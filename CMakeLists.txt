@@ -9,6 +9,8 @@ else()
 endif()
 add_executable(cardos_tests
   test/test_main.c
+  test/test_mem_handles.c
+  kernel/mem/mem.c
 )
 target_include_directories(cardos_tests PRIVATE test kernel)
 enable_testing()
