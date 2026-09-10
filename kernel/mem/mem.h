@@ -41,6 +41,7 @@ typedef struct {
   uint16_t handles_used;
   uint32_t compactions;
   uint32_t evictions;
+  uint32_t evict_writes;  /* evictions that actually wrote to swap */
   uint32_t page_ins;
 } MemStats;
 

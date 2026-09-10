@@ -2,6 +2,7 @@
 
 #include "mem/mem.h"
 #include "mem/mem_internal.h"
+#include "swap/swap.h"
 
 #include <string.h>
 
@@ -23,6 +24,7 @@ static uint16_t g_handles_used;
 static uint32_t g_compactions;
 static uint32_t g_evictions;
 static uint32_t g_page_ins;
+static uint32_t g_evict_writes;
 
 /* Free ranges inside the fixed arena, kept sorted by offset and coalesced. */
 #define FIXED_FREE_MAX 32
@@ -168,6 +170,7 @@ void mem_init(void *heap, size_t bytes) {
   g_fixed_bottom = g_size;
   g_handles_used = 0;
   g_compactions = g_evictions = g_page_ins = 0;
+  g_evict_writes = 0;
   g_fixed_free_n = 0;
   g_lru_head = g_lru_tail = MEM_NO_LRU;
 }
@@ -194,6 +197,7 @@ void mem_stats(MemStats *out) {
   out->compactions  = g_compactions;
   out->evictions    = g_evictions;
   out->page_ins     = g_page_ins;
+  out->evict_writes = g_evict_writes;
   for (i = 0; i < MEM_MAX_HANDLES; i++) {
     MemDesc *d = &g_table[i];
     if (!(d->flags & D_INUSE)) continue;
@@ -251,12 +255,62 @@ void mem_compact(void) {
   g_compactions++;
 }
 
-/* Place a movable block, compacting first if a plain bump will not fit.
- * Eviction to swap is added on top of this in Task 9. */
-static int movable_alloc(uint32_t size, uint32_t *out_off) {
-  if (movable_bump(size, out_off)) return 1;
+/* ---------------------------------------------------------- eviction ---- */
+
+static uint16_t pages_for(uint32_t bytes) {
+  return (uint16_t)((bytes + SWAP_PAGE_SIZE - 1u) / SWAP_PAGE_SIZE);
+}
+
+/* Push the least recently used unlocked block out to swap. Returns 1 if RAM
+ * was actually released. The RAM it occupied becomes a gap; the caller
+ * compacts to turn that into usable space. */
+static int evict_one(void) {
+  MemDesc *d;
+  uint16_t need;
+
+  if (g_lru_head == MEM_NO_LRU) return 0;      /* nothing is evictable */
+  d = &g_table[g_lru_head];
+  need = pages_for(d->size);
+
+  if ((d->flags & D_BACKED) && !(d->flags & D_DIRTY)) {
+    /* Its copy in swap is still valid, so this eviction is free. This is what
+     * mem_lock_ro buys: read-mostly data costs one write, ever. */
+  } else {
+    if (!(d->flags & D_BACKED)) {
+      uint16_t first = swap_alloc_pages(need);
+      if (first == SWAP_INVALID_PAGE) return 0;   /* swap is full */
+      d->swap_page = first;
+    }
+    if (swap_write(d->swap_page, g_base + d->off, d->size) != 0) {
+      if (!(d->flags & D_BACKED)) swap_free_pages(d->swap_page, need);
+      return 0;                                    /* device error: keep it resident */
+    }
+    d->flags |= D_BACKED;
+    g_evict_writes++;
+  }
+
+  lru_remove(d);
+  d->flags = (uint8_t)(d->flags & ~(D_RESIDENT | D_DIRTY));
+  d->off = MEM_OFF_NONE;
+  g_evictions++;
+  return 1;
+}
+
+/* The escalation the spec specifies: compact, then evict least-recently-used
+ * blocks until the request fits, then give up and let the caller handle it. */
+static int arena_alloc(uint32_t size, int fixed, uint32_t *out_off) {
+  if (fixed ? fixed_alloc(size, out_off) : movable_bump(size, out_off)) return 1;
   mem_compact();
-  return movable_bump(size, out_off);
+  if (fixed ? fixed_alloc(size, out_off) : movable_bump(size, out_off)) return 1;
+  while (evict_one()) {
+    mem_compact();
+    if (fixed ? fixed_alloc(size, out_off) : movable_bump(size, out_off)) return 1;
+  }
+  return 0;
+}
+
+static int movable_alloc(uint32_t size, uint32_t *out_off) {
+  return arena_alloc(size, 0, out_off);
 }
 
 /* ----------------------------------------------------------- public API -- */
@@ -271,8 +325,7 @@ Handle mem_alloc(size_t bytes, uint16_t flags) {
   d = claim_slot();
   if (!d) return MEM_INVALID_HANDLE;
 
-  ok = (flags & MEM_FIXED) ? fixed_alloc(size, &off)
-                           : movable_alloc(size, &off);
+  ok = arena_alloc(size, (flags & MEM_FIXED) ? 1 : 0, &off);
   if (!ok) return MEM_INVALID_HANDLE;
 
   d->off       = off;
@@ -293,7 +346,9 @@ void mem_free(Handle h) {
   MemDesc *d = mem_desc(h);
   if (!d) return;
   lru_remove(d);
-  if (d->flags & D_FIXED) fixed_free_insert(d->off, d->size);
+  if (d->flags & D_BACKED) swap_free_pages(d->swap_page, pages_for(d->size));
+  if ((d->flags & D_FIXED) && (d->flags & D_RESIDENT))
+    fixed_free_insert(d->off, d->size);
   d->flags = 0;                 /* clears D_INUSE */
   d->off   = MEM_OFF_NONE;
   d->size  = 0;
@@ -305,7 +360,19 @@ void mem_free(Handle h) {
 static void *lock_common(Handle h, int mark_dirty) {
   MemDesc *d = mem_desc(h);
   if (!d) return NULL;
-  if (!(d->flags & D_RESIDENT)) return NULL;   /* page-in arrives in Task 9 */
+
+  if (!(d->flags & D_RESIDENT)) {
+    /* Page it back in. This can fail: if RAM is full of pinned blocks there
+     * is nowhere to put it, and saying so is better than hanging. The 32 KB
+     * block cap is what keeps that from being the common case. */
+    uint32_t off;
+    if (!movable_alloc(d->size, &off)) return NULL;
+    if (swap_read(d->swap_page, g_base + off, d->size) != 0) return NULL;
+    d->off = off;
+    d->flags |= D_RESIDENT;
+    g_page_ins++;
+  }
+
   lru_remove(d);                               /* pinned blocks are not victims */
   d->lock++;
   if (mark_dirty) d->flags |= D_DIRTY;

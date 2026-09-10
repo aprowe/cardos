@@ -14,6 +14,7 @@
 #define D_RESIDENT 0x04u
 #define D_DIRTY    0x08u
 #define D_ONLRU    0x10u
+#define D_BACKED   0x20u  /* swap_page holds a valid copy */
 
 /* Offset from the heap base, not a pointer, so the descriptor has the same
  * layout on a 64-bit host as on the 32-bit device and the host tests measure
