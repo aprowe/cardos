@@ -11,5 +11,8 @@ file(GLOB CARDOS_TEST_SOURCES CONFIGURE_DEPENDS test/*.c)
 file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS kernel/*.c)
 add_executable(cardos_tests ${CARDOS_TEST_SOURCES} ${CARDOS_KERNEL_SOURCES})
 target_include_directories(cardos_tests PRIVATE test kernel)
+# Host tests run the memory manager in paranoid mode: every allocation
+# relocates unpinned blocks, so illegally retained pointers fail loudly.
+target_compile_definitions(cardos_tests PRIVATE CARDOS_MEM_PARANOID)
 enable_testing()
 add_test(NAME unit COMMAND cardos_tests)

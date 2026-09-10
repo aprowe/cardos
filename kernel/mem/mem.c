@@ -210,10 +210,28 @@ void mem_stats(MemStats *out) {
 
 /* Place a movable block. For now this is a pure bump allocation at the top of
  * the movable region; compaction and eviction hook in here in later tasks. */
-static int movable_bump(uint32_t size, uint32_t *out_off) {
-  if (g_fixed_bottom - g_movable_top < size) return 0;
-  *out_off = g_movable_top;
-  g_movable_top += size;
+/* First fit across the movable region, not just a bump at the top.
+ * Compaction cannot close a gap that sits between two locked blocks, and the
+ * lock discipline means locked blocks are normal, not exceptional -- so the
+ * space between them has to be usable or a workload that holds a few locks
+ * loses most of the heap. */
+static int movable_place(uint32_t size, uint32_t *out_off) {
+  uint8_t order[MEM_MAX_HANDLES];
+  int n = collect_movable_sorted(order), i;
+  uint32_t cursor = 0, off = 0;
+  int found = 0;
+
+  for (i = 0; i < n && !found; i++) {
+    MemDesc *d = &g_table[order[i]];
+    if (d->off - cursor >= size) { off = cursor; found = 1; break; }
+    cursor = d->off + d->size;
+  }
+  if (!found) {
+    if (g_fixed_bottom - cursor < size) return 0;
+    off = cursor;
+  }
+  *out_off = off;
+  if (off + size > g_movable_top) g_movable_top = off + size;
   return 1;
 }
 
@@ -222,11 +240,9 @@ static int movable_bump(uint32_t size, uint32_t *out_off) {
  * so the destination cursor jumps past it and packing resumes above. That is
  * why the lock discipline matters: every block held locked across an
  * allocation is a place compaction has to give up on. */
-void mem_compact(void) {
-  uint8_t order[MEM_MAX_HANDLES];
+/* Gather the resident movable blocks, sorted by heap offset. */
+static int collect_movable_sorted(uint8_t *order) {
   int n = 0, i, k;
-  uint32_t dst = 0;
-
   for (i = 0; i < MEM_MAX_HANDLES; i++) {
     MemDesc *d = &g_table[i];
     if ((d->flags & (D_INUSE | D_RESIDENT | D_FIXED)) == (D_INUSE | D_RESIDENT))
@@ -238,6 +254,13 @@ void mem_compact(void) {
       order[k + 1] = order[k];
     order[k + 1] = v;
   }
+  return n;
+}
+
+static void compact_from(uint32_t dst_start) {
+  uint8_t order[MEM_MAX_HANDLES];
+  int n = collect_movable_sorted(order), i;
+  uint32_t dst = dst_start;
 
   for (i = 0; i < n; i++) {
     MemDesc *d = &g_table[order[i]];
@@ -254,6 +277,44 @@ void mem_compact(void) {
   g_movable_top = dst;
   g_compactions++;
 }
+
+void mem_compact(void) { compact_from(0); }
+
+#ifdef CARDOS_MEM_PARANOID
+/* Host-test builds only. Deliberately relocate every unpinned block on every
+ * allocation, even when there is no need to, by alternating the base the
+ * movable region packs to. Any pointer a caller illegally retained across an
+ * allocation then points at the wrong byte immediately, under a deterministic
+ * seed -- instead of once a month on a device with no debugger. This is the
+ * cheap stand-in for a borrow checker. */
+static uint32_t g_paranoid_phase;
+
+static void paranoid_shuffle(void) {
+  uint8_t order[MEM_MAX_HANDLES];
+  int n, i;
+
+  compact_from(0);                     /* pack down: always safe */
+  g_paranoid_phase ^= 1u;
+  if (!g_paranoid_phase) return;       /* alternate between the two layouts */
+  if (g_fixed_bottom - g_movable_top < 1u) return;
+
+  n = collect_movable_sorted(order);
+  for (i = 0; i < n; i++)
+    if (g_table[order[i]].lock > 0) return;   /* a pinned block cannot move */
+
+  /* Shift the whole movable region up by one byte, highest block first so a
+   * block is never written over its neighbour before that neighbour has
+   * moved. Walking ascending here would corrupt every block but the last. */
+  for (i = n - 1; i >= 0; i--) {
+    MemDesc *d = &g_table[order[i]];
+    memmove(g_base + d->off + 1, g_base + d->off, d->size);
+    d->off += 1;
+  }
+  g_movable_top += 1;
+}
+#else
+static void paranoid_shuffle(void) { }
+#endif
 
 /* ---------------------------------------------------------- eviction ---- */
 
@@ -299,12 +360,12 @@ static int evict_one(void) {
 /* The escalation the spec specifies: compact, then evict least-recently-used
  * blocks until the request fits, then give up and let the caller handle it. */
 static int arena_alloc(uint32_t size, int fixed, uint32_t *out_off) {
-  if (fixed ? fixed_alloc(size, out_off) : movable_bump(size, out_off)) return 1;
+  if (fixed ? fixed_alloc(size, out_off) : movable_place(size, out_off)) return 1;
   mem_compact();
-  if (fixed ? fixed_alloc(size, out_off) : movable_bump(size, out_off)) return 1;
+  if (fixed ? fixed_alloc(size, out_off) : movable_place(size, out_off)) return 1;
   while (evict_one()) {
     mem_compact();
-    if (fixed ? fixed_alloc(size, out_off) : movable_bump(size, out_off)) return 1;
+    if (fixed ? fixed_alloc(size, out_off) : movable_place(size, out_off)) return 1;
   }
   return 0;
 }
@@ -321,6 +382,8 @@ Handle mem_alloc(size_t bytes, uint16_t flags) {
   int ok;
 
   if (bytes == 0 || bytes > MEM_MAX_BLOCK) return MEM_INVALID_HANDLE;
+
+  paranoid_shuffle();
 
   d = claim_slot();
   if (!d) return MEM_INVALID_HANDLE;
