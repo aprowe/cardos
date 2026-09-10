@@ -1028,3 +1028,34 @@ rtk git add -A && rtk git commit -m "test(mem): randomised torture test over all
 ## Not in this plan
 
 The scheduler, filesystem, console, keyboard and shell are separate plans. This one stops at the point where the memory core is provably correct on the host — which is the precondition for all of them. Two components the spec omits entirely and that the shell MVP needs, **a keyboard matrix driver and an ST7789 console**, need specs of their own before they get plans.
+
+---
+
+## As built
+
+All ten tasks are implemented and committed. Where the finished code differs
+from the plan above, the plan was wrong:
+
+- **`movable_bump` became `movable_place` (first fit).** Placing only at the
+  top of the movable region made the gaps between locked blocks unusable, and
+  compaction cannot close those by definition. Measured over the torture run:
+  allocation failures 3079 to 135, successful allocations 847 to 1724.
+- **`MemStats.evict_writes` was added.** The plan tested the clean-eviction
+  optimisation by counting device writes across a hand-built sequence, which
+  was brittle. Counting evictions that actually wrote is directly meaningful
+  and is what the shell's `swap` command needs anyway.
+- **Paranoid relocation mode was added** (`CARDOS_MEM_PARANOID`, host builds
+  only): every allocation deliberately relocates unpinned blocks, so a pointer
+  illegally retained across an allocation fails immediately under a fixed seed.
+  This is the cheap stand-in for the compile-time guarantee a Rust guard type
+  would give, and it caught a live corruption bug within a minute of existing.
+- **The test registry is generated** by `tools/gen_test_main.py` rather than
+  hand-maintained, so a test cannot be written and then silently never run.
+- **Three tests in the plan were wrong and were corrected:** a fake device
+  sized smaller than its own extent; a first-fit expectation computed by hand
+  as page 6 when page 4 is correct; and several eviction tests whose
+  allocations fit the heap comfortably and so never forced an eviction at all.
+
+Remaining before the device: the keyboard matrix driver and the ST7789
+console, neither of which the spec currently mentions, plus the scheduler,
+filesystem and shell.
