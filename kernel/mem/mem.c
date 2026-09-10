@@ -208,6 +208,8 @@ void mem_stats(MemStats *out) {
 
 /* ------------------------------------------------------ movable arena ---- */
 
+static int collect_movable_sorted(uint8_t *order);
+
 /* Place a movable block. For now this is a pure bump allocation at the top of
  * the movable region; compaction and eviction hook in here in later tasks. */
 /* First fit across the movable region, not just a bump at the top.

@@ -1,0 +1,157 @@
+/* Cardputer keyboard matrix.
+ *
+ * The scan and the coordinate mapping below are transcribed from M5Stack's own
+ * IOMatrix reader, which is the only authoritative description of how this
+ * matrix is wired. Getting it wrong yields a keyboard that reports plausible
+ * but wrong keys, which is far harder to debug than one that reports nothing.
+ *
+ *   address lines (into the 74HC138): GPIO 8 (bit 0), 9 (bit 1), 11 (bit 2)
+ *   row inputs, pulled up, active low: GPIO 13, 15, 3, 4, 5, 6, 7
+ *
+ * For each of the 8 column selects, the seven rows are read. A set bit j maps
+ * to logical x = 2j for column selects 4..7 and x = 2j+1 for 0..3; y counts
+ * down from 3. That asymmetry is the physical interleave of the key columns,
+ * not a mistake.
+ */
+
+#include "drv/keyboard.h"
+
+#include "driver/gpio.h"
+#include "esp_rom_sys.h"   /* esp_rom_delay_us */
+
+static const int ADDR_PINS[3] = { 8, 9, 11 };
+static const int ROW_PINS[7]  = { 13, 15, 3, 4, 5, 6, 7 };
+
+/* The 4x14 layout printed on the keys. Row 0 is the number row. */
+static const char KEYMAP[4][14] = {
+  { '`','1','2','3','4','5','6','7','8','9','0','-','=', (char)KEY_BACKSPACE },
+  { (char)KEY_TAB,'q','w','e','r','t','y','u','i','o','p','[',']','\\' },
+  { 0 /*Fn*/, 0 /*Shift*/,'a','s','d','f','g','h','j','k','l',';','\'', (char)KEY_ENTER },
+  { 0 /*Ctrl*/, 0 /*Opt*/, 0 /*Alt*/,'z','x','c','v','b','n','m',',','.','/',' ' },
+};
+
+static const char KEYMAP_SHIFT[4][14] = {
+  { '~','!','@','#','$','%','^','&','*','(',')','_','+', (char)KEY_BACKSPACE },
+  { (char)KEY_TAB,'Q','W','E','R','T','Y','U','I','O','P','{','}','|' },
+  { 0, 0,'A','S','D','F','G','H','J','K','L',':','"', (char)KEY_ENTER },
+  { 0, 0, 0,'Z','X','C','V','B','N','M','<','>','?',' ' },
+};
+
+/* Modifier positions in the map above. */
+#define IS_FN(x, y)    ((y) == 2 && (x) == 0)
+#define IS_SHIFT(x, y) ((y) == 2 && (x) == 1)
+#define IS_CTRL(x, y)  ((y) == 3 && (x) == 0)
+#define IS_ALT(x, y)   ((y) == 3 && (x) == 2)
+#define IS_OPT(x, y)   ((y) == 3 && (x) == 1)
+
+static uint8_t s_down[4][14];      /* previous scan, for edge detection */
+static int s_shift, s_ctrl, s_fn;
+
+static void set_address(int value) {
+  gpio_set_level(ADDR_PINS[0], (value >> 0) & 1);
+  gpio_set_level(ADDR_PINS[1], (value >> 1) & 1);
+  gpio_set_level(ADDR_PINS[2], (value >> 2) & 1);
+}
+
+int keyboard_init(void) {
+  int i;
+  gpio_config_t out = {
+    .pin_bit_mask = 0,
+    .mode = GPIO_MODE_OUTPUT,
+    .pull_up_en = GPIO_PULLUP_DISABLE,
+    .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    .intr_type = GPIO_INTR_DISABLE,
+  };
+  gpio_config_t in = {
+    .pin_bit_mask = 0,
+    .mode = GPIO_MODE_INPUT,
+    .pull_up_en = GPIO_PULLUP_ENABLE,      /* switches pull a row to ground */
+    .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    .intr_type = GPIO_INTR_DISABLE,
+  };
+
+  for (i = 0; i < 3; i++) out.pin_bit_mask |= 1ULL << ADDR_PINS[i];
+  for (i = 0; i < 7; i++) in.pin_bit_mask  |= 1ULL << ROW_PINS[i];
+
+  if (gpio_config(&out) != ESP_OK) return -1;
+  if (gpio_config(&in) != ESP_OK) return -1;
+
+  set_address(0);
+  for (i = 0; i < 4 * 14; i++) ((uint8_t *)s_down)[i] = 0;
+  return 0;
+}
+
+/* Scan the whole matrix into `now`, and update the modifier state. */
+static void scan(uint8_t now[4][14]) {
+  int col, j, x, y;
+
+  for (y = 0; y < 4; y++)
+    for (x = 0; x < 14; x++) now[y][x] = 0;
+
+  s_shift = s_ctrl = s_fn = 0;
+
+  for (col = 0; col < 8; col++) {
+    set_address(col);
+    /* The 74HC138 and the row pull-ups need a moment to settle before the
+     * read; without this the first column bleeds into the next. */
+    esp_rom_delay_us(10);
+
+    for (j = 0; j < 7; j++) {
+      if (gpio_get_level(ROW_PINS[j]) != 0) continue;   /* active low */
+
+      x = (col > 3) ? (2 * j) : (2 * j + 1);
+      y = 3 - ((col > 3) ? (col - 4) : col);
+      if (x < 0 || x >= 14 || y < 0 || y >= 4) continue;
+
+      now[y][x] = 1;
+      if (IS_SHIFT(x, y)) s_shift = 1;
+      if (IS_CTRL(x, y))  s_ctrl = 1;
+      if (IS_FN(x, y))    s_fn = 1;
+    }
+  }
+}
+
+uint8_t keyboard_poll(void) {
+  uint8_t now[4][14];
+  uint8_t out = 0;
+  int x, y;
+
+  scan(now);
+
+  for (y = 0; y < 4 && !out; y++) {
+    for (x = 0; x < 14; x++) {
+      if (!now[y][x] || s_down[y][x]) continue;    /* only rising edges */
+      if (IS_SHIFT(x, y) || IS_CTRL(x, y) || IS_FN(x, y) ||
+          IS_ALT(x, y) || IS_OPT(x, y)) continue;  /* modifiers are not keys */
+
+      {
+        char c = s_shift ? KEYMAP_SHIFT[y][x] : KEYMAP[y][x];
+
+        /* The ` key is labelled ESC on the case and is the universal escape,
+         * so it never reaches anyone as a backtick. */
+        if (KEYMAP[y][x] == '`') c = (char)KEY_ESC;
+
+        /* Fn turns ; , . / into the arrow cluster. */
+        if (s_fn) {
+          switch (KEYMAP[y][x]) {
+          case ';': c = (char)KEY_UP;    break;
+          case '.': c = (char)KEY_DOWN;  break;
+          case ',': c = (char)KEY_LEFT;  break;
+          case '/': c = (char)KEY_RIGHT; break;
+          default: break;
+          }
+        }
+        if (c) { out = (uint8_t)c; break; }
+      }
+    }
+  }
+
+  for (y = 0; y < 4; y++)
+    for (x = 0; x < 14; x++) s_down[y][x] = now[y][x];
+
+  return out;
+}
+
+int keyboard_shift_down(void) { return s_shift; }
+int keyboard_ctrl_down(void)  { return s_ctrl; }
+int keyboard_fn_down(void)    { return s_fn; }

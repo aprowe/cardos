@@ -1,0 +1,23 @@
+# CardOS device configuration.
+
+# Route the console to the built-in USB-CDC. The board definition otherwise
+# sends it to UART0 pins, which is why "the firmware seems dead" on this board
+# is usually a serial problem rather than a crash.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# 8 MB flash, custom partition table (see partitions.csv).
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Required for the app launcher's one-shot guest boot: a guest that never
+# validates itself is rolled back to CardOS on the next reset.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# No PSRAM on this board. Say so explicitly so a misconfiguration fails at
+# build time rather than as a mysterious boot loop.
+# (CONFIG_SPIRAM is not set)
+
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

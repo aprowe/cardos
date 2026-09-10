@@ -1,0 +1,18 @@
+idf_component_register(
+  SRCS
+    "main.c"
+    "../kernel/drv/display.c"
+    "../kernel/drv/keyboard.c"
+    "../kernel/console/console.c"
+    "../kernel/mem/mem.c"
+    "../kernel/swap/swap.c"
+    "../kernel/app/appimage.c"
+  INCLUDE_DIRS
+    "."
+    "../kernel"
+  REQUIRES
+    driver
+    esp_lcd
+    app_update
+    esp_timer
+)
