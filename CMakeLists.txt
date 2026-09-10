@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.20)
+project(cardos C)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+if (MSVC)
+  add_compile_options(/W4 /wd4127 /D_CRT_SECURE_NO_WARNINGS)
+else()
+  add_compile_options(-Wall -Wextra)
+endif()
+add_executable(cardos_tests
+  test/test_main.c
+)
+target_include_directories(cardos_tests PRIVATE test kernel)
+enable_testing()
+add_test(NAME unit COMMAND cardos_tests)
