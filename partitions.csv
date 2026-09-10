@@ -1,0 +1,22 @@
+# CardOS partition table for the 8 MB ESP32-S3FN8 on the Cardputer.
+#
+# CardOS lives in ota_0 and a guest firmware is staged into ota_1. Both must be
+# OTA subtypes: the one-shot boot works by marking the guest pending-verify, so
+# that a guest which never validates itself (and a foreign firmware never will)
+# is rolled back to CardOS on the next reset. Requires
+# CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y.
+#
+# `storage` is mostly for guest compatibility: a guest reads the partition
+# table at 0x8000, which is ours, not the one it was built against. A guest
+# expecting a data partition we do not declare will fail at startup.
+#
+# 0x20000 + 0x200000 + 0x400000 + 0x1E0000 = 0x800000 = 8 MB exactly.
+# App partitions must start on a 64 KB boundary.
+#
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+otadata,    data, ota,     0xF000,   0x2000,
+phy_init,   data, phy,     0x11000,  0x1000,
+cardos,     app,  ota_0,   0x20000,  0x200000,
+guest,      app,  ota_1,   0x220000, 0x400000,
+storage,    data, spiffs,  0x620000, 0x1E0000,

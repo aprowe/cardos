@@ -10,6 +10,19 @@ int tt_report(void) {
   return tt_fails ? 1 : 0;
 }
 
+void test_valid_s3_image_parses(void);
+void test_app_descriptor_fields_are_extracted(void);
+void test_image_without_a_descriptor_is_still_valid(void);
+void test_a_full_length_name_is_still_terminated(void);
+void test_not_an_image_is_rejected(void);
+void test_image_for_the_wrong_chip_is_rejected(void);
+void test_a_file_too_short_for_a_header_is_rejected(void);
+void test_a_truncated_image_is_rejected(void);
+void test_absurd_segment_counts_are_rejected(void);
+void test_a_wild_segment_length_cannot_overflow_the_walk(void);
+void test_an_image_too_large_for_the_partition_is_rejected(void);
+void test_hash_appended_accounts_for_the_extra_32_bytes(void);
+void test_every_result_has_a_message(void);
 void test_locked_pointer_is_writable_and_stable(void);
 void test_mem_zero_clears_the_block(void);
 void test_blocks_do_not_overlap(void);
@@ -60,6 +73,20 @@ void test_write_past_the_end_of_swap_is_refused(void);
 void test_device_errors_are_propagated(void);
 
 int main(void) {
+  printf("-- appimage --\n");
+  RUN(test_valid_s3_image_parses);
+  RUN(test_app_descriptor_fields_are_extracted);
+  RUN(test_image_without_a_descriptor_is_still_valid);
+  RUN(test_a_full_length_name_is_still_terminated);
+  RUN(test_not_an_image_is_rejected);
+  RUN(test_image_for_the_wrong_chip_is_rejected);
+  RUN(test_a_file_too_short_for_a_header_is_rejected);
+  RUN(test_a_truncated_image_is_rejected);
+  RUN(test_absurd_segment_counts_are_rejected);
+  RUN(test_a_wild_segment_length_cannot_overflow_the_walk);
+  RUN(test_an_image_too_large_for_the_partition_is_rejected);
+  RUN(test_hash_appended_accounts_for_the_extra_32_bytes);
+  RUN(test_every_result_has_a_message);
   printf("-- mem alloc --\n");
   RUN(test_locked_pointer_is_writable_and_stable);
   RUN(test_mem_zero_clears_the_block);
