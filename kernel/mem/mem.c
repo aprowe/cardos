@@ -206,15 +206,57 @@ void mem_stats(MemStats *out) {
 
 /* Place a movable block. For now this is a pure bump allocation at the top of
  * the movable region; compaction and eviction hook in here in later tasks. */
-static int movable_alloc(uint32_t size, uint32_t *out_off) {
+static int movable_bump(uint32_t size, uint32_t *out_off) {
   if (g_fixed_bottom - g_movable_top < size) return 0;
   *out_off = g_movable_top;
   g_movable_top += size;
   return 1;
 }
 
+/* Slide unpinned movable blocks down to close gaps left by frees and
+ * evictions. A locked block cannot move -- a caller is holding its pointer --
+ * so the destination cursor jumps past it and packing resumes above. That is
+ * why the lock discipline matters: every block held locked across an
+ * allocation is a place compaction has to give up on. */
 void mem_compact(void) {
-  /* Implemented in Task 5. */
+  uint8_t order[MEM_MAX_HANDLES];
+  int n = 0, i, k;
+  uint32_t dst = 0;
+
+  for (i = 0; i < MEM_MAX_HANDLES; i++) {
+    MemDesc *d = &g_table[i];
+    if ((d->flags & (D_INUSE | D_RESIDENT | D_FIXED)) == (D_INUSE | D_RESIDENT))
+      order[n++] = (uint8_t)i;
+  }
+  for (i = 1; i < n; i++) {            /* insertion sort by heap offset */
+    uint8_t v = order[i];
+    for (k = i - 1; k >= 0 && g_table[order[k]].off > g_table[v].off; k--)
+      order[k + 1] = order[k];
+    order[k + 1] = v;
+  }
+
+  for (i = 0; i < n; i++) {
+    MemDesc *d = &g_table[order[i]];
+    if (d->lock > 0) {                 /* pinned: cannot move, skip past it */
+      dst = d->off + d->size;
+      continue;
+    }
+    if (d->off != dst) {
+      memmove(g_base + dst, g_base + d->off, d->size);
+      d->off = dst;
+    }
+    dst += d->size;
+  }
+  g_movable_top = dst;
+  g_compactions++;
+}
+
+/* Place a movable block, compacting first if a plain bump will not fit.
+ * Eviction to swap is added on top of this in Task 9. */
+static int movable_alloc(uint32_t size, uint32_t *out_off) {
+  if (movable_bump(size, out_off)) return 1;
+  mem_compact();
+  return movable_bump(size, out_off);
 }
 
 /* ----------------------------------------------------------- public API -- */

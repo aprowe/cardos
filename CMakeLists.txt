@@ -7,11 +7,9 @@ if (MSVC)
 else()
   add_compile_options(-Wall -Wextra)
 endif()
-add_executable(cardos_tests
-  test/test_main.c
-  test/test_mem_handles.c
-  kernel/mem/mem.c
-)
+file(GLOB CARDOS_TEST_SOURCES CONFIGURE_DEPENDS test/*.c)
+file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS kernel/*.c)
+add_executable(cardos_tests ${CARDOS_TEST_SOURCES} ${CARDOS_KERNEL_SOURCES})
 target_include_directories(cardos_tests PRIVATE test kernel)
 enable_testing()
 add_test(NAME unit COMMAND cardos_tests)
