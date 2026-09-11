@@ -72,6 +72,38 @@ fiddly bugs are:
 That is `kernel/input/mouse.c`, written and tested now. When the radio work
 happens, it only has to deliver bytes.
 
+## Where this got to on hardware (2026-09-10)
+
+Both a Logitech Pebble M350 and an MX Master 3S **pair, encrypt and bond**
+successfully -- `ENC_CHANGE ... bonded=1` -- and CardOS reads their report
+descriptors. Neither ever delivers an input report.
+
+The failure is in ESP-IDF's `esp_hid` component, not in CardOS, and it is
+identical on both devices. `attach_report_listeners` in `nimble_hidh.c` takes
+`LOCK_OPS()`, then calls `write_char_descr`, which issues a GATT write and
+blocks in `WAIT_CB()`. On both mice the log shows the write to the battery
+CCCD being issued and then no further GATT activity at all -- it hangs on the
+first descriptor write, before it ever reaches the HID report
+characteristics. A completion callback that needs the same lock would do
+exactly this.
+
+There is a second, independent problem in the same function: it subscribes
+only to reports tagged `ESP_HID_PROTOCOL_MODE_REPORT`. A Boot Mouse Input
+characteristic (`0x2A33`) is tagged `PROTOCOL_MODE_BOOT` at discovery and
+skipped, so a boot-protocol mouse would never be subscribed even without the
+first bug.
+
+Neither is fixable from outside the component. The way forward is a minimal
+HOGP client written directly against NimBLE: connect, initiate security,
+discover service `0x1812`, find the Report characteristics that support
+notify, write their `0x2902` descriptors, and handle
+`BLE_GAP_EVENT_NOTIFY_RX`. Perhaps 300 lines, entirely under our control, and
+it feeds the decode and cursor logic that is already built and tested.
+
+Worth recording that everything *around* the gap works: scanning finds both
+mice by HID appearance (`0x03c2`), bonding persists, and the radio costs a
+measured 70 KB.
+
 ## Open questions for the real spec
 
 - Cursor rendering: the compositor must save the pixels under the cursor and
