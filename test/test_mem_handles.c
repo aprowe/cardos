@@ -1,6 +1,6 @@
 #include "tinytest.h"
-#include "mem/mem.h"
-#include "mem/mem_internal.h"
+#include "kernel/mem/mem.h"
+#include "kernel/mem/mem_internal.h"
 
 static unsigned char heap[64 * 1024];
 

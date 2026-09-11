@@ -15,5 +15,6 @@ void cmd_apps(void);
 void cmd_boot(const char *arg, int confirmed);
 void cmd_bootinfo(void);
 void cmd_taskcost(void);
+void cmd_mouse(const char *arg);
 
 #endif /* CARDOS_SHELLCMD_H */

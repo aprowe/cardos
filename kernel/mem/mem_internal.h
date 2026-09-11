@@ -3,7 +3,7 @@
 #ifndef CARDOS_MEM_INTERNAL_H
 #define CARDOS_MEM_INTERNAL_H
 
-#include "mem/mem.h"
+#include "kernel/mem/mem.h"
 
 #define MEM_OFF_NONE 0xFFFFFFFFu
 #define MEM_NO_LRU   0xFFu

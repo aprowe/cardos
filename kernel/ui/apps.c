@@ -1,9 +1,9 @@
 /* The built-in apps. See app.h. */
 
-#include "ui/app.h"
-#include "ui/draw.h"
-#include "fs/fs.h"
-#include "mem/mem.h"
+#include "kernel/ui/app.h"
+#include "kernel/ui/draw.h"
+#include "kernel/fs/fs.h"
+#include "kernel/mem/mem.h"
 #include "esp_system.h"
 
 #include <stdio.h>

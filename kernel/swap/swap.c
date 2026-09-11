@@ -1,6 +1,6 @@
 /* CardOS swap. See swap.h for the contract. */
 
-#include "swap/swap.h"
+#include "kernel/swap/swap.h"
 
 #include <string.h>
 

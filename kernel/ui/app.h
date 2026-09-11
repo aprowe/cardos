@@ -18,7 +18,7 @@
 
 #include <stdint.h>
 
-#include "ui/rect.h"
+#include "kernel/ui/rect.h"
 
 typedef struct {
   const char *name;

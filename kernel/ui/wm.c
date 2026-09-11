@@ -1,6 +1,6 @@
 /* Window manager core. See wm.h. */
 
-#include "ui/wm.h"
+#include "kernel/ui/wm.h"
 
 #include <string.h>
 

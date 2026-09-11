@@ -11,15 +11,16 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "app/appimage.h"
-#include "app/launcher.h"
-#include "console/console.h"
-#include "drv/display.h"
-#include "fs/fs.h"
+#include "kernel/app/appimage.h"
+#include "kernel/app/launcher.h"
+#include "kernel/console/console.h"
+#include "kernel/drv/display.h"
+#include "kernel/fs/fs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
-#include "fs/path.h"
+#include "kernel/drv/btmouse.h"
+#include "kernel/fs/path.h"
 
 static char s_cwd[FS_PATH_MAX] = "/";
 
@@ -314,4 +315,30 @@ void cmd_taskcost(void) {
   for (i = 0; i < n; i++) if (h[i]) vTaskDelete(h[i]);
   vTaskDelay(pdMS_TO_TICKS(50));      /* let the idle task reap them */
   con_printf("after free %u\n", (unsigned)esp_get_free_heap_size());
+}
+
+
+/* -------------------------------------------------------------- mouse -- */
+
+void cmd_mouse(const char *arg) {
+  if (arg && !strcmp(arg, "off")) {
+    btmouse_stop();
+    con_printf("mouse %s\n", btmouse_status());
+    return;
+  }
+  if (arg && !strcmp(arg, "status")) {
+    con_printf("mouse %s\n", btmouse_status());
+    if (btmouse_heap_cost())
+      con_printf("radio cost %u KB\n", (unsigned)(btmouse_heap_cost() / 1024));
+    return;
+  }
+
+  con_write("put the mouse in pairing mode\n");
+  con_write("scanning 6s...\n");
+  btmouse_start(6);
+  con_printf("%s\n", btmouse_status());
+  if (btmouse_heap_cost())
+    con_printf("radio cost %u KB, heap %u KB\n",
+               (unsigned)(btmouse_heap_cost() / 1024),
+               (unsigned)(esp_get_free_heap_size() / 1024));
 }

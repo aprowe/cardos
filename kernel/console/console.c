@@ -9,9 +9,9 @@
  * exception is scrolling, which repaints every row.
  */
 
-#include "console/console.h"
-#include "console/font6x8.h"
-#include "drv/display.h"
+#include "kernel/console/console.h"
+#include "kernel/console/font6x8.h"
+#include "kernel/drv/display.h"
 
 #include <stdarg.h>
 #include <stdio.h>

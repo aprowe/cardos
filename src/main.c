@@ -17,14 +17,15 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 
-#include "console/console.h"
-#include "drv/display.h"
-#include "drv/keyboard.h"
-#include "mem/mem.h"
-#include "task/sched.h"
-#include "fs/fs.h"
+#include "kernel/console/console.h"
+#include "kernel/drv/display.h"
+#include "kernel/drv/keyboard.h"
+#include "kernel/mem/mem.h"
+#include "kernel/task/sched.h"
+#include "kernel/fs/fs.h"
 #include "shellcmd.h"
-#include "ui/desktop.h"
+#include "kernel/ui/desktop.h"
+#include "kernel/drv/btmouse.h"
 
 #define CARDOS_LINE_MAX 63
 
@@ -119,6 +120,7 @@ static void run_line(char *line) {
   else if (!strcmp(line, "boot!"))  cmd_boot(arg, 1);
   else if (!strcmp(line, "bootinfo")) cmd_bootinfo();
   else if (!strcmp(line, "taskcost")) cmd_taskcost();
+  else if (!strcmp(line, "mouse")) cmd_mouse(arg);
   else if (!strcmp(line, "flip")) {
     display_set_orient(display_orient() + 1);
     con_clear();
@@ -235,6 +237,11 @@ void app_main(void) {
     }
 
     if (s_desktop) {
+      MouseReport mr;
+      /* Drain whatever the radio queued. It arrives on the Bluetooth task,
+       * which must not touch the display, so this is where it turns into
+       * pointer movement. */
+      while (btmouse_poll(&mr)) desktop_mouse(&mr);
       desktop_tick((uint32_t)(esp_timer_get_time() / 1000));
       if (k && desktop_key(k)) {
         /* ESC left the desktop: hand the screen back to the console. */

@@ -13,7 +13,7 @@
 
 #include <stdint.h>
 
-#include "app/appimage.h"
+#include "kernel/app/appimage.h"
 
 typedef enum {
   LAUNCH_OK = 0,

@@ -7,7 +7,7 @@
 #ifndef FAKE_SWAPDEV_H
 #define FAKE_SWAPDEV_H
 
-#include "swap/swap.h"
+#include "kernel/swap/swap.h"
 
 typedef struct FakeSwapDev FakeSwapDev;
 

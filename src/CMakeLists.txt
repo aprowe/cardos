@@ -4,6 +4,8 @@ idf_component_register(
     "shellcmd.c"
     "../kernel/drv/display.c"
     "../kernel/drv/keyboard.c"
+    "../kernel/drv/btmouse.c"
+    "../kernel/drv/vendor/esp_hid_gap.c"
     "../kernel/console/console.c"
     "../kernel/task/sched.c"
     "../kernel/fs/path.c"
@@ -20,7 +22,7 @@ idf_component_register(
     "../kernel/app/launcher.c"
   INCLUDE_DIRS
     "."
-    "../kernel"
+    ".."      # CardOS headers are included as "kernel/..."
   REQUIRES
     driver
     esp_lcd
@@ -29,4 +31,7 @@ idf_component_register(
     app_update
     esp_timer
     esp_driver_usb_serial_jtag
+    bt
+    esp_hid
+    nvs_flash
 )

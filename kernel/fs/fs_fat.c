@@ -9,8 +9,8 @@
  * actually mounted.
  */
 
-#include "fs/fs.h"
-#include "fs/path.h"
+#include "kernel/fs/fs.h"
+#include "kernel/fs/path.h"
 
 #include <dirent.h>
 #include <errno.h>

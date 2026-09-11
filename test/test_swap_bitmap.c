@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "swap/swap.h"
+#include "kernel/swap/swap.h"
 #include "fake_swapdev.h"
 
 static unsigned char bitmap[128];

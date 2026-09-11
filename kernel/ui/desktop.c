@@ -1,11 +1,11 @@
 /* The desktop shell. See desktop.h. */
 
-#include "ui/desktop.h"
-#include "ui/draw.h"
-#include "drv/keyboard.h"
-#include "mem/mem.h"
-#include "fs/fs.h"
-#include "ui/app.h"
+#include "kernel/ui/desktop.h"
+#include "kernel/ui/draw.h"
+#include "kernel/drv/keyboard.h"
+#include "kernel/mem/mem.h"
+#include "kernel/fs/fs.h"
+#include "kernel/ui/app.h"
 
 #include <stdio.h>
 #include <string.h>

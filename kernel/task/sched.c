@@ -1,7 +1,7 @@
 /* CardOS cooperative scheduler -- portable policy. See sched.h. */
 
-#include "task/sched.h"
-#include "mem/mem.h"
+#include "kernel/task/sched.h"
+#include "kernel/mem/mem.h"
 
 #include <string.h>
 

@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "ui/wm.h"
+#include "kernel/ui/wm.h"
 #include <string.h>
 
 static Rect R(int x, int y, int w, int h) {

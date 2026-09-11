@@ -1,6 +1,6 @@
 /* Rectangle arithmetic. See rect.h. */
 
-#include "ui/rect.h"
+#include "kernel/ui/rect.h"
 
 static int16_t min16(int16_t a, int16_t b) { return a < b ? a : b; }
 static int16_t max16(int16_t a, int16_t b) { return a > b ? a : b; }

@@ -1,6 +1,6 @@
 /* Path handling. See path.h. */
 
-#include "fs/path.h"
+#include "kernel/fs/path.h"
 
 #include <string.h>
 

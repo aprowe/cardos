@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "mem/mem.h"
+#include "kernel/mem/mem.h"
 #include <string.h>
 
 static unsigned char heap[64 * 1024];

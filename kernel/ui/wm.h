@@ -18,7 +18,7 @@
 
 #include <stdint.h>
 
-#include "ui/rect.h"
+#include "kernel/ui/rect.h"
 
 #define WM_MAX_WINDOWS 8
 #define WM_MAX_DAMAGE  8

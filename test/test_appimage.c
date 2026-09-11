@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "app/appimage.h"
+#include "kernel/app/appimage.h"
 #include <string.h>
 
 /* ---- synthetic image builder -------------------------------------------

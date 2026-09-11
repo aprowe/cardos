@@ -7,7 +7,7 @@
  * scheduler hand them back when the task dies.
  */
 #include "tinytest.h"
-#include "mem/mem.h"
+#include "kernel/mem/mem.h"
 #include <string.h>
 
 static unsigned char heap[32 * 1024];

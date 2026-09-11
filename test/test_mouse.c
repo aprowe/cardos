@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "input/mouse.h"
+#include "kernel/input/mouse.h"
 #include <string.h>
 
 static void setup(void) { mouse_init(240, 135); }

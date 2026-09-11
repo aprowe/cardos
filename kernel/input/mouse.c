@@ -1,6 +1,6 @@
 /* Mouse input. See mouse.h. */
 
-#include "input/mouse.h"
+#include "kernel/input/mouse.h"
 
 static int16_t g_w = 240, g_h = 135;
 static int16_t g_x, g_y;

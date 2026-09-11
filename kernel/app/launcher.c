@@ -1,7 +1,7 @@
 /* Booting a guest firmware. See launcher.h. */
 
-#include "app/launcher.h"
-#include "fs/fs.h"
+#include "kernel/app/launcher.h"
+#include "kernel/fs/fs.h"
 
 #include <stddef.h>
 #include <stdlib.h>

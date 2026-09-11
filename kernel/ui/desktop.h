@@ -9,8 +9,8 @@
 
 #include <stdint.h>
 
-#include "ui/wm.h"
-#include "input/mouse.h"
+#include "kernel/ui/wm.h"
+#include "kernel/input/mouse.h"
 
 #define TASKBAR_H 13
 

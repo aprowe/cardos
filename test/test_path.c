@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "fs/path.h"
+#include "kernel/fs/path.h"
 #include <string.h>
 
 static char out[FS_PATH_MAX];

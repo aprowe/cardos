@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "task/sched.h"
+#include "kernel/task/sched.h"
 #include <string.h>
 
 /* Time is injected, so these tests drive the clock directly rather than
@@ -227,7 +227,7 @@ void test_listing_respects_the_caller_s_limit(void) {
 
 /* --- integration with the memory manager --------------------------------- */
 
-#include "mem/mem.h"
+#include "kernel/mem/mem.h"
 static unsigned char sched_heap[16 * 1024];
 
 void test_a_dying_task_hands_back_the_locks_it_held(void) {

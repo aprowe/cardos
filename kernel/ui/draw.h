@@ -10,8 +10,8 @@
 
 #include <stdint.h>
 
-#include "drv/display.h"
-#include "ui/rect.h"
+#include "kernel/drv/display.h"
+#include "kernel/ui/rect.h"
 
 /* The classic beveled palette. Chosen for legibility at 240x135: a one-pixel
  * light/dark edge still reads as raised, where a subtle flat fill vanishes. */

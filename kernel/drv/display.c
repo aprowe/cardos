@@ -10,7 +10,7 @@
  * also always colour-inverted.
  */
 
-#include "drv/display.h"
+#include "kernel/drv/display.h"
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"

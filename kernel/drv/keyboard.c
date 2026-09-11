@@ -14,7 +14,7 @@
  * not a mistake.
  */
 
-#include "drv/keyboard.h"
+#include "kernel/drv/keyboard.h"
 
 #include "driver/gpio.h"
 #include "esp_rom_sys.h"   /* esp_rom_delay_us */

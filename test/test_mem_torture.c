@@ -7,8 +7,8 @@
  * reports the exact byte that went wrong instead of a dead Cardputer.
  */
 #include "tinytest.h"
-#include "mem/mem.h"
-#include "swap/swap.h"
+#include "kernel/mem/mem.h"
+#include "kernel/swap/swap.h"
 #include "fake_swapdev.h"
 #include <string.h>
 

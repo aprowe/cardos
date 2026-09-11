@@ -1,7 +1,7 @@
 /* Drawing primitives. See draw.h. */
 
-#include "ui/draw.h"
-#include "console/font6x8.h"
+#include "kernel/ui/draw.h"
+#include "kernel/console/font6x8.h"
 
 #include <string.h>
 

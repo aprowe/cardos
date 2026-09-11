@@ -1,8 +1,8 @@
 /* CardOS handle-based memory manager. See mem.h for the contract. */
 
-#include "mem/mem.h"
-#include "mem/mem_internal.h"
-#include "swap/swap.h"
+#include "kernel/mem/mem.h"
+#include "kernel/mem/mem_internal.h"
+#include "kernel/swap/swap.h"
 
 #include <stdint.h>
 #include <string.h>

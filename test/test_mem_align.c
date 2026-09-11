@@ -8,7 +8,7 @@
  * instead.
  */
 #include "tinytest.h"
-#include "mem/mem.h"
+#include "kernel/mem/mem.h"
 #include <stdint.h>
 #include <string.h>
 

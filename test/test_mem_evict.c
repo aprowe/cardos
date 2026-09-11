@@ -1,6 +1,6 @@
 #include "tinytest.h"
-#include "mem/mem.h"
-#include "swap/swap.h"
+#include "kernel/mem/mem.h"
+#include "kernel/swap/swap.h"
 #include "fake_swapdev.h"
 #include <string.h>
 

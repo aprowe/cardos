@@ -1,6 +1,6 @@
 /* Structural validation of an ESP32-S3 application image. See appimage.h. */
 
-#include "app/appimage.h"
+#include "kernel/app/appimage.h"
 
 #include <string.h>
 
