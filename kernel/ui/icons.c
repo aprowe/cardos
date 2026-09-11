@@ -35,27 +35,71 @@ static uint32_t blob_stamp(void) {
   return h;
 }
 
+/* fs_write returns -1 on a short write, and the bytes it did manage are
+ * already in the file. Writing in chunks and checking each one is the
+ * difference between a truncated app and a retried one: edit.capp landed on
+ * the card as 650 bytes of a 14720-byte file, and because the stamp was
+ * written anyway, every later boot believed it was current. */
+static int write_all(int fd, const uint8_t *data, size_t size) {
+  size_t done = 0;
+  int stalls = 0;
+
+  while (done < size) {
+    size_t chunk = size - done;
+    int n;
+    if (chunk > 1024) chunk = 1024;
+    n = fs_write(fd, data + done, chunk);
+    if (n > 0) { done += (size_t)n; stalls = 0; continue; }
+    if (++stalls > 3) return -1;      /* not going to get better by asking again */
+  }
+  return 0;
+}
+
+static int file_size(const char *path) {
+  int fd = fs_open(path, FS_O_READ);
+  int n;
+  if (fd < 0) return -1;
+  n = fs_seek(fd, 0, FS_SEEK_END);
+  fs_close(fd);
+  return n;
+}
+
 static void seed_capps(void) {
   uint32_t want = blob_stamp(), have = 0;
   size_t i;
   char path[80];
-  int fd;
+  int fd, all_ok = 1;
 
   fd = fs_open(ICONS_DIR "/.capps", FS_O_READ);
   if (fd >= 0) {
     if (fs_read(fd, &have, sizeof have) != (int)sizeof have) have = 0;
     fs_close(fd);
   }
-  if (have == want) return;
 
   for (i = 0; i < CAPP_BLOB_COUNT; i++) {
+    int ok;
     snprintf(path, sizeof path, "%s/%s", ICONS_DIR, CAPP_BLOBS[i].name);
+
+    /* The stamp says which firmware wrote these, and the size says whether the
+     * write finished. Both are checked, because a matching stamp over a
+     * truncated file is exactly the state that made edit.capp stay broken at
+     * 650 bytes of 14720 across every reboot. */
+    if (have == want && file_size(path) == (int)CAPP_BLOBS[i].size) continue;
+
     fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
-    if (fd < 0) continue;
-    fs_write(fd, CAPP_BLOBS[i].data, CAPP_BLOBS[i].size);
+    if (fd < 0) { all_ok = 0; continue; }
+    ok = (write_all(fd, CAPP_BLOBS[i].data, CAPP_BLOBS[i].size) == 0);
     fs_close(fd);
+
+    /* Reopened and measured rather than trusted. A half-written app that
+     * loads is worse than one that is plainly missing, so a bad one goes. */
+    if (ok && file_size(path) != (int)CAPP_BLOBS[i].size) ok = 0;
+    if (!ok) { fs_remove(path); all_ok = 0; }
   }
 
+  /* The stamp means "every blob on the card is this firmware's". Writing it
+   * after a failure is what made the truncation permanent. */
+  if (!all_ok || have == want) return;
   fd = fs_open(ICONS_DIR "/.capps", FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
   if (fd >= 0) { fs_write(fd, &want, sizeof want); fs_close(fd); }
 }

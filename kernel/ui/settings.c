@@ -84,22 +84,24 @@ static void act_radio_off(SettingsState *st) {
   snprintf(st->note, sizeof st->note, "bluetooth off");
 }
 
-static void act_pointer(SettingsState *st) {
-  desktop_set_kbd_mouse(!desktop_kbd_mouse());
-  snprintf(st->note, sizeof st->note, "arrows move, space clicks");
+static void act_bt_boot(SettingsState *st) {
+  int on = !bthid_autostart();
+  bthid_set_autostart(on);
+  snprintf(st->note, sizeof st->note,
+           on ? "on: costs ~67K of heap from boot" : "off: pair from here instead");
 }
 
-static void act_flip(SettingsState *st) {
-  int n = (display_orient() + 1) % DISPLAY_ORIENTS;
-  display_set_orient(n);
-  snprintf(st->note, sizeof st->note, "orientation %d", n);
-  ui_repaint();
-}
-
-static void act_rescan(SettingsState *st) {
-  desktop_reload_icons();
-  snprintf(st->note, sizeof st->note, "desktop reloaded");
-  ui_repaint();
+/* One button for "get me back to where I was": the saved network and whatever
+ * was paired, which between them is everything that drops when the machine is
+ * put down for a while. */
+static void act_reconnect(SettingsState *st) {
+  int n;
+  snprintf(st->note, sizeof st->note, "reconnecting...");
+  settings_paint_now();
+  if (!wifi_is_connected()) wifi_connect_saved(15000);
+  n = bthid_autoconnect(3);
+  snprintf(st->note, sizeof st->note, "%s, %d bluetooth",
+           wifi_is_connected() ? "wifi up" : "no wifi", n);
 }
 
 static void act_wifi_scan(SettingsState *st) {
@@ -126,10 +128,11 @@ static void act_wifi_saved(SettingsState *st) {
   snprintf(st->note, sizeof st->note, "%s", wifi_status());
 }
 
-static void act_wifi_forget(SettingsState *st) {
+static void act_forget(SettingsState *st) {
   wifi_forget();
   wifi_stop();
-  snprintf(st->note, sizeof st->note, "network forgotten, radio off");
+  bthid_stop_all();
+  snprintf(st->note, sizeof st->note, "network forgotten, radios off");
 }
 
 static void act_reboot(SettingsState *st) {
@@ -147,40 +150,39 @@ typedef struct {
 
 static void v_mouse(char *b, size_t n) { snprintf(b, n, "%s", bthid_status(BTHID_MOUSE)); }
 static void v_kbd(char *b, size_t n)   { snprintf(b, n, "%s", bthid_status(BTHID_KEYBOARD)); }
-static void v_wifi(char *b, size_t n)   { snprintf(b, n, "%s", wifi_status()); }
+static void v_wifi(char *b, size_t n)  { snprintf(b, n, "%s", wifi_status()); }
 static void v_saved(char *b, size_t n) {
-  const char *s = wifi_saved_ssid();
-  snprintf(b, n, "%s", s[0] ? s : "none");
+  const char *ssid = wifi_saved_ssid();
+  snprintf(b, n, "%s", ssid[0] ? ssid : "none");
 }
-static void v_pointer(char *b, size_t n) {
-  snprintf(b, n, "%s", desktop_kbd_mouse() ? "keyboard" : "off");
-}
-static void v_orient(char *b, size_t n) { snprintf(b, n, "%d", display_orient()); }
-static void v_heap(char *b, size_t n) {
-  snprintf(b, n, "%uK", (unsigned)(esp_get_free_heap_size() / 1024));
-}
-static void v_exec(char *b, size_t n) {
-  snprintf(b, n, "%uK", (unsigned)(capprun_exec_free() / 1024));
-}
-static void v_radio(char *b, size_t n) {
-  uint32_t bt = bthid_heap_cost(), wf = wifi_heap_cost();
-  snprintf(b, n, "bt %uK wifi %uK", (unsigned)(bt / 1024), (unsigned)(wf / 1024));
+static void v_btboot(char *b, size_t n) {
+  snprintf(b, n, "%s", bthid_autostart() ? "on" : "off");
 }
 
+/* One line rather than four. Free heap is the number that decides whether the
+ * next radio will start; the rest is what the mem command is for. */
+static void v_ram(char *b, size_t n) {
+  snprintf(b, n, "%uK free, %uK app",
+           (unsigned)(esp_get_free_heap_size() / 1024),
+           (unsigned)(capprun_exec_free() / 1024));
+}
+
+/* The radios first, because they are the only settings that change day to
+ * day. Rotation and the keyboard-driven pointer were here and are gone: the
+ * orientation was baked in once it was right, and a real mouse made the other
+ * one a debugging aid. Both survive as console commands -- flip, and ctrl-P on
+ * the desktop. */
 static const Row ROWS[] = {
-  { "WiFi",      v_wifi,    act_wifi_scan   },
-  { "Saved net", v_saved,   act_wifi_saved  },
-  { "Forget",    NULL,      act_wifi_forget },
-  { "Mouse",     v_mouse,   act_pair        },
-  { "Keyboard",  v_kbd,     act_pair_kbd    },
-  { "BT off",    NULL,      act_radio_off   },
-  { "Pointer",   v_pointer, act_pointer     },
-  { "Rotation",  v_orient,  act_flip        },
-  { "Desktop",   NULL,      act_rescan      },
-  { "Heap",      v_heap,    NULL            },
-  { "App RAM",   v_exec,    NULL            },
-  { "Radios",    v_radio,   NULL            },
-  { "Restart",   NULL,      act_reboot      },
+  { "WiFi",      v_wifi,   act_wifi_scan  },
+  { "Network",   v_saved,  act_wifi_saved },
+  { "Mouse",     v_mouse,  act_pair       },
+  { "Keyboard",  v_kbd,    act_pair_kbd   },
+  { "BT at boot", v_btboot, act_bt_boot   },
+  { "Reconnect", NULL,     act_reconnect  },
+  { "Bluetooth off", NULL, act_radio_off  },
+  { "Forget all", NULL,    act_forget     },
+  { "RAM",       v_ram,    NULL           },
+  { "Restart",   NULL,     act_reboot     },
 };
 
 #define NROWS ((int)(sizeof ROWS / sizeof ROWS[0]))

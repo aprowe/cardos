@@ -27,6 +27,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 
 #include "freertos/FreeRTOS.h"
@@ -658,6 +659,90 @@ int bthid_start(int scan_seconds, BtHidKind want) {
     }
   }
   return 0;
+}
+
+/* Wait for a link that is mid-handshake to settle. Discovery runs entirely
+ * from GATT callbacks, so this is a poll rather than a wait on anything --
+ * there is no lock to block on, which is the whole reason this client works
+ * where esp_hidh deadlocked. */
+static int settle(Link *l, int ms) {
+  int waited = 0;
+  while (l->used && l->state == BTH_CONNECTING && waited < ms) {
+    vTaskDelay(pdMS_TO_TICKS(50));
+    waited += 50;
+  }
+  return l->used && l->state == BTH_CONNECTED;
+}
+
+int bthid_autoconnect(int scan_seconds) {
+  esp_hid_scan_result_t *results = NULL, *r;
+  size_t count = 0;
+  int opened = 0;
+
+  if (radio_up() != 0) return 0;
+  if (esp_hid_scan((uint32_t)scan_seconds, &count, &results) != ESP_OK) return 0;
+
+  for (r = results; r && opened < MAX_LINKS; r = r->next) {
+    BtHidKind kind;
+    Link *l;
+    ble_addr_t addr;
+
+    if (r->transport != ESP_HID_TRANSPORT_BLE) continue;
+    if (already_connected(r)) continue;
+
+    /* The appearance is the only thing that says which this is before the
+     * services are read. A device that advertises neither is assumed to be a
+     * mouse, because that is the one worth guessing: a keyboard that guesses
+     * wrong still types, while a mouse that never connects is a dead
+     * pointer. */
+    kind = (r->ble.appearance == ESP_HID_APPEARANCE_KEYBOARD) ? BTHID_KEYBOARD
+                                                              : BTHID_MOUSE;
+    l = link_for_kind(kind);
+    if (l && l->state == BTH_CONNECTED) continue;
+
+    l = link_claim(kind);
+    if (!l) continue;
+    l->state = BTH_CONNECTING;
+    snprintf(l->detail, sizeof l->detail, "%s",
+             r->name ? r->name : (kind == BTHID_KEYBOARD ? "keyboard" : "mouse"));
+
+    addr.type = r->ble.addr_type;
+    memcpy(addr.val, r->bda, 6);
+    s_pending = l;
+    if (ble_gap_connect(s_own_addr_type, &addr, 8000, NULL, gap_event, NULL) != 0) {
+      l->state = BTH_FAILED;
+      continue;
+    }
+    /* One connect at a time: discovery is driven by s_pending, and starting a
+     * second before the first has a handle would hand its events to the wrong
+     * link. */
+    if (settle(l, 6000)) opened++;
+    s_pending = NULL;
+  }
+
+  esp_hid_scan_results_free(results);
+  ESP_LOGI(TAG, "autoconnect: %d link%s", opened, opened == 1 ? "" : "s");
+  return opened;
+}
+
+#define NVS_NS      "cardos"
+#define NVS_BTBOOT  "btboot"
+
+int bthid_autostart(void) {
+  nvs_handle_t h;
+  uint8_t v = 0;
+  if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return 0;
+  if (nvs_get_u8(h, NVS_BTBOOT, &v) != ESP_OK) v = 0;
+  nvs_close(h);
+  return v ? 1 : 0;
+}
+
+void bthid_set_autostart(int on) {
+  nvs_handle_t h;
+  if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_set_u8(h, NVS_BTBOOT, (uint8_t)(on ? 1 : 0));
+  nvs_commit(h);
+  nvs_close(h);
 }
 
 void bthid_stop(BtHidKind kind) {

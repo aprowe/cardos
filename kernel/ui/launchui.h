@@ -22,6 +22,14 @@ void launchui_init(void);
 /* Repaint now, for an app that is about to block. */
 void launchui_repaint(void);
 
+/* Open a named app straight away, skipping the carousel -- what the console's
+ * `run` command does. The name is matched against what the launcher shows,
+ * case-insensitively. Returns 0 if it was found and started.
+ *
+ * Escape then returns to the carousel rather than to the console, because that
+ * is what Escape does everywhere else in this shell. */
+int launchui_run(const char *name);
+
 /* Returns 1 when the user asked to leave for the text console. */
 int  launchui_key(uint8_t key);
 

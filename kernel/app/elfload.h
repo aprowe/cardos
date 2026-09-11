@@ -39,6 +39,7 @@ typedef enum {
   CAPP_ERR_OPEN,
   CAPP_ERR_TOO_BIG,
   CAPP_ERR_NOT_ELF,
+  CAPP_ERR_TRUNCATED,       /* the file is shorter than it says it is */
   CAPP_ERR_WRONG_MACHINE,
   CAPP_ERR_NO_IMAGE,        /* no allocatable section */
   CAPP_ERR_NO_ENTRY,        /* capp_register missing */

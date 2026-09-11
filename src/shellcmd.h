@@ -27,4 +27,8 @@ void cmd_wifi(const char *arg);
 /* get URL -- fetch and print, for checking that the network actually works. */
 void cmd_get(const char *arg);
 
+/* run          -- what there is to run
+ * run NAME     -- start it fullscreen; escape returns to the launcher */
+void cmd_run(const char *arg);
+
 #endif /* CARDOS_SHELLCMD_H */

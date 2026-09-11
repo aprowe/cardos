@@ -9,6 +9,8 @@
 #include "shellcmd.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/http.h"
+#include "kernel/ui/icons.h"
+#include "kernel/ui/launchui.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -413,4 +415,48 @@ void cmd_get(const char *arg) {
   n = http_get(arg, buf, sizeof buf, 15000);
   if (n < 0) { con_printf("failed (%d)\n", n); return; }
   con_printf("%d bytes\n%.600s\n", n, buf);
+}
+
+/* ----------------------------------------------------------------- run --- */
+
+static const char *run_kind(IconKind k) {
+  switch (k) {
+  case ICON_FIRMWARE: return "firmware";
+  case ICON_CAPP:     return "app";
+  default:            return "built in";
+  }
+}
+
+void cmd_run(const char *arg) {
+  int i;
+
+  if (!arg || !*arg) {
+    icons_reload();
+    if (icons_count() == 0) { con_write("nothing to run\n"); return; }
+    for (i = 0; i < icons_count(); i++) {
+      const Icon *ic = icon_at(i);
+      con_printf("  %-14s %-9s %s\n", ic->name, run_kind(ic->kind), ic->path);
+    }
+    con_write("run NAME\n");
+    return;
+  }
+
+  /* Firmware goes through boot, which asks first: it ends CardOS, and a
+   * mistyped name should not cost a reboot. */
+  icons_reload();
+  for (i = 0; i < icons_count(); i++) {
+    const Icon *ic = icon_at(i);
+    if (!ic) continue;
+    if (strcasecmp(ic->name, arg) != 0) continue;
+    if (ic->kind == ICON_FIRMWARE) {
+      con_printf("%s is firmware. use: boot %s\n", ic->name, ic->name);
+      return;
+    }
+    break;
+  }
+
+  if (launchui_run(arg) != 0) {
+    err(arg, "no such app -- run with no argument lists them");
+    return;
+  }
 }

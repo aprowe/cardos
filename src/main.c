@@ -24,6 +24,7 @@
 #include "kernel/task/sched.h"
 #include "kernel/fs/fs.h"
 #include "shellcmd.h"
+#include "kernel/fs/path.h"
 #include "kernel/ui/desktop.h"
 #include "kernel/ui/launchui.h"
 #include "kernel/net/wifi.h"
@@ -152,10 +153,158 @@ static void run_line(char *line) {
   }
   else if (!strcmp(line, "wifi")) cmd_wifi(arg);
   else if (!strcmp(line, "get"))  cmd_get(arg);
+  else if (!strcmp(line, "run")) {
+    /* cmd_run starts it; the mode has to change here, where the loop is. */
+    cmd_run(arg);
+    if (arg && *arg && ui_shell() == UI_LAUNCHER) s_mode = MODE_LAUNCHER;
+  }
   else if (!strcmp(line, "clear"))  con_clear();
   else if (!strcmp(line, "reboot")) esp_restart();
   else if (!strcmp(line, "echo"))   { con_write(arg); con_putc('\n'); }
   else con_printf("unknown command: %s\n", line);
+}
+
+
+/* ---- tab completion -----------------------------------------------------
+ *
+ * Completes the command when the cursor is still in the first word, and a path
+ * otherwise. Only one list is kept -- the commands -- and it is the same one
+ * `help` prints, so a command added in one place cannot go missing from the
+ * other.
+ *
+ * On several matches it completes as far as they agree and lists them, which
+ * is what every shell does and the only behaviour that is useful when you have
+ * half-remembered a name. */
+static const char *const COMMANDS[] = {
+  "apps", "boot", "boot!", "bootinfo", "cat", "cd", "clear", "df", "desk",
+  "echo", "flip", "get", "gui", "help", "launch", "ls", "mem", "mkdir",
+  "mouse", "ps", "pwd", "reboot", "rm", "run", "taskcost", "wifi",
+};
+#define NCOMMANDS ((int)(sizeof COMMANDS / sizeof COMMANDS[0]))
+
+/* How many leading characters `a` and `b` share. */
+static int common(const char *a, const char *b) {
+  int i = 0;
+  while (a[i] && b[i] && a[i] == b[i]) i++;
+  return i;
+}
+
+/* Split the path being typed into the directory to list and the stem to match
+ * inside it. "/desk" -> "/" and "desk"; "/desktop/mi" -> "/desktop" and "mi". */
+static void split_path(const char *word, char *dir, size_t dirn, const char **stem) {
+  const char *slash = strrchr(word, '/');
+  if (!slash) {
+    snprintf(dir, dirn, "%s", ".");
+    *stem = word;
+    return;
+  }
+  if (slash == word) snprintf(dir, dirn, "%s", "/");
+  else snprintf(dir, dirn, "%.*s", (int)(slash - word), word);
+  *stem = slash + 1;
+}
+
+/* Collects matches, tracking the longest shared prefix and printing them if
+ * there is more than one. Returns what to append to what is already typed. */
+typedef struct {
+  const char *stem;
+  size_t      stem_len;
+  char        best[CARDOS_LINE_MAX + 1];
+  int         count;
+} Complete;
+
+static void offer(Complete *c, const char *name) {
+  if (strncmp(name, c->stem, c->stem_len) != 0) return;
+  if (c->count == 0) snprintf(c->best, sizeof c->best, "%s", name);
+  else c->best[common(c->best, name)] = 0;
+  c->count++;
+}
+
+static void list_again(Complete *c, const char *what) {
+  (void)c;
+  (void)what;
+}
+
+static void complete_line(void) {
+  Complete c;
+  const char *word;
+  int i, word_start;
+  int is_first_word;
+
+  s_line[s_len] = 0;
+
+  /* The word under the cursor starts after the last space. */
+  word_start = s_len;
+  while (word_start > 0 && s_line[word_start - 1] != ' ') word_start--;
+  word = s_line + word_start;
+  is_first_word = (word_start == 0);
+
+  memset(&c, 0, sizeof c);
+  c.stem = word;
+  c.stem_len = strlen(word);
+
+  if (is_first_word) {
+    for (i = 0; i < NCOMMANDS; i++) offer(&c, COMMANDS[i]);
+  } else {
+    char dir[FS_PATH_MAX], full[FS_PATH_MAX];
+    const char *stem;
+    FsDir d;
+    FsEntry e;
+
+    split_path(word, dir, sizeof dir, &stem);
+    c.stem = stem;
+    c.stem_len = strlen(stem);
+    if (dir[0] == '.' && dir[1] == 0) snprintf(full, sizeof full, "%s", shell_cwd());
+    else snprintf(full, sizeof full, "%s", dir);
+
+    if (fs_opendir(full, &d) == 0) {
+      while (fs_readdir(&d, &e) == 1) offer(&c, e.name);
+      fs_closedir(&d);
+    }
+  }
+
+  if (c.count == 0) return;
+
+  /* Append whatever is agreed and not already typed. */
+  {
+    size_t have = c.stem_len, want = strlen(c.best);
+    while (have < want && s_len < CARDOS_LINE_MAX) {
+      s_line[s_len++] = c.best[have++];
+      con_putc(c.best[have - 1]);
+    }
+    s_line[s_len] = 0;
+    if (c.count == 1 && s_len < CARDOS_LINE_MAX) {
+      s_line[s_len++] = ' ';
+      con_putc(' ');
+      s_line[s_len] = 0;
+    }
+  }
+
+  /* More than one, and nothing left to agree on: show what they are. */
+  if (c.count > 1 && strlen(c.best) == c.stem_len) {
+    con_putc('\n');
+    if (is_first_word) {
+      for (i = 0; i < NCOMMANDS; i++)
+        if (strncmp(COMMANDS[i], c.stem, c.stem_len) == 0)
+          con_printf("%s  ", COMMANDS[i]);
+    } else {
+      char dir[FS_PATH_MAX], full[FS_PATH_MAX];
+      const char *stem;
+      FsDir d;
+      FsEntry e;
+      split_path(word, dir, sizeof dir, &stem);
+      if (dir[0] == '.' && dir[1] == 0) snprintf(full, sizeof full, "%s", shell_cwd());
+      else snprintf(full, sizeof full, "%s", dir);
+      if (fs_opendir(full, &d) == 0) {
+        while (fs_readdir(&d, &e) == 1)
+          if (strncmp(e.name, stem, strlen(stem)) == 0) con_printf("%s  ", e.name);
+        fs_closedir(&d);
+      }
+    }
+    con_putc('\n');
+    prompt();
+    con_write(s_line);
+  }
+  (void)list_again;
 }
 
 /* Monotonic milliseconds for the scheduler. */
@@ -244,11 +393,23 @@ void app_main(void) {
 
   /* Came back from a firmware the desktop launched: return there, rather than
    * to a console nobody asked for. */
-  /* Straight into the launcher. It is the shell that is actually useful, and
-   * a device that boots to a blinking prompt is a device you have to remember
-   * a command for. The console is one Escape away. */
-  launchui_init();
-  s_mode = MODE_LAUNCHER;
+  /* A bonded mouse or keyboard is usually still advertising, so one short look
+   * before the shell comes up saves reaching for Settings. Off unless asked
+   * for: the radio costs ~67 KB for the whole uptime. */
+  if (bthid_autostart()) {
+    con_write("bluetooth: looking for paired devices...\n");
+    con_printf("  %d connected\n", bthid_autoconnect(1));
+  }
+
+  /* Back into whichever shell was last used. A device that always boots to the
+   * same one regardless of what you were doing is a device you have to re-enter
+   * a command on every time -- and it makes the firmware round trip land where
+   * you left from, which is the behaviour the rollback was built for. */
+  switch (ui_saved_shell()) {
+  case UI_DESKTOP:  desktop_init(); s_mode = MODE_DESKTOP; break;
+  case UI_NONE:     prompt();       s_mode = MODE_CONSOLE; break;
+  default:          launchui_init(); s_mode = MODE_LAUNCHER; break;
+  }
 
   for (;;) {
     uint8_t k = keyboard_poll();
@@ -326,6 +487,8 @@ void app_main(void) {
         prompt();
       } else if (k == KEY_BACKSPACE) {
         if (s_len > 0) { s_len--; con_putc('\b'); }
+      } else if (k == KEY_TAB) {
+        complete_line();
       } else if (k == KEY_ESC) {
         s_len = 0;
         con_putc('\n');

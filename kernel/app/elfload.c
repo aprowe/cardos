@@ -90,7 +90,7 @@ CappResult capp_load(const char *path, LoadedApp *out) {
   uint8_t *code = NULL, *code_w = NULL, *data = NULL;
   uint32_t code_size = 0, data_size = 0;
   int code_sec = -1, data_sec = -1;
-  int fd, i;
+  int fd, i, fsize;
   CappResult rc = CAPP_ERR_OPEN;
 
   memset(out, 0, sizeof *out);
@@ -98,10 +98,20 @@ CappResult capp_load(const char *path, LoadedApp *out) {
   fd = fs_open(path, FS_O_READ);
   if (fd < 0) return CAPP_ERR_OPEN;
 
+  /* Measured up front so a short file is reported as short. A truncated app
+   * otherwise fails wherever it happens to run out -- as "not a CardOS app",
+   * which sends you looking at the toolchain instead of at the card. */
+  fsize = fs_seek(fd, 0, FS_SEEK_END);
+
   if (read_at(fd, 0, &eh, sizeof eh) != 0) goto done;
   if (memcmp(eh.e_ident, "\x7F" "ELF", 4) != 0) { rc = CAPP_ERR_NOT_ELF; goto done; }
   if (eh.e_machine != EM_XTENSA) { rc = CAPP_ERR_WRONG_MACHINE; goto done; }
   if (eh.e_shnum == 0 || eh.e_shnum > 64) { rc = CAPP_ERR_NOT_ELF; goto done; }
+  if (fsize > 0 &&
+      (uint32_t)fsize < eh.e_shoff + (uint32_t)eh.e_shnum * sizeof(Elf32_Shdr)) {
+    rc = CAPP_ERR_TRUNCATED;
+    goto done;
+  }
 
   sh = (Elf32_Shdr *)malloc((size_t)eh.e_shnum * sizeof *sh);
   if (!sh) { rc = CAPP_ERR_NO_MEMORY; goto done; }
@@ -123,6 +133,13 @@ CappResult capp_load(const char *path, LoadedApp *out) {
     }
   }
   if (code_sec < 0) { rc = CAPP_ERR_NO_IMAGE; goto done; }
+  if (fsize > 0 &&
+      ((uint32_t)fsize < sh[code_sec].sh_offset + code_size ||
+       (data_sec >= 0 && sh[data_sec].sh_type == SHT_PROGBITS &&
+        (uint32_t)fsize < sh[data_sec].sh_offset + data_size))) {
+    rc = CAPP_ERR_TRUNCATED;
+    goto done;
+  }
   if (code_size > CAPP_MAX_CODE || data_size > CAPP_MAX_DATA) {
     rc = CAPP_ERR_TOO_BIG;
     goto done;
@@ -293,6 +310,7 @@ const char *capp_strerror(CappResult r) {
   case CAPP_ERR_OPEN:           return "cannot open";
   case CAPP_ERR_TOO_BIG:        return "too large";
   case CAPP_ERR_NOT_ELF:        return "not a CardOS app";
+  case CAPP_ERR_TRUNCATED:      return "truncated file";
   case CAPP_ERR_WRONG_MACHINE:  return "built for another chip";
   case CAPP_ERR_NO_IMAGE:       return "no loadable section";
   case CAPP_ERR_NO_ENTRY:       return "no capp_register";

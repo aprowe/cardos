@@ -244,7 +244,9 @@ static void launch(int i) {
 
   a = icon_app(i);
   if (!a) return;
-  if (ic->kind == ICON_CAPP) capprun_set_file(ic->slot, ic->path);
+  /* Deliberately not capprun_set_file(ic->path): that path is the app's own
+   * binary, and handing Edit its own .capp made it open 14 KB of ELF as text.
+   * set_file is for an icon that names a document, which nothing does yet. */
   if (a->open) a->open(a->state);
 
   /* Everything runs fullscreen here, whatever size it asked for: there is no
@@ -277,6 +279,35 @@ void launchui_init(void) {
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
   flush();
+}
+
+/* Case-insensitive, because a console user types what they remember seeing and
+ * the launcher shows "Mines" while the file is mines.capp. */
+static int same_name(const char *a, const char *b) {
+  while (*a && *b) {
+    char ca = *a, cb = *b;
+    if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + 32);
+    if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + 32);
+    if (ca != cb) return 0;
+    a++; b++;
+  }
+  return *a == 0 && *b == 0;
+}
+
+int launchui_run(const char *name) {
+  int i;
+
+  if (!name || !*name) return -1;
+  launchui_init();
+
+  for (i = 0; i < icons_count(); i++) {
+    const Icon *ic = icon_at(i);
+    if (!ic || !same_name(ic->name, name)) continue;
+    s_sel = i;
+    launch(i);
+    return 0;
+  }
+  return -1;
 }
 
 int launchui_key(uint8_t key) {

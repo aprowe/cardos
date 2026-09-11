@@ -424,7 +424,9 @@ static void launch_icon(int i) {
 
   a = icon_app(i);
   if (!a) return;
-  if (ic->kind == ICON_CAPP) capprun_set_file(ic->slot, ic->path);
+  /* Deliberately not capprun_set_file(ic->path): that path is the app's own
+   * binary, and handing Edit its own .capp made it open 14 KB of ELF as text.
+   * set_file is for an icon that names a document, which nothing does yet. */
 
   if (ic->kind == ICON_CAPP && capprun_fullscreen(ic->slot)) {
     int16_t w = DISPLAY_W, h = DISPLAY_H;

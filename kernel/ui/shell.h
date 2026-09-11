@@ -13,8 +13,14 @@
 
 typedef enum { UI_NONE = 0, UI_DESKTOP, UI_LAUNCHER } UiShell;
 
+/* Setting the shell also remembers it, so the machine comes back up in
+ * whichever one you were last using rather than in whichever one the firmware
+ * author preferred. */
 void    ui_set_shell(UiShell s);
 UiShell ui_shell(void);
+
+/* What to start in. UI_LAUNCHER on a machine that has never been told. */
+UiShell ui_saved_shell(void);
 
 /* Repaint the active shell immediately. For an action that is about to block
  * for long enough to be noticed. */

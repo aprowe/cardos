@@ -39,6 +39,21 @@ typedef enum {
  * doing first. Returns 0 if a device was found and opened. */
 int bthid_start(int scan_seconds, BtHidKind want);
 
+/* One scan, and connect to everything HID it finds, up to both slots. For
+ * boot: a device that was bonded last time is usually still advertising, and a
+ * short look costs a second where two separate scans cost two.
+ *
+ * The radio's ~67 KB is the real price, and it is paid for the whole uptime
+ * from the moment this runs -- so it is a setting, not a default buried in the
+ * boot path. Returns how many links reached CONNECTED. */
+int bthid_autoconnect(int scan_seconds);
+
+/* Whether to run that scan at boot. Remembered across reboots. Off by default:
+ * the radio costs about 67 KB for the whole uptime, and a machine that is
+ * being used from its own keyboard should not pay that without being asked. */
+int  bthid_autostart(void);
+void bthid_set_autostart(int on);
+
 /* Disconnect one kind, or everything and the radio with it. */
 void bthid_stop(BtHidKind kind);
 void bthid_stop_all(void);
