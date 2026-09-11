@@ -34,6 +34,12 @@ void cmd_run(const char *arg);
 /* env            -- list the variables
  * set NAME=VALUE -- set one, or unset it with an empty value */
 void cmd_env(void);
+
+/* google                    -- what is stored, and whether it works
+ * google id|secret|token X  -- set one field (tools/google_auth.py sends these)
+ * google test               -- fetch an access token now
+ * google forget             -- erase them */
+void cmd_google(const char *arg);
 void cmd_set(const char *arg);
 
 /* Resolve a bare word or a path into something runnable and start it. This is

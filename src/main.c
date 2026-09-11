@@ -152,6 +152,7 @@ static void run_builtin(const char *line, char *arg) {
   else if (!strcmp(line, "get"))  cmd_get(arg);
   else if (!strcmp(line, "env"))  cmd_env();
   else if (!strcmp(line, "set"))  cmd_set(arg);
+  else if (!strcmp(line, "google")) cmd_google(arg);
   else if (!strcmp(line, "run")) {
     /* cmd_run starts it; the mode has to change here, where the loop is. */
     cmd_run(arg);

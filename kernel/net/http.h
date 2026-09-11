@@ -20,4 +20,16 @@
  *                           into the return when it fits, so -404 is a 404) */
 int http_get(const char *url, char *buf, size_t size, int timeout_ms);
 
+/* The general form. `method` is "GET", "POST", "PATCH" or "DELETE"; `body` and
+ * `content_type` are NULL for a request without one; `bearer` is an OAuth
+ * access token, or NULL.
+ *
+ * One call rather than three because the difference between them here is two
+ * strings, and an API with get/post/patch would have to grow again the first
+ * time something needed DELETE. */
+int http_request(const char *method, const char *url,
+                 const char *body, const char *content_type,
+                 const char *bearer,
+                 char *out, size_t out_size, int timeout_ms);
+
 #endif /* CARDOS_HTTP_H */

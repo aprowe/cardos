@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 8
+#define CAPP_API_VERSION 9
 
 #define CAPP_ICON_W 16
 #define CAPP_ICON_H 16
@@ -149,6 +149,21 @@ typedef struct {
   int (*http_get)(const char *url, char *buf, size_t size, int timeout_ms);
   int (*net_ready)(void);
   int (*net_connect)(int timeout_ms);
+
+  /* The general form. method is "GET", "POST", "PATCH", "PUT" or "DELETE";
+   * body and content_type are NULL for a request without one; bearer is an
+   * OAuth access token, or NULL. The reply body is returned whatever the
+   * status, because an API's error is a document explaining itself. */
+  int (*http)(const char *method, const char *url,
+              const char *body, const char *content_type,
+              const char *bearer,
+              char *out, size_t out_size, int timeout_ms);
+
+  /* A Google access token, refreshed if needed, or NULL if the device has not
+   * been signed in. The sign-in itself happens once on a PC -- see
+   * kernel/net/gauth.h for why it cannot happen here. */
+  const char *(*google_token)(void);
+  const char *(*google_status)(void);
 
   /* ---- becoming a graphical app ----
    *

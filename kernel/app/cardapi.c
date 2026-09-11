@@ -11,6 +11,7 @@
 #include "kernel/fs/fs.h"
 #include "kernel/net/http.h"
 #include "kernel/net/wifi.h"
+#include "kernel/net/gauth.h"
 #include "kernel/sys/sio.h"
 
 #include <stdarg.h>
@@ -105,6 +106,16 @@ static int api_net_connect(int timeout_ms) {
   return wifi_connect_saved(timeout_ms);
 }
 
+static int api_http(const char *method, const char *url, const char *body,
+                    const char *content_type, const char *bearer,
+                    char *out, size_t out_size, int timeout_ms) {
+  return http_request(method, url, body, content_type, bearer, out, out_size,
+                      timeout_ms);
+}
+
+static const char *api_google_token(void)  { return gauth_token(); }
+static const char *api_google_status(void) { return gauth_status(); }
+
 static void api_ui(const CappUi *ui) { capprun_install_ui(ui); }
 
 static const CardApi API = {
@@ -114,7 +125,8 @@ static const CardApi API = {
   api_memset, api_memcpy, api_memmove, api_strlen, api_fmt,
   api_ticks, api_log,
   api_out, api_out_line, api_in_line, api_has_input,
-  api_http_get, api_net_ready, api_net_connect,
+  api_http_get, api_net_ready, api_net_connect, api_http,
+  api_google_token, api_google_status,
   api_ui,
 };
 

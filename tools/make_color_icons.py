@@ -198,6 +198,25 @@ ICONS = {
         "................",
         "................",
     ],
+    # A clipboard with a ticked line.
+    "Todo": [
+        "................",
+        "......KKKK......",
+        "....KKyyyyKK....",
+        "..KKKKKKKKKKKK..",
+        "..KWWWWWWWWWWK..",
+        "..KWKKWWWWWWWK..",
+        "..KWKgKWWWWWWK..",
+        "..KWgKgWWWWWWK..",
+        "..KWggKWWWWWWK..",
+        "..KWWWWWWWWWWK..",
+        "..KWKKKKWWWWWK..",
+        "..KWWWWWWWWWWK..",
+        "..KWKKKKKKWWWK..",
+        "..KWWWWWWWWWWK..",
+        "..KKKKKKKKKKKK..",
+        "................",
+    ],
     # A board with a chip and a header: a firmware image.
     "firmware": [
         "................",

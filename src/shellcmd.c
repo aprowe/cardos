@@ -13,6 +13,7 @@
 #include "kernel/ui/launchui.h"
 #include "kernel/sys/env.h"
 #include "kernel/sys/sio.h"
+#include "kernel/net/gauth.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -550,4 +551,47 @@ int shell_exec(const char *word, const char *args) {
   /* Last: an app by the name the launcher shows it under, so "run edit" and
    * "edit" agree even though the file is edit.capp. */
   return launchui_run(word, args);
+}
+
+/* --------------------------------------------------------------- google --- */
+
+/* Never prints a secret back. The values arrive over the same serial line
+ * someone may be watching, and echoing them would put a refresh token into
+ * every terminal log that ever captured a session. */
+void cmd_google(const char *arg) {
+  const char *sp;
+
+  if (!arg || !*arg) {
+    con_printf("google: %s\n", gauth_configured() ? "credentials stored"
+                                                 : "not configured");
+    con_printf("status: %s\n", gauth_status());
+    con_write("set up with: python tools/google_auth.py\n");
+    return;
+  }
+
+  if (!strcmp(arg, "forget")) {
+    gauth_forget();
+    con_write("google: forgotten\n");
+    return;
+  }
+
+  if (!strcmp(arg, "test")) {
+    const char *tok;
+    con_write("asking Google for an access token...\n");
+    tok = gauth_token();
+    con_printf("%s: %s\n", tok ? "signed in" : "failed", gauth_status());
+    return;
+  }
+
+  sp = strchr(arg, ' ');
+  if (!sp) { err("google", "id, secret, token, test or forget"); return; }
+  while (*sp == ' ') sp++;
+
+  if (!strncmp(arg, "id ", 3))          gauth_set(sp, NULL, NULL);
+  else if (!strncmp(arg, "secret ", 7)) gauth_set(NULL, sp, NULL);
+  else if (!strncmp(arg, "token ", 6))  gauth_set(NULL, NULL, sp);
+  else { err("google", "id, secret, token, test or forget"); return; }
+
+  con_printf("stored, %s\n",
+             gauth_configured() ? "all three present" : "waiting for the rest");
 }

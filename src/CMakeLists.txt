@@ -25,6 +25,7 @@ idf_component_register(
     "../kernel/sys/sio.c"
     "../kernel/net/wifi.c"
     "../kernel/net/http.c"
+    "../kernel/net/gauth.c"
     "../kernel/fs/fs_fat.c"
     "../kernel/mem/mem.c"
     "../kernel/swap/swap.c"
