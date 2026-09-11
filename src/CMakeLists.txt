@@ -7,6 +7,7 @@ idf_component_register(
     "../kernel/console/console.c"
     "../kernel/task/sched.c"
     "../kernel/fs/path.c"
+    "../kernel/input/mouse.c"
     "../kernel/fs/fs_fat.c"
     "../kernel/mem/mem.c"
     "../kernel/swap/swap.c"
