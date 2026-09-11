@@ -10,6 +10,8 @@ idf_component_register(
     "../kernel/input/mouse.c"
     "../kernel/ui/rect.c"
     "../kernel/ui/wm.c"
+    "../kernel/ui/draw.c"
+    "../kernel/ui/desktop.c"
     "../kernel/fs/fs_fat.c"
     "../kernel/mem/mem.c"
     "../kernel/swap/swap.c"

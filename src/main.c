@@ -24,6 +24,7 @@
 #include "task/sched.h"
 #include "fs/fs.h"
 #include "shellcmd.h"
+#include "ui/desktop.h"
 
 #define CARDOS_LINE_MAX 63
 
@@ -37,6 +38,7 @@
 static uint8_t *s_heap;
 static char     s_line[CARDOS_LINE_MAX + 1];
 static int      s_len;
+static int      s_desktop;      /* the desktop owns the screen and keys */
 
 static void prompt(void) {
   con_set_color(COLOR_AMBER);
@@ -121,6 +123,10 @@ static void run_line(char *line) {
     con_clear();
     con_printf("orientation %d of %d\n", display_orient(), DISPLAY_ORIENTS);
     con_write("flip again if this is not right\n");
+  }
+  else if (!strcmp(line, "desk")) {
+    desktop_init();
+    s_desktop = 1;
   }
   else if (!strcmp(line, "clear"))  con_clear();
   else if (!strcmp(line, "reboot")) esp_restart();
@@ -225,6 +231,19 @@ void app_main(void) {
       else if (sc == 0x7F || sc == 0x08) k = KEY_BACKSPACE;
       else if (sc == 0x1B) k = KEY_ESC;
       else if (sc > 0) k = (uint8_t)sc;
+    }
+
+    if (s_desktop) {
+      desktop_tick((uint32_t)(esp_timer_get_time() / 1000));
+      if (k && desktop_key(k)) {
+        /* ESC left the desktop: hand the screen back to the console. */
+        s_desktop = 0;
+        con_clear();
+        con_write("back at the console\n");
+        prompt();
+      }
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
     }
 
     if (k) {
