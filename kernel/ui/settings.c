@@ -392,7 +392,8 @@ static void settings_open(void *state) {
 const AppDef *settings_app(void) {
   static const AppDef def = {
     "Settings", settings_paint, settings_key, settings_click,
-    settings_open, &s_state, settings_height, 0, 0, settings_wants_text
+    settings_open, &s_state, settings_height, 0, 0, settings_wants_text,
+    "arrows\tmove the selection\nenter\trun the selected row\nbackspace\tback out of a list\n"
   };
   return &def;
 }

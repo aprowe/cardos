@@ -14,7 +14,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 3
+#define CAPP_API_VERSION 4
 #define CAPP_ICON_W 16
 #define CAPP_ICON_H 16
 #define CAPP_ICON_BYTES ((CAPP_ICON_W / 8) * CAPP_ICON_H)   /* 1bpp, 32 bytes */
@@ -126,6 +126,11 @@ typedef struct {
    * shell turns ; . , / into arrows so moving a selection needs no Fn key.
    * NULL means it never takes text. */
   int (*wants_text)(void *state);
+
+  /* --- version 4 ---------------------------------------------------------
+   * The app's keys, one per line as "key<tab>meaning", shown by ctrl-h. NULL
+   * if it has none worth listing. */
+  const char *help;
 
   void *state;
 } CappApp;

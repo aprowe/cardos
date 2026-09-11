@@ -125,6 +125,16 @@ void test_ctrl_makes_the_same_control_characters_as_the_builtin_keyboard(void) {
   CHECK_EQ(kbd_hid_translate(0x13, KBD_MOD_LCTRL), 0x10);   /* ctrl-p */
 }
 
+/* ctrl-h and Backspace both want 0x08. Backspace keeps it, because it is a key
+ * rather than a chord, and ctrl-h becomes the help code -- the same one the
+ * built-in keyboard produces, or help would open from one keyboard and delete
+ * a character from the other. */
+void test_ctrl_h_is_help_and_backspace_keeps_its_byte(void) {
+  CHECK_EQ(kbd_hid_translate(0x0B, KBD_MOD_LCTRL), KBD_KEY_HELP);   /* ctrl-h */
+  CHECK_EQ(kbd_hid_translate(0x2A, 0), 0x08);                       /* backspace */
+  CHECK_EQ(kbd_hid_translate(0x0B, 0), 'h');                        /* plain h */
+}
+
 void test_repeat_waits_for_the_delay_then_runs_at_the_rate(void) {
   uint8_t out[8];
   setup();

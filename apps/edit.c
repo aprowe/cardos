@@ -490,6 +490,7 @@ const CappApp *capp_register(const CardApi *a) {
   APP.pref_w = 0;
   APP.pref_h = 0;
   APP.wants_text = app_wants_text;
+  APP.help = "arrows\tmove\nenter\topen, or split the line\nbackspace\tup a folder, or delete\nn\tnew file\nctrl-s\tsave\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n";
   APP.state = 0;
   return &APP;
 }

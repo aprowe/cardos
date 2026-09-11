@@ -197,6 +197,7 @@ const CappApp *capp_register(const CardApi *a) {
   APP.open = app_open;
   APP.set_file = app_set_file;
   APP.wants_text = 0;      /* a list or a board, never a text field */
+  APP.help = "arrows\tprevious and next\nspace\tnext\nclick\tleft back, right forward\nr\trescan the folder\n";
   APP.state = 0;
   return &APP;
 }

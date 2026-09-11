@@ -353,6 +353,7 @@ const CappApp *capp_register(const CardApi *a) {
   APP.pref_w = BOARD_W;
   APP.pref_h = HEAD + BOARD_H;
   APP.wants_text = 0;      /* a list or a board, never a text field */
+  APP.help = "arrows\tmove the cursor\nspace\tdig\nf\tflag a cell\nright click\tflag a cell\nn\tnew game\nthe face\tnew game\n";
   APP.state = 0;
   return &APP;
 }

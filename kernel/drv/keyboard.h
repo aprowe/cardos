@@ -16,6 +16,12 @@
 #define KEY_BACKSPACE 0x08
 #define KEY_TAB       0x09
 
+/* ctrl-h, which ASCII says is 0x08 -- the same byte the Backspace key sends.
+ * Only one of them can keep it, and Backspace is a key while ctrl-h is a
+ * chord, so the chord is the one that moves. Nothing here wanted the ASCII
+ * meaning of ctrl-h; every caller that wants a backspace has a key for it. */
+#define KEY_HELP      0x86
+
 #define KEY_UP        0x80   /* the ; , . / keys double as arrows under Fn */
 #define KEY_DOWN      0x81
 #define KEY_LEFT      0x82

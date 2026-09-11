@@ -73,6 +73,9 @@ int capprun_load(const char *path) {
   s_slot[i].def.pref_w = s_slot[i].la.app->pref_w;
   s_slot[i].def.pref_h = s_slot[i].la.app->pref_h;
   s_slot[i].def.wants_text = s_slot[i].la.app->wants_text ? tr_wants_text : NULL;
+  /* The string lives in the app's own data allocation and was relocated with
+   * everything else, so it can be handed straight over. */
+  s_slot[i].def.help = s_slot[i].la.app->help;
   s_slot[i].def.state = &s_slot[i];
   s_slot[i].used = 1;
   return i;

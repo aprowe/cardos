@@ -22,6 +22,11 @@
 #define KBD_HID_REPORT_LEN 8
 #define KBD_HID_MAX_KEYS   6
 
+/* Must match KEY_HELP in kernel/drv/keyboard.h. Repeated rather than included
+ * because this module is portable and host-tested, and keyboard.h is device
+ * code -- the test for it is the thing that keeps the two in step. */
+#define KBD_KEY_HELP 0x86
+
 /* Modifier bits, as the HID spec orders them. */
 #define KBD_MOD_LCTRL  0x01
 #define KBD_MOD_LSHIFT 0x02

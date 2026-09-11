@@ -10,6 +10,7 @@
 #include "kernel/app/capprun.h"
 #include "kernel/ui/icons.h"
 #include "kernel/ui/shell.h"
+#include "kernel/ui/help.h"
 #include "kernel/drv/bthid.h"
 #include "esp_timer.h"
 #include "nvs.h"
@@ -47,6 +48,10 @@ static Rect s_full_rect;
 /* The pointer can also ask to leave for the console, and a mouse handler has
  * no return value that reaches the main loop. */
 static int s_leave_for_console;
+
+/* The ctrl-h key list, drawn over the compositor's output like the start
+ * menu. Closing it repaints, because nothing below it knows it was there. */
+static int s_help;
 
 /* ------------------------------------------------------------- icons ---- */
 
@@ -536,6 +541,20 @@ static void nudge(int16_t dx, int16_t dy) {
 }
 
 int desktop_key(uint8_t key) {
+  if (s_help) {
+    s_help = 0;
+    desktop_repaint();
+    return 0;
+  }
+  if (key == KEY_HELP) {
+    const AppDef *a = s_full ? s_full
+                    : (wm_focus() != WIN_NONE ? app_of(wm_focus()) : NULL);
+    s_help = 1;
+    help_paint(a ? a->name : "Desktop", a ? a->help : NULL,
+               "ctrl-s\tstart menu\nctrl-w\tclose window\nctrl-p\tkeyboard pointer\ntab\tnext window\nescape\tthe console\nctrl-h\tclose this\n");
+    return 0;
+  }
+
   /* ; . , / stand in for the arrow cluster unless something is taking text.
    * Same rule as the launcher, so a key does the same thing in both shells. */
   {

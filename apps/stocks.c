@@ -303,6 +303,7 @@ const CappApp *capp_register(const CardApi *a) {
   APP.pref_w = 0;
   APP.pref_h = 0;
   APP.wants_text = 0;      /* a list or a board, never a text field */
+  APP.help = "arrows\tmove the selection\nr\tfetch quotes\ne\tre-read stocks.txt\nthe title bar\tfetch quotes\n";
   APP.state = 0;
   return &APP;
 }

@@ -135,7 +135,8 @@ uint8_t keyboard_poll(void) {
          * chords work identically from this keyboard and from a serial
          * terminal -- and so ordinary letters stay free for whatever has
          * focus. */
-        if (s_ctrl && c >= 'a' && c <= 'z') c = (char)(c - 'a' + 1);
+        if (s_ctrl && (c == 'h' || c == 'H')) c = (char)KEY_HELP;
+        else if (s_ctrl && c >= 'a' && c <= 'z') c = (char)(c - 'a' + 1);
         else if (s_ctrl && c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 1);
 
         /* Fn turns ; , . / into the arrow cluster. */

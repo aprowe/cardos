@@ -65,6 +65,11 @@ uint8_t kbd_hid_translate(uint8_t usage, uint8_t mods) {
      * desktop's chords are ctrl-P, ctrl-S and ctrl-W, and an app that wants
      * ctrl-S has to receive the same byte from either keyboard. */
     if (ctrl) {
+      /* ctrl-h would be 0x08, which is the byte Backspace already sends.
+       * Backspace is a key and ctrl-h is a chord, so the chord moves -- and it
+       * has to move the same way here as on the built-in keyboard, or help
+       * opens from one keyboard and deletes a character from the other. */
+      if (c == 'h' || c == 'H') return KBD_KEY_HELP;
       if (c >= 'a' && c <= 'z') return (uint8_t)(c - 'a' + 1);
       if (c >= 'A' && c <= 'Z') return (uint8_t)(c - 'A' + 1);
       return 0;

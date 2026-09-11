@@ -25,6 +25,7 @@
 #include "kernel/drv/keyboard.h"
 #include "kernel/drv/bthid.h"
 #include "kernel/net/wifi.h"
+#include "kernel/ui/help.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -59,6 +60,7 @@ static char     s_note[48];
 static const AppDef *s_app;
 static int            s_app_dirty;
 static int            s_app_clear;    /* the screen still has the carousel on it */
+static int            s_help;         /* the key list is over everything */
 static Rect           s_app_rect;
 
 static Rect R(int x, int y, int w, int h) {
@@ -197,7 +199,21 @@ static void paint_app(void) {
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
 }
 
+/* The shell's own keys, appended under the app's. Two lists rather than one so
+ * an app cannot accidentally claim a key the shell owns. */
+static const char *shell_keys(void) {
+  return s_app
+    ? "escape\tback to the launcher\nctrl-h\tclose this\n"
+    : "arrows\tmove along the row\nenter\topen\nr\treload the app list\nd\tswitch to the desktop\nescape\tthe console\nctrl-h\tclose this\n";
+}
+
 static void flush(void) {
+  if (s_help) {
+    const Icon *ic = icon_at(s_sel);
+    help_paint(s_app ? s_app->name : (ic ? ic->name : "CardOS"),
+               s_app ? s_app->help : NULL, shell_keys());
+    return;
+  }
   if (s_app) {
     if (!s_app_dirty) return;
     s_app_dirty = 0;
@@ -311,6 +327,18 @@ int launchui_run(const char *name) {
 }
 
 int launchui_key(uint8_t key) {
+  /* The key list is over everything, so it gets the key first: ctrl-h closes
+   * it and so does anything else, because a panel you have to dismiss with
+   * one specific key is a panel you fight. */
+  if (s_help) {
+    s_help = 0;
+    if (s_app) { s_app_dirty = 1; s_app_clear = 1; }
+    else s_dirty = 1;
+    flush();
+    return 0;
+  }
+  if (key == KEY_HELP) { s_help = 1; flush(); return 0; }
+
   /* ; . , / are the arrow cluster here without needing Fn. The carousel takes
    * no text at all, and a running app only gets the raw keys back while it is
    * actually taking some. */
