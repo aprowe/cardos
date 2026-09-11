@@ -274,3 +274,68 @@ WmHit wm_hit_test(WinId w, int16_t x, int16_t y) {
   }
   return WM_HIT_BORDER;
 }
+
+/* ------------------------------------------------------------ painting -- */
+
+/* Working set while a rectangle is being cut down. Static because task stacks
+ * are 1 KB and this must be allowed to be generous. */
+#define WM_MAX_PIECES 64
+static Rect g_pieces[WM_MAX_PIECES];
+static int  g_pieces_n;
+
+static void pieces_reset(Rect r) {
+  g_pieces_n = 0;
+  if (!rect_is_empty(r)) g_pieces[g_pieces_n++] = r;
+}
+
+/* Remove `cut` from every piece. On overflow the piece is kept whole rather
+ * than dropped: over-painting is merely wasted effort, and because painting
+ * runs back to front a higher window repaints over it afterwards anyway.
+ * Dropping would leave a hole on screen forever. */
+static void pieces_subtract(Rect cut) {
+  Rect next[WM_MAX_PIECES];
+  int n = 0, i, j;
+
+  for (i = 0; i < g_pieces_n; i++) {
+    Rect rest[RECT_SUB_MAX];
+    int n_rest;
+
+    if (!rect_overlaps(g_pieces[i], cut)) {
+      if (n < WM_MAX_PIECES) next[n++] = g_pieces[i];
+      continue;
+    }
+    n_rest = rect_subtract(g_pieces[i], cut, rest);
+    if (n + n_rest > WM_MAX_PIECES) {
+      if (n < WM_MAX_PIECES) next[n++] = g_pieces[i];   /* keep it whole */
+      continue;
+    }
+    for (j = 0; j < n_rest; j++) next[n++] = rest[j];
+  }
+  for (i = 0; i < n; i++) g_pieces[i] = next[i];
+  g_pieces_n = n;
+}
+
+void wm_paint(PaintFn fn, void *ctx) {
+  Rect damage[WM_MAX_DAMAGE];
+  int n_damage = wm_take_damage(damage, WM_MAX_DAMAGE);
+  int d, w, k, i;
+
+  if (!fn) return;
+
+  for (d = 0; d < n_damage; d++) {
+    /* The desktop shows wherever no window covers. Painted first, so anything
+     * above simply covers it. */
+    pieces_reset(damage[d]);
+    for (w = 0; w < g_n; w++) pieces_subtract(g_win[g_order[w]].frame);
+    for (i = 0; i < g_pieces_n; i++) fn(ctx, WIN_NONE, g_pieces[i]);
+
+    /* Then each window from the bottom up, showing only where nothing above
+     * it covers. */
+    for (w = 0; w < g_n; w++) {
+      Win *p = &g_win[g_order[w]];
+      pieces_reset(rect_intersect(damage[d], p->frame));
+      for (k = w + 1; k < g_n; k++) pieces_subtract(g_win[g_order[k]].frame);
+      for (i = 0; i < g_pieces_n; i++) fn(ctx, id_of(p), g_pieces[i]);
+    }
+  }
+}

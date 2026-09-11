@@ -37,6 +37,12 @@ Rect rect_inset(Rect r, int16_t n);
 
 Rect rect_offset(Rect r, int16_t dx, int16_t dy);
 
+/* The parts of `a` not covered by `b`, as up to four disjoint rects. Returns
+ * how many were written. This is what lets the compositor work out which parts
+ * of a window are not hidden behind the ones above it. */
+#define RECT_SUB_MAX 4
+int rect_subtract(Rect a, Rect b, Rect *out);
+
 /* Clip to a screen of w x h. */
 Rect rect_clip(Rect r, int16_t w, int16_t h);
 

@@ -85,4 +85,27 @@ void wm_damage(Rect r);
 int  wm_damage_count(void);
 int  wm_take_damage(Rect *out, int max);   /* count, and clears the list */
 
+/* ---- painting ----
+ *
+ * Turns accumulated damage into a sequence of "window W must redraw rectangle
+ * R" calls, with WIN_NONE meaning the desktop background. Consumes the damage.
+ *
+ * A callback rather than a filled array on purpose. Partitioning a full screen
+ * behind eight overlapping windows needs far more rectangles than fit
+ * comfortably on a 1 KB task stack, and an array with a cap silently drops
+ * jobs -- which leaves pixels unpainted, the one failure this module exists to
+ * prevent.
+ *
+ * Calls arrive **back to front**: the desktop first, then each window from the
+ * bottom of the stack upward. Painting them in the order given is therefore
+ * always correct, even where a region is covered more than once.
+ *
+ * Guarantees, both checked per pixel by the tests:
+ *   - every damaged pixel is painted at least once;
+ *   - the last call covering a pixel names the topmost window there.
+ */
+typedef void (*PaintFn)(void *ctx, WinId w, Rect r);
+
+void wm_paint(PaintFn fn, void *ctx);
+
 #endif /* CARDOS_WM_H */

@@ -84,3 +84,43 @@ long rect_area(Rect r) {
   if (rect_is_empty(r)) return 0;
   return (long)r.w * (long)r.h;
 }
+
+int rect_subtract(Rect a, Rect b, Rect *out) {
+  Rect i = rect_intersect(a, b);
+  int n = 0;
+
+  if (rect_is_empty(a)) return 0;
+  if (rect_is_empty(i)) { out[0] = a; return 1; }
+
+  /* Up to four bands around the overlap: above, below, then left and right of
+   * it within the overlapping band of rows. Splitting this way keeps the
+   * pieces disjoint, which is what stops the compositor painting a pixel
+   * twice. */
+  if (i.y > a.y) {
+    Rect t;
+    t.x = a.x; t.y = a.y; t.w = a.w; t.h = (int16_t)(i.y - a.y);
+    out[n++] = t;
+  }
+  if (i.y + i.h < a.y + a.h) {
+    Rect t;
+    t.x = a.x;
+    t.y = (int16_t)(i.y + i.h);
+    t.w = a.w;
+    t.h = (int16_t)((a.y + a.h) - (i.y + i.h));
+    out[n++] = t;
+  }
+  if (i.x > a.x) {
+    Rect t;
+    t.x = a.x; t.y = i.y; t.w = (int16_t)(i.x - a.x); t.h = i.h;
+    out[n++] = t;
+  }
+  if (i.x + i.w < a.x + a.w) {
+    Rect t;
+    t.x = (int16_t)(i.x + i.w);
+    t.y = i.y;
+    t.w = (int16_t)((a.x + a.w) - (i.x + i.w));
+    t.h = i.h;
+    out[n++] = t;
+  }
+  return n;
+}

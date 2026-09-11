@@ -109,6 +109,10 @@ void test_inset(void);
 void test_offset(void);
 void test_clipping_to_the_screen(void);
 void test_area(void);
+void test_subtracting_a_disjoint_rect_changes_nothing(void);
+void test_subtracting_a_covering_rect_leaves_nothing(void);
+void test_subtracting_a_hole_leaves_four_pieces(void);
+void test_subtraction_is_exact_and_disjoint_everywhere(void);
 void test_created_tasks_get_distinct_live_tids(void);
 void test_task_table_exhaustion_is_reported(void);
 void test_names_are_truncated_not_overflowed(void);
@@ -168,6 +172,14 @@ void test_moving_a_window_damages_both_places(void);
 void test_destroying_a_window_damages_what_it_covered(void);
 void test_raising_damages_only_the_window_raised(void);
 void test_damage_is_clipped_to_the_screen(void);
+void test_painting_an_empty_desktop_is_all_background(void);
+void test_a_single_window_splits_damage_from_the_desktop(void);
+void test_overlapping_windows_are_partitioned_correctly(void);
+void test_a_fully_covered_window_is_not_painted(void);
+void test_raising_changes_who_paints_the_overlap(void);
+void test_calls_arrive_back_to_front(void);
+void test_a_crowded_desktop_still_paints_every_pixel(void);
+void test_painting_consumes_the_damage(void);
 
 int main(void) {
   printf("-- appimage --\n");
@@ -281,6 +293,10 @@ int main(void) {
   RUN(test_offset);
   RUN(test_clipping_to_the_screen);
   RUN(test_area);
+  RUN(test_subtracting_a_disjoint_rect_changes_nothing);
+  RUN(test_subtracting_a_covering_rect_leaves_nothing);
+  RUN(test_subtracting_a_hole_leaves_four_pieces);
+  RUN(test_subtraction_is_exact_and_disjoint_everywhere);
   printf("-- sched --\n");
   RUN(test_created_tasks_get_distinct_live_tids);
   RUN(test_task_table_exhaustion_is_reported);
@@ -345,5 +361,13 @@ int main(void) {
   RUN(test_destroying_a_window_damages_what_it_covered);
   RUN(test_raising_damages_only_the_window_raised);
   RUN(test_damage_is_clipped_to_the_screen);
+  RUN(test_painting_an_empty_desktop_is_all_background);
+  RUN(test_a_single_window_splits_damage_from_the_desktop);
+  RUN(test_overlapping_windows_are_partitioned_correctly);
+  RUN(test_a_fully_covered_window_is_not_painted);
+  RUN(test_raising_changes_who_paints_the_overlap);
+  RUN(test_calls_arrive_back_to_front);
+  RUN(test_a_crowded_desktop_still_paints_every_pixel);
+  RUN(test_painting_consumes_the_damage);
   return tt_report();
 }

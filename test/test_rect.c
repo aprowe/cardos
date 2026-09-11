@@ -90,3 +90,69 @@ void test_area(void) {
   CHECK_EQ(rect_area(R(0, 0, 0, 10)), 0);
   CHECK_EQ(rect_area(R(0, 0, 240, 135)), 32400);   /* the whole screen */
 }
+
+/* ---- subtraction --------------------------------------------------------
+ * The compositor uses this to work out which parts of a window are not hidden
+ * behind the windows above it, so the pieces must be disjoint and must add up
+ * to exactly the original minus the overlap. */
+
+/* Counts how many of the returned pieces contain a point: must be 1 for a
+ * pixel that survives and 0 for one that was subtracted. */
+static int cover_count(const Rect *rs, int n, int x, int y) {
+  int i, c = 0;
+  for (i = 0; i < n; i++)
+    if (rect_contains(rs[i], (int16_t)x, (int16_t)y)) c++;
+  return c;
+}
+
+void test_subtracting_a_disjoint_rect_changes_nothing(void) {
+  Rect out[RECT_SUB_MAX];
+  CHECK_EQ(rect_subtract(R(0, 0, 10, 10), R(50, 50, 10, 10), out), 1);
+  RECT_IS(out[0], 0, 0, 10, 10);
+}
+
+void test_subtracting_a_covering_rect_leaves_nothing(void) {
+  Rect out[RECT_SUB_MAX];
+  CHECK_EQ(rect_subtract(R(10, 10, 10, 10), R(0, 0, 100, 100), out), 0);
+}
+
+void test_subtracting_a_hole_leaves_four_pieces(void) {
+  Rect out[RECT_SUB_MAX];
+  int n = rect_subtract(R(0, 0, 30, 30), R(10, 10, 10, 10), out);
+  CHECK_EQ(n, 4);
+  /* A pixel in the hole is gone; pixels around it survive exactly once. */
+  CHECK_EQ(cover_count(out, n, 15, 15), 0);
+  CHECK_EQ(cover_count(out, n, 5, 5), 1);
+  CHECK_EQ(cover_count(out, n, 25, 15), 1);
+  CHECK_EQ(cover_count(out, n, 15, 25), 1);
+}
+
+/* The property, checked over every pixel: a pixel of `a` survives exactly once
+ * unless it was in `b`, in which case it is gone. Disjointness matters as much
+ * as coverage -- overlapping pieces mean painting the same pixel twice. */
+void test_subtraction_is_exact_and_disjoint_everywhere(void) {
+  static const Rect bs[] = {
+    { 10, 10, 10, 10 },   /* a hole in the middle */
+    { -5, -5, 12, 12 },   /* a corner */
+    { 0, 10, 30, 5 },     /* a full-width band */
+    { 12, 0, 6, 30 },     /* a full-height band */
+    { 25, 25, 20, 20 },   /* overlapping one corner, extending outside */
+  };
+  Rect a = R(0, 0, 30, 30);
+  size_t k;
+  int x, y;
+
+  for (k = 0; k < sizeof bs / sizeof bs[0]; k++) {
+    Rect out[RECT_SUB_MAX];
+    int n = rect_subtract(a, bs[k], out);
+    int bad = 0;
+    for (y = 0; y < 30; y++) {
+      for (x = 0; x < 30; x++) {
+        int want = rect_contains(bs[k], (int16_t)x, (int16_t)y) ? 0 : 1;
+        if (cover_count(out, n, x, y) != want) bad++;
+      }
+    }
+    CHECK_EQ(bad, 0);
+    if (bad) printf("      case %u: %d pixels wrong\n", (unsigned)k, bad);
+  }
+}

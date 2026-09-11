@@ -292,3 +292,171 @@ void test_damage_is_clipped_to_the_screen(void) {
     CHECK(out[i].y + out[i].h <= 135);
   }
 }
+
+/* ---- paint scheduling ---------------------------------------------------
+ *
+ * These use a per-pixel oracle rather than checking rectangles by eye. For a
+ * 240x135 screen that is 32400 checks per case, which costs nothing on a PC
+ * and is the only way to be sure about occlusion geometry.
+ */
+
+#define MAX_COLLECT 512
+typedef struct { WinId win; Rect r; } Job;
+static Job g_jobs[MAX_COLLECT];
+static int g_jobs_n;
+
+static void collect(void *ctx, WinId w, Rect r) {
+  (void)ctx;
+  if (g_jobs_n < MAX_COLLECT) { g_jobs[g_jobs_n].win = w; g_jobs[g_jobs_n].r = r; g_jobs_n++; }
+}
+
+static int run_paint(void) { g_jobs_n = 0; wm_paint(collect, NULL); return g_jobs_n; }
+
+/* Who *should* end up owning pixel (x,y): the topmost window covering it, else
+ * the desktop. Computed the slow obvious way so it is independent of the code
+ * under test. */
+static WinId oracle_owner(int x, int y) { return wm_at((int16_t)x, (int16_t)y); }
+
+/* Painting runs back to front, so the correctness condition is that the LAST
+ * call covering a pixel is its true owner -- and that every damaged pixel is
+ * covered at least once. Returns pixels that got it wrong; `overdraw` counts
+ * pixels painted more than once, which is waste rather than error. */
+static int audit(Rect damage, int *overdraw) {
+  int bad = 0, x, y, j;
+  *overdraw = 0;
+  for (y = damage.y; y < damage.y + damage.h; y++) {
+    for (x = damage.x; x < damage.x + damage.w; x++) {
+      int hits = 0;
+      WinId last = WIN_NONE;
+      for (j = 0; j < g_jobs_n; j++) {
+        if (rect_contains(g_jobs[j].r, (int16_t)x, (int16_t)y)) { hits++; last = g_jobs[j].win; }
+      }
+      if (hits > 1) (*overdraw)++;
+      if (hits < 1 || last != oracle_owner(x, y)) {
+        if (bad < 4)
+          printf("      (%d,%d): %d calls, ended as %u, wanted %u\n",
+                 x, y, hits, (unsigned)last, (unsigned)oracle_owner(x, y));
+        bad++;
+      }
+    }
+  }
+  return bad;
+}
+
+void test_painting_an_empty_desktop_is_all_background(void) {
+  Rect d = R(10, 10, 40, 30);
+  int over;
+  setup();
+  wm_damage(d);
+  CHECK_EQ(run_paint(), 1);
+  CHECK_EQ(g_jobs[0].win, WIN_NONE);
+  CHECK(rect_equals(g_jobs[0].r, d));
+  CHECK_EQ(audit(d, &over), 0);
+  CHECK_EQ(over, 0);
+}
+
+void test_a_single_window_splits_damage_from_the_desktop(void) {
+  Rect d = R(0, 0, 100, 100);
+  int over;
+  setup();
+  wm_create("a", R(20, 20, 40, 40));
+  wm_take_damage(NULL, 0);
+  wm_damage(d);
+  run_paint();
+  CHECK_EQ(audit(d, &over), 0);
+  CHECK_EQ(over, 0);            /* a simple case must not waste any pixel */
+}
+
+void test_overlapping_windows_are_partitioned_correctly(void) {
+  Rect d = R(0, 0, 240, 135);
+  int over;
+  setup();
+  wm_create("a", R(10, 10, 80, 60));
+  wm_create("b", R(50, 30, 80, 60));      /* overlaps a, and sits above it */
+  wm_create("c", R(0, 90, 200, 40));
+  wm_take_damage(NULL, 0);
+  wm_damage(d);
+  CHECK(run_paint() > 0);
+  CHECK_EQ(audit(d, &over), 0);
+  CHECK_EQ(over, 0);
+}
+
+/* A window entirely behind another must not be painted at all -- that is the
+ * whole point of tracking occlusion. */
+void test_a_fully_covered_window_is_not_painted(void) {
+  WinId a, b;
+  Rect d = R(0, 0, 240, 135);
+  int over, i, a_jobs = 0;
+  setup();
+  a = wm_create("a", R(20, 20, 40, 40));
+  b = wm_create("b", R(10, 10, 80, 80));   /* completely covers a */
+  wm_take_damage(NULL, 0);
+  wm_damage(d);
+  run_paint();
+  for (i = 0; i < g_jobs_n; i++) if (g_jobs[i].win == a) a_jobs++;
+  CHECK_EQ(a_jobs, 0);
+  CHECK_EQ(audit(d, &over), 0);
+  (void)b;
+}
+
+void test_raising_changes_who_paints_the_overlap(void) {
+  WinId a, b;
+  Rect d = R(0, 0, 240, 135);
+  int over;
+  setup();
+  a = wm_create("a", R(0, 0, 100, 100));
+  b = wm_create("b", R(50, 0, 100, 100));
+  wm_take_damage(NULL, 0);
+
+  wm_damage(d);
+  run_paint();
+  CHECK_EQ(audit(d, &over), 0);
+
+  wm_raise(a);
+  wm_take_damage(NULL, 0);
+  wm_damage(d);
+  run_paint();
+  CHECK_EQ(audit(d, &over), 0);      /* the oracle moved with it */
+  (void)b;
+}
+
+/* Painting in call order must be correct, so lower windows come first. */
+void test_calls_arrive_back_to_front(void) {
+  int i, last = -2;
+  setup();
+  wm_create("a", R(0, 0, 120, 120));
+  wm_create("b", R(30, 30, 120, 100));
+  wm_create("c", R(60, 10, 100, 110));
+  wm_take_damage(NULL, 0);
+  wm_damage(R(0, 0, 240, 135));
+  run_paint();
+  for (i = 0; i < g_jobs_n; i++) {
+    int z = (g_jobs[i].win == WIN_NONE) ? -1 : wm_z(g_jobs[i].win);
+    CHECK(z >= last);
+    last = z;
+  }
+}
+
+/* Eight overlapping windows across the whole screen: the case that broke an
+ * earlier version, which capped the job list and silently dropped the rest. */
+void test_a_crowded_desktop_still_paints_every_pixel(void) {
+  Rect d = R(0, 0, 240, 135);
+  int over, i;
+  setup();
+  for (i = 0; i < WM_MAX_WINDOWS; i++)
+    wm_create("w", R(i * 12, i * 8, 90, 50));
+  wm_take_damage(NULL, 0);
+  wm_damage(d);
+  CHECK(run_paint() > 0);
+  CHECK_EQ(audit(d, &over), 0);
+  printf("    crowded desktop: %d paint calls, %d pixels overdrawn\n",
+         g_jobs_n, over);
+}
+
+void test_painting_consumes_the_damage(void) {
+  setup();
+  wm_damage(R(0, 0, 20, 20));
+  run_paint();
+  CHECK_EQ(wm_damage_count(), 0);
+  CHECK_EQ(run_paint(), 0);
+}
