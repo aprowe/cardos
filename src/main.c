@@ -118,6 +118,7 @@ static void run_line(char *line) {
   else if (!strcmp(line, "boot"))   cmd_boot(arg, 0);
   else if (!strcmp(line, "boot!"))  cmd_boot(arg, 1);
   else if (!strcmp(line, "bootinfo")) cmd_bootinfo();
+  else if (!strcmp(line, "taskcost")) cmd_taskcost();
   else if (!strcmp(line, "flip")) {
     display_set_orient(display_orient() + 1);
     con_clear();

@@ -5,6 +5,7 @@
 #include "drv/keyboard.h"
 #include "mem/mem.h"
 #include "fs/fs.h"
+#include "ui/app.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -14,13 +15,11 @@
 /* What a window shows. The desktop owns the content because there is no app
  * model yet -- that arrives with the context switch, when each window becomes
  * a task with its own paint callback. */
-typedef enum { APP_ABOUT = 0, APP_FILES, APP_MEM, APP_COUNT } AppKind;
+#define MAX_OPEN 4
 
-static const char *APP_NAME[APP_COUNT] = { "About", "Files", "Memory" };
-
-static WinId   s_win[APP_COUNT];
-static AppKind s_kind[APP_COUNT];
-static int     s_nwin;
+static WinId s_win[MAX_OPEN];
+static int   s_app[MAX_OPEN];       /* index into the app registry */
+static int   s_nwin;
 
 static int      s_start_open;
 static int      s_start_sel;
@@ -32,11 +31,11 @@ static Rect R(int x, int y, int w, int h) {
   return r;
 }
 
-static AppKind kind_of(WinId w) {
+static const AppDef *app_of(WinId w) {
   int i;
   for (i = 0; i < s_nwin; i++)
-    if (s_win[i] == w) return s_kind[i];
-  return APP_ABOUT;
+    if (s_win[i] == w) return app_at(s_app[i]);
+  return app_at(0);
 }
 
 /* ---------------------------------------------------------- chrome ------ */
@@ -78,47 +77,13 @@ static void paint_window(WinId w, Rect clip) {
   draw_bevel(content, C_WHITE, C_SHADOW, C_LIGHT);
 
   {
+    const AppDef *a = app_of(w);
     Rect inner = rect_inset(content, 2);
-    int16_t tx = inner.x, ty = inner.y;
-    char line[40];
-
-    switch (kind_of(w)) {
-    case APP_ABOUT:
-      draw_text(tx, ty, "CardOS 0.1", C_TEXT, C_WHITE);
-      draw_text(tx, (int16_t)(ty + 9), "M5Stack Cardputer", C_TEXT, C_WHITE);
-      draw_text(tx, (int16_t)(ty + 18), "ESP32-S3, 8MB flash", C_TEXT, C_WHITE);
-      draw_text(tx, (int16_t)(ty + 27), "no PSRAM, no MMU", C_TEXT, C_WHITE);
-      break;
-    case APP_FILES: {
-      FsDir d;
-      FsEntry e;
-      int n = 0;
-      if (fs_opendir("/", &d) == 0) {
-        while (n < 5 && fs_readdir(&d, &e) == 1) {
-          snprintf(line, sizeof line, "%.30s%s", e.name, e.is_dir ? "/" : "");
-          draw_text(tx, (int16_t)(ty + n * 9), line, C_TEXT, C_WHITE);
-          n++;
-        }
-        fs_closedir(&d);
-      }
-      if (n == 0) draw_text(tx, ty, "no card", C_TEXT, C_WHITE);
-      break;
-    }
-    case APP_MEM: {
-      MemStats st;
-      mem_stats(&st);
-      snprintf(line, sizeof line, "heap  %uK", (unsigned)(st.heap_size / 1024));
-      draw_text(tx, ty, line, C_TEXT, C_WHITE);
-      snprintf(line, sizeof line, "used  %u", (unsigned)(st.movable_used + st.fixed_used));
-      draw_text(tx, (int16_t)(ty + 9), line, C_TEXT, C_WHITE);
-      snprintf(line, sizeof line, "hnds  %u/%u", (unsigned)st.handles_used,
-               (unsigned)MEM_MAX_HANDLES);
-      draw_text(tx, (int16_t)(ty + 18), line, C_TEXT, C_WHITE);
-      snprintf(line, sizeof line, "cmpct %u", (unsigned)st.compactions);
-      draw_text(tx, (int16_t)(ty + 27), line, C_TEXT, C_WHITE);
-      break;
-    }
-    default: break;
+    if (a->paint && !rect_is_empty(inner)) {
+      /* Confine the app to its own content well: an app that draws too far
+       * must not be able to scribble over another window's chrome. */
+      draw_set_clip(rect_intersect(clip, inner));
+      a->paint(a->state, inner);
     }
   }
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
@@ -172,15 +137,15 @@ static void paint_start_menu(void) {
   int i;
   if (!s_start_open) return;
 
-  m = R(2, DESK_H - (APP_COUNT * 11 + 6), 84, APP_COUNT * 11 + 6);
+  m = R(2, DESK_H - (app_count() * 11 + 6), 84, app_count() * 11 + 6);
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_bevel(m, C_FACE, C_LIGHT, C_DARK);
 
-  for (i = 0; i < APP_COUNT; i++) {
+  for (i = 0; i < app_count(); i++) {
     Rect item = R(m.x + 3, m.y + 3 + i * 11, m.w - 6, 10);
     int sel = (i == s_start_sel);
     draw_rect(item, sel ? C_TITLE : C_FACE);
-    draw_text((int16_t)(item.x + 2), (int16_t)(item.y + 1), APP_NAME[i],
+    draw_text((int16_t)(item.x + 2), (int16_t)(item.y + 1), app_at(i)->name,
               sel ? C_TITLE_FG : C_TEXT, sel ? C_TITLE : C_FACE);
   }
 }
@@ -211,17 +176,19 @@ void desktop_repaint(void) {
 
 /* ------------------------------------------------------------ input ----- */
 
-static void open_app(AppKind k) {
+static void open_app(int k) {
+  const AppDef *a = app_at(k);
   Rect frame;
   WinId w;
-  if (s_nwin >= APP_COUNT) return;
+  if (s_nwin >= MAX_OPEN) return;
   /* Cascade, so a new window is visibly on top rather than exactly covering
    * the last one. */
   frame = R(8 + s_nwin * 14, 6 + s_nwin * 10, 132, 74);
-  w = wm_create(APP_NAME[k], frame);
+  w = wm_create(a->name, frame);
   if (w == WIN_NONE) return;
+  if (a->open) a->open(a->state);
   s_win[s_nwin] = w;
-  s_kind[s_nwin] = k;
+  s_app[s_nwin] = k;
   s_nwin++;
 }
 
@@ -232,7 +199,7 @@ static void close_focused(void) {
   wm_destroy(f);
   for (i = 0; i < s_nwin; i++) {
     if (s_win[i] != f) continue;
-    for (j = i; j < s_nwin - 1; j++) { s_win[j] = s_win[j + 1]; s_kind[j] = s_kind[j + 1]; }
+    for (j = i; j < s_nwin - 1; j++) { s_win[j] = s_win[j + 1]; s_app[j] = s_app[j + 1]; }
     s_nwin--;
     break;
   }
@@ -261,11 +228,11 @@ static void nudge(int16_t dx, int16_t dy) {
 int desktop_key(uint8_t key) {
   if (s_start_open) {
     switch (key) {
-    case KEY_UP:   s_start_sel = (s_start_sel + APP_COUNT - 1) % APP_COUNT; break;
-    case KEY_DOWN: s_start_sel = (s_start_sel + 1) % APP_COUNT; break;
+    case KEY_UP:   s_start_sel = (s_start_sel + app_count() - 1) % app_count(); break;
+    case KEY_DOWN: s_start_sel = (s_start_sel + 1) % app_count(); break;
     case KEY_ENTER:
       s_start_open = 0;
-      open_app((AppKind)s_start_sel);
+      open_app(s_start_sel);
       desktop_repaint();
       return 0;
     case KEY_ESC: s_start_open = 0; desktop_repaint(); return 0;
@@ -275,16 +242,28 @@ int desktop_key(uint8_t key) {
     return 0;
   }
 
+  /* Desktop commands are ctrl-chords, so every ordinary key stays free to
+   * reach the focused app. Without that a window you can type into is
+   * impossible: `s` would always mean Start. */
   switch (key) {
-  case '\t':     cycle_focus(); break;
-  case 's': case 'S': s_start_open = 1; s_start_sel = 0; desktop_repaint(); return 0;
-  case 'w': case 'W': close_focused(); desktop_repaint(); return 0;
-  case KEY_LEFT:  nudge(-6, 0); break;
-  case KEY_RIGHT: nudge(6, 0); break;
-  case KEY_UP:    nudge(0, -5); break;
-  case KEY_DOWN:  nudge(0, 5); break;
+  case 0x13: s_start_open = 1; s_start_sel = 0; desktop_repaint(); return 0; /* ctrl-S */
+  case 0x17: close_focused(); desktop_repaint(); return 0;                   /* ctrl-W */
+  case '\t':      cycle_focus();   desktop_flush(); return 0;
+  case KEY_LEFT:  nudge(-6, 0);    desktop_flush(); return 0;
+  case KEY_RIGHT: nudge(6, 0);     desktop_flush(); return 0;
+  case KEY_UP:    nudge(0, -5);    desktop_flush(); return 0;
+  case KEY_DOWN:  nudge(0, 5);     desktop_flush(); return 0;
   case KEY_ESC:   return 1;                 /* back to the text console */
   default: break;
+  }
+
+  /* Everything else belongs to whichever window has focus. */
+  {
+    WinId f = wm_focus();
+    const AppDef *a;
+    if (f == WIN_NONE) return 0;
+    a = app_of(f);
+    if (a->key && a->key(a->state, key)) wm_damage(wm_frame(f));
   }
   desktop_flush();
   return 0;
@@ -302,10 +281,10 @@ void desktop_init(void) {
   s_nwin = 0;
   s_start_open = 0;
   s_start_sel = 0;
-  for (i = 0; i < APP_COUNT; i++) s_win[i] = WIN_NONE;
+  for (i = 0; i < MAX_OPEN; i++) s_win[i] = WIN_NONE;
 
-  open_app(APP_ABOUT);
-  open_app(APP_MEM);
+  open_app(0);            /* About */
+  open_app(3);            /* Notes, so focus is visibly somewhere */
 
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);

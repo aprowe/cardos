@@ -131,6 +131,13 @@ uint8_t keyboard_poll(void) {
          * so it never reaches anyone as a backtick. */
         if (KEYMAP[y][x] == '`') c = (char)KEY_ESC;
 
+        /* Ctrl plus a letter gives the usual control character, so desktop
+         * chords work identically from this keyboard and from a serial
+         * terminal -- and so ordinary letters stay free for whatever has
+         * focus. */
+        if (s_ctrl && c >= 'a' && c <= 'z') c = (char)(c - 'a' + 1);
+        else if (s_ctrl && c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 1);
+
         /* Fn turns ; , . / into the arrow cluster. */
         if (s_fn) {
           switch (KEYMAP[y][x]) {

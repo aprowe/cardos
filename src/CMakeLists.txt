@@ -12,6 +12,7 @@ idf_component_register(
     "../kernel/ui/wm.c"
     "../kernel/ui/draw.c"
     "../kernel/ui/desktop.c"
+    "../kernel/ui/apps.c"
     "../kernel/fs/fs_fat.c"
     "../kernel/mem/mem.c"
     "../kernel/swap/swap.c"

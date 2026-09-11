@@ -16,6 +16,9 @@
 #include "console/console.h"
 #include "drv/display.h"
 #include "fs/fs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_heap_caps.h"
 #include "fs/path.h"
 
 static char s_cwd[FS_PATH_MAX] = "/";
@@ -274,4 +277,41 @@ void cmd_boot(const char *arg, int confirmed) {
   /* Only reached on failure: success restarts the chip. */
   con_putc('\n');
   err(arg, launcher_strerror(r));
+}
+
+
+/* ------------------------------------------------------- task cost ------ */
+
+static void idle_body(void *arg) {
+  (void)arg;
+  for (;;) vTaskDelay(portMAX_DELAY);
+}
+
+/* The kernel spec justifies a hand-written context switch with "~1 KB/task vs
+ * FreeRTOS's ~4 KB". That number was never measured on this board, and it
+ * decides whether writing Xtensa assembly is worth the risk. So measure it. */
+void cmd_taskcost(void) {
+  static TaskHandle_t h[8];
+  const int n = 8;
+  size_t before, after;
+  int i, made = 0;
+
+  before = esp_get_free_heap_size();
+  for (i = 0; i < n; i++) {
+    /* 1024 words is the CardOS spec's per-task stack size in bytes; FreeRTOS
+     * takes the depth in words, so ask for the same 1 KB. */
+    if (xTaskCreate(idle_body, "probe", 1024 / sizeof(StackType_t), NULL,
+                    1, &h[i]) == pdPASS) made++;
+    else h[i] = NULL;
+  }
+  after = esp_get_free_heap_size();
+
+  con_printf("%d tasks x 1KB stack\n", made);
+  con_printf("heap %u -> %u\n", (unsigned)before, (unsigned)after);
+  if (made)
+    con_printf("cost %u bytes each\n", (unsigned)((before - after) / (unsigned)made));
+
+  for (i = 0; i < n; i++) if (h[i]) vTaskDelete(h[i]);
+  vTaskDelay(pdMS_TO_TICKS(50));      /* let the idle task reap them */
+  con_printf("after free %u\n", (unsigned)esp_get_free_heap_size());
 }
