@@ -90,6 +90,44 @@ void draw_text(int16_t x, int16_t y, const char *s, uint16_t fg, uint16_t bg) {
   }
 }
 
+/* A glyph at an integer scale. Clipped per pixel like the unscaled one, so a
+ * damage rectangle cutting through a large character still repaints it. */
+static void draw_glyph_scaled(int16_t x, int16_t y, char ch, int scale,
+                              uint16_t fg, uint16_t bg) {
+  Rect cell, v;
+  const uint8_t *glyph = NULL;
+  int16_t px, py;
+
+  cell.x = x; cell.y = y;
+  cell.w = (int16_t)(FONT_W * scale);
+  cell.h = (int16_t)(FONT_H * scale);
+  v = rect_intersect(cell, s_clip);
+  if (rect_is_empty(v)) return;
+
+  if ((unsigned char)ch >= FONT_FIRST && (unsigned char)ch <= FONT_LAST)
+    glyph = font6x8[(unsigned char)ch - FONT_FIRST];
+
+  for (py = v.y; py < v.y + v.h; py++) {
+    int row_bit = (py - y) / scale;
+    for (px = v.x; px < v.x + v.w; px++) {
+      int col = (px - x) / scale;
+      uint8_t bits = glyph ? glyph[col] : 0;
+      s_row[px - v.x] = ((bits >> row_bit) & 1) ? fg : bg;
+    }
+    display_blit(v.x, py, v.w, 1, s_row);
+  }
+}
+
+void draw_text_scaled(int16_t x, int16_t y, const char *s, int scale,
+                      uint16_t fg, uint16_t bg) {
+  if (scale <= 1) { draw_text(x, y, s, fg, bg); return; }
+  while (*s) {
+    draw_glyph_scaled(x, y, *s++, scale, fg, bg);
+    x = (int16_t)(x + FONT_W * scale);
+    if (x >= s_clip.x + s_clip.w) return;
+  }
+}
+
 int16_t draw_text_width(const char *s) {
   return (int16_t)(strlen(s) * FONT_W);
 }
@@ -138,6 +176,35 @@ void draw_bitmap1(int16_t x, int16_t y, int16_t w, int16_t h,
       int col = px - x;
       int on = (row[col >> 3] >> (7 - (col & 7))) & 1;
       s_row[px - v.x] = on ? fg : bg;
+    }
+    display_blit(v.x, py, v.w, 1, s_row);
+  }
+}
+
+void draw_bitmap1_scaled(int16_t x, int16_t y, int16_t w, int16_t h,
+                         const uint8_t *bits, int scale,
+                         uint16_t fg, uint16_t bg) {
+  Rect box, v;
+  int16_t px, py;
+  int stride;
+
+  if (!bits || w <= 0 || h <= 0 || scale <= 0) return;
+  if (scale == 1) { draw_bitmap1(x, y, w, h, bits, fg, bg); return; }
+  stride = (w + 7) / 8;
+
+  box.x = x; box.y = y;
+  box.w = (int16_t)(w * scale);
+  box.h = (int16_t)(h * scale);
+  v = rect_intersect(box, s_clip);
+  if (rect_is_empty(v)) return;
+
+  /* One blit per output scanline, not per source pixel: at 4x a 16x16 icon is
+   * 4096 pixels, and a blit each would be 4096 SPI transactions. */
+  for (py = v.y; py < v.y + v.h; py++) {
+    const uint8_t *row = bits + (size_t)((py - y) / scale) * (size_t)stride;
+    for (px = v.x; px < v.x + v.w; px++) {
+      int col = (px - x) / scale;
+      s_row[px - v.x] = ((row[col >> 3] >> (7 - (col & 7))) & 1) ? fg : bg;
     }
     display_blit(v.x, py, v.w, 1, s_row);
   }

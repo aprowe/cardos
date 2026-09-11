@@ -41,6 +41,11 @@ void draw_bevel(Rect r, uint16_t face, uint16_t tl, uint16_t br);
  * damage rectangle that cuts a glyph in half still draws the visible half. */
 void draw_text(int16_t x, int16_t y, const char *s, uint16_t fg, uint16_t bg);
 
+/* Text at an integer scale, for the one or two places that need to be read
+ * across a room rather than up close. */
+void draw_text_scaled(int16_t x, int16_t y, const char *s, int scale,
+                      uint16_t fg, uint16_t bg);
+
 /* As draw_text but stops at `max_w` pixels, ending with ".." if it had to. */
 void draw_text_ellipsis(int16_t x, int16_t y, int16_t max_w, const char *s,
                         uint16_t fg, uint16_t bg);
@@ -61,6 +66,13 @@ int16_t draw_text_width(const char *s);
  * get `bg`, or are left alone if `bg` equals `fg`. */
 void draw_bitmap1(int16_t x, int16_t y, int16_t w, int16_t h,
                   const uint8_t *bits, uint16_t fg, uint16_t bg);
+
+/* The same, with each source pixel drawn as a scale x scale block. A 16x16
+ * icon at 4x is 64x64 of deliberate pixel art rather than a blurred
+ * enlargement, which is the only honest way to make these bigger. */
+void draw_bitmap1_scaled(int16_t x, int16_t y, int16_t w, int16_t h,
+                         const uint8_t *bits, int scale,
+                         uint16_t fg, uint16_t bg);
 
 void draw_cursor(int16_t x, int16_t y);
 Rect draw_cursor_bounds(int16_t x, int16_t y);

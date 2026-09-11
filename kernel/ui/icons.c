@@ -6,6 +6,7 @@
 #include "kernel/app/capp_blobs.h"
 #include "kernel/app/launcher.h"
 #include "kernel/ui/desktop.h"
+#include "kernel/ui/icons_builtin.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -150,10 +151,24 @@ const AppDef *icon_app(int i) {
   return NULL;
 }
 
+/* Every entry has an icon, so the launcher never has to fall back to drawing a
+ * letter in a box. A loaded app supplies its own; a built-in is matched by
+ * name; anything else gets the generic page. */
 const uint8_t *icon_bitmap(int i) {
   const Icon *ic = icon_at(i);
-  if (!ic || ic->kind != ICON_CAPP) return NULL;
-  return capprun_icon(ic->slot);
+  if (!ic) return NULL;
+
+  if (ic->kind == ICON_CAPP) {
+    const uint8_t *b = capprun_icon(ic->slot);
+    return b ? b : ICON_GENERIC;
+  }
+  if (ic->kind == ICON_FIRMWARE) return ICON_FIRMWARE_;
+
+  if (strcmp(ic->name, "Files") == 0)    return ICON_FILES;
+  if (strcmp(ic->name, "Memory") == 0)   return ICON_MEMORY;
+  if (strcmp(ic->name, "Settings") == 0) return ICON_SETTINGS;
+  if (strcmp(ic->name, "About") == 0)    return ICON_ABOUT;
+  return ICON_GENERIC;
 }
 
 int icons_boot_firmware(int i) {
