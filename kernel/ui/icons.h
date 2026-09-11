@@ -9,6 +9,8 @@
  *   NAME.app    a built-in app, by name
  *   NAME.capp   a loadable app binary, which carries its own name and icon
  *   NAME.bin    a firmware image to chain-boot, replacing CardOS
+ *
+ * /firmware is scanned as well, for .bin only.
  */
 #ifndef CARDOS_ICONS_H
 #define CARDOS_ICONS_H
@@ -18,6 +20,12 @@
 #include "kernel/ui/app.h"
 
 #define ICONS_DIR "/desktop"
+
+/* Firmware images are scanned from here too. They were already living in
+ * /firmware before CardOS existed -- put there by the tools that built them --
+ * and asking the user to copy them into /desktop to see them would be asking
+ * them to keep two copies of a 1.4 MB file in step. */
+#define FIRMWARE_DIR "/firmware"
 #define MAX_ICONS 24
 
 typedef enum { ICON_BUILTIN, ICON_FIRMWARE, ICON_CAPP } IconKind;

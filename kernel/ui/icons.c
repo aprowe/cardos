@@ -88,16 +88,13 @@ static int ends_with(const char *name, size_t n, const char *ext) {
   return n > e && strcmp(name + n - e, ext) == 0;
 }
 
-void icons_reload(void) {
+/* Scan one folder. `bin_only` for /firmware, which holds images and nothing
+ * this launcher can run any other way. */
+static void scan(const char *dir, int bin_only) {
   FsDir d;
   FsEntry e;
 
-  s_nicon = 0;
-  capprun_unload_all();
-  if (!fs_mounted()) return;
-
-  seed_dir();
-  if (fs_opendir(ICONS_DIR, &d) != 0) return;
+  if (fs_opendir(dir, &d) != 0) return;
 
   while (s_nicon < MAX_ICONS && fs_readdir(&d, &e) == 1) {
     size_t n = strlen(e.name);
@@ -105,9 +102,15 @@ void icons_reload(void) {
     if (e.is_dir) continue;
     if (e.name[0] == '.') continue;      /* the stamp file, and anything like it */
 
-    snprintf(ic->path, sizeof ic->path, "%s/%s", ICONS_DIR, e.name);
+    snprintf(ic->path, sizeof ic->path, "%s/%s", dir, e.name);
 
-    if (ends_with(e.name, n, ".capp")) {
+    if (ends_with(e.name, n, ".bin")) {
+      ic->kind = ICON_FIRMWARE;
+      ic->slot = -1;
+      snprintf(ic->name, sizeof ic->name, "%.*s", (int)(n - 4), e.name);
+    } else if (bin_only) {
+      continue;
+    } else if (ends_with(e.name, n, ".capp")) {
       /* Loaded eagerly and left loaded: the label under the icon and the icon
        * itself are the app's own, and asking it is the only way to know
        * them. */
@@ -124,16 +127,22 @@ void icons_reload(void) {
       if (ic->slot < 0) continue;            /* names an app we do not have */
       ic->kind = ICON_BUILTIN;
       snprintf(ic->name, sizeof ic->name, "%s", stem);
-    } else if (ends_with(e.name, n, ".bin")) {
-      ic->kind = ICON_FIRMWARE;
-      ic->slot = -1;
-      snprintf(ic->name, sizeof ic->name, "%.*s", (int)(n - 4), e.name);
     } else {
       continue;
     }
     s_nicon++;
   }
   fs_closedir(&d);
+}
+
+void icons_reload(void) {
+  s_nicon = 0;
+  capprun_unload_all();
+  if (!fs_mounted()) return;
+
+  seed_dir();
+  scan(ICONS_DIR, 0);
+  scan(FIRMWARE_DIR, 1);
 }
 
 int icons_count(void) { return s_nicon; }
