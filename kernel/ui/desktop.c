@@ -473,7 +473,11 @@ void desktop_icon_click(int16_t x, int16_t y) {
   desktop_repaint();
 }
 
-static void open_def(const AppDef *a) {
+/* `fresh` calls the app's open callback, which resets it. A window being
+ * created because the user asked for one does; a window being created because
+ * an app came out of fullscreen does not -- that would throw away whatever
+ * they were in the middle of, which is the opposite of what a toggle means. */
+static void open_def_ex(const AppDef *a, int fresh) {
   Rect frame;
   WinId w;
   if (!a || s_nwin >= MAX_OPEN) return;
@@ -494,14 +498,47 @@ static void open_def(const AppDef *a) {
   }
   w = wm_create(a->name, frame);
   if (w == WIN_NONE) return;
-  if (a->open) a->open(a->state);
+  if (fresh && a->open) a->open(a->state);
   s_win[s_nwin] = w;
   s_app[s_nwin] = a;
   s_scroll[s_nwin] = 0;
   s_nwin++;
 }
 
+static void close_focused(void);
+
+static void open_def(const AppDef *a) { open_def_ex(a, 1); }
 static void open_app(int k) { open_def(app_at(k)); }
+
+/* Whether an app fills the screen is the user's call, not the app's. The
+ * fullscreen flag a .capp carries is the default it opens with; this is how it
+ * gets changed, and it keeps the app's state either way. */
+static void toggle_fullscreen(void) {
+  const AppDef *a;
+
+  if (s_full) {
+    a = s_full;
+    s_full = NULL;
+    open_def_ex(a, 0);
+    desktop_repaint();
+    return;
+  }
+
+  {
+    WinId f = wm_focus();
+    int16_t w = DISPLAY_W, h = DISPLAY_H;
+    if (f == WIN_NONE) return;
+    a = app_of(f);
+    close_focused();
+    if (a->pref_w > 0 && a->pref_w < w) w = a->pref_w;
+    if (a->pref_h > 0 && a->pref_h < h) h = a->pref_h;
+    s_full = a;
+    s_full_rect = R((DISPLAY_W - w) / 2, (DISPLAY_H - h) / 2, w, h);
+    s_full_clear = 1;
+    s_full_dirty = 1;
+    desktop_flush();
+  }
+}
 
 static void close_focused(void) {
   WinId f = wm_focus();
@@ -551,7 +588,7 @@ int desktop_key(uint8_t key) {
                     : (wm_focus() != WIN_NONE ? app_of(wm_focus()) : NULL);
     s_help = 1;
     help_paint(a ? a->name : "Desktop", a ? a->help : NULL,
-               "ctrl-s\tstart menu\nctrl-w\tclose window\nctrl-p\tkeyboard pointer\ntab\tnext window\nescape\tthe console\nctrl-h\tclose this\n");
+               "ctrl-s\tstart menu\nctrl-f\tfullscreen / window\nctrl-w\tclose window\nctrl-p\tkeyboard pointer\ntab\tnext window\nescape\tthe console\nctrl-h\tclose this\n");
     return 0;
   }
 
@@ -570,6 +607,7 @@ int desktop_key(uint8_t key) {
    * key it does not get, because something has to bring the desktop back. */
   if (s_full) {
     if (key == KEY_ESC) { leave_fullscreen(); return 0; }
+    if (key == 0x06) { toggle_fullscreen(); return 0; }      /* ctrl-F */
     if (s_full->key && s_full->key(s_full->state, key)) {
       s_full_dirty = 1;
       desktop_flush();
@@ -647,6 +685,7 @@ int desktop_key(uint8_t key) {
   case 0x13: s_start_open = 1; s_start_sel = 0; menu_touch();                 /* ctrl-S */
              desktop_flush(); return 0;
   case 0x17: close_focused(); desktop_repaint(); return 0;                   /* ctrl-W */
+  case 0x06: toggle_fullscreen(); return 0;                                  /* ctrl-F */
   case '	':      cycle_focus();   desktop_flush(); return 0;
   case KEY_LEFT:  nudge(-6, 0);    desktop_flush(); return 0;
   case KEY_RIGHT: nudge(6, 0);     desktop_flush(); return 0;

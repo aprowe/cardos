@@ -42,7 +42,12 @@
 #define CLR_SEL     CAPP_RGB(52, 80, 116)
 #define CLR_DIM     CAPP_RGB(130, 140, 158)
 
-typedef enum { VIEW_BROWSE = 0, VIEW_EDIT } View;
+typedef enum { VIEW_BROWSE = 0, VIEW_EDIT, VIEW_NAME } View;
+
+/* What the filename prompt is for. One view serves both, because "what shall
+ * it be called" is the same question either way -- only what happens after the
+ * answer differs. */
+typedef enum { NAME_NEW = 0, NAME_SAVE_AS } NameFor;
 
 static const CardApi *api;
 
@@ -65,6 +70,11 @@ static struct {
   int   truncated;
   char  path[96];
   char  status[40];
+
+  /* the filename prompt */
+  NameFor name_for;
+  char    name[40];
+  int     name_len;
 } E;
 
 static CRect rect(int x, int y, int w, int h) {
@@ -132,11 +142,18 @@ out:
   }
 }
 
+static void begin_name(NameFor why, const char *initial) {
+  E.name_for = why;
+  api->fmt(E.name, sizeof E.name, "%s", initial ? initial : "");
+  E.name_len = (int)api->str_len(E.name);
+  E.view = VIEW_NAME;
+}
+
 static void save(void) {
   int fd, i;
   char nl = 10;
 
-  if (!E.path[0]) { say("no filename"); return; }
+  if (!E.path[0]) { begin_name(NAME_SAVE_AS, "untitled.txt"); return; }
   fd = api->open(E.path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
   if (fd < 0) { say("cannot write"); return; }
   for (i = 0; i < E.nlines; i++) {
@@ -275,6 +292,27 @@ static void backspace(void) {
   E.dirty = 1;
 }
 
+/* The name is joined to the folder being browsed, so "notes.txt" lands where
+ * you were looking rather than at the root. */
+static void finish_name(void) {
+  char path[96];
+
+  if (E.name_len == 0) { E.view = VIEW_EDIT; return; }
+  api->fmt(path, sizeof path, "%s%s%s", E.dir, E.dir[1] == 0 ? "" : "/", E.name);
+
+  if (E.name_for == NAME_NEW) {
+    blank();
+    api->fmt(E.path, sizeof E.path, "%s", path);
+    say("new file, ctrl-s saves");
+  } else {
+    api->fmt(E.path, sizeof E.path, "%s", path);
+    E.view = VIEW_EDIT;
+    save();
+    return;
+  }
+  E.view = VIEW_EDIT;
+}
+
 /* ------------------------------------------------------------ painting --- */
 
 static void paint_browse(CRect c) {
@@ -310,9 +348,10 @@ static void paint_edit(CRect c) {
   if (cols < 1) cols = 1;
   scroll_to_cursor(rows, cols);
 
-  api->fill(c, CLR_BG);
-  api->fill(rect(c.x, c.y, GUTTER, c.h - ROWH), CLR_GUTTER);
-
+  /* No full-screen clear. Each row paints its own background as it goes, so a
+   * keystroke redraws rows rather than wiping 240x135 to one colour and
+   * drawing over it -- which at 40MHz is 12ms of flat background on every
+   * character typed, and reads as a flash. */
   for (r = 0; r < rows; r++) {
     int i = E.top + r;
     short y = (short)(c.y + r * ROWH);
@@ -320,10 +359,10 @@ static void paint_edit(CRect c) {
     uint16_t bg = on_cursor ? CLR_CUR_BG : CLR_BG;
     int n;
 
-    if (i >= E.nlines) break;
+    api->fill(rect(c.x, y, GUTTER, ROWH), CLR_GUTTER);
+    api->fill(rect(c.x + GUTTER, y, c.w - GUTTER, ROWH), bg);
 
-    if (on_cursor)
-      api->fill(rect(c.x + GUTTER, y, c.w - GUTTER, ROWH), bg);
+    if (i >= E.nlines) continue;      /* cleared, so deleted lines disappear */
 
     api->fmt(buf, sizeof buf, "%3d", i + 1);
     api->text((short)(c.x + 1), y, buf,
@@ -353,9 +392,31 @@ static void paint_edit(CRect c) {
             CLR_BAR_FG, CLR_BAR);
 }
 
+static void paint_name(CRect c) {
+  char shown[sizeof E.name + 2];
+  short y = (short)(c.y + c.h / 2 - 18);
+
+  api->fill(c, CLR_BG);
+  api->text((short)(c.x + 8), y,
+            E.name_for == NAME_NEW ? "New file" : "Save as", CLR_BAR_FG, CLR_BG);
+  api->text((short)(c.x + 8), (short)(y + 11), E.dir, CLR_DIM, CLR_BG);
+
+  api->fill(rect(c.x + 6, y + 24, c.w - 12, 13), CLR_CUR_BG);
+  api->fill(rect(c.x + 6, y + 24, c.w - 12, 1), CLR_SEL);
+  api->mem_cpy(shown, E.name, (size_t)E.name_len);
+  shown[E.name_len] = '_';
+  shown[E.name_len + 1] = 0;
+  api->text((short)(c.x + 9), (short)(y + 27), shown, CLR_TEXT, CLR_CUR_BG);
+
+  api->fill(rect(c.x, c.y + c.h - ROWH, c.w, ROWH), CLR_BAR);
+  api->text((short)(c.x + 3), (short)(c.y + c.h - ROWH + 1),
+            "enter confirms   backspace cancels when empty", CLR_BAR_FG, CLR_BAR);
+}
+
 static void app_paint(void *st, CRect c) {
   (void)st;
   if (E.view == VIEW_BROWSE) paint_browse(c);
+  else if (E.view == VIEW_NAME) paint_name(c);
   else paint_edit(c);
 }
 
@@ -370,12 +431,7 @@ static int key_browse(unsigned char k) {
   case CAPP_KEY_RIGHT:
   case CAPP_KEY_ENTER: open_selected(); return 1;
   case 'n': case 'N':
-    /* A new file lands in the folder being browsed, named on save. */
-    blank();
-    api->fmt(E.path, sizeof E.path, "%s%suntitled.txt", E.dir,
-             E.dir[1] == 0 ? "" : "/");
-    say("new file, ctrl-s saves");
-    E.view = VIEW_EDIT;
+    begin_name(NAME_NEW, "");
     return 1;
   case 'r': case 'R': rescan(); return 1;
   default: return 0;
@@ -403,6 +459,10 @@ static int key_edit(unsigned char k) {
   case CAPP_KEY_ENTER: split_line(); return 1;
 
   case 0x13: save(); return 1;                    /* ctrl-s */
+  case 0x0E: begin_name(NAME_NEW, ""); return 1;  /* ctrl-n */
+  case 0x12:                                      /* ctrl-r, save as */
+    begin_name(NAME_SAVE_AS, E.path[0] ? E.path : "untitled.txt");
+    return 1;
   case 0x0F:                                      /* ctrl-o, back to the list */
     E.view = VIEW_BROWSE;
     rescan();
@@ -416,9 +476,28 @@ static int key_edit(unsigned char k) {
   }
 }
 
+static int key_name(unsigned char k) {
+  if (k == CAPP_KEY_ENTER) { finish_name(); return 1; }
+  if (k == CAPP_KEY_BACK) {
+    if (E.name_len > 0) E.name[--E.name_len] = 0;
+    else E.view = (E.name_for == NAME_NEW) ? VIEW_BROWSE : VIEW_EDIT;
+    return 1;
+  }
+  /* No slashes: this names a file in the folder being browsed, and a path
+   * typed here would silently land somewhere else. */
+  if (k >= 32 && k < 127 && k != '/' && E.name_len < (int)sizeof E.name - 1) {
+    E.name[E.name_len++] = (char)k;
+    E.name[E.name_len] = 0;
+    return 1;
+  }
+  return 0;
+}
+
 static int app_key(void *st, unsigned char k) {
   (void)st;
-  return E.view == VIEW_BROWSE ? key_browse(k) : key_edit(k);
+  if (E.view == VIEW_BROWSE) return key_browse(k);
+  if (E.view == VIEW_NAME) return key_name(k);
+  return key_edit(k);
 }
 
 static int app_click(void *st, short x, short y, int button) {
@@ -448,7 +527,7 @@ static int app_click(void *st, short x, short y, int button) {
  * machine whose arrow keys are ; . , / needs those back. */
 static int app_wants_text(void *st) {
   (void)st;
-  return E.view == VIEW_EDIT;
+  return E.view != VIEW_BROWSE;
 }
 
 static void app_open(void *st) {
@@ -490,7 +569,7 @@ const CappApp *capp_register(const CardApi *a) {
   APP.pref_w = 0;
   APP.pref_h = 0;
   APP.wants_text = app_wants_text;
-  APP.help = "arrows\tmove\nenter\topen, or split the line\nbackspace\tup a folder, or delete\nn\tnew file\nctrl-s\tsave\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n";
+  APP.help = "arrows\tmove\nenter\topen, or split the line\nbackspace\tup a folder, or delete\nn\tnew file\nctrl-n\tnew file\nctrl-s\tsave\nctrl-r\tsave as\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n";
   APP.state = 0;
   return &APP;
 }
