@@ -4,6 +4,7 @@
 #include "fs/fs.h"
 
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -105,7 +106,7 @@ LaunchResult launcher_boot(const char *path, LaunchProgress cb, void *ctx) {
   AppImageResult why;
   const esp_partition_t *target;
   esp_ota_handle_t handle = 0;
-  static uint8_t buf[COPY_CHUNK];
+  uint8_t *buf;
   uint32_t done = 0;
   int fd, last_pct = -1;
   LaunchResult r;
@@ -122,8 +123,15 @@ LaunchResult launcher_boot(const char *path, LaunchProgress cb, void *ctx) {
   fd = fs_open(path, FS_O_READ);
   if (fd < 0) return LAUNCH_ERR_OPEN;
 
+  /* Allocated rather than static: this runs once, seconds before the chip
+     restarts, and a permanent 4 KB reservation for it is 4 KB the rest of
+     CardOS never gets back. */
+  buf = malloc(COPY_CHUNK);
+  if (!buf) { fs_close(fd); return LAUNCH_ERR_ERASE; }
+
   if (esp_ota_begin(target, info.image_size, &handle) != ESP_OK) {
     fs_close(fd);
+    free(buf);
     return LAUNCH_ERR_ERASE;
   }
 
@@ -135,6 +143,7 @@ LaunchResult launcher_boot(const char *path, LaunchProgress cb, void *ctx) {
     if (got <= 0) break;
     if (esp_ota_write(handle, buf, (size_t)got) != ESP_OK) {
       fs_close(fd);
+      free(buf);
       esp_ota_abort(handle);
       return LAUNCH_ERR_WRITE;
     }
@@ -145,6 +154,7 @@ LaunchResult launcher_boot(const char *path, LaunchProgress cb, void *ctx) {
     }
   }
   fs_close(fd);
+  free(buf);
 
   /* esp_ota_end verifies the appended SHA-256, which is why this layer does
    * not carry its own crypto. */

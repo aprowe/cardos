@@ -39,6 +39,7 @@ static const char *TAG = "fs";
 static sdmmc_card_t *s_card;
 static int           s_mounted;
 static FILE         *s_open[FS_MAX_OPEN];
+static char          s_dir_prefix[FS_PATH_MAX + 8];
 
 /* Map a CardOS path onto the VFS mount point. */
 static int real_path(const char *cardos_path, char *out, size_t out_size) {
@@ -208,34 +209,55 @@ int fs_stat(const char *path, FsStat *out) {
   return 0;
 }
 
-int fs_list(const char *dir, FsEntry *out, int max) {
+int fs_opendir(const char *path, FsDir *d) {
   char real[FS_PATH_MAX + 8];
-  char child[FS_PATH_MAX * 2];
-  DIR *d;
-  struct dirent *e;
-  int n = 0;
-
+  DIR *dir;
+  d->impl = NULL;
   if (!s_mounted) return -1;
-  if (real_path(dir, real, sizeof real) != 0) return -1;
+  if (real_path(path, real, sizeof real) != 0) return -1;
   if (real[0] == '\0') strcpy(real, MOUNT_POINT);
+  dir = opendir(real);
+  if (!dir) return -1;
+  d->impl = dir;
+  /* Remember the directory so readdir can stat each child. */
+  strncpy(s_dir_prefix, real, sizeof s_dir_prefix - 1);
+  s_dir_prefix[sizeof s_dir_prefix - 1] = '\0';
+  return 0;
+}
 
-  d = opendir(real);
-  if (!d) return -1;
+int fs_readdir(FsDir *d, FsEntry *out) {
+  struct dirent *e;
+  struct stat st;
+  char child[FS_PATH_MAX * 2];
 
-  while (n < max && (e = readdir(d)) != NULL) {
-    struct stat st;
-    strncpy(out[n].name, e->d_name, FS_NAME_MAX);
-    out[n].name[FS_NAME_MAX] = '\0';
-    out[n].size = 0;
-    out[n].is_dir = 0;
-    if (snprintf(child, sizeof child, "%s/%s", real, e->d_name) > 0 &&
-        stat(child, &st) == 0) {
-      out[n].size = (uint32_t)st.st_size;
-      out[n].is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
-    }
-    n++;
+  if (!d->impl) return -1;
+  e = readdir((DIR *)d->impl);
+  if (!e) return 0;
+
+  strncpy(out->name, e->d_name, FS_NAME_MAX);
+  out->name[FS_NAME_MAX] = '\0';
+  out->size = 0;
+  out->is_dir = 0;
+  if (snprintf(child, sizeof child, "%s/%s", s_dir_prefix, e->d_name) > 0 &&
+      stat(child, &st) == 0) {
+    out->size = (uint32_t)st.st_size;
+    out->is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
   }
-  closedir(d);
+  return 1;
+}
+
+void fs_closedir(FsDir *d) {
+  if (!d->impl) return;
+  closedir((DIR *)d->impl);
+  d->impl = NULL;
+}
+
+int fs_list(const char *dir, FsEntry *out, int max) {
+  FsDir d;
+  int n = 0;
+  if (fs_opendir(dir, &d) != 0) return -1;
+  while (n < max && fs_readdir(&d, &out[n]) == 1) n++;
+  fs_closedir(&d);
   return n;
 }
 

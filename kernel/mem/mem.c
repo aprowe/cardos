@@ -4,6 +4,7 @@
 #include "mem/mem_internal.h"
 #include "swap/swap.h"
 
+#include <stdint.h>
 #include <string.h>
 
 /* ---------------------------------------------------------------- state -- */
@@ -26,6 +27,19 @@ static uint32_t g_evictions;
 static uint32_t g_page_ins;
 static uint32_t g_evict_writes;
 static uint8_t  g_owner;      /* task currently running; 0 = kernel */
+
+/* Xtensa faults on a misaligned 32-bit access, and the first thing a caller
+ * does with a block is usually to put a struct in it -- so every block starts
+ * on a 4-byte boundary. Sizes are not rounded: mem_size still reports what was
+ * asked for, and the padding lives between blocks. */
+#define MEM_ALIGN 4u
+#define ALIGN_UP(x) (((x) + (MEM_ALIGN - 1u)) & ~(MEM_ALIGN - 1u))
+
+/* Scratch for the sorted block list. Static rather than a local because task
+ * stacks are 1 KB and a 256-byte frame in the hottest kernel path is a quarter
+ * of one. The kernel is cooperative and none of its users nest, so sharing is
+ * safe. */
+static uint8_t g_order[MEM_MAX_HANDLES];
 
 /* Free ranges inside the fixed arena, kept sorted by offset and coalesced. */
 #define FIXED_FREE_MAX 32
@@ -149,9 +163,13 @@ static int fixed_alloc(uint32_t size, uint32_t *out_off) {
       return 1;
     }
   }
-  if (g_fixed_bottom < size || g_fixed_bottom - size < g_movable_top) return 0;
-  g_fixed_bottom -= size;                     /* grow the arena downward */
-  *out_off = g_fixed_bottom;
+  if (g_fixed_bottom < size) return 0;
+  {
+    uint32_t off = (g_fixed_bottom - size) & ~(MEM_ALIGN - 1u);
+    if (off < g_movable_top) return 0;
+    g_fixed_bottom = off;                     /* grow the arena downward */
+    *out_off = off;
+  }
   return 1;
 }
 
@@ -165,8 +183,14 @@ void mem_init(void *heap, size_t bytes) {
     g_table[i].off = MEM_OFF_NONE;
     g_table[i].lru_prev = g_table[i].lru_next = MEM_NO_LRU;
   }
-  g_base = (uint8_t *)heap;
-  g_size = (uint32_t)bytes;
+  /* The caller's heap may not be aligned; align the base and lose the few
+   * bytes rather than hand out misaligned blocks. */
+  {
+    uintptr_t raw = (uintptr_t)heap;
+    uintptr_t aligned = (raw + (MEM_ALIGN - 1u)) & ~(uintptr_t)(MEM_ALIGN - 1u);
+    g_base = (uint8_t *)aligned;
+    g_size = (uint32_t)(bytes - (size_t)(aligned - raw));
+  }
   g_movable_top = 0;
   g_fixed_bottom = g_size;
   g_handles_used = 0;
@@ -241,18 +265,18 @@ static int collect_movable_sorted(uint8_t *order);
  * space between them has to be usable or a workload that holds a few locks
  * loses most of the heap. */
 static int movable_place(uint32_t size, uint32_t *out_off) {
-  uint8_t order[MEM_MAX_HANDLES];
+  uint8_t *order = g_order;
   int n = collect_movable_sorted(order), i;
   uint32_t cursor = 0, off = 0;
   int found = 0;
 
   for (i = 0; i < n && !found; i++) {
     MemDesc *d = &g_table[order[i]];
-    if (d->off - cursor >= size) { off = cursor; found = 1; break; }
-    cursor = d->off + d->size;
+    if (d->off >= cursor && d->off - cursor >= size) { off = cursor; found = 1; break; }
+    cursor = ALIGN_UP(d->off + d->size);
   }
   if (!found) {
-    if (g_fixed_bottom - cursor < size) return 0;
+    if (cursor > g_fixed_bottom || g_fixed_bottom - cursor < size) return 0;
     off = cursor;
   }
   *out_off = off;
@@ -283,21 +307,21 @@ static int collect_movable_sorted(uint8_t *order) {
 }
 
 static void compact_from(uint32_t dst_start) {
-  uint8_t order[MEM_MAX_HANDLES];
+  uint8_t *order = g_order;
   int n = collect_movable_sorted(order), i;
   uint32_t dst = dst_start;
 
   for (i = 0; i < n; i++) {
     MemDesc *d = &g_table[order[i]];
     if (d->lock > 0) {                 /* pinned: cannot move, skip past it */
-      dst = d->off + d->size;
+      dst = ALIGN_UP(d->off + d->size);
       continue;
     }
     if (d->off != dst) {
       memmove(g_base + dst, g_base + d->off, d->size);
       d->off = dst;
     }
-    dst += d->size;
+    dst = ALIGN_UP(dst + d->size);
   }
   g_movable_top = dst;
   g_compactions++;
@@ -315,13 +339,13 @@ void mem_compact(void) { compact_from(0); }
 static uint32_t g_paranoid_phase;
 
 static void paranoid_shuffle(void) {
-  uint8_t order[MEM_MAX_HANDLES];
+  uint8_t *order = g_order;
   int n, i;
 
   compact_from(0);                     /* pack down: always safe */
   g_paranoid_phase ^= 1u;
   if (!g_paranoid_phase) return;       /* alternate between the two layouts */
-  if (g_fixed_bottom - g_movable_top < 1u) return;
+  if (g_fixed_bottom - g_movable_top < MEM_ALIGN) return;
 
   n = collect_movable_sorted(order);
   for (i = 0; i < n; i++)
@@ -332,10 +356,10 @@ static void paranoid_shuffle(void) {
    * moved. Walking ascending here would corrupt every block but the last. */
   for (i = n - 1; i >= 0; i--) {
     MemDesc *d = &g_table[order[i]];
-    memmove(g_base + d->off + 1, g_base + d->off, d->size);
-    d->off += 1;
+    memmove(g_base + d->off + MEM_ALIGN, g_base + d->off, d->size);
+    d->off += MEM_ALIGN;
   }
-  g_movable_top += 1;
+  g_movable_top += MEM_ALIGN;
 }
 #else
 static void paranoid_shuffle(void) { }

@@ -55,25 +55,29 @@ void cmd_cd(const char *arg) {
 
 void cmd_ls(const char *arg) {
   char target[FS_PATH_MAX];
-  FsEntry entries[32];
-  int n, i;
+  FsEntry e;
+  FsDir d;
+  int n = 0;
 
   if (!fs_mounted()) { err("ls", "no card mounted"); return; }
   if (resolve(arg && *arg ? arg : "", target) != 0) return;
 
-  n = fs_list(target, entries, 32);
-  if (n < 0) { err(target, "cannot list"); return; }
-  if (n == 0) { con_write("(empty)\n"); return; }
-
-  for (i = 0; i < n; i++) {
-    if (entries[i].is_dir) {
+  /* Iterating rather than filling an array: an FsEntry is 72 bytes, and the
+   * array version measured 2464 bytes of stack against a 1 KB task stack. It
+   * also stopped at 32 files without saying so. */
+  if (fs_opendir(target, &d) != 0) { err(target, "cannot list"); return; }
+  while (fs_readdir(&d, &e) == 1) {
+    n++;
+    if (e.is_dir) {
       con_set_color(COLOR_WHITE);
-      con_printf("%s/\n", entries[i].name);
+      con_printf("%s/\n", e.name);
       con_set_color(COLOR_GREEN);
     } else {
-      con_printf("%-28s %6u\n", entries[i].name, (unsigned)entries[i].size);
+      con_printf("%-28s %6u\n", e.name, (unsigned)e.size);
     }
   }
+  fs_closedir(&d);
+  if (n == 0) con_write("(empty)\n");
 }
 
 void cmd_cat(const char *arg) {
@@ -137,44 +141,48 @@ static int fs_reader(void *ctx, uint32_t offset, void *buf, size_t n) {
 
 #define GUEST_PARTITION_BYTES (3u * 1024 * 1024)   /* ota_0 in partitions.csv */
 
+/* Static rather than local: this and the AppImageInfo below were the bulk of
+ * a 2608-byte stack frame, and task stacks are 1 KB. Nothing here is
+ * re-entrant -- the kernel is cooperative and this does not yield. */
+static char        s_full[FS_PATH_MAX];
+static AppImageInfo s_info;
+
 static int list_apps_in(const char *dir) {
-  FsEntry entries[32];
-  int n, i, found = 0;
+  FsEntry e;
+  FsDir d;
+  int found = 0;
 
-  n = fs_list(dir, entries, 32);
-  if (n < 0) return -1;          /* the directory simply is not there */
+  if (fs_opendir(dir, &d) != 0) return -1;   /* the directory is not there */
 
-  for (i = 0; i < n; i++) {
-    char full[FS_PATH_MAX];
-    AppImageInfo info;
+  while (fs_readdir(&d, &e) == 1) {
     AppImageResult r;
     int fd;
-    size_t len = strlen(entries[i].name);
+    size_t len = strlen(e.name);
 
-    if (entries[i].is_dir) continue;
-    if (len < 4 || strcmp(entries[i].name + len - 4, ".bin") != 0) continue;
+    if (e.is_dir) continue;
+    if (len < 4 || strcmp(e.name + len - 4, ".bin") != 0) continue;
     found++;
 
-    if (snprintf(full, sizeof full, "%s/%s", dir, entries[i].name) < 0) continue;
-    fd = fs_open(full, FS_O_READ);
-    if (fd < 0) { con_printf("%-16s unreadable\n", entries[i].name); continue; }
+    if (snprintf(s_full, sizeof s_full, "%s/%s", dir, e.name) < 0) continue;
+    fd = fs_open(s_full, FS_O_READ);
+    if (fd < 0) { con_printf("%-16s unreadable\n", e.name); continue; }
 
-    r = appimage_parse(fs_reader, &fd, entries[i].size,
-                       GUEST_PARTITION_BYTES, &info);
+    r = appimage_parse(fs_reader, &fd, e.size, GUEST_PARTITION_BYTES, &s_info);
     fs_close(fd);
 
     if (r != APPIMAGE_OK) {
       con_set_color(COLOR_RED);
-      con_printf("%-16s %s\n", entries[i].name, appimage_strerror(r));
+      con_printf("%-16s %s\n", e.name, appimage_strerror(r));
       con_set_color(COLOR_GREEN);
       continue;
     }
     /* The app descriptor is why this says "bruce 1.2.3" and not "bruce.bin". */
-    con_printf("%-16s %s %s %uK\n", entries[i].name,
-               info.has_app_desc ? info.project_name : "?",
-               info.has_app_desc ? info.version : "",
-               (unsigned)(info.image_size / 1024));
+    con_printf("%-16s %s %s %uK\n", e.name,
+               s_info.has_app_desc ? s_info.project_name : "?",
+               s_info.has_app_desc ? s_info.version : "",
+               (unsigned)(s_info.image_size / 1024));
   }
+  fs_closedir(&d);
   return found;
 }
 

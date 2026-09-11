@@ -54,16 +54,18 @@ void test_one_owner_dying_does_not_release_another_s_locks(void) {
 }
 
 void test_a_released_block_becomes_relocatable_again(void) {
-  Handle a, b;
+  Handle pad, a;
   unsigned char *before, *after;
   mem_init(heap, sizeof heap);
   mem_set_owner(OWNER_SHELL);
+  /* pad sits *below* a, so freeing it leaves a gap that compaction can only
+   * close by moving a downward. Freeing a block above a would prove nothing. */
+  pad = mem_alloc(4096, 0);
   a = mem_alloc(4096, 0);
-  b = mem_alloc(4096, 0);
   before = mem_lock(a);
   memset(before, 0x5C, 4096);
 
-  mem_free(b);                        /* a gap below a */
+  mem_free(pad);
   mem_compact();
   CHECK_EQ(mem_lock(a) == before, 1); /* pinned: compaction could not move it */
   mem_unlock(a);

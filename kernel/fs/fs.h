@@ -54,6 +54,21 @@ int  fs_seek(int fd, int32_t off, int whence);  /* new position, or -1 */
 void fs_close(int fd);
 
 int  fs_stat(const char *path, FsStat *out);
+
+/* Directory iteration.
+ *
+ * Prefer this to fs_list. A caller of fs_list has to hold the array, and an
+ * FsEntry is 72 bytes: the shell's `ls` was measured at 2464 bytes of stack
+ * against task stacks the spec sets at 1 KB. Iterating costs one entry. It
+ * also removes the arbitrary cap -- fs_list silently truncated a directory
+ * with more files than the caller guessed. */
+typedef struct { void *impl; } FsDir;
+
+int  fs_opendir(const char *path, FsDir *d);
+int  fs_readdir(FsDir *d, FsEntry *out);   /* 1 = entry, 0 = end, -1 = error */
+void fs_closedir(FsDir *d);
+
+/* Batch convenience over the iterator; the spec names it. Truncates at max. */
 int  fs_list(const char *dir, FsEntry *out, int max);   /* count, or -1 */
 int  fs_mkdir(const char *path);
 int  fs_remove(const char *path);
