@@ -31,6 +31,9 @@
 #include "kernel/ui/shell.h"
 #include "kernel/sys/env.h"
 #include "kernel/sys/sio.h"
+
+#include "nvs.h"
+#include "nvs_flash.h"
 #include "kernel/drv/bthid.h"
 
 #define CARDOS_LINE_MAX 63
@@ -160,7 +163,8 @@ static void run_builtin(const char *line, char *arg) {
   }
   else if (!strcmp(line, "clear"))  con_clear();
   else if (!strcmp(line, "reboot")) esp_restart();
-  else if (!strcmp(line, "echo"))   { con_write(arg); con_putc('\n'); }
+  /* To stdout, so `echo text > file` writes a file rather than printing. */
+  else if (!strcmp(line, "echo"))   sio_write_line(arg);
   else {
     /* Not a built-in: try to run it. "./grep x" is a path and "grep x" is a
      * PATH lookup, and both end in the same place -- which is what makes a
@@ -583,6 +587,23 @@ void app_main(void) {
   /* The scheduler's policy half runs now; the Xtensa context switch does not
    * exist yet, so this loop *is* the shell task rather than being switched to
    * it. `ps` therefore shows one task. spawn/kill arrive with the switch. */
+  /* NVS, before anything reads a setting.
+   *
+   * It used to be initialised inside wifi_start and the Bluetooth radio, which
+   * meant every nvs_open before a radio started failed silently -- and a
+   * silent failure in a settings store looks exactly like a setting that does
+   * not change. "BT at boot" could not be turned on, and the remembered shell
+   * always came back as the default, because both were reading from a
+   * partition nobody had opened. */
+  {
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      nvs_flash_erase();
+      err = nvs_flash_init();
+    }
+    if (err != ESP_OK) con_write("nvs unavailable: settings will not stick\n");
+  }
+
   env_init();
   sched_init(clock_ms, NULL);
   sched_create("shell");
@@ -697,7 +718,7 @@ void app_main(void) {
     }
 
     if (k) {
-      con_cursor(0);
+      if (s_mode == MODE_CONSOLE) con_cursor(0);
       if (k == KEY_ENTER) {
         s_line[s_len] = 0;
         con_putc('\n');
@@ -706,7 +727,10 @@ void app_main(void) {
         s_hist_saved[0] = 0;
         run_pipeline(s_line);
         s_len = 0;
-        prompt();
+        /* Only if the console still owns the screen. `desk` and `launch` paint
+         * a whole shell from inside run_pipeline, and printing a prompt
+         * afterwards drew a line of console over the top of it. */
+        if (s_mode == MODE_CONSOLE) prompt();
       } else if (k == KEY_BACKSPACE) {
         if (s_len > 0) { s_len--; con_putc('\b'); }
       } else if (k == KEY_UP) {
@@ -723,14 +747,16 @@ void app_main(void) {
         s_line[s_len++] = (char)k;
         con_putc((char)k);
       }
-      last_blink = esp_timer_get_time();
-      blink = 1;
-      con_cursor(1);
+      if (s_mode == MODE_CONSOLE) {
+        last_blink = esp_timer_get_time();
+        blink = 1;
+        con_cursor(1);
+      }
     }
 
     {
       int64_t now = esp_timer_get_time();
-      if (now - last_blink > 500000) {      /* 500 ms */
+      if (s_mode == MODE_CONSOLE && now - last_blink > 500000) {   /* 500 ms */
         last_blink = now;
         blink = !blink;
         con_cursor(blink);

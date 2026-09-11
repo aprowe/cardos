@@ -97,9 +97,12 @@ char *sio_take_buffer(size_t *len) {
 }
 
 int sio_out_to_file(const char *path, int append) {
-  int fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | (append ? 0 : FS_O_TRUNC));
+  /* FS_O_APPEND rather than opening and seeking: without TRUNC the open still
+   * maps to "w+b", which truncates -- so ">>" was overwriting the file every
+   * time and looked like only the last line had been written. */
+  int fd = fs_open(path, FS_O_WRITE | FS_O_CREATE |
+                         (append ? FS_O_APPEND : FS_O_TRUNC));
   if (fd < 0) return -1;
-  if (append) fs_seek(fd, 0, FS_SEEK_END);
   s_out_fd = fd;
   s_out_kind = OUT_FILE;
   return 0;
