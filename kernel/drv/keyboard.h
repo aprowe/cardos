@@ -22,6 +22,18 @@
  * meaning of ctrl-h; every caller that wants a backspace has a key for it. */
 #define KEY_HELP      0x86
 
+/* Opt is the global-shortcut modifier.
+ *
+ * Its chords are given codes of their own rather than being folded into the
+ * ASCII range, because they have to survive being typed *inside* an app --
+ * they are how you leave one -- and an app that is taking text would otherwise
+ * swallow them. Nothing below 0x90 is affected.
+ *
+ * 0xA0..0xA9 are opt with a digit, 0xC0..0xD9 opt with a letter. */
+#define KEY_OPT_DIGIT(d)  ((uint8_t)(0xA0 + (d)))
+#define KEY_OPT_LETTER(c) ((uint8_t)(0xC0 + ((c) - 'a')))
+#define KEY_IS_OPT(k)     ((k) >= 0xA0)
+
 #define KEY_UP        0x80   /* the ; , . / keys double as arrows under Fn */
 #define KEY_DOWN      0x81
 #define KEY_LEFT      0x82
@@ -36,6 +48,7 @@ uint8_t keyboard_poll(void);
 int keyboard_shift_down(void);
 int keyboard_ctrl_down(void);
 int keyboard_fn_down(void);
+int keyboard_opt_down(void);
 
 /* The arrow this key stands for, or 0. On this keyboard ; . , / double as the
  * arrow cluster under Fn; a shell with nothing to type into maps them without

@@ -45,7 +45,7 @@ static const char KEYMAP_SHIFT[4][14] = {
 #define IS_OPT(x, y)   ((y) == 3 && (x) == 1)
 
 static uint8_t s_down[4][14];      /* previous scan, for edge detection */
-static int s_shift, s_ctrl, s_fn;
+static int s_shift, s_ctrl, s_fn, s_opt;
 
 static void set_address(int value) {
   gpio_set_level(ADDR_PINS[0], (value >> 0) & 1);
@@ -88,7 +88,7 @@ static void scan(uint8_t now[4][14]) {
   for (y = 0; y < 4; y++)
     for (x = 0; x < 14; x++) now[y][x] = 0;
 
-  s_shift = s_ctrl = s_fn = 0;
+  s_shift = s_ctrl = s_fn = s_opt = 0;
 
   for (col = 0; col < 8; col++) {
     set_address(col);
@@ -107,6 +107,7 @@ static void scan(uint8_t now[4][14]) {
       if (IS_SHIFT(x, y)) s_shift = 1;
       if (IS_CTRL(x, y))  s_ctrl = 1;
       if (IS_FN(x, y))    s_fn = 1;
+      if (IS_OPT(x, y))   s_opt = 1;
     }
   }
 }
@@ -121,7 +122,7 @@ uint8_t keyboard_poll(void) {
   for (y = 0; y < 4 && !out; y++) {
     for (x = 0; x < 14; x++) {
       if (!now[y][x] || s_down[y][x]) continue;    /* only rising edges */
-      if (IS_SHIFT(x, y) || IS_CTRL(x, y) || IS_FN(x, y) ||
+      if (IS_SHIFT(x, y) || IS_CTRL(x, y) || IS_FN(x, y) || IS_OPT(x, y) ||
           IS_ALT(x, y) || IS_OPT(x, y)) continue;  /* modifiers are not keys */
 
       {
@@ -135,7 +136,15 @@ uint8_t keyboard_poll(void) {
          * chords work identically from this keyboard and from a serial
          * terminal -- and so ordinary letters stay free for whatever has
          * focus. */
-        if (s_ctrl && (c == 'h' || c == 'H')) c = (char)KEY_HELP;
+        /* Opt first: a global shortcut outranks whatever the key would
+         * otherwise mean, which is the point of having one. */
+        if (s_opt) {
+          char base = KEYMAP[y][x];
+          if (base >= '0' && base <= '9') c = (char)KEY_OPT_DIGIT(base - '0');
+          else if (base >= 'a' && base <= 'z') c = (char)KEY_OPT_LETTER(base);
+          else c = 0;
+        }
+        else if (s_ctrl && (c == 'h' || c == 'H')) c = (char)KEY_HELP;
         else if (s_ctrl && c >= 'a' && c <= 'z') c = (char)(c - 'a' + 1);
         else if (s_ctrl && c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 1);
 
@@ -163,6 +172,7 @@ uint8_t keyboard_poll(void) {
 int keyboard_shift_down(void) { return s_shift; }
 int keyboard_ctrl_down(void)  { return s_ctrl; }
 int keyboard_fn_down(void)    { return s_fn; }
+int keyboard_opt_down(void)   { return s_opt; }
 
 uint8_t keyboard_arrow_for(uint8_t k) {
   switch (k) {

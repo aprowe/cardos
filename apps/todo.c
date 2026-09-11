@@ -48,6 +48,7 @@ typedef struct {
   char title[TITLE_MAX + 1];
   int  done;
   int  dirty;               /* changed here, not yet pushed */
+  int  deleted;             /* gone here, not yet gone at Google */
 } Item;
 
 static const CardApi *api;
@@ -157,8 +158,9 @@ static void cache_load(void) {
         int p = 0, q = 0;
         if (line[0] < '0' || line[0] > '1') continue;
         it->done = line[0] - '0';
-        it->dirty = (line[2] == '1');
-        p = 4;
+        it->deleted = (line[1] == '1');
+        it->dirty = (line[3] == '1');
+        p = 5;
         while (line[p] && line[p] != ' ' && q < ID_MAX - 1) it->id[q++] = line[p++];
         it->id[q] = 0;
         if (it->id[0] == '-' && !it->id[1]) it->id[0] = 0;
@@ -210,6 +212,37 @@ static int find_list(const char *tok) {
   return 1;
 }
 
+/* Removing a row from the array. Used once the delete has reached Google, and
+ * straight away for something that never got there. */
+static void drop(int i) {
+  int j;
+  for (j = i; j + 1 < T.n; j++)
+    api->mem_cpy(&T.item[j], &T.item[j + 1], sizeof T.item[0]);
+  T.n--;
+  if (T.sel >= T.n) T.sel = T.n ? T.n - 1 : 0;
+}
+
+/* Marked rather than removed, so a delete made offline still happens when the
+ * network comes back. An item that never reached Google has nothing to tell it
+ * about and goes immediately. */
+static void delete_selected(void) {
+  Item *it;
+
+  if (T.sel < 0 || T.sel >= T.n) return;
+  it = &T.item[T.sel];
+
+  if (!it->id[0]) {
+    drop(T.sel);
+    cache_save();
+    say("deleted");
+    return;
+  }
+  it->deleted = 1;
+  it->dirty = 1;
+  cache_save();
+  say("deleted -- s syncs");
+}
+
 /* Push anything changed here, then pull the list back. Push first on purpose:
  * a pull that ran first would overwrite a local tick with the server's older
  * answer, which is the one way an offline edit can be silently lost. */
@@ -226,7 +259,12 @@ static void sync_now(void) {
     Item *it = &T.item[i];
     if (!it->dirty) continue;
 
-    if (!it->id[0]) {
+    if (it->deleted) {
+      api->fmt(url, sizeof url, TASK_URL, T.list_id, it->id);
+      n = api->http("DELETE", url, 0, 0, tok, T.reply, sizeof T.reply, 15000);
+      /* 404 means it is already gone, which is the outcome asked for. */
+      if (n >= 0 || n == -404) { drop(i); i--; continue; }
+    } else if (!it->id[0]) {
       api->fmt(url, sizeof url, ADD_URL, T.list_id);
       api->fmt(body, sizeof body, "{\"title\":\"%s\"}", it->title);
       n = api->http("POST", url, body, "application/json", tok,
@@ -284,6 +322,7 @@ static void sync_now(void) {
 
 static void toggle(void) {
   if (T.sel < 0 || T.sel >= T.n) return;
+  if (T.item[T.sel].deleted) return;
   T.item[T.sel].done = !T.item[T.sel].done;
   T.item[T.sel].dirty = 1;
   cache_save();
@@ -342,7 +381,15 @@ static void paint_list(CRect c) {
     }
 
     api->text((short)(c.x + 14), (short)(y + 2), T.item[i].title,
-              T.item[i].done ? CLR_DONE : CLR_TEXT, bg);
+              (T.item[i].done || T.item[i].deleted) ? CLR_DONE : CLR_TEXT, bg);
+
+    /* Struck through rather than hidden: an item deleted with no network is
+     * still on the list until the delete reaches Google, and it should look
+     * like something on its way out rather than something still to do. */
+    if (T.item[i].deleted) {
+      short w = (short)(api->str_len(T.item[i].title) * 6);
+      api->fill(rect(c.x + 14, y + 5, w, 1), CLR_DONE);
+    }
 
     /* A dot for anything the server has not seen yet. */
     if (T.item[i].dirty)
@@ -400,6 +447,8 @@ static int key_list(unsigned char k) {
     T.view = VIEW_ADD;
     return 1;
   case 's': case 'S': sync_now(); return 1;
+  case 'd': case 'D':
+  case 0x7F:          delete_selected(); return 1;
   default: return 0;
   }
 }
@@ -454,7 +503,7 @@ const CappInfo capp_info = {
     0x30, 0x0C, 0x37, 0x8C, 0x33, 0x0C, 0x30, 0x0C,
     0x36, 0x0C, 0x33, 0x0C, 0x31, 0x8C, 0x30, 0xCC,
     0x30, 0x6C, 0x3F, 0xFC, 0x00, 0x00, 0x00, 0x00 },
-  "arrows\tmove\nenter\ttick it off\na\tadd a task\ns\tsync with Google\n",
+  "arrows\tmove\nenter\ttick it off\na\tadd a task\nd\tdelete\ns\tsync with Google\n",
 };
 
 static CappUi UI;

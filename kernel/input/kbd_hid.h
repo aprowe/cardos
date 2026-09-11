@@ -27,6 +27,12 @@
  * code -- the test for it is the thing that keeps the two in step. */
 #define KBD_KEY_HELP 0x86
 
+/* Must match KEY_OPT_DIGIT / KEY_OPT_LETTER in kernel/drv/keyboard.h. Repeated
+ * because this module is portable and that one is device code; the test is
+ * what keeps the two in step. */
+#define KBD_KEY_OPT_DIGIT(d)  ((uint8_t)(0xA0 + (d)))
+#define KBD_KEY_OPT_LETTER(c) ((uint8_t)(0xC0 + ((c) - 'a')))
+
 /* Modifier bits, as the HID spec orders them. */
 #define KBD_MOD_LCTRL  0x01
 #define KBD_MOD_LSHIFT 0x02

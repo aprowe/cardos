@@ -182,6 +182,12 @@ static void scan(const char *dir, int bin_only) {
     if (e.is_dir) continue;
     if (e.name[0] == '.') continue;      /* the stamp file, and anything like it */
 
+    /* Cleared before it is filled. The colour pointer in particular is freed
+     * by the next reload, and leaving a stale one here meant the second reload
+     * freed it twice -- which aborts in the allocator with a backtrace that
+     * points at free() and says nothing about icons. */
+    memset(ic, 0, sizeof *ic);
+
     snprintf(ic->path, sizeof ic->path, "%s/%s", dir, e.name);
 
     if (ends_with(e.name, n, ".bin")) {
@@ -234,7 +240,11 @@ static void partition_cli(void) {
 
 void icons_reload(void) {
   int i;
-  for (i = 0; i < s_nicon; i++) free(s_icon[i].colour);
+  for (i = 0; i < s_nicon; i++) {
+    free(s_icon[i].colour);
+    s_icon[i].colour = NULL;
+    s_icon[i].colour_tried = 0;
+  }
   s_nicon = 0;
   s_nvisible = 0;
   capprun_unload_all();

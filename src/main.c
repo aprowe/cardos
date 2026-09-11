@@ -31,6 +31,7 @@
 #include "kernel/ui/shell.h"
 #include "kernel/sys/env.h"
 #include "kernel/sys/sio.h"
+#include "kernel/ui/help.h"
 
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -533,6 +534,100 @@ static void hist_walk(int delta) {
   line_replace(want == 0 ? s_hist_saved : s_hist[want - 1]);
 }
 
+
+/* ---- global shortcuts ----------------------------------------------------
+ *
+ * Handled here, above every shell, because they have to work from inside an
+ * app -- they are how you leave one. A shell that saw them first would hand
+ * them to whatever had focus, and an editor would eat opt-3 as a character.
+ *
+ * Returns 1 if the key was one of these and has been dealt with. */
+static void enter_console(void) {
+  s_mode = MODE_CONSOLE;
+  ui_set_shell(UI_NONE);
+  con_clear();
+  prompt();
+}
+
+/* The shortcut list, over whatever is on screen. Drawn with the same panel
+ * every app's ctrl-h uses, so there is one thing that looks like help. Any key
+ * closes it, and the shell underneath repaints. */
+static int s_opt_help;
+
+static void show_opt_help(void) {
+  s_opt_help = 1;
+  help_paint("Shortcuts", "opt-1\tlauncher\nopt-2\tdesktop\nopt-3\tconsole\nopt-t\ttodo\nopt-s\tstocks\nopt-e\tedit\nopt-m\tmines\nopt-b\treconnect bluetooth\nopt-w\treconnect wifi\n",
+             "ctrl-h\tthe keys of whatever is running\nany key\tclose this\n");
+}
+
+static int global_key(uint8_t k) {
+  /* The panel is above everything, so it gets the key first. */
+  if (s_opt_help) {
+    s_opt_help = 0;
+    if (s_mode == MODE_DESKTOP) desktop_repaint();
+    else if (s_mode == MODE_LAUNCHER) launchui_repaint();
+    else { con_clear(); prompt(); }
+    return 1;
+  }
+
+  switch (k) {
+  case KEY_OPT_LETTER('h'):
+    show_opt_help();
+    return 1;
+  case KEY_OPT_DIGIT(1):
+    launchui_init();
+    s_mode = MODE_LAUNCHER;
+    return 1;
+  case KEY_OPT_DIGIT(2):
+    desktop_init();
+    s_mode = MODE_DESKTOP;
+    return 1;
+  case KEY_OPT_DIGIT(3):
+    enter_console();
+    return 1;
+
+  /* Reconnect the radios. Both, because "get me back to where I was" is one
+   * thought, and it blocks for seconds either way -- so it says what it is
+   * doing on the console rather than freezing a shell silently. */
+  case KEY_OPT_LETTER('b'): {
+    int n;
+    enter_console();
+    con_write("bluetooth: looking...\n");
+    n = bthid_autoconnect(4);
+    con_printf("  %d connected: %s\n", n, bthid_status(BTHID_MOUSE));
+    prompt();
+    return 1;
+  }
+  case KEY_OPT_LETTER('w'):
+    enter_console();
+    con_write("wifi: joining the saved network...\n");
+    wifi_connect_saved(20000);
+    con_printf("  %s\n", wifi_status());
+    prompt();
+    return 1;
+
+  /* A letter runs the app of that name. The table is here rather than in a
+   * settings file because these are the two that earn a chord; anything else
+   * is a name away in the launcher. */
+  case KEY_OPT_LETTER('t'):
+  case KEY_OPT_LETTER('s'):
+  case KEY_OPT_LETTER('e'):
+  case KEY_OPT_LETTER('m'): {
+    const char *name = (k == KEY_OPT_LETTER('t')) ? "Todo"
+                     : (k == KEY_OPT_LETTER('s')) ? "Stocks"
+                     : (k == KEY_OPT_LETTER('e')) ? "Edit" : "Mines";
+    if (shell_exec(name, NULL) == 0 && ui_shell() == UI_LAUNCHER)
+      s_mode = MODE_LAUNCHER;
+    return 1;
+  }
+
+  default:
+    /* Every other opt chord is swallowed rather than passed on: a shortcut
+     * that is not bound should do nothing, not type a letter. */
+    return KEY_IS_OPT(k);
+  }
+}
+
 /* Monotonic milliseconds for the scheduler. */
 static uint32_t clock_ms(void *ctx) {
   (void)ctx;
@@ -675,6 +770,9 @@ void app_main(void) {
       else if (sc == 0x1B) k = KEY_ESC;
       else if (sc > 0) k = (uint8_t)sc;
     }
+
+    /* Before any shell sees it. */
+    if (k && global_key(k)) k = 0;
 
     if (s_mode == MODE_LAUNCHER) {
       MouseReport mr;

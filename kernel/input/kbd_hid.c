@@ -34,6 +34,9 @@ void kbd_hid_init(KbdHid *k) {
 uint8_t kbd_hid_translate(uint8_t usage, uint8_t mods) {
   int shift = (mods & (KBD_MOD_LSHIFT | KBD_MOD_RSHIFT)) != 0;
   int ctrl = (mods & (KBD_MOD_LCTRL | KBD_MOD_RCTRL)) != 0;
+  /* Alt stands in for the Cardputer's Opt key: a Bluetooth keyboard has no
+   * key by that name, and Alt is where a hand goes looking for one. */
+  int opt = (mods & (KBD_MOD_LALT | KBD_MOD_RALT)) != 0;
 
   switch (usage) {
   case 0x28: return 0x0D;        /* enter */
@@ -55,6 +58,14 @@ uint8_t kbd_hid_translate(uint8_t usage, uint8_t mods) {
   if (usage == 0x62) return '0';
   if (usage == 0x63) return '.';
   if (usage == 0x58) return 0x0D;          /* keypad enter */
+
+  /* The global shortcuts, before anything else claims the key. */
+  if (opt) {
+    if (usage >= 0x04 && usage <= 0x1D) return KBD_KEY_OPT_LETTER('a' + (usage - 0x04));
+    if (usage >= 0x1E && usage <= 0x26) return KBD_KEY_OPT_DIGIT(1 + (usage - 0x1E));
+    if (usage == 0x27) return KBD_KEY_OPT_DIGIT(0);
+    return 0;
+  }
 
   if (usage < USAGE_FIRST || usage > USAGE_LAST) return 0;
 

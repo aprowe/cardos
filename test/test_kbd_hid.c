@@ -135,6 +135,19 @@ void test_ctrl_h_is_help_and_backspace_keeps_its_byte(void) {
   CHECK_EQ(kbd_hid_translate(0x0B, 0), 'h');                        /* plain h */
 }
 
+/* Alt stands in for Opt, and its chords get codes of their own so an app
+ * taking text cannot swallow the shortcut that leaves it. */
+void test_alt_makes_the_global_shortcut_codes(void) {
+  CHECK_EQ(kbd_hid_translate(0x1E, KBD_MOD_LALT), KBD_KEY_OPT_DIGIT(1));  /* alt-1 */
+  CHECK_EQ(kbd_hid_translate(0x20, KBD_MOD_LALT), KBD_KEY_OPT_DIGIT(3));  /* alt-3 */
+  CHECK_EQ(kbd_hid_translate(0x27, KBD_MOD_RALT), KBD_KEY_OPT_DIGIT(0));  /* alt-0 */
+  CHECK_EQ(kbd_hid_translate(0x17, KBD_MOD_LALT), KBD_KEY_OPT_LETTER('t'));
+  CHECK_EQ(kbd_hid_translate(0x16, KBD_MOD_LALT), KBD_KEY_OPT_LETTER('s'));
+  /* and without alt they are still themselves */
+  CHECK_EQ(kbd_hid_translate(0x17, 0), 't');
+  CHECK_EQ(kbd_hid_translate(0x1E, 0), '1');
+}
+
 void test_repeat_waits_for_the_delay_then_runs_at_the_rate(void) {
   uint8_t out[8];
   setup();

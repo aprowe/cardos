@@ -38,6 +38,7 @@ void test_a_short_keyboard_report_is_refused(void);
 void test_arrows_and_control_keys_map_to_the_kernels_bytes(void);
 void test_ctrl_makes_the_same_control_characters_as_the_builtin_keyboard(void);
 void test_ctrl_h_is_help_and_backspace_keeps_its_byte(void);
+void test_alt_makes_the_global_shortcut_codes(void);
 void test_repeat_waits_for_the_delay_then_runs_at_the_rate(void);
 void test_lifting_the_key_stops_the_repeat(void);
 void test_the_newest_key_is_the_one_that_repeats(void);
@@ -228,6 +229,7 @@ int main(void) {
   RUN(test_arrows_and_control_keys_map_to_the_kernels_bytes);
   RUN(test_ctrl_makes_the_same_control_characters_as_the_builtin_keyboard);
   RUN(test_ctrl_h_is_help_and_backspace_keeps_its_byte);
+  RUN(test_alt_makes_the_global_shortcut_codes);
   RUN(test_repeat_waits_for_the_delay_then_runs_at_the_rate);
   RUN(test_lifting_the_key_stops_the_repeat);
   RUN(test_the_newest_key_is_the_one_that_repeats);

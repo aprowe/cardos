@@ -13,6 +13,7 @@
 #include "kernel/ui/help.h"
 #include "kernel/drv/bthid.h"
 #include "esp_timer.h"
+#include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -116,7 +117,11 @@ static void clamp_scroll(int idx, const AppDef *a, Rect inner) {
 
 void desktop_reload_icons(void) {
   icons_reload();
-  s_sel_icon = -1;
+  /* Something stays selected while there is anything to select. Clearing it
+   * meant the first arrow press after a reload was spent putting the selection
+   * back rather than moving it -- invisible unless you count keystrokes, and
+   * wrong every time. */
+  s_sel_icon = icons_count() ? 0 : -1;
 }
 
 static void paint_icons(Rect clip) {
@@ -453,25 +458,37 @@ static void leave_fullscreen(void) {
 /* ------------------------------------------------------------ input ----- */
 
 static void open_def(const AppDef *a);
+static void open_def_ex(const AppDef *a, int fresh);
 
 static void launch_icon(int i) {
   const Icon *ic = icon_at(i);
-  const AppDef *a;
+  const AppDef *a = NULL;
 
   if (!ic) return;
   if (ic->kind == ICON_FIRMWARE) { icons_boot_firmware(i); return; }
 
-  a = icon_app(i);
+  if (ic->kind == ICON_CAPP) {
+    /* Running the program *is* opening it: capp_main builds whatever state it
+     * has and installs an interface if it wants one. There is no AppDef before
+     * that -- capprun_def returns NULL until the program has run -- which is
+     * why asking for one first made every loadable icon do nothing at all,
+     * from the keyboard and from a double click alike.
+     *
+     * No arguments: the only path an icon has is the program's own binary, and
+     * handing Edit its own .capp made it open 14 KB of ELF as text. */
+    capprun_start(ic->slot, ic->name, NULL);
+    if (!capprun_is_app(ic->slot)) return;    /* a command, already finished */
+    a = capprun_def(ic->slot);
+  } else {
+    a = icon_app(i);
+    if (a && a->open) a->open(a->state);
+  }
   if (!a) return;
-  /* No arguments from an icon: the only path an icon has is the app's own
-   * binary, and handing Edit its own .capp made it open 14 KB of ELF as
-   * text. Arguments come from the console's run command. */
 
   if (ic->kind == ICON_CAPP && capprun_fullscreen(ic->slot)) {
     int16_t w = DISPLAY_W, h = DISPLAY_H;
     if (a->pref_w > 0 && a->pref_w < w) w = a->pref_w;
     if (a->pref_h > 0 && a->pref_h < h) h = a->pref_h;
-    if (a->open) a->open(a->state);
     s_full = a;
     s_full_rect = R((DISPLAY_W - w) / 2, (DISPLAY_H - h) / 2, w, h);
     s_full_clear = 1;
@@ -479,12 +496,13 @@ static void launch_icon(int i) {
     desktop_flush();
     return;
   }
-  open_def(a);
+
+  /* open_def_ex(a, 0): capp_main already did the opening, and a built-in had
+   * its open called above. Calling it again here would reset the app the
+   * moment its window appeared. */
+  open_def_ex(a, 0);
   desktop_repaint();
 }
-
-/* Enter on the selected icon, which is the same thing a double click does. */
-static void launch_icon(int i);
 
 static void launch_selected(void) {
   if (s_sel_icon >= 0 && s_sel_icon < icons_count()) launch_icon(s_sel_icon);
