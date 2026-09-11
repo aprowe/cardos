@@ -9,3 +9,6 @@ sdkconfig.old
 # tools/build_apps.py, and a stale committed copy is worse than no copy -- the
 # firmware would carry app binaries built against a different API version.
 kernel/app/capp_blobs.h
+
+# A rendered page, produced by tools/webproxy.py --test. Test output, not source.
+page.cpx
