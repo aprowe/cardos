@@ -12,7 +12,8 @@ set(ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 file(GLOB CARDOS_TEST_SOURCES CONFIGURE_DEPENDS ${ROOT}/test/*.c)
 # Only the portable modules build on the host; kernel/drv is device-only.
 file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
-  ${ROOT}/kernel/mem/*.c ${ROOT}/kernel/swap/*.c ${ROOT}/kernel/app/*.c
+  ${ROOT}/kernel/mem/*.c ${ROOT}/kernel/swap/*.c
+  ${ROOT}/kernel/app/appimage.c   # launcher.c is device-only (ESP-IDF)
   ${ROOT}/kernel/task/sched.c
   ${ROOT}/kernel/fs/path.c)   # task.c is device glue; sched.c is the policy
 add_executable(cardos_tests ${CARDOS_TEST_SOURCES} ${CARDOS_KERNEL_SOURCES})

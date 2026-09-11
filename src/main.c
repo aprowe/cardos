@@ -79,7 +79,8 @@ static void cmd_ps(void) {
 }
 
 static void cmd_help(void) {
-  con_write("ls cd pwd cat mkdir rm df apps\n");
+  con_write("ls cd pwd cat mkdir rm df\n");
+  con_write("apps boot bootinfo\n");
   con_write("mem ps clear echo reboot help\n");
 }
 
@@ -111,6 +112,9 @@ static void run_line(char *line) {
   else if (!strcmp(line, "rm"))     cmd_rm(arg);
   else if (!strcmp(line, "df"))     cmd_df();
   else if (!strcmp(line, "apps"))   cmd_apps();
+  else if (!strcmp(line, "boot"))   cmd_boot(arg, 0);
+  else if (!strcmp(line, "boot!"))  cmd_boot(arg, 1);
+  else if (!strcmp(line, "bootinfo")) cmd_bootinfo();
   else if (!strcmp(line, "clear"))  con_clear();
   else if (!strcmp(line, "reboot")) esp_restart();
   else if (!strcmp(line, "echo"))   { con_write(arg); con_putc('\n'); }

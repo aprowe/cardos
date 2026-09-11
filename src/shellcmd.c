@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "app/appimage.h"
+#include "app/launcher.h"
 #include "console/console.h"
 #include "drv/display.h"
 #include "fs/fs.h"
@@ -186,4 +187,83 @@ void cmd_apps(void) {
   a = list_apps_in("/cardos/apps");
   b = list_apps_in("/firmware");
   if (a <= 0 && b <= 0) con_write("no .bin in /cardos/apps or /firmware\n");
+}
+
+/* ------------------------------------------------------------ booting --- */
+
+/* Find an app by bare name or path, in either directory. */
+static int find_app(const char *name, char *out) {
+  static const char *dirs[] = { "/cardos/apps", "/firmware" };
+  FsStat st;
+  size_t i;
+
+  if (!name || !*name) return -1;
+
+  if (name[0] == '/') {                       /* an explicit path */
+    if (path_resolve(s_cwd, name, out, FS_PATH_MAX) != 0) return -1;
+    return fs_stat(out, &st) == 0 ? 0 : -1;
+  }
+  for (i = 0; i < sizeof dirs / sizeof dirs[0]; i++) {
+    if (snprintf(out, FS_PATH_MAX, "%s/%s", dirs[i], name) < 0) continue;
+    if (fs_stat(out, &st) == 0) return 0;
+    if (snprintf(out, FS_PATH_MAX, "%s/%s.bin", dirs[i], name) < 0) continue;
+    if (fs_stat(out, &st) == 0) return 0;
+  }
+  return -1;
+}
+
+static void boot_progress(void *ctx, int percent) {
+  (void)ctx;
+  if (percent % 10) return;                   /* the console is not a bar */
+  con_printf("%d%% ", percent);
+}
+
+void cmd_bootinfo(void) {
+  LauncherInfo info;
+  launcher_info(&info);
+  con_printf("running from %s\n", info.running[0] ? info.running : "?");
+  if (info.guest_valid)
+    con_printf("guest slot: %s %s %uK\n",
+               info.guest_name[0] ? info.guest_name : "?",
+               info.guest_version, (unsigned)(info.guest_size / 1024));
+  else
+    con_write("guest slot: empty\n");
+}
+
+/* `boot` is a dry run on purpose. The real thing does not return, and a
+ * mistyped name should not cost a reboot. */
+void cmd_boot(const char *arg, int confirmed) {
+  char full[FS_PATH_MAX];
+  AppImageInfo info;
+  AppImageResult why;
+  LaunchResult r;
+
+  if (!fs_mounted()) { err("boot", "no card mounted"); return; }
+  if (!arg || !*arg)  { err("boot", "needs an app name"); return; }
+  if (find_app(arg, full) != 0) { err(arg, "not found"); return; }
+
+  r = launcher_check(full, &info, &why);
+  if (r != LAUNCH_OK) {
+    err(arg, r == LAUNCH_ERR_IMAGE ? appimage_strerror(why)
+                                   : launcher_strerror(r));
+    return;
+  }
+
+  if (!confirmed) {
+    con_printf("%s: %s %s, %uK\n", arg,
+               info.has_app_desc ? info.project_name : "?",
+               info.has_app_desc ? info.version : "",
+               (unsigned)(info.image_size / 1024));
+    con_set_color(COLOR_AMBER);
+    con_write("this ends CardOS. reset returns.\n");
+    con_printf("run: boot! %s\n", arg);
+    con_set_color(COLOR_GREEN);
+    return;
+  }
+
+  con_printf("copying %uK ", (unsigned)(info.image_size / 1024));
+  r = launcher_boot(full, boot_progress, NULL);
+  /* Only reached on failure: success restarts the chip. */
+  con_putc('\n');
+  err(arg, launcher_strerror(r));
 }

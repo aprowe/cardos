@@ -11,6 +11,7 @@ idf_component_register(
     "../kernel/mem/mem.c"
     "../kernel/swap/swap.c"
     "../kernel/app/appimage.c"
+    "../kernel/app/launcher.c"
   INCLUDE_DIRS
     "."
     "../kernel"

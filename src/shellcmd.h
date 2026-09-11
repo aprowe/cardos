@@ -12,5 +12,7 @@ void cmd_df(void);
 void cmd_mkdir(const char *arg);
 void cmd_rm(const char *arg);
 void cmd_apps(void);
+void cmd_boot(const char *arg, int confirmed);
+void cmd_bootinfo(void);
 
 #endif /* CARDOS_SHELLCMD_H */

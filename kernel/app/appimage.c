@@ -44,6 +44,12 @@ static void copy_field(char *dst, size_t dst_size,
 AppImageResult appimage_parse(AppImageRead read, void *ctx,
                               uint32_t file_size, uint32_t max_size,
                               AppImageInfo *out) {
+  return appimage_parse_ex(read, ctx, file_size, max_size, 0, out);
+}
+
+AppImageResult appimage_parse_ex(AppImageRead read, void *ctx,
+                                 uint32_t file_size, uint32_t max_size,
+                                 int allow_trailing, AppImageInfo *out) {
   unsigned char hdr[APPIMAGE_HEADER_SIZE];
   unsigned char desc[D_SIZE];
   uint32_t pos, total;
@@ -106,7 +112,8 @@ AppImageResult appimage_parse(AppImageRead read, void *ctx,
   if (out->hash_appended) total += 32u;
 
   if (total > file_size) return APPIMAGE_ERR_TRUNCATED;
-  if (file_size - total > APPIMAGE_MAX_TRAILER) return APPIMAGE_ERR_TRAILING;
+  if (!allow_trailing && file_size - total > APPIMAGE_MAX_TRAILER)
+    return APPIMAGE_ERR_TRAILING;
   if (total > max_size)  return APPIMAGE_ERR_TOO_BIG;
 
   out->image_size = total;

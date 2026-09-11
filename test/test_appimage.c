@@ -55,6 +55,15 @@ static uint32_t build(uint8_t segs, uint16_t chip, int hash_appended, int with_d
   return total;
 }
 
+/* Reads straight out of the synthetic image, the way a flash partition reader
+ * does -- no file length to bound it. */
+static int img_read(void *ctx, uint32_t offset, void *dst, size_t n) {
+  (void)ctx;
+  if (offset + n > sizeof g_img) return -1;
+  memcpy(dst, g_img + offset, n);
+  return 0;
+}
+
 /* ---- tests -------------------------------------------------------------- */
 
 void test_valid_s3_image_parses(void) {
@@ -209,4 +218,16 @@ void test_a_small_trailer_is_tolerated(void) {
   uint32_t total = build(2, APPIMAGE_CHIP_ESP32S3, 1, 1);
   CHECK_EQ(appimage_parse_buffer(g_img, total + 4096, 4u * 1024 * 1024, &info),
            APPIMAGE_OK);
+}
+
+/* Reading an image out of a flash partition: the rest of the partition sits
+ * after it, which is not a dump. */
+void test_trailing_data_is_allowed_when_reading_a_partition(void) {
+  AppImageInfo info;
+  uint32_t total = build(2, APPIMAGE_CHIP_ESP32S3, 1, 1);
+  CHECK_EQ(appimage_parse_buffer(g_img, 64000, 4u * 1024 * 1024, &info),
+           APPIMAGE_ERR_TRAILING);
+  CHECK_EQ(appimage_parse_ex(img_read, NULL, 64000, 4u * 1024 * 1024, 1,
+                             &info), APPIMAGE_OK);
+  CHECK_EQ(info.image_size, total);
 }

@@ -69,6 +69,14 @@ AppImageResult appimage_parse(AppImageRead read, void *ctx,
                               uint32_t file_size, uint32_t max_size,
                               AppImageInfo *out);
 
+/* As appimage_parse, but `allow_trailing` suppresses the full-flash-dump
+ * check. Use it when the container is a flash partition rather than a file:
+ * an image in a partition is legitimately followed by the rest of the
+ * partition, so the check would reject every guest. */
+AppImageResult appimage_parse_ex(AppImageRead read, void *ctx,
+                                 uint32_t file_size, uint32_t max_size,
+                                 int allow_trailing, AppImageInfo *out);
+
 /* Convenience wrapper for a whole image already in memory. */
 AppImageResult appimage_parse_buffer(const void *buf, uint32_t len,
                                      uint32_t max_size, AppImageInfo *out);
