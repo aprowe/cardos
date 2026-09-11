@@ -302,6 +302,7 @@ const CappApp *capp_register(const CardApi *a) {
   APP.height = 0;
   APP.pref_w = 0;
   APP.pref_h = 0;
+  APP.wants_text = 0;      /* a list or a board, never a text field */
   APP.state = 0;
   return &APP;
 }

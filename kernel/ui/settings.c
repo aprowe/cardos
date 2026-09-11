@@ -346,6 +346,12 @@ static int settings_key(void *state, uint8_t k) {
   }
 }
 
+/* Only the password field. Everywhere else this app is a list, and a list
+ * wants ; . , / to move the selection. */
+static int settings_wants_text(void *state) {
+  return ((SettingsState *)state)->view == VIEW_PASS;
+}
+
 static int settings_click(void *state, int16_t x, int16_t y, int button) {
   SettingsState *st = (SettingsState *)state;
   (void)x; (void)button;
@@ -384,7 +390,7 @@ static void settings_open(void *state) {
 const AppDef *settings_app(void) {
   static const AppDef def = {
     "Settings", settings_paint, settings_key, settings_click,
-    settings_open, &s_state, settings_height, 0, 0
+    settings_open, &s_state, settings_height, 0, 0, settings_wants_text
   };
   return &def;
 }

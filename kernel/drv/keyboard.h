@@ -31,4 +31,10 @@ int keyboard_shift_down(void);
 int keyboard_ctrl_down(void);
 int keyboard_fn_down(void);
 
+/* The arrow this key stands for, or 0. On this keyboard ; . , / double as the
+ * arrow cluster under Fn; a shell with nothing to type into maps them without
+ * it, because reaching for Fn to move a selection is a lot of hand for one
+ * step. The caller decides when that is appropriate -- see AppDef.wants_text. */
+uint8_t keyboard_arrow_for(uint8_t k);
+
 #endif /* CARDOS_KEYBOARD_H */

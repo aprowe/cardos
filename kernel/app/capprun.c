@@ -42,6 +42,11 @@ static int16_t tr_height(void *state, int16_t w) {
   return s->la.app->height ? s->la.app->height(s->la.app->state, w) : 0;
 }
 
+static int tr_wants_text(void *state) {
+  Slot *s = (Slot *)state;
+  return s->la.app->wants_text ? s->la.app->wants_text(s->la.app->state) : 0;
+}
+
 static void tr_open(void *state) {
   Slot *s = (Slot *)state;
   if (s->la.app->open) s->la.app->open(s->la.app->state);
@@ -67,6 +72,7 @@ int capprun_load(const char *path) {
   s_slot[i].def.height = s_slot[i].la.app->height ? tr_height : NULL;
   s_slot[i].def.pref_w = s_slot[i].la.app->pref_w;
   s_slot[i].def.pref_h = s_slot[i].la.app->pref_h;
+  s_slot[i].def.wants_text = s_slot[i].la.app->wants_text ? tr_wants_text : NULL;
   s_slot[i].def.state = &s_slot[i];
   s_slot[i].used = 1;
   return i;

@@ -162,3 +162,13 @@ uint8_t keyboard_poll(void) {
 int keyboard_shift_down(void) { return s_shift; }
 int keyboard_ctrl_down(void)  { return s_ctrl; }
 int keyboard_fn_down(void)    { return s_fn; }
+
+uint8_t keyboard_arrow_for(uint8_t k) {
+  switch (k) {
+  case ';': return KEY_UP;
+  case '.': return KEY_DOWN;
+  case ',': return KEY_LEFT;
+  case '/': return KEY_RIGHT;
+  default:  return 0;
+  }
+}

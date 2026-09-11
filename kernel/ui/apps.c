@@ -118,10 +118,10 @@ static void mem_paint(void *state, Rect c) {
  * app drifting apart -- so the built-ins are the ones that cannot sensibly be
  * loadable: a file browser, a heap view, and an about box. */
 static const AppDef APPS[] = {
-  /* name      paint        key        click open        state     height w  h */
-  { "Files",  files_paint, files_key, NULL,  files_open, &s_files, NULL, 0, 0 },
-  { "Memory", mem_paint,   NULL,      NULL,  NULL,       NULL,     NULL, 0, 0 },
-  { "About",  about_paint, NULL,      NULL,  NULL,       NULL,     NULL, 0, 0 },
+  /* name    paint        key        click open        state     height w h text */
+  { "Files",  files_paint, files_key, NULL,  files_open, &s_files, NULL, 0,0, NULL },
+  { "Memory", mem_paint,   NULL,      NULL,  NULL,       NULL,     NULL, 0,0, NULL },
+  { "About",  about_paint, NULL,      NULL,  NULL,       NULL,     NULL, 0,0, NULL },
 };
 
 /* Settings lives in its own file -- it reaches across the radio, the panel and

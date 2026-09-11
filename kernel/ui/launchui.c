@@ -280,6 +280,14 @@ void launchui_init(void) {
 }
 
 int launchui_key(uint8_t key) {
+  /* ; . , / are the arrow cluster here without needing Fn. The carousel takes
+   * no text at all, and a running app only gets the raw keys back while it is
+   * actually taking some. */
+  if (!s_app || !s_app->wants_text || !s_app->wants_text(s_app->state)) {
+    uint8_t arrow = keyboard_arrow_for(key);
+    if (arrow) key = arrow;
+  }
+
   if (s_app) {
     if (key == KEY_ESC) { leave_app(); return 0; }
     if (s_app->key && s_app->key(s_app->state, key)) {

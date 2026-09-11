@@ -50,6 +50,14 @@ typedef struct {
    * A game with a fixed board has a right answer here and nothing else
    * does. */
   int16_t pref_w, pref_h;
+
+  /* Does this app want typed characters right now?
+   *
+   * When it does not, the shell turns ; . , / into arrows, so moving a
+   * selection does not need the Fn key. An app that is taking text -- an
+   * editor, a password field -- returns 1 and gets those keys as themselves.
+   * NULL means it never takes text, which is the common case. */
+  int (*wants_text)(void *state);
 } AppDef;
 
 /* The apps the Start menu offers. */

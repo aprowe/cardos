@@ -196,6 +196,7 @@ const CappApp *capp_register(const CardApi *a) {
   APP.click = app_click;
   APP.open = app_open;
   APP.set_file = app_set_file;
+  APP.wants_text = 0;      /* a list or a board, never a text field */
   APP.state = 0;
   return &APP;
 }

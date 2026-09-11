@@ -211,6 +211,10 @@ static int app_click(void *st, short x, short y, int button) {
   return 1;
 }
 
+/* Always taking text: every printable key is a character, including , . / and
+ * ; -- which is exactly why the shell has to be told. */
+static int app_wants_text(void *st) { (void)st; return 1; }
+
 static void app_set_file(void *st, const char *path) { (void)st; load(path); }
 
 /* 16x16: a sheet of paper with a folded corner and ruled lines. */
@@ -235,6 +239,7 @@ const CappApp *capp_register(const CardApi *a) {
   APP.click = app_click;
   APP.open = app_open;
   APP.set_file = app_set_file;
+  APP.wants_text = app_wants_text;
   APP.state = 0;
   return &APP;
 }

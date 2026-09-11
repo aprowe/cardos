@@ -534,6 +534,17 @@ static void nudge(int16_t dx, int16_t dy) {
 }
 
 int desktop_key(uint8_t key) {
+  /* ; . , / stand in for the arrow cluster unless something is taking text.
+   * Same rule as the launcher, so a key does the same thing in both shells. */
+  {
+    const AppDef *focused = s_full ? s_full
+                          : (wm_focus() != WIN_NONE ? app_of(wm_focus()) : NULL);
+    if (!focused || !focused->wants_text || !focused->wants_text(focused->state)) {
+      uint8_t arrow = keyboard_arrow_for(key);
+      if (arrow) key = arrow;
+    }
+  }
+
   /* A fullscreen app has the keyboard as well as the panel. Escape is the one
    * key it does not get, because something has to bring the desktop back. */
   if (s_full) {

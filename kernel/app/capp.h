@@ -14,7 +14,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 2
+#define CAPP_API_VERSION 3
 #define CAPP_ICON_W 16
 #define CAPP_ICON_H 16
 #define CAPP_ICON_BYTES ((CAPP_ICON_W / 8) * CAPP_ICON_H)   /* 1bpp, 32 bytes */
@@ -120,6 +120,12 @@ typedef struct {
 
   /* Preferred content size; 0 for whatever the desktop hands out. */
   int16_t pref_w, pref_h;
+
+  /* --- version 3 ---------------------------------------------------------
+   * Does this app want typed characters right now? When it does not, the
+   * shell turns ; . , / into arrows so moving a selection needs no Fn key.
+   * NULL means it never takes text. */
+  int (*wants_text)(void *state);
 
   void *state;
 } CappApp;
