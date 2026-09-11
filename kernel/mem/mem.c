@@ -25,6 +25,7 @@ static uint32_t g_compactions;
 static uint32_t g_evictions;
 static uint32_t g_page_ins;
 static uint32_t g_evict_writes;
+static uint8_t  g_owner;      /* task currently running; 0 = kernel */
 
 /* Free ranges inside the fixed arena, kept sorted by offset and coalesced. */
 #define FIXED_FREE_MAX 32
@@ -178,6 +179,28 @@ void mem_init(void *heap, size_t bytes) {
 size_t mem_size(Handle h) {
   MemDesc *d = mem_desc(h);
   return d ? d->size : 0;
+}
+
+void mem_set_owner(uint8_t owner) { g_owner = owner; }
+
+int mem_locked(Handle h) {
+  MemDesc *d = mem_desc(h);
+  return d ? d->lock : 0;
+}
+
+/* Hand back every lock held by a task that is going away. */
+int mem_release_owner(uint8_t owner) {
+  int i, n = 0;
+  if (owner == 0) return 0;          /* unowned locks belong to no task */
+  for (i = 0; i < MEM_MAX_HANDLES; i++) {
+    MemDesc *d = &g_table[i];
+    if (!(d->flags & D_INUSE) || d->lock == 0 || d->owner != owner) continue;
+    d->lock = 0;
+    d->owner = 0;
+    lru_touch(d);                    /* relocatable and evictable once more */
+    n++;
+  }
+  return n;
 }
 
 int mem_resident(Handle h) {
@@ -439,6 +462,7 @@ static void *lock_common(Handle h, int mark_dirty) {
   }
 
   lru_remove(d);                               /* pinned blocks are not victims */
+  if (d->lock == 0) d->owner = g_owner;        /* first lock records the owner */
   d->lock++;
   if (mark_dirty) d->flags |= D_DIRTY;
   return g_base + d->off;

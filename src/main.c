@@ -20,6 +20,7 @@
 #include "drv/display.h"
 #include "drv/keyboard.h"
 #include "mem/mem.h"
+#include "task/sched.h"
 
 #define CARDOS_LINE_MAX 63
 
@@ -54,9 +55,31 @@ static void cmd_mem(void) {
                  (unsigned)(esp_get_free_heap_size() / 1024));
 }
 
+static const char *state_name(TaskState st) {
+  switch (st) {
+  case TASK_READY:    return "ready";
+  case TASK_RUNNING:  return "run";
+  case TASK_SLEEPING: return "sleep";
+  case TASK_BLOCKED:  return "block";
+  case TASK_DEAD:     return "dead";
+  default:            return "free";
+  }
+}
+
+static void cmd_ps(void) {
+  TaskInfo info[SCHED_MAX_TASKS];
+  int n = sched_list(info, SCHED_MAX_TASKS), i;
+  con_write("tid  state  slices name\n");
+  for (i = 0; i < n; i++)
+    con_printf("%-4u %-6s %-6u %s\n", (unsigned)info[i].tid,
+               state_name(info[i].state), (unsigned)info[i].slices,
+               info[i].name);
+}
+
 static void cmd_help(void) {
   con_write("help   this list\n");
   con_write("mem    memory statistics\n");
+  con_write("ps     list tasks\n");
   con_write("clear  clear the screen\n");
   con_write("echo   print the rest of the line\n");
   con_write("reboot restart the device\n");
@@ -69,11 +92,18 @@ static void run_line(char *line) {
 
   if (!strcmp(line, "help"))        cmd_help();
   else if (!strcmp(line, "mem"))    cmd_mem();
+  else if (!strcmp(line, "ps"))     cmd_ps();
   else if (!strcmp(line, "clear"))  con_clear();
   else if (!strcmp(line, "reboot")) esp_restart();
   else if (!strncmp(line, "echo ", 5)) { con_write(line + 5); con_putc('\n'); }
   else if (!strcmp(line, "echo"))   con_putc('\n');
   else con_printf("unknown command: %s\n", line);
+}
+
+/* Monotonic milliseconds for the scheduler. */
+static uint32_t clock_ms(void *ctx) {
+  (void)ctx;
+  return (uint32_t)(esp_timer_get_time() / 1000);
 }
 
 void app_main(void) {
@@ -116,6 +146,13 @@ void app_main(void) {
   } else {
     mem_init(s_heap, CARDOS_HEAP_BYTES);
   }
+
+  /* The scheduler's policy half runs now; the Xtensa context switch does not
+   * exist yet, so this loop *is* the shell task rather than being switched to
+   * it. `ps` therefore shows one task. spawn/kill arrive with the switch. */
+  sched_init(clock_ms, NULL);
+  sched_create("shell");
+  sched_next();                  /* mark it running, so it owns its locks */
 
   /* Success criterion 6: the free heap is reported and understood. */
   con_printf("heap %u KB free at boot\n", (unsigned)(heap_at_boot / 1024));

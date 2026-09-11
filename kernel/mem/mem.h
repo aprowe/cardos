@@ -71,6 +71,16 @@ int    mem_resident(Handle h);
  * command triggers it. */
 void   mem_compact(void);
 
+int    mem_locked(Handle h);   /* current lock count */
+
+/* Lock ownership. The scheduler stamps the running task before switching to
+ * it, so that when a task dies its locks can be handed back -- otherwise the
+ * counts stay raised forever and the blocks are pinned for the life of the
+ * system. Owner 0 means unowned (kernel allocations made before any task
+ * exists) and is never released. */
+void   mem_set_owner(uint8_t owner);
+int    mem_release_owner(uint8_t owner);   /* returns blocks released */
+
 void   mem_stats(MemStats *out);
 
 #endif /* CARDOS_MEM_H */

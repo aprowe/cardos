@@ -28,7 +28,7 @@ typedef struct {
   uint8_t  gen;
   uint8_t  lru_prev;
   uint8_t  lru_next;
-  uint8_t  pad;
+  uint8_t  owner;   /* task index holding the lock; 0 = unowned */
 } MemDesc;
 
 _Static_assert(sizeof(MemDesc) == 16,

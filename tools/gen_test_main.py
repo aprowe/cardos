@@ -22,6 +22,15 @@ for path in sorted((ROOT / "test").glob("test_*.c")):
         title = path.stem[len("test_"):].replace("_", " ")
         groups.append((title, names))
 
+seen = {}
+for title, names in groups:
+    for n in names:
+        if n in seen:
+            raise SystemExit(
+                "duplicate test name %s in %s and %s -- test names are global "
+                "C symbols and must be unique" % (n, seen[n], title))
+        seen[n] = title
+
 out = [
     '#include "tinytest.h"',
     "",

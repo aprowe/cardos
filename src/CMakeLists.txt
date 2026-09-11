@@ -4,6 +4,7 @@ idf_component_register(
     "../kernel/drv/display.c"
     "../kernel/drv/keyboard.c"
     "../kernel/console/console.c"
+    "../kernel/task/sched.c"
     "../kernel/mem/mem.c"
     "../kernel/swap/swap.c"
     "../kernel/app/appimage.c"
