@@ -64,3 +64,12 @@ CONFIG_BT_NIMBLE_HID_SERVICE=y
 # isolation anyway, so this removes a guard rail rather than a wall.
 CONFIG_ESP_SYSTEM_MEMPROT=n
 CONFIG_ESP_SYSTEM_MEMPROT_FEATURE=n
+
+# TLS to Google.
+#
+# Yahoo's endpoints verified fine and every Google one failed the handshake
+# with "Connection failed, sock < 0" -- DNS and TCP were fine, since plain HTTP
+# to the same host answered. The difference is the chain: Google Trust Services
+# roots are cross-signed (GTS Root R1 under GlobalSign), and the certificate
+# bundle refuses a cross-signed chain unless told to follow it.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y

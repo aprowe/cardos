@@ -36,7 +36,11 @@
 #include "nvs_flash.h"
 #include "kernel/drv/bthid.h"
 
-#define CARDOS_LINE_MAX 63
+/* Long enough for the lines a tool sends rather than the ones a person types.
+ * At 63 a Google client ID -- 72 characters on its own, 81 with the command in
+ * front of it -- was silently cut in half, and the only symptom was Google
+ * answering "invalid_client". A refresh token is longer still. */
+#define CARDOS_LINE_MAX 200
 
 /* The handle heap. Carved once from the IDF heap at boot; everything CardOS
  * allocates afterwards comes through kmem_alloc. Deliberately not "whatever is
