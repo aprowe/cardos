@@ -328,32 +328,31 @@ static int app_click(void *st, short x, short y, int button) {
   return 1;
 }
 
-/* 16x16, one bit per pixel: a mine with a fuse. */
-static const unsigned char ICON[CAPP_ICON_BYTES] = {
-  0x00, 0x00, 0x00, 0x60, 0x00, 0x90, 0x01, 0x10,
-  0x03, 0xE0, 0x07, 0xC0, 0x1F, 0xF0, 0x3F, 0xF8,
-  0x7F, 0xFC, 0x7F, 0xFC, 0x7F, 0xFC, 0x3F, 0xF8,
-  0x1F, 0xF0, 0x07, 0xC0, 0x00, 0x00, 0x00, 0x00,
+const CappInfo capp_info = {
+  CAPP_API_VERSION,
+  0,
+  "Mines",
+  /* 16x16, one bit per pixel: a mine with a fuse. */
+  { 0x00, 0x00, 0x00, 0x60, 0x00, 0x90, 0x01, 0x10,
+    0x03, 0xE0, 0x07, 0xC0, 0x1F, 0xF0, 0x3F, 0xF8,
+    0x7F, 0xFC, 0x7F, 0xFC, 0x7F, 0xFC, 0x3F, 0xF8,
+    0x1F, 0xF0, 0x07, 0xC0, 0x00, 0x00, 0x00, 0x00 },
+  "arrows\tmove the cursor\nspace\tdig\nf\tflag a cell\nright click\tflag a cell\nn\tnew game\nthe face\tnew game\n",
 };
 
-static CappApp APP;
+/* Static, not a local: the shell keeps calling into this long after
+ * capp_main has returned. */
+static CappUi UI;
 
-const CappApp *capp_register(const CardApi *a) {
+int capp_main(const CardApi *a, int argc, char **argv) {
   api = a;
-  APP.api_version = CAPP_API_VERSION;
-  api->mem_cpy(APP.name, "Mines", 6);
-  api->mem_cpy(APP.icon, ICON, CAPP_ICON_BYTES);
-  APP.fullscreen = 0;
-  APP.paint = app_paint;
-  APP.key = app_key;
-  APP.click = app_click;
-  APP.open = app_open;
-  APP.set_args = 0;
-  APP.height = 0;
-  APP.pref_w = BOARD_W;
-  APP.pref_h = HEAD + BOARD_H;
-  APP.wants_text = 0;      /* a list or a board, never a text field */
-  APP.help = "arrows\tmove the cursor\nspace\tdig\nf\tflag a cell\nright click\tflag a cell\nn\tnew game\nthe face\tnew game\n";
-  APP.state = 0;
-  return &APP;
+  (void)argc; (void)argv;
+  app_open(0);
+  UI.paint = app_paint;
+  UI.key = app_key;
+  UI.click = app_click;
+  UI.pref_w = BOARD_W;
+  UI.pref_h = HEAD + BOARD_H;
+  api->ui(&UI);
+  return 0;
 }

@@ -1,9 +1,9 @@
-/* The API table handed to a loaded app.
+/* The API table handed to a loaded program.
  *
- * An app links against nothing and resolves no symbols; it calls through this
- * table. That removes symbol resolution from the loader entirely, and it
- * versions cleanly -- an app built against a table CardOS no longer provides
- * is refused at load rather than crashing at the first call.
+ * A program links against nothing and resolves no symbols; it calls through
+ * this table. That removes symbol resolution from the loader entirely, and it
+ * versions cleanly -- a program built against a table CardOS no longer
+ * provides is refused at load rather than crashing at the first call.
  */
 
 #include "kernel/app/capp.h"
@@ -11,6 +11,7 @@
 #include "kernel/fs/fs.h"
 #include "kernel/net/http.h"
 #include "kernel/net/wifi.h"
+#include "kernel/sys/sio.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -18,6 +19,9 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+
+/* Defined by capprun.c, which knows which program is currently running. */
+void capprun_install_ui(const CappUi *ui);
 
 static Rect to_rect(CRect r) {
   Rect o;
@@ -34,7 +38,7 @@ static void api_text(int16_t x, int16_t y, const char *s, uint16_t fg, uint16_t 
   draw_text(x, y, s, fg, bg);
 }
 
-/* Raw blit, clipped like everything else -- an app must not be able to draw
+/* Raw blit, clipped like everything else -- a program must not be able to draw
  * over another window's chrome. */
 static void api_pixels(CRect r, const uint16_t *px) {
   Rect want = to_rect(r);
@@ -48,14 +52,14 @@ static void api_pixels(CRect r, const uint16_t *px) {
   }
 }
 
-static int api_open(const char *p, int f)          { return fs_open(p, f); }
-static int api_read(int fd, void *b, size_t n)     { return fs_read(fd, b, n); }
+static int api_open(const char *p, int f)             { return fs_open(p, f); }
+static int api_read(int fd, void *b, size_t n)        { return fs_read(fd, b, n); }
 static int api_write(int fd, const void *b, size_t n) { return fs_write(fd, b, n); }
-static int api_seek(int fd, int32_t o, int w)      { return fs_seek(fd, o, w); }
-static void api_close(int fd)                      { fs_close(fd); }
+static int api_seek(int fd, int32_t o, int w)         { return fs_seek(fd, o, w); }
+static void api_close(int fd)                         { fs_close(fd); }
 
 /* Flattened listing: names packed into a caller-supplied array of fixed-width
- * slots, so an app needs no allocator and no knowledge of FsEntry. */
+ * slots, so a program needs no allocator and no knowledge of FsEntry. */
 static int api_list(const char *dir, char *out, int max_entries, int name_len) {
   FsDir d;
   FsEntry e;
@@ -70,10 +74,10 @@ static int api_list(const char *dir, char *out, int max_entries, int name_len) {
   return n;
 }
 
-static void *api_memset(void *d, int c, size_t n)            { return memset(d, c, n); }
-static void *api_memcpy(void *d, const void *s, size_t n)    { return memcpy(d, s, n); }
-static void *api_memmove(void *d, const void *s, size_t n)   { return memmove(d, s, n); }
-static size_t api_strlen(const char *s)                      { return strlen(s); }
+static void *api_memset(void *d, int c, size_t n)          { return memset(d, c, n); }
+static void *api_memcpy(void *d, const void *s, size_t n)  { return memcpy(d, s, n); }
+static void *api_memmove(void *d, const void *s, size_t n) { return memmove(d, s, n); }
+static size_t api_strlen(const char *s)                    { return strlen(s); }
 
 static int api_fmt(char *buf, size_t n, const char *fmt, ...) {
   va_list ap;
@@ -84,6 +88,14 @@ static int api_fmt(char *buf, size_t n, const char *fmt, ...) {
   return r;
 }
 
+static uint32_t api_ticks(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+static void api_log(const char *m) { ESP_LOGI("app", "%s", m ? m : ""); }
+
+static void api_out(const char *s)              { sio_write(s); }
+static void api_out_line(const char *s)         { sio_write_line(s); }
+static int  api_in_line(char *b, size_t n)      { return sio_read_line(b, n); }
+static int  api_has_input(void)                 { return sio_has_input(); }
+
 static int api_http_get(const char *url, char *buf, size_t n, int timeout_ms) {
   return http_get(url, buf, n, timeout_ms);
 }
@@ -93,8 +105,7 @@ static int api_net_connect(int timeout_ms) {
   return wifi_connect_saved(timeout_ms);
 }
 
-static uint32_t api_ticks(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
-static void api_log(const char *m) { ESP_LOGI("app", "%s", m ? m : ""); }
+static void api_ui(const CappUi *ui) { capprun_install_ui(ui); }
 
 static const CardApi API = {
   CAPP_API_VERSION,
@@ -102,7 +113,9 @@ static const CardApi API = {
   api_open, api_read, api_write, api_seek, api_close, api_list,
   api_memset, api_memcpy, api_memmove, api_strlen, api_fmt,
   api_ticks, api_log,
+  api_out, api_out_line, api_in_line, api_has_input,
   api_http_get, api_net_ready, api_net_connect,
+  api_ui,
 };
 
 const CardApi *cardos_api(void) { return &API; }

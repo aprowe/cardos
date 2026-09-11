@@ -19,6 +19,10 @@
 #define C_FACE     RGB565(192, 192, 192)
 #define C_LIGHT    RGB565(255, 255, 255)
 #define C_SHADOW   RGB565(128, 128, 128)
+/* Secondary text on the teal desktop. Grey at 50% sits almost exactly on the
+ * teal's own luminance and disappears into it; this is light enough to read
+ * and quiet enough not to compete with the labels. */
+#define C_DESK_DIM RGB565(176, 208, 208)
 #define C_DARK     RGB565(0,   0,   0)
 #define C_TITLE    RGB565(0,   0,   128)   /* navy, focused */
 #define C_TITLE_UN RGB565(128, 128, 128)   /* unfocused */
@@ -46,7 +50,9 @@ void draw_text(int16_t x, int16_t y, const char *s, uint16_t fg, uint16_t bg);
 void draw_text_scaled(int16_t x, int16_t y, const char *s, int scale,
                       uint16_t fg, uint16_t bg);
 
-/* As draw_text but stops at `max_w` pixels, ending with ".." if it had to. */
+/* As draw_text but stops at `max_w` pixels. Truncated cleanly: no ellipsis,
+ * which costs two of the few characters that fit and reads as damage rather
+ * than as a label. */
 void draw_text_ellipsis(int16_t x, int16_t y, int16_t max_w, const char *s,
                         uint16_t fg, uint16_t bg);
 

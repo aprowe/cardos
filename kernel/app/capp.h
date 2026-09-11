@@ -3,10 +3,34 @@
  * This header is shared: CardOS includes it, and so does every app, which is
  * why it must not depend on anything else in the tree.
  *
- * An app links against nothing. Everything it may do arrives as a table of
- * function pointers handed to its entry point, so there are no undefined
- * symbols to resolve and the interface versions cleanly -- CardOS refuses a
- * binary built against an API version it no longer provides.
+ * A .capp is a program, in the ordinary sense. It exports two things:
+ *
+ *   capp_info   a const descriptor -- name, icon, flags -- that the loader
+ *               reads *without running anything*. A launcher needs an app's
+ *               name to draw its icon, and executing a program to find out
+ *               what it is called is the wrong way round.
+ *
+ *   capp_main   the program: argc, argv, an API table, and an exit status.
+ *
+ * A command-line tool does its work in capp_main, reads with api->in_line,
+ * writes with api->out, and returns. Nothing takes the screen and the prompt
+ * comes straight back, which is what typing a command should do.
+ *
+ * A graphical app calls api->ui() from capp_main to install its event
+ * handlers, and then returns. The shell keeps the handlers and calls them; the
+ * app's globals stay alive because its image stays loaded. It is a callback
+ * table rather than an event loop of its own because the desktop hosts four
+ * windows at once, and four programs cannot each be blocked in their own loop
+ * on a machine with one stack.
+ *
+ * That split is the whole design: one entry point, argc/argv and stdio like
+ * any other program, and drawing is something a program asks for rather than a
+ * different kind of program.
+ *
+ * An app links against nothing. Everything it may do arrives in the API table,
+ * so there are no undefined symbols to resolve and the interface versions
+ * cleanly -- CardOS refuses a binary built against a version it no longer
+ * provides.
  */
 #ifndef CARDOS_CAPP_H
 #define CARDOS_CAPP_H
@@ -14,10 +38,17 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 6
+#define CAPP_API_VERSION 8
+
 #define CAPP_ICON_W 16
 #define CAPP_ICON_H 16
 #define CAPP_ICON_BYTES ((CAPP_ICON_W / 8) * CAPP_ICON_H)   /* 1bpp, 32 bytes */
+
+#define CAPP_MAX_ARGS 8
+
+/* capp_info flags. */
+#define CAPP_CLI        0x0001   /* a command: no icon, runs and returns */
+#define CAPP_FULLSCREEN 0x0002   /* opens filling the screen */
 
 typedef struct { int16_t x, y, w, h; } CRect;
 
@@ -53,20 +84,40 @@ typedef struct { int16_t x, y, w, h; } CRect;
 #define CAPP_O_CREATE 0x04
 #define CAPP_O_TRUNC  0x10
 
+/* What a graphical app installs. Everything is optional except paint. */
+typedef struct {
+  void (*paint)(void *state, CRect content);
+  int  (*key)(void *state, uint8_t k);
+  int  (*click)(void *state, int16_t x, int16_t y, int button);
+
+  /* Natural height at this width, for contents taller than the window. The
+   * shell scrolls the difference and draws a scrollbar. */
+  int16_t (*height)(void *state, int16_t width);
+
+  /* Does the app want typed characters right now? When it does not, the shell
+   * turns ; . , / into arrows so moving a selection needs no Fn key. */
+  int (*wants_text)(void *state);
+
+  /* Preferred content size; 0 for whatever the shell hands out. */
+  int16_t pref_w, pref_h;
+
+  void *state;
+} CappUi;
+
 /* Everything an app is allowed to do. Grows only by appending, with
- * api_version bumped -- never by reordering. */
+ * CAPP_API_VERSION bumped -- never by reordering. */
 typedef struct {
   uint16_t version;
 
-  /* Drawing. All coordinates are content-relative; the clip is already set to
-   * whatever part of the window is actually visible. */
+  /* ---- drawing. Only meaningful from a ui callback; coordinates are
+   * content-relative and the clip is already the visible part. ---- */
   void (*fill)(CRect r, uint16_t colour);
   void (*frame)(CRect r, uint16_t colour);
   void (*bevel)(CRect r, uint16_t face, uint16_t tl, uint16_t br);
   void (*text)(int16_t x, int16_t y, const char *s, uint16_t fg, uint16_t bg);
   void (*pixels)(CRect r, const uint16_t *rgb565);   /* raw blit */
 
-  /* Files. */
+  /* ---- files ---- */
   int  (*open)(const char *path, int flags);
   int  (*read)(int fd, void *buf, size_t n);
   int  (*write)(int fd, const void *buf, size_t n);
@@ -74,7 +125,8 @@ typedef struct {
   void (*close)(int fd);
   int  (*list)(const char *dir, char *out, int max_entries, int name_len);
 
-  /* Odds and ends an app cannot get from a libc it is not linked against. */
+  /* ---- odds and ends an app cannot get from a libc it is not linked
+   * against ---- */
   void *(*mem_set)(void *d, int c, size_t n);
   void *(*mem_cpy)(void *d, const void *s, size_t n);
   void *(*mem_move)(void *d, const void *s, size_t n);
@@ -83,70 +135,40 @@ typedef struct {
   uint32_t (*ticks_ms)(void);
   void (*log)(const char *msg);
 
-  /* --- version 2 ---------------------------------------------------------
-   * The network. One-shot and blocking: an app here has a few kilobytes to
-   * spare and no business holding a connection open across paint calls.
-   * Returns bytes written, or negative (-1 means there is no network). */
+  /* ---- standard output and input ----
+   *
+   * Where these go is the shell's business, not the app's: the console, a
+   * file, or the next program in a pipeline. */
+  void (*out)(const char *s);
+  void (*out_line)(const char *s);              /* adds the newline */
+  int  (*in_line)(char *buf, size_t n);         /* -1 at end of input */
+  int  (*has_input)(void);
+
+  /* ---- the network. One-shot and blocking: an app here has a few kilobytes
+   * to spare and no business holding a connection open. ---- */
   int (*http_get)(const char *url, char *buf, size_t size, int timeout_ms);
   int (*net_ready)(void);
-
-  /* Bring up the network the user last joined. Blocking, up to timeout_ms;
-   * returns 0 on success. An app that needs the web calls this rather than
-   * telling the user to go to Settings and come back. */
   int (*net_connect)(int timeout_ms);
+
+  /* ---- becoming a graphical app ----
+   *
+   * Called from capp_main. The CappUi must outlive the call -- a static, not
+   * a local -- because the shell keeps calling into it long after capp_main
+   * has returned. */
+  void (*ui)(const CappUi *ui);
 } CardApi;
 
-/* What an app hands back. The callbacks mirror the built-in AppDef, so a
- * loaded app and a compiled-in one are the same thing to the window system. */
+/* The descriptor, read by the loader without executing anything. Must be a
+ * const object named exactly `capp_info`. */
 typedef struct {
   uint16_t api_version;                  /* must equal CAPP_API_VERSION */
+  uint16_t flags;
   char     name[16];
   uint8_t  icon[CAPP_ICON_BYTES];        /* 16x16, 1bpp, bit 7 = leftmost */
-  int      fullscreen;                   /* 1 to take the whole screen */
+  const char *help;                      /* "key<tab>meaning" per line */
+} CappInfo;
 
-  /* 1 for a command-line tool: runnable by name or path from the console, but
-   * no icon anywhere. grep is a program you type, not a thing you click, and
-   * an icon for it is an icon you scroll past every time. */
-  int      cli;
-
-  void (*paint)(void *state, CRect content);
-  int  (*key)(void *state, uint8_t k);
-  int  (*click)(void *state, int16_t x, int16_t y, int button);
-  void (*open)(void *state);
-
-  /* Optional: the arguments the app was started with, as one string --
-   * "run edit /notes.txt" reaches Edit as "/notes.txt". Called *after* open(),
-   * because open() resets the app and would otherwise throw the arguments
-   * away. Not called at all when there are none, so an app can tell "started
-   * bare" from "started with an empty string".
-   *
-   * One string rather than argv: an app that wants words can split them, and
-   * every app that has wanted arguments so far wanted exactly one path. */
-  void (*set_args)(void *state, const char *args);
-
-  /* Natural height at this width, for contents that do not fit the window.
-   * NULL means it always fits. */
-  int16_t (*height)(void *state, int16_t width);
-
-  /* Preferred content size; 0 for whatever the desktop hands out. */
-  int16_t pref_w, pref_h;
-
-  /* --- version 3 ---------------------------------------------------------
-   * Does this app want typed characters right now? When it does not, the
-   * shell turns ; . , / into arrows so moving a selection needs no Fn key.
-   * NULL means it never takes text. */
-  int (*wants_text)(void *state);
-
-  /* --- version 4 ---------------------------------------------------------
-   * The app's keys, one per line as "key<tab>meaning", shown by ctrl-h. NULL
-   * if it has none worth listing. */
-  const char *help;
-
-  void *state;
-} CappApp;
-
-/* The single exported symbol. The loader finds it by name, calls it with the
- * API table, and gets everything else back. */
-const CappApp *capp_register(const CardApi *api);
+/* The program. argv[0] is the name it was invoked as. */
+int capp_main(const CardApi *api, int argc, char **argv);
 
 #endif /* CARDOS_CAPP_H */

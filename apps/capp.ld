@@ -21,7 +21,7 @@
  * with -q so the relocations survive into the output; only the absolute
  * R_XTENSA_32 entries are applied at load time.
  */
-ENTRY(capp_register)
+ENTRY(capp_main)
 
 SECTIONS {
   . = 0;
@@ -33,6 +33,10 @@ SECTIONS {
 
   . = 0x10000000;
   .data : {
+    /* The descriptor is read by the loader, never referenced by the code, so
+     * --gc-sections discards it unless told otherwise. It is first in the
+     * section for no reason but tidiness -- the loader finds it by symbol. */
+    KEEP(*(.rodata.capp_info))
     *(.rodata .rodata.*)
     *(.data .data.*)
     . = ALIGN(4);

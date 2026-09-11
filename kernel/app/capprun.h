@@ -1,9 +1,12 @@
-/* Loaded apps, wearing a built-in app's clothes. Device-only.
+/* Running loaded programs. Device-only.
  *
- * elfload.c gets a .capp into memory; this turns it into an AppDef, so the
- * window system cannot tell a loaded app from a compiled-in one. That is the
- * whole point of the split: the desktop, the taskbar and the focus rules never
- * learn that loadable apps exist.
+ * elfload.c gets a .capp into memory; this runs it. A program that installs a
+ * CappUi becomes an AppDef, so the window system cannot tell a loaded app from
+ * a compiled-in one -- that is the point of the split: the desktop, the
+ * taskbar and the focus rules never learn that loadable apps exist.
+ *
+ * A program that installs nothing was a command: it did its work, wrote to
+ * stdout, and returned.
  */
 #ifndef CARDOS_CAPPRUN_H
 #define CARDOS_CAPPRUN_H
@@ -11,28 +14,33 @@
 #include "kernel/ui/app.h"
 #include "kernel/app/capp.h"
 
-/* Executable RAM is a small, separate pool, and every loaded app holds some
- * for as long as its icon is on the desktop. Four is more than the screen
- * fits icons for. */
-/* Eight, because /desktop now holds five apps and four was chosen when it held
- * three. Each slot costs a pointer and a name until something is loaded into
- * it; the memory that matters is the per-app allocation, and that is counted
- * when it happens. */
+/* Eight, because /desktop holds five programs and four was chosen when it held
+ * three. A slot costs a name and some pointers until something is loaded into
+ * it; the memory that matters is the per-program allocation. */
 #define CAPPRUN_MAX 8
 
-/* Load and register. Returns a slot index, or -1. The app stays loaded until
- * unloaded: keeping it resident is what lets the desktop show its real name
- * and icon rather than a placeholder. */
+/* Load and read the descriptor. Nothing runs. Returns a slot index, or -1. */
 int capprun_load(const char *path);
 
 void capprun_unload_all(void);
 
-const AppDef  *capprun_def(int slot);
+/* Run it. `args` is split into argv here: splitting a command line is the
+ * shell's job everywhere else, and there is no reason for it to be the
+ * program's here. Returns the exit status, or -1 if the slot is empty. */
+int capprun_start(int slot, const char *name, const char *args);
+
+/* Did the program that just ran install a user interface? Non-zero means there
+ * is an app to host; zero means it was a command and has already finished. */
+int capprun_is_app(int slot);
+
+/* The descriptor's own facts, available without running anything. */
+const char    *capprun_name(int slot);
 const uint8_t *capprun_icon(int slot);    /* 16x16 1bpp, CAPP_ICON_BYTES */
+int            capprun_is_cli(int slot);
 int            capprun_fullscreen(int slot);
 
-/* Hand the app its arguments, if it takes any. After open, never before. */
-void capprun_set_args(int slot, const char *args);
+/* Valid only after a run that installed an interface. */
+const AppDef *capprun_def(int slot);
 
 /* Executable RAM still free, for the Settings app to report. */
 uint32_t capprun_exec_free(void);

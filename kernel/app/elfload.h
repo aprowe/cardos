@@ -27,11 +27,18 @@
 #include "kernel/app/capp.h"
 
 typedef struct {
-  void          *code;       /* executable RAM, instruction-window address */
-  void          *data;       /* ordinary heap: rodata, data and bss */
-  uint32_t       code_size;
-  uint32_t       data_size;
-  const CappApp *app;        /* what capp_register handed back */
+  void           *code;      /* executable RAM, instruction-window address */
+  void           *data;      /* ordinary heap: rodata, data and bss */
+  uint32_t        code_size;
+  uint32_t        data_size;
+
+  /* Read from the image without running it -- name, icon and flags are needed
+   * to draw an icon, and executing a program to find out what it is called is
+   * the wrong way round. */
+  const CappInfo *info;
+
+  /* The program. Called when it is actually run. */
+  int (*main)(const CardApi *api, int argc, char **argv);
 } LoadedApp;
 
 typedef enum {
@@ -42,7 +49,7 @@ typedef enum {
   CAPP_ERR_TRUNCATED,       /* the file is shorter than it says it is */
   CAPP_ERR_WRONG_MACHINE,
   CAPP_ERR_NO_IMAGE,        /* no allocatable section */
-  CAPP_ERR_NO_ENTRY,        /* capp_register missing */
+  CAPP_ERR_NO_ENTRY,        /* capp_main or capp_info missing */
   CAPP_ERR_NO_MEMORY,       /* no executable RAM left */
   CAPP_ERR_RELOC,           /* a relocation type we cannot apply */
   CAPP_ERR_API              /* built against a different API version */

@@ -1,18 +1,30 @@
-/* Loaded apps as AppDefs. See capprun.h. */
+/* Running loaded programs. See capprun.h. */
 
 #include "kernel/app/capprun.h"
 #include "kernel/app/elfload.h"
 
+#include <stdio.h>
 #include <string.h>
 
 typedef struct {
   LoadedApp la;
-  AppDef    def;
-  char      name[16];
   int       used;
+
+  char      name[16];     /* copied out: CappInfo.name need not be terminated */
+  char      help[160];
+
+  CappUi    ui;           /* what the program installed, if anything */
+  int       has_ui;
+
+  AppDef    def;          /* the same thing, wearing a built-in app's clothes */
 } Slot;
 
 static Slot s_slot[CAPPRUN_MAX];
+
+/* Which slot is running. The api->ui callback has no argument saying who is
+ * calling, and cannot: it is called from inside the program, which has no idea
+ * it lives in a slot. */
+static Slot *s_running;
 
 static CRect to_crect(Rect r) {
   CRect o;
@@ -20,71 +32,72 @@ static CRect to_crect(Rect r) {
   return o;
 }
 
-/* The slot is the AppDef's state, so one set of trampolines serves every
- * loaded app rather than needing generated thunks per slot. */
+/* One set of trampolines for every slot, with the slot as the AppDef's state.
+ * Generated thunks per slot would be the alternative, and there is no need. */
 static void tr_paint(void *state, Rect c) {
   Slot *s = (Slot *)state;
-  if (s->la.app->paint) s->la.app->paint(s->la.app->state, to_crect(c));
+  if (s->ui.paint) s->ui.paint(s->ui.state, to_crect(c));
 }
 
 static int tr_key(void *state, uint8_t k) {
   Slot *s = (Slot *)state;
-  return s->la.app->key ? s->la.app->key(s->la.app->state, k) : 0;
+  return s->ui.key ? s->ui.key(s->ui.state, k) : 0;
 }
 
 static int tr_click(void *state, int16_t x, int16_t y, int button) {
   Slot *s = (Slot *)state;
-  return s->la.app->click ? s->la.app->click(s->la.app->state, x, y, button) : 0;
+  return s->ui.click ? s->ui.click(s->ui.state, x, y, button) : 0;
 }
 
 static int16_t tr_height(void *state, int16_t w) {
   Slot *s = (Slot *)state;
-  return s->la.app->height ? s->la.app->height(s->la.app->state, w) : 0;
-}
-
-static void tr_set_args(void *state, const char *args) {
-  Slot *s = (Slot *)state;
-  if (s->la.app->set_args) s->la.app->set_args(s->la.app->state, args);
+  return s->ui.height ? s->ui.height(s->ui.state, w) : 0;
 }
 
 static int tr_wants_text(void *state) {
   Slot *s = (Slot *)state;
-  return s->la.app->wants_text ? s->la.app->wants_text(s->la.app->state) : 0;
+  return s->ui.wants_text ? s->ui.wants_text(s->ui.state) : 0;
 }
 
-static void tr_open(void *state) {
-  Slot *s = (Slot *)state;
-  if (s->la.app->open) s->la.app->open(s->la.app->state);
+/* Called by the program, through the API table, from inside capp_main. */
+void capprun_install_ui(const CappUi *ui) {
+  Slot *s = s_running;
+  if (!s || !ui) return;
+
+  s->ui = *ui;               /* copied: the program may pass a local */
+  s->has_ui = 1;
+
+  s->def.name       = s->name;
+  s->def.paint      = ui->paint ? tr_paint : NULL;
+  s->def.key        = ui->key ? tr_key : NULL;
+  s->def.click      = ui->click ? tr_click : NULL;
+  s->def.open       = NULL;      /* capp_main was the open */
+  s->def.state      = s;
+  s->def.height     = ui->height ? tr_height : NULL;
+  s->def.pref_w     = ui->pref_w;
+  s->def.pref_h     = ui->pref_h;
+  s->def.wants_text = ui->wants_text ? tr_wants_text : NULL;
+  s->def.help       = s->help[0] ? s->help : NULL;
+  s->def.set_args   = NULL;      /* argv was the arguments */
 }
 
 int capprun_load(const char *path) {
   int i;
+  Slot *s;
+
   for (i = 0; i < CAPPRUN_MAX; i++) if (!s_slot[i].used) break;
   if (i == CAPPRUN_MAX) return -1;
+  s = &s_slot[i];
 
-  if (capp_load(path, &s_slot[i].la) != CAPP_OK) return -1;
+  memset(s, 0, sizeof *s);
+  if (capp_load(path, &s->la) != CAPP_OK) return -1;
 
-  /* The name is copied out because CappApp.name need not be NUL-terminated if
-   * the app filled all 16 bytes, and AppDef.name is a C string. */
-  memcpy(s_slot[i].name, s_slot[i].la.app->name, sizeof s_slot[i].name - 1);
-  s_slot[i].name[sizeof s_slot[i].name - 1] = 0;
+  memcpy(s->name, s->la.info->name, sizeof s->name - 1);
+  s->name[sizeof s->name - 1] = 0;
+  if (s->la.info->help)
+    snprintf(s->help, sizeof s->help, "%s", s->la.info->help);
 
-  s_slot[i].def.name  = s_slot[i].name;
-  s_slot[i].def.paint = tr_paint;
-  s_slot[i].def.key   = tr_key;
-  s_slot[i].def.click = tr_click;
-  s_slot[i].def.open  = tr_open;
-  s_slot[i].def.height = s_slot[i].la.app->height ? tr_height : NULL;
-  s_slot[i].def.pref_w = s_slot[i].la.app->pref_w;
-  s_slot[i].def.pref_h = s_slot[i].la.app->pref_h;
-  s_slot[i].def.wants_text = s_slot[i].la.app->wants_text ? tr_wants_text : NULL;
-  /* The string lives in the app's own data allocation and was relocated with
-   * everything else, so it can be handed straight over. */
-  s_slot[i].def.help = s_slot[i].la.app->help;
-  s_slot[i].def.set_args = s_slot[i].la.app->set_args ? tr_set_args : NULL;
-  s_slot[i].def.cli = s_slot[i].la.app->cli;
-  s_slot[i].def.state = &s_slot[i];
-  s_slot[i].used = 1;
+  s->used = 1;
   return i;
 }
 
@@ -94,29 +107,91 @@ void capprun_unload_all(void) {
     if (!s_slot[i].used) continue;
     capp_unload(&s_slot[i].la);
     s_slot[i].used = 0;
+    s_slot[i].has_ui = 0;
   }
+  s_running = NULL;
 }
 
-const AppDef *capprun_def(int slot) {
-  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return NULL;
-  return &s_slot[slot].def;
+/* Split a command line into argv. In place, into a buffer of our own, because
+ * the caller's string is not ours to write on. Quotes are honoured so a path
+ * with a space in it survives; nothing else is interpreted. */
+static int split_args(const char *name, const char *args,
+                      char *buf, size_t bufsize, char **argv, int max) {
+  int argc = 0;
+  size_t n = 0;
+
+  /* argv[0] is the name it was invoked as, as it is everywhere else. */
+  argv[argc++] = buf;
+  while (name[n] && n < 15 && n + 2 < bufsize) { buf[n] = name[n]; n++; }
+  buf[n++] = 0;
+
+  if (!args) return argc;
+
+  while (*args && argc < max && n + 1 < bufsize) {
+    char quote = 0;
+    while (*args == ' ') args++;
+    if (!*args) break;
+
+    if (*args == '"' || *args == '\'') quote = *args++;
+    argv[argc++] = buf + n;
+    while (*args && n + 1 < bufsize) {
+      if (quote ? (*args == quote) : (*args == ' ')) { args++; break; }
+      buf[n++] = *args++;
+    }
+    buf[n++] = 0;
+  }
+  return argc;
+}
+
+int capprun_start(int slot, const char *name, const char *args) {
+  static char argbuf[192];
+  char *argv[CAPP_MAX_ARGS];
+  int argc, rc;
+  Slot *s;
+  extern const CardApi *cardos_api(void);
+
+  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return -1;
+  s = &s_slot[slot];
+  s->has_ui = 0;
+
+  argc = split_args(name ? name : s->name, args, argbuf, sizeof argbuf,
+                    argv, CAPP_MAX_ARGS);
+
+  s_running = s;
+  rc = s->la.main(cardos_api(), argc, argv);
+  s_running = NULL;
+  return rc;
+}
+
+int capprun_is_app(int slot) {
+  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return 0;
+  return s_slot[slot].has_ui;
+}
+
+const char *capprun_name(int slot) {
+  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return "";
+  return s_slot[slot].name;
 }
 
 const uint8_t *capprun_icon(int slot) {
   if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return NULL;
-  return s_slot[slot].la.app->icon;
+  return s_slot[slot].la.info->icon;
+}
+
+int capprun_is_cli(int slot) {
+  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return 0;
+  return (s_slot[slot].la.info->flags & CAPP_CLI) != 0;
 }
 
 int capprun_fullscreen(int slot) {
   if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return 0;
-  return s_slot[slot].la.app->fullscreen ? 1 : 0;
+  return (s_slot[slot].la.info->flags & CAPP_FULLSCREEN) != 0;
 }
 
-void capprun_set_args(int slot, const char *args) {
-  const CappApp *a;
-  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return;
-  a = s_slot[slot].la.app;
-  if (a->set_args) a->set_args(a->state, args);
+const AppDef *capprun_def(int slot) {
+  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return NULL;
+  if (!s_slot[slot].has_ui) return NULL;
+  return &s_slot[slot].def;
 }
 
 uint32_t capprun_exec_free(void) { return capp_exec_free(); }

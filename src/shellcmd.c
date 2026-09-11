@@ -12,6 +12,7 @@
 #include "kernel/ui/icons.h"
 #include "kernel/ui/launchui.h"
 #include "kernel/sys/env.h"
+#include "kernel/sys/sio.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -64,6 +65,7 @@ void cmd_cd(const char *arg) {
 
 void cmd_ls(const char *arg) {
   char target[FS_PATH_MAX];
+  char line[FS_PATH_MAX + 16];
   FsEntry e;
   FsDir d;
   int n = 0;
@@ -77,13 +79,13 @@ void cmd_ls(const char *arg) {
   if (fs_opendir(target, &d) != 0) { err(target, "cannot list"); return; }
   while (fs_readdir(&d, &e) == 1) {
     n++;
-    if (e.is_dir) {
-      con_set_color(COLOR_WHITE);
-      con_printf("%s/\n", e.name);
-      con_set_color(COLOR_GREEN);
-    } else {
-      con_printf("%-28s %6u\n", e.name, (unsigned)e.size);
-    }
+    /* To stdout, not to the console: `ls | grep capp` has to mean something,
+     * and a command that writes straight to the screen cannot be the left-hand
+     * side of anything. Errors still go to the console, which is what keeps
+     * them out of the pipe. */
+    if (e.is_dir) snprintf(line, sizeof line, "%s/", e.name);
+    else snprintf(line, sizeof line, "%-28s %6u", e.name, (unsigned)e.size);
+    sio_write_line(line);
   }
   fs_closedir(&d);
   if (n == 0) con_write("(empty)\n");

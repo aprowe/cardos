@@ -26,6 +26,7 @@
 #include "kernel/drv/bthid.h"
 #include "kernel/net/wifi.h"
 #include "kernel/ui/help.h"
+#include "kernel/ui/icons_builtin.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -87,21 +88,35 @@ static const char *kind_word(const Icon *ic) {
 
 /* ------------------------------------------------------------- paint ---- */
 
+/* The status strip. Icons rather than words: "wifi mouse 3:41" spends most of
+ * a 240-pixel bar saying things that a glyph says in eight. A radio that is
+ * off is drawn dim rather than hidden, so the strip does not reflow and the
+ * eye learns where to look. */
 static void paint_bar(void) {
-  char right[28];
+  char clock[8];
+  int16_t x = DISPLAY_W - 4;
 
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_rect(R(0, 0, DISPLAY_W, BAR_H), C_TITLE);
   draw_text(4, 2, "CardOS", C_TITLE_FG, C_TITLE);
 
-  /* The two things worth knowing here are whether the radios are up. */
-  snprintf(right, sizeof right, "%s%s%u:%02u",
-           wifi_is_connected() ? "wifi  " : "",
-           bthid_state(BTHID_MOUSE) == BTH_CONNECTED ? "mouse  " : "",
+  snprintf(clock, sizeof clock, "%u:%02u",
            (unsigned)(s_now_ms / 60000u) % 100u,
            (unsigned)((s_now_ms / 1000u) % 60u));
-  draw_text_ellipsis((int16_t)(DISPLAY_W - 128), 2, 124, right,
-                     C_TITLE_FG, C_TITLE);
+  x = (int16_t)(x - draw_text_width(clock));
+  draw_text(x, 2, clock, C_TITLE_FG, C_TITLE);
+
+  x = (int16_t)(x - 12);
+  draw_bitmap1(x, 2, 8, 8, ICON8_KBD,
+               bthid_state(BTHID_KEYBOARD) == BTH_CONNECTED ? C_TITLE_FG : C_SHADOW,
+               C_TITLE);
+  x = (int16_t)(x - 11);
+  draw_bitmap1(x, 2, 8, 8, ICON8_MOUSE,
+               bthid_state(BTHID_MOUSE) == BTH_CONNECTED ? C_TITLE_FG : C_SHADOW,
+               C_TITLE);
+  x = (int16_t)(x - 11);
+  draw_bitmap1(x, 2, 8, 8, ICON8_WIFI,
+               wifi_is_connected() ? C_TITLE_FG : C_SHADOW, C_TITLE);
 }
 
 static void paint_icon(int idx, int16_t x, int16_t y, int scale, uint16_t fg) {
@@ -135,8 +150,8 @@ static void paint_carousel(void) {
 
   if (n == 0) {
     draw_text_scaled(28, 46, "no apps", 2, C_TITLE_FG, C_DESKTOP);
-    draw_text(28, 74, "put .capp or .bin files", C_SHADOW, C_DESKTOP);
-    draw_text(28, 86, "in /desktop, then press r", C_SHADOW, C_DESKTOP);
+    draw_text(28, 74, "put .capp or .bin files", C_DESK_DIM, C_DESKTOP);
+    draw_text(28, 86, "in /desktop, then press r", C_DESK_DIM, C_DESKTOP);
     return;
   }
 
@@ -162,7 +177,7 @@ static void paint_carousel(void) {
     if (kx < 2) kx = 2;
     draw_text_scaled(nx, NAME_Y, ic->name, 2, C_TITLE_FG, C_DESKTOP);
     draw_text_ellipsis(kx, KIND_Y, (int16_t)(DISPLAY_W - 4), k,
-                       C_SHADOW, C_DESKTOP);
+                       C_DESK_DIM, C_DESKTOP);
   }
 
   paint_pips(n);
@@ -258,15 +273,20 @@ static void launch_with(int i, const char *args) {
     return;
   }
 
-  a = icon_app(i);
-  if (!a) return;
-  if (a->open) a->open(a->state);
-
-  /* After open, never before: open resets the app, so arguments applied first
-   * are the arguments thrown away. The icon's own path is deliberately not
-   * passed -- it is the app's binary, and handing Edit its own .capp made it
-   * open 14 KB of ELF as text. */
-  if (args && *args && a->set_args) a->set_args(a->state, args);
+  if (ic->kind == ICON_CAPP) {
+    /* Running the program *is* opening it: capp_main constructs whatever state
+     * it has and installs an interface if it wants one. A program that
+     * installs nothing was a command, and has already finished. */
+    capprun_start(ic->slot, ic->name, args);
+    if (!capprun_is_app(ic->slot)) return;
+    a = capprun_def(ic->slot);
+    if (!a) return;
+  } else {
+    a = icon_app(i);
+    if (!a) return;
+    if (a->open) a->open(a->state);
+    if (args && *args && a->set_args) a->set_args(a->state, args);
+  }
 
   /* Everything runs fullscreen here, whatever size it asked for: there is no
    * desktop behind it for a window to sit on. */
@@ -289,16 +309,41 @@ static void move(int delta) {
 
 /* -------------------------------------------------------------- input --- */
 
-void launchui_init(void) {
+/* Take the screen. Separate from launchui_init because running a *command*
+ * must not do this: a command prints and returns, and the console it was typed
+ * at should still be there afterwards. Conflating the two meant the line after
+ * "cat foo" was typed into the carousel. */
+static void enter(void) {
   ui_set_shell(UI_LAUNCHER);
-  icons_reload();
   mouse_init(DISPLAY_W, DISPLAY_H);
-  s_sel = 0;
-  s_app = NULL;
   s_note[0] = 0;
   s_dirty = 1;
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
+}
+
+/* The icon list, loaded if it is not already. Not reloaded on every run: a
+ * reload unloads every program, and one of them may be the one about to
+ * run. */
+static void need_icons(void) {
+  if (icons_total() == 0) icons_reload();
+}
+
+void launchui_init(void) {
+  icons_reload();
+  s_sel = 0;
+  s_app = NULL;
+  enter();
+  flush();
+}
+
+/* Put an app on the screen. The launcher runs everything fullscreen: there is
+ * no desktop behind it for a window to sit on. */
+static void host(const AppDef *a) {
+  s_app = a;
+  s_app_rect = app_rect(a);
+  s_app_clear = 1;
+  s_app_dirty = 1;
   flush();
 }
 
@@ -319,13 +364,24 @@ int launchui_run(const char *name, const char *args) {
   int i;
 
   if (!name || !*name) return -1;
-  launchui_init();
+  need_icons();
 
   /* Commands included: "grep" has no icon but is still something to run. */
   for (i = 0; i < icons_total(); i++) {
     const Icon *ic = icon_at(i);
     if (!ic || !same_name(ic->name, name)) continue;
+    /* A command runs and returns, and the console keeps the screen. Anything
+     * else is an app, and the launcher takes over to host it. */
+    if (ic->kind == ICON_CAPP) {
+      capprun_start(ic->slot, ic->name, args);
+      if (!capprun_is_app(ic->slot)) return 0;
+      s_sel = i;
+      enter();
+      host(capprun_def(ic->slot));
+      return 0;
+    }
     s_sel = i;
+    enter();
     launch_with(i, args);
     return 0;
   }
@@ -341,30 +397,29 @@ int launchui_run_path(const char *path, const char *args) {
   int i, slot;
 
   if (!path || !*path) return -1;
-  launchui_init();
+  need_icons();
 
   for (i = 0; i < icons_total(); i++) {
     const Icon *ic = icon_at(i);
     if (ic && ic->kind == ICON_CAPP && strcmp(ic->path, path) == 0) {
+      capprun_start(ic->slot, ic->name, args);
+      if (!capprun_is_app(ic->slot)) return 0;   /* a command, already done */
       s_sel = i;
-      launch_with(i, args);
+      enter();
+      host(capprun_def(ic->slot));
       return 0;
     }
   }
 
   slot = capprun_load(path);
   if (slot < 0) return -1;
+  capprun_start(slot, path, args);
+  if (!capprun_is_app(slot)) return 0;    /* a command, and it is done */
   a = capprun_def(slot);
   if (!a) return -1;
 
-  if (a->open) a->open(a->state);
-  if (args && *args && a->set_args) a->set_args(a->state, args);
-
-  s_app = a;
-  s_app_rect = app_rect(a);
-  s_app_clear = 1;
-  s_app_dirty = 1;
-  flush();
+  enter();
+  host(a);
   return 0;
 }
 

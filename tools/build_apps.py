@@ -92,8 +92,13 @@ def check_image(elf, name):
         raise SystemExit("%s: relocations the loader cannot apply: %s"
                          % (name, ", ".join(sorted(bad))))
 
-    if not re.search(r"\bcapp_register\b", text):
-        raise SystemExit("%s: no capp_register symbol" % name)
+    # Both exported symbols must survive the link. capp_info in particular is
+    # read by the loader and referenced by nothing, so --gc-sections discards it
+    # unless the linker script KEEPs it -- a mistake that otherwise shows up as
+    # an app that loads and then has no name.
+    for sym in ("capp_main", "capp_info"):
+        if not re.search(r"\b%s\b" % sym, text):
+            raise SystemExit("%s: %s did not survive the link" % (name, sym))
 
     # An undefined symbol here means the app reached for something outside the
     # API table. Nothing will resolve it at load time.

@@ -30,6 +30,7 @@
 #include "kernel/net/wifi.h"
 #include "kernel/ui/shell.h"
 #include "kernel/sys/env.h"
+#include "kernel/sys/sio.h"
 #include "kernel/drv/bthid.h"
 
 #define CARDOS_LINE_MAX 63
@@ -107,28 +108,14 @@ static void cmd_help(void) {
 
 /* A stand-in for the real shell, which needs the context switch so it can run
  * as a task and block on the keyboard rather than polling it. */
-static void run_line(char *line) {
-  char *arg;
-
-  while (*line == ' ') line++;
-  if (*line == 0) return;
-
-  /* Split off the first argument at the first space. */
-  arg = strchr(line, ' ');
-  if (arg) {
-    *arg++ = '\0';
-    while (*arg == ' ') arg++;
-  } else {
-    arg = line + strlen(line);      /* empty, never NULL */
-  }
-
+/* One command, already separated from its pipeline and redirections. */
+static void run_builtin(const char *line, char *arg) {
   if (!strcmp(line, "help"))        cmd_help();
   else if (!strcmp(line, "mem"))    cmd_mem();
   else if (!strcmp(line, "ps"))     cmd_ps();
   else if (!strcmp(line, "ls"))     cmd_ls(arg);
   else if (!strcmp(line, "cd"))     cmd_cd(arg);
   else if (!strcmp(line, "pwd"))    cmd_pwd();
-  else if (!strcmp(line, "cat"))    cmd_cat(arg);
   else if (!strcmp(line, "mkdir"))  cmd_mkdir(arg);
   else if (!strcmp(line, "rm"))     cmd_rm(arg);
   else if (!strcmp(line, "df"))     cmd_df();
@@ -320,6 +307,156 @@ static void complete_line(void) {
   (void)list_again;
 }
 
+
+/* --------------------------------------------------------------- pipeline --
+ *
+ * "cat notes | grep TODO > hits" is three decisions: what runs, where its
+ * output goes, and where its input comes from. The shell makes all three and
+ * the programs make none, which is the whole point -- grep has no idea whether
+ * it is reading a file, a pipe, or nothing at all.
+ *
+ * Pipes are buffered rather than concurrent. With one cooperative loop and no
+ * context switch, "both sides run at once" is not on offer: the left-hand side
+ * runs to completion into a buffer and the right-hand side then reads it. The
+ * only thing that changes is an infinite producer, and there are none here.
+ * A pipe that looked concurrent and deadlocked would be worse than one that is
+ * honest about what it does.
+ */
+
+#define PIPE_CAP   (8 * 1024)
+#define MAX_STAGES 4
+
+typedef struct {
+  char text[CARDOS_LINE_MAX + 1];
+  char in_file[FS_PATH_MAX];
+  char out_file[FS_PATH_MAX];
+  int  append;
+} Stage;
+
+/* Pull "< path" and "> path" out of a stage, leaving the command and its
+ * arguments behind. Rewritten in place because a redirection is not an
+ * argument, and the program must never see one. */
+static void take_redirects(Stage *st) {
+  char clean[CARDOS_LINE_MAX + 1];
+  int i = 0, n = 0;
+
+  while (st->text[i]) {
+    char c = st->text[i];
+
+    if (c == '<' || c == '>') {
+      char *dest = (c == '<') ? st->in_file : st->out_file;
+      int m = 0;
+      i++;
+      if (c == '>' && st->text[i] == '>') { st->append = 1; i++; }
+      while (st->text[i] == ' ') i++;
+      while (st->text[i] && st->text[i] != ' ' && st->text[i] != '<' &&
+             st->text[i] != '>' && m < FS_PATH_MAX - 1)
+        dest[m++] = st->text[i++];
+      dest[m] = 0;
+      continue;
+    }
+    if (n < CARDOS_LINE_MAX) clean[n++] = c;
+    i++;
+  }
+  clean[n] = 0;
+  while (n > 0 && clean[n - 1] == ' ') clean[--n] = 0;
+  snprintf(st->text, sizeof st->text, "%s", clean);
+}
+
+/* One stage, with stdio already pointed wherever it should go. */
+static void run_stage(Stage *st) {
+  char cmd[CARDOS_LINE_MAX + 1];
+  char *arg;
+  int i = 0;
+
+  snprintf(cmd, sizeof cmd, "%s", st->text);
+  while (cmd[i] && cmd[i] != ' ') i++;
+  if (cmd[i]) {
+    cmd[i] = 0;
+    arg = cmd + i + 1;
+    while (*arg == ' ') arg++;
+  } else {
+    arg = cmd + i;
+  }
+  if (cmd[0]) run_builtin(cmd, arg);
+}
+
+/* The whole line: split on |, wire each stage's output to the next one's
+ * input, and give stdio back to the console afterwards. */
+static void run_pipeline(const char *line) {
+  static Stage stage[MAX_STAGES];
+  int n = 0, i = 0, k;
+  char *carry = NULL;
+
+  while (line[i] && n < MAX_STAGES) {
+    int m = 0;
+    char quote = 0;
+    while (line[i] == ' ') i++;
+    /* Quotes so a pipe inside one is just a character. */
+    while (line[i] && (quote || line[i] != '|')) {
+      if (!quote && (line[i] == '"' || line[i] == '\'')) quote = line[i];
+      else if (quote && line[i] == quote) quote = 0;
+      if (m < CARDOS_LINE_MAX) stage[n].text[m++] = line[i];
+      i++;
+    }
+    stage[n].text[m] = 0;
+    while (m > 0 && stage[n].text[m - 1] == ' ') stage[n].text[--m] = 0;
+    stage[n].in_file[0] = 0;
+    stage[n].out_file[0] = 0;
+    stage[n].append = 0;
+    take_redirects(&stage[n]);
+    if (stage[n].text[0]) n++;
+    if (line[i] == '|') i++;
+  }
+
+  if (n == 0) return;
+
+  for (k = 0; k < n; k++) {
+    int last = (k == n - 1);
+
+    sio_reset();
+
+    /* stdin: a named file wins over the pipe, because it was asked for. */
+    if (stage[k].in_file[0]) {
+      free(carry);
+      carry = NULL;
+      if (sio_in_from_file(stage[k].in_file) != 0) {
+        con_printf("%s: cannot read\n", stage[k].in_file);
+        break;
+      }
+    } else if (carry) {
+      sio_in_from_buffer(carry);       /* takes ownership */
+      carry = NULL;
+    }
+
+    /* stdout: a named file, else a buffer if another stage follows, else the
+     * console. */
+    if (stage[k].out_file[0]) {
+      if (sio_out_to_file(stage[k].out_file, stage[k].append) != 0) {
+        con_printf("%s: cannot write\n", stage[k].out_file);
+        break;
+      }
+    } else if (!last) {
+      if (!sio_out_to_buffer(PIPE_CAP)) {
+        con_write("out of memory for the pipe\n");
+        break;
+      }
+    }
+
+    run_stage(&stage[k]);
+
+    if (!last && !stage[k].out_file[0]) {
+      size_t len = 0;
+      if (sio_out_overflowed())
+        con_printf("pipe full at %d bytes, output truncated\n", PIPE_CAP);
+      carry = sio_take_buffer(&len);
+    }
+  }
+
+  free(carry);
+  sio_reset();
+}
+
 /* Monotonic milliseconds for the scheduler. */
 static uint32_t clock_ms(void *ctx) {
   (void)ctx;
@@ -496,7 +633,7 @@ void app_main(void) {
       if (k == KEY_ENTER) {
         s_line[s_len] = 0;
         con_putc('\n');
-        run_line(s_line);
+        run_pipeline(s_line);
         s_len = 0;
         prompt();
       } else if (k == KEY_BACKSPACE) {

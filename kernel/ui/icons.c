@@ -160,13 +160,14 @@ static void scan(const char *dir, int bin_only) {
       /* Loaded eagerly and left loaded: the label under the icon and the icon
        * itself are the app's own, and asking it is the only way to know
        * them. */
-      const AppDef *def;
+      /* Loaded, but not run: the name and icon come from the descriptor,
+       * which is exactly why the descriptor exists. Running a program to find
+       * out what it is called is the wrong way round. */
       ic->slot = capprun_load(ic->path);
       if (ic->slot < 0) continue;
-      def = capprun_def(ic->slot);
       ic->kind = ICON_CAPP;
-      ic->cli = def->cli;
-      snprintf(ic->name, sizeof ic->name, "%s", def->name);
+      ic->cli = capprun_is_cli(ic->slot);
+      snprintf(ic->name, sizeof ic->name, "%s", capprun_name(ic->slot));
     } else if (ends_with(e.name, n, ".app")) {
       char stem[20];
       ic->cli = 0;
@@ -216,6 +217,9 @@ const Icon *icon_at(int i) {
   return &s_icon[i];
 }
 
+/* For a built-in, the definition is compiled in. For a loaded program there is
+ * nothing until it has run and installed an interface -- which is the point:
+ * a program is not an app until it says it is. */
 const AppDef *icon_app(int i) {
   const Icon *ic = icon_at(i);
   if (!ic) return NULL;

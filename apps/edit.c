@@ -153,7 +153,10 @@ static void save(void) {
   int fd, i;
   char nl = 10;
 
-  if (!E.path[0]) { begin_name(NAME_SAVE_AS, "untitled.txt"); return; }
+  /* Empty rather than pre-filled: a buffer with no name came from a pipe or a
+   * new file, and the first thing typed should be the name rather than the
+   * end of a name you have to delete first. */
+  if (!E.path[0]) { begin_name(NAME_SAVE_AS, ""); return; }
   fd = api->open(E.path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
   if (fd < 0) { say("cannot write"); return; }
   for (i = 0; i < E.nlines; i++) {
@@ -543,33 +546,58 @@ static void app_set_args(void *st, const char *path) {
   E.view = VIEW_EDIT;
 }
 
-/* 16x16: a document with a folded corner and ruled lines. */
-static const unsigned char ICON[CAPP_ICON_BYTES] = {
-  0x00, 0x00, 0x1F, 0xF0, 0x10, 0x18, 0x10, 0x14,
-  0x10, 0x12, 0x10, 0x1F, 0x13, 0xC1, 0x10, 0x01,
-  0x13, 0xE1, 0x10, 0x01, 0x13, 0xC1, 0x10, 0x01,
-  0x11, 0xE1, 0x10, 0x01, 0x1F, 0xFF, 0x00, 0x00,
+const CappInfo capp_info = {
+  CAPP_API_VERSION,
+  CAPP_FULLSCREEN,
+  "Edit",
+  /* 16x16: a document with a folded corner and ruled lines. */
+  { 0x00, 0x00, 0x1F, 0xF0, 0x10, 0x18, 0x10, 0x14,
+    0x10, 0x12, 0x10, 0x1F, 0x13, 0xC1, 0x10, 0x01,
+    0x13, 0xE1, 0x10, 0x01, 0x13, 0xC1, 0x10, 0x01,
+    0x11, 0xE1, 0x10, 0x01, 0x1F, 0xFF, 0x00, 0x00 },
+  "arrows\tmove\nenter\topen, or split the line\nbackspace\tup a folder, or delete\nn\tnew file\nctrl-n\tnew file\nctrl-s\tsave\nctrl-r\tsave as\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n",
 };
 
-static CappApp APP;
+/* Static, not a local: the shell keeps calling into this long after
+ * capp_main has returned. */
+static CappUi UI;
 
-const CappApp *capp_register(const CardApi *a) {
+/* Pulls whatever was piped in into the buffer. "cat notes | grep TODO | edit"
+ * is the case that matters: the left-hand side produced text and this is where
+ * you want to look at it. It stays an unnamed buffer until saved, which is
+ * what an editor should do with something that arrived without a file. */
+static void load_stdin(void) {
+  char line[MAXCOL + 64];
+  int n;
+
+  blank();
+  if (!E.dir[0]) api->fmt(E.dir, sizeof E.dir, "%s", "/");
+  E.path[0] = 0;
+  while (E.nlines < MAXLINES && (n = api->in_line(line, sizeof line)) >= 0) {
+    if (n > MAXCOL) n = MAXCOL;
+    api->mem_cpy(E.line[E.nlines - 1], line, (size_t)n);
+    E.len[E.nlines - 1] = (short)n;
+    E.nlines++;
+  }
+  if (E.nlines > 1) E.nlines--;        /* the last increment had no line */
+  E.dirty = 1;                         /* nothing on the card holds this yet */
+  E.view = VIEW_EDIT;
+  api->fmt(E.status, sizeof E.status, "%d lines in, ctrl-s names it", E.nlines);
+}
+
+int capp_main(const CardApi *a, int argc, char **argv) {
   api = a;
   blank();
-  APP.api_version = CAPP_API_VERSION;
-  api->mem_cpy(APP.name, "Edit", 5);
-  api->mem_cpy(APP.icon, ICON, CAPP_ICON_BYTES);
-  APP.fullscreen = 1;          /* an editor wants every pixel it can get */
-  APP.paint = app_paint;
-  APP.key = app_key;
-  APP.click = app_click;
-  APP.open = app_open;
-  APP.set_args = app_set_args;
-  APP.height = 0;
-  APP.pref_w = 0;
-  APP.pref_h = 0;
-  APP.wants_text = app_wants_text;
-  APP.help = "arrows\tmove\nenter\topen, or split the line\nbackspace\tup a folder, or delete\nn\tnew file\nctrl-n\tnew file\nctrl-s\tsave\nctrl-r\tsave as\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n";
-  APP.state = 0;
-  return &APP;
+  /* Three ways in, in the order a shell would expect: something piped in, a
+     named file, or nothing -- and nothing means the browser, because an editor
+     with no file has nothing to do. */
+  if (api->has_input()) load_stdin();
+  else if (argc > 1) app_set_args(0, argv[1]);
+  else app_open(0);
+  UI.paint = app_paint;
+  UI.key = app_key;
+  UI.click = app_click;
+  UI.wants_text = app_wants_text;
+  api->ui(&UI);
+  return 0;
 }

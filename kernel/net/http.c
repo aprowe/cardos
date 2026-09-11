@@ -18,7 +18,11 @@ int http_get(const char *url, char *buf, size_t size, int timeout_ms) {
 
   if (!url || !buf || size < 2) return -2;
   buf[0] = 0;
-  if (!wifi_is_connected()) return -1;
+  /* Bring the network up rather than refusing. An app that wants a URL wants
+   * the network, and making it say so separately only moves the same call into
+   * every app that ever needs one. The radio's cost is still only paid when
+   * something actually asks. */
+  if (!wifi_is_connected() && wifi_connect_saved(20000) != 0) return -1;
 
   memset(&cfg, 0, sizeof cfg);
   cfg.url = url;

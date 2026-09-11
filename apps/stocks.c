@@ -278,32 +278,29 @@ static int app_click(void *st, short x, short y, int button) {
   return 1;
 }
 
-/* 16x16: a rising line over an axis. */
-static const unsigned char ICON[CAPP_ICON_BYTES] = {
-  0x00, 0x00, 0x40, 0x00, 0x40, 0x3E, 0x40, 0x0E,
-  0x40, 0x1A, 0x40, 0x30, 0x40, 0x60, 0x41, 0x80,
-  0x43, 0x00, 0x4C, 0x00, 0x58, 0x00, 0x60, 0x00,
-  0x40, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x00, 0x00,
+const CappInfo capp_info = {
+  CAPP_API_VERSION,
+  0,
+  "Stocks",
+  /* 16x16: a rising line over an axis. */
+  { 0x00, 0x00, 0x40, 0x00, 0x40, 0x3E, 0x40, 0x0E,
+    0x40, 0x1A, 0x40, 0x30, 0x40, 0x60, 0x41, 0x80,
+    0x43, 0x00, 0x4C, 0x00, 0x58, 0x00, 0x60, 0x00,
+    0x40, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x00, 0x00 },
+  "arrows\tmove the selection\nr\tfetch quotes\ne\tre-read stocks.txt\nthe title bar\tfetch quotes\n",
 };
 
-static CappApp APP;
+/* Static, not a local: the shell keeps calling into this long after
+ * capp_main has returned. */
+static CappUi UI;
 
-const CappApp *capp_register(const CardApi *a) {
+int capp_main(const CardApi *a, int argc, char **argv) {
   api = a;
-  APP.api_version = CAPP_API_VERSION;
-  api->mem_cpy(APP.name, "Stocks", 7);
-  api->mem_cpy(APP.icon, ICON, CAPP_ICON_BYTES);
-  APP.fullscreen = 0;
-  APP.paint = app_paint;
-  APP.key = app_key;
-  APP.click = app_click;
-  APP.open = app_open;
-  APP.set_args = 0;
-  APP.height = 0;
-  APP.pref_w = 0;
-  APP.pref_h = 0;
-  APP.wants_text = 0;      /* a list or a board, never a text field */
-  APP.help = "arrows\tmove the selection\nr\tfetch quotes\ne\tre-read stocks.txt\nthe title bar\tfetch quotes\n";
-  APP.state = 0;
-  return &APP;
+  (void)argc; (void)argv;
+  app_open(0);
+  UI.paint = app_paint;
+  UI.key = app_key;
+  UI.click = app_click;
+  api->ui(&UI);
+  return 0;
 }

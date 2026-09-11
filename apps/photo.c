@@ -175,29 +175,30 @@ static void app_set_args(void *st, const char *path) {
   }
 }
 
-/* 16x16: a framed landscape -- hill, sun. */
-static const unsigned char ICON[CAPP_ICON_BYTES] = {
-  0x00, 0x00, 0x7F, 0xFE, 0x40, 0x02, 0x41, 0x82,
-  0x43, 0xC2, 0x41, 0x82, 0x40, 0x02, 0x40, 0x02,
-  0x40, 0x82, 0x41, 0xC2, 0x43, 0xE2, 0x47, 0xF2,
-  0x4F, 0xFA, 0x5F, 0xFE, 0x7F, 0xFE, 0x00, 0x00,
+const CappInfo capp_info = {
+  CAPP_API_VERSION,
+  CAPP_FULLSCREEN,
+  "Photos",
+  /* 16x16: a framed landscape -- hill, sun. */
+  { 0x00, 0x00, 0x7F, 0xFE, 0x40, 0x02, 0x41, 0x82,
+    0x43, 0xC2, 0x41, 0x82, 0x40, 0x02, 0x40, 0x02,
+    0x40, 0x82, 0x41, 0xC2, 0x43, 0xE2, 0x47, 0xF2,
+    0x4F, 0xFA, 0x5F, 0xFE, 0x7F, 0xFE, 0x00, 0x00 },
+  "arrows\tprevious and next\nspace\tnext\nclick\tleft back, right forward\nr\trescan the folder\n",
 };
 
-static CappApp APP;
+/* Static, not a local: the shell keeps calling into this long after
+ * capp_main has returned. */
+static CappUi UI;
 
-const CappApp *capp_register(const CardApi *a) {
+int capp_main(const CardApi *a, int argc, char **argv) {
   api = a;
-  APP.api_version = CAPP_API_VERSION;
-  api->mem_cpy(APP.name, "Photos", 7);
-  api->mem_cpy(APP.icon, ICON, CAPP_ICON_BYTES);
-  APP.fullscreen = 1;
-  APP.paint = app_paint;
-  APP.key = app_key;
-  APP.click = app_click;
-  APP.open = app_open;
-  APP.set_args = app_set_args;
-  APP.wants_text = 0;      /* a list or a board, never a text field */
-  APP.help = "arrows\tprevious and next\nspace\tnext\nclick\tleft back, right forward\nr\trescan the folder\n";
-  APP.state = 0;
-  return &APP;
+  /* An argument names a folder, or a picture in one. */
+  if (argc > 1) app_set_args(0, argv[1]);
+  else app_open(0);
+  UI.paint = app_paint;
+  UI.key = app_key;
+  UI.click = app_click;
+  api->ui(&UI);
+  return 0;
 }

@@ -231,13 +231,14 @@ CappResult capp_load(const char *path, LoadedApp *out) {
     }
   }
 
-  /* Find the one exported symbol. It is a function, so it lives in the code
-   * half by construction, and that half was linked at 0. */
+  /* Two exported symbols: the descriptor and the entry point. Found by name
+   * in the symbol table, then turned into addresses the same way a relocation
+   * is -- which half a value belongs to is decided by where it was linked. */
   {
-    uint32_t entry = 0;
-    int found = 0;
+    uint32_t main_off = 0, info_off = 0;
+    int have_main = 0, have_info = 0;
 
-    for (i = 0; i < eh.e_shnum && !found; i++) {
+    for (i = 0; i < eh.e_shnum && !(have_main && have_info); i++) {
       Elf32_Sym sym;
       char name[32];
       uint32_t n, j, stroff;
@@ -253,34 +254,36 @@ CappResult capp_load(const char *path, LoadedApp *out) {
         if (sym.st_name == 0) continue;
         memset(name, 0, sizeof name);
         if (read_at(fd, stroff + sym.st_name, name, sizeof name - 1) != 0) continue;
-        if (strcmp(name, "capp_register") == 0) {
-          entry = sym.st_value;
-          found = 1;
-          break;
+
+        if (!have_main && strcmp(name, "capp_main") == 0) {
+          main_off = sym.st_value;
+          have_main = 1;
+        } else if (!have_info && strcmp(name, "capp_info") == 0) {
+          info_off = sym.st_value;
+          have_info = 1;
         }
       }
     }
-    if (!found || entry >= code_size) { rc = CAPP_ERR_NO_ENTRY; goto done; }
 
-    {
-      const CappApp *(*reg)(const CardApi *);
-      extern const CardApi *cardos_api(void);
-      const CappApp *app;
-
-      reg = (const CappApp *(*)(const CardApi *))(code + entry);
-      app = reg(cardos_api());
-      if (!app) { rc = CAPP_ERR_NO_ENTRY; goto done; }
-      if (app->api_version != CAPP_API_VERSION) { rc = CAPP_ERR_API; goto done; }
-
-      out->code = code;
-      out->data = data;
-      out->code_size = code_size;
-      out->data_size = data_size;
-      out->app = app;
-      code = NULL;                 /* handed over */
-      data = NULL;
-      rc = CAPP_OK;
+    if (!have_main || !have_info) { rc = CAPP_ERR_NO_ENTRY; goto done; }
+    if (main_off >= code_size) { rc = CAPP_ERR_NO_ENTRY; goto done; }
+    if (info_off < CAPP_DATA_ORIGIN ||
+        info_off - CAPP_DATA_ORIGIN + sizeof(CappInfo) > data_size) {
+      rc = CAPP_ERR_NO_ENTRY;
+      goto done;
     }
+
+    out->info = (const CappInfo *)(data + (info_off - CAPP_DATA_ORIGIN));
+    if (out->info->api_version != CAPP_API_VERSION) { rc = CAPP_ERR_API; goto done; }
+
+    out->main = (int (*)(const CardApi *, int, char **))(code + main_off);
+    out->code = code;
+    out->data = data;
+    out->code_size = code_size;
+    out->data_size = data_size;
+    code = NULL;                 /* handed over */
+    data = NULL;
+    rc = CAPP_OK;
   }
 
 done:
@@ -289,9 +292,9 @@ done:
   if (code) heap_caps_free(code);
   if (data) heap_caps_free(data);
   if (rc == CAPP_OK)
-    ESP_LOGI(TAG, "loaded %s: %u code at %p, %u data at %p, exec free %u",
-             path, (unsigned)out->code_size, out->code,
-             (unsigned)out->data_size, out->data, (unsigned)capp_exec_free());
+    ESP_LOGI(TAG, "loaded %s (%s): %u code, %u data, exec free %u",
+             path, out->info->name, (unsigned)out->code_size,
+             (unsigned)out->data_size, (unsigned)capp_exec_free());
   else
     ESP_LOGW(TAG, "load %s failed: %s", path, capp_strerror(rc));
   return rc;

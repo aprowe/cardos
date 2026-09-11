@@ -140,17 +140,13 @@ void draw_text_ellipsis(int16_t x, int16_t y, int16_t max_w, const char *s,
   if (room <= 0) return;
   if (n <= room) { draw_text(x, y, s, fg, bg); return; }
 
-  /* Truncate and mark it, so a clipped title looks deliberate. */
+  /* Cut, with nothing to mark it. An ellipsis costs two of the six or seven
+   * characters that fit under an icon, and "Settin.." reads worse than
+   * "Setting" -- the reader can already see the label ran out of room. */
   {
-    int16_t keep = (int16_t)(room - 2);
     int16_t i;
-    if (keep < 0) keep = 0;
-    for (i = 0; i < keep; i++) {
+    for (i = 0; i < room; i++)
       draw_glyph((int16_t)(x + i * FONT_W), y, s[i], fg, bg);
-    }
-    for (; i < room; i++) {
-      draw_glyph((int16_t)(x + i * FONT_W), y, '.', fg, bg);
-    }
   }
 }
 

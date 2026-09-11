@@ -133,7 +133,42 @@ ART = {
     ],
 }
 
+# 8x8, for the status strip. Same packing, one byte per row.
+STATUS = {
+    "wifi": [
+        "........",
+        ".######.",
+        "#......#",
+        "..####..",
+        ".#....#.",
+        "...##...",
+        "...##...",
+        "........",
+    ],
+    "mouse": [
+        "..####..",
+        ".#.##.#.",
+        ".#.##.#.",
+        ".#....#.",
+        ".#....#.",
+        ".#....#.",
+        "..####..",
+        "........",
+    ],
+    "kbd": [
+        "........",
+        "########",
+        "#.#.#.#.",
+        "#.......",
+        "#.#####.",
+        "#.......",
+        "########",
+        "........",
+    ],
+}
+
 ORDER = ["Files", "Memory", "Settings", "About", "firmware", "generic"]
+STATUS_ORDER = ["wifi", "mouse", "kbd"]
 
 
 def pack(art):
@@ -164,6 +199,10 @@ def main():
         for name in ORDER:
             print(name + ":")
             render(pack(ART[name]))
+        for name in STATUS_ORDER:
+            print(name + " (8x8):")
+            for row in STATUS[name]:
+                print("  " + row)
         return
 
     lines = [
@@ -191,6 +230,20 @@ def main():
             lines.append("  " + " ".join("0x%02X," % v for v in b[i:i + 8]))
         lines.append("};")
         lines.append("")
+    for name in STATUS_ORDER:
+        art = STATUS[name]
+        b = []
+        for row in art:
+            v = 0
+            for c in range(8):
+                if row[c] == "#":
+                    v |= 1 << (7 - c)
+            b.append(v)
+        lines.append("static const uint8_t ICON8_%s[8] = {" % name.upper())
+        lines.append("  " + " ".join("0x%02X," % v for v in b))
+        lines.append("};")
+        lines.append("")
+
     lines += ["#endif /* CARDOS_ICONS_BUILTIN_H */"]
 
     with open("kernel/ui/icons_builtin.h", "w", newline="\n") as f:
