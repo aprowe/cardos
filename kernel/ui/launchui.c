@@ -321,7 +321,8 @@ int launchui_run(const char *name, const char *args) {
   if (!name || !*name) return -1;
   launchui_init();
 
-  for (i = 0; i < icons_count(); i++) {
+  /* Commands included: "grep" has no icon but is still something to run. */
+  for (i = 0; i < icons_total(); i++) {
     const Icon *ic = icon_at(i);
     if (!ic || !same_name(ic->name, name)) continue;
     s_sel = i;
@@ -342,7 +343,7 @@ int launchui_run_path(const char *path, const char *args) {
   if (!path || !*path) return -1;
   launchui_init();
 
-  for (i = 0; i < icons_count(); i++) {
+  for (i = 0; i < icons_total(); i++) {
     const Icon *ic = icon_at(i);
     if (ic && ic->kind == ICON_CAPP && strcmp(ic->path, path) == 0) {
       s_sel = i;

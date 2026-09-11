@@ -82,6 +82,7 @@ int capprun_load(const char *path) {
    * everything else, so it can be handed straight over. */
   s_slot[i].def.help = s_slot[i].la.app->help;
   s_slot[i].def.set_args = s_slot[i].la.app->set_args ? tr_set_args : NULL;
+  s_slot[i].def.cli = s_slot[i].la.app->cli;
   s_slot[i].def.state = &s_slot[i];
   s_slot[i].used = 1;
   return i;

@@ -129,11 +129,11 @@ static void mem_paint(void *state, Rect c) {
  * loadable: a file browser, a heap view, and an about box. */
 static const AppDef APPS[] = {
   { "Files",  files_paint, files_key, NULL, files_open, &s_files, NULL, 0, 0,
-    NULL, "arrows\tscroll the listing\nr\tre-read the card\n", files_set_args },
+    NULL, "arrows\tscroll the listing\nr\tre-read the card\n", files_set_args, 0 },
   { "Memory", mem_paint,   NULL,      NULL, NULL,       NULL,     NULL, 0, 0,
-    NULL, NULL, NULL },
+    NULL, NULL, NULL, 0 },
   { "About",  about_paint, NULL,      NULL, NULL,       NULL,     NULL, 0, 0,
-    NULL, NULL, NULL },
+    NULL, NULL, NULL, 0 },
 };
 
 /* Settings lives in its own file -- it reaches across the radio, the panel and

@@ -420,8 +420,9 @@ void cmd_get(const char *arg) {
 
 /* ----------------------------------------------------------------- run --- */
 
-static const char *run_kind(IconKind k) {
-  switch (k) {
+static const char *run_kind(const Icon *ic) {
+  if (ic->cli) return "command";
+  switch (ic->kind) {
   case ICON_FIRMWARE: return "firmware";
   case ICON_CAPP:     return "app";
   default:            return "built in";
@@ -436,10 +437,10 @@ void cmd_run(const char *arg) {
 
   if (!arg || !*arg) {
     icons_reload();
-    if (icons_count() == 0) { con_write("nothing to run\n"); return; }
-    for (i = 0; i < icons_count(); i++) {
+    if (icons_total() == 0) { con_write("nothing to run\n"); return; }
+    for (i = 0; i < icons_total(); i++) {
       const Icon *ic = icon_at(i);
-      con_printf("  %-14s %-9s %s\n", ic->name, run_kind(ic->kind), ic->path);
+      con_printf("  %-14s %-9s %s\n", ic->name, run_kind(ic), ic->path);
     }
     con_write("run NAME [arguments]\n");
     return;
@@ -462,7 +463,7 @@ void cmd_run(const char *arg) {
   /* Firmware goes through boot, which asks first: it ends CardOS, and a
    * mistyped name should not cost a reboot. */
   icons_reload();
-  for (i = 0; i < icons_count(); i++) {
+  for (i = 0; i < icons_total(); i++) {
     const Icon *ic = icon_at(i);
     if (!ic || strcasecmp(ic->name, name) != 0) continue;
     if (ic->kind == ICON_FIRMWARE) {

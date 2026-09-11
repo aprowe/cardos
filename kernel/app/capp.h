@@ -14,7 +14,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 5
+#define CAPP_API_VERSION 6
 #define CAPP_ICON_W 16
 #define CAPP_ICON_H 16
 #define CAPP_ICON_BYTES ((CAPP_ICON_W / 8) * CAPP_ICON_H)   /* 1bpp, 32 bytes */
@@ -103,6 +103,11 @@ typedef struct {
   char     name[16];
   uint8_t  icon[CAPP_ICON_BYTES];        /* 16x16, 1bpp, bit 7 = leftmost */
   int      fullscreen;                   /* 1 to take the whole screen */
+
+  /* 1 for a command-line tool: runnable by name or path from the console, but
+   * no icon anywhere. grep is a program you type, not a thing you click, and
+   * an icon for it is an icon you scroll past every time. */
+  int      cli;
 
   void (*paint)(void *state, CRect content);
   int  (*key)(void *state, uint8_t k);

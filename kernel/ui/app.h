@@ -69,6 +69,9 @@ typedef struct {
   /* The arguments the app was started with, as one string. Called after open,
    * and not at all when there are none. */
   void (*set_args)(void *state, const char *args);
+
+  /* 1 for a command-line tool: runnable from the console, but no icon. */
+  int cli;
 } AppDef;
 
 /* The apps the Start menu offers. */

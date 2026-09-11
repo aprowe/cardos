@@ -307,6 +307,7 @@ const CappApp *capp_register(const CardApi *a) {
   api->mem_cpy(APP.name, "Grep", 5);
   api->mem_cpy(APP.icon, ICON, CAPP_ICON_BYTES);
   APP.fullscreen = 1;      /* results want the width */
+  APP.cli = 1;             /* a program you type, not a thing you click */
   APP.paint = app_paint;
   APP.key = app_key;
   APP.click = app_click;

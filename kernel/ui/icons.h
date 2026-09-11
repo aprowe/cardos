@@ -35,13 +35,20 @@ typedef struct {
   char     path[80];    /* full path */
   IconKind kind;
   int      slot;        /* app registry index, or capprun slot */
+  int      cli;         /* a command: runnable, but not shown anywhere */
 } Icon;
 
 /* Seeds the folder if it is empty and loads every .capp it finds. Safe to call
  * again; unloads what it loaded first. */
 void icons_reload(void);
 
-int         icons_count(void);
+/* What the shells draw: everything except the command-line tools, which are
+ * sorted to the end so a carousel can walk 0..count-1 without gaps. */
+int icons_count(void);
+
+/* Everything, commands included -- what a name or path lookup searches. */
+int icons_total(void);
+
 const Icon *icon_at(int i);
 
 /* The app behind an icon, or NULL for firmware. */

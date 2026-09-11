@@ -12,7 +12,8 @@
 #include <string.h>
 
 static Icon s_icon[MAX_ICONS];
-static int  s_nicon;
+static int  s_nicon;      /* everything found */
+static int  s_nvisible;   /* everything with an icon, sorted to the front */
 
 /* The .capp binaries are carried in the firmware and written out to the card.
  * There is no card reader in the loop, so an app that can only arrive by
@@ -151,6 +152,7 @@ static void scan(const char *dir, int bin_only) {
     if (ends_with(e.name, n, ".bin")) {
       ic->kind = ICON_FIRMWARE;
       ic->slot = -1;
+      ic->cli = 0;
       snprintf(ic->name, sizeof ic->name, "%.*s", (int)(n - 4), e.name);
     } else if (bin_only) {
       continue;
@@ -163,9 +165,11 @@ static void scan(const char *dir, int bin_only) {
       if (ic->slot < 0) continue;
       def = capprun_def(ic->slot);
       ic->kind = ICON_CAPP;
+      ic->cli = def->cli;
       snprintf(ic->name, sizeof ic->name, "%s", def->name);
     } else if (ends_with(e.name, n, ".app")) {
       char stem[20];
+      ic->cli = 0;
       snprintf(stem, sizeof stem, "%.*s", (int)(n - 4), e.name);
       ic->slot = app_index_by_name(stem);
       if (ic->slot < 0) continue;            /* names an app we do not have */
@@ -179,17 +183,33 @@ static void scan(const char *dir, int bin_only) {
   fs_closedir(&d);
 }
 
+/* Stable partition: visible entries keep their order, commands move to the
+ * end keeping theirs. The carousel can then walk 0..icons_count()-1 with no
+ * gaps, and a lookup still sees everything. */
+static void partition_cli(void) {
+  Icon tmp[MAX_ICONS];
+  int i, n = 0;
+
+  for (i = 0; i < s_nicon; i++) if (!s_icon[i].cli) tmp[n++] = s_icon[i];
+  s_nvisible = n;
+  for (i = 0; i < s_nicon; i++) if (s_icon[i].cli) tmp[n++] = s_icon[i];
+  for (i = 0; i < s_nicon; i++) s_icon[i] = tmp[i];
+}
+
 void icons_reload(void) {
   s_nicon = 0;
+  s_nvisible = 0;
   capprun_unload_all();
   if (!fs_mounted()) return;
 
   seed_dir();
   scan(ICONS_DIR, 0);
   scan(FIRMWARE_DIR, 1);
+  partition_cli();
 }
 
-int icons_count(void) { return s_nicon; }
+int icons_count(void) { return s_nvisible; }
+int icons_total(void) { return s_nicon; }
 
 const Icon *icon_at(int i) {
   if (i < 0 || i >= s_nicon) return NULL;
