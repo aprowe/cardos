@@ -59,7 +59,11 @@ static int s_help;
 #define ICON_H     34
 #define ICON_BOX   16
 
-static int  s_sel_icon = -1;
+/* Whether the icons have the keyboard rather than a window. With no windows
+ * open it is the only thing that could, so it starts true; Tab moves it
+ * between the windows and the desktop, the way Tab moves focus anywhere. */
+static int  s_icon_focus = 1;
+static int  s_sel_icon = 0;
 static int  s_last_icon = -1;
 static uint32_t s_last_click_ms;
 
@@ -160,6 +164,27 @@ labelled:
     draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   }
 }
+
+/* Move the selection by a whole row or a single icon, and repaint only the two
+ * that changed -- a full repaint for a selection frame is what made the Start
+ * menu flicker, and the same would happen here. */
+static void select_icon(int delta) {
+  int n = icons_count();
+  int was = s_sel_icon;
+
+  if (n == 0) return;
+  if (s_sel_icon < 0) s_sel_icon = 0;
+  else s_sel_icon += delta;
+
+  if (s_sel_icon < 0) s_sel_icon = 0;
+  if (s_sel_icon >= n) s_sel_icon = n - 1;
+  if (s_sel_icon == was) return;
+
+  if (was >= 0 && was < n) wm_damage(icon_rect(was));
+  wm_damage(icon_rect(s_sel_icon));
+}
+
+static int icons_per_row(void) { return DISPLAY_W / ICON_W; }
 
 /* ---------------------------------------------------------- chrome ------ */
 
@@ -458,6 +483,13 @@ static void launch_icon(int i) {
   desktop_repaint();
 }
 
+/* Enter on the selected icon, which is the same thing a double click does. */
+static void launch_icon(int i);
+
+static void launch_selected(void) {
+  if (s_sel_icon >= 0 && s_sel_icon < icons_count()) launch_icon(s_sel_icon);
+}
+
 void desktop_icon_click(int16_t x, int16_t y) {
   uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
   int i, hit = -1;
@@ -466,9 +498,13 @@ void desktop_icon_click(int16_t x, int16_t y) {
     if (rect_contains(icon_rect(i), x, y)) { hit = i; break; }
 
   if (hit < 0) {
-    if (s_sel_icon >= 0) { s_sel_icon = -1; desktop_repaint(); }
+    /* Clicking bare desktop gives the keyboard back to the icons without
+     * clearing the selection: something has to stay selected for an arrow key
+     * to mean anything. */
+    if (!s_icon_focus) { s_icon_focus = 1; desktop_repaint(); }
     return;
   }
+  s_icon_focus = 1;
 
   /* Two clicks on the same icon within half a second is a double click. */
   if (hit == s_last_icon && now - s_last_click_ms < 500) {
@@ -512,6 +548,7 @@ static void open_def_ex(const AppDef *a, int fresh) {
   s_app[s_nwin] = a;
   s_scroll[s_nwin] = 0;
   s_nwin++;
+  s_icon_focus = 0;            /* the new window has the keyboard */
 }
 
 static void close_focused(void);
@@ -564,18 +601,34 @@ static void close_focused(void) {
     s_nwin--;
     break;
   }
+  if (s_nwin == 0) s_icon_focus = 1;
 }
 
+/* Tab walks the windows and then the desktop, and round again. The desktop is
+ * a focus target like any other here: with a window open there would otherwise
+ * be no way back to the icons without reaching for the mouse. */
 static void cycle_focus(void) {
   WinId f = wm_focus();
   int i;
-  if (s_nwin < 2) return;
-  for (i = 0; i < s_nwin; i++) {
-    if (s_win[i] == f) {
-      wm_raise(s_win[(i + 1) % s_nwin]);
-      return;
-    }
+
+  if (s_nwin == 0) { s_icon_focus = 1; return; }
+
+  if (s_icon_focus) {              /* desktop -> the bottom window */
+    s_icon_focus = 0;
+    wm_raise(s_win[0]);
+    desktop_repaint();
+    return;
   }
+
+  for (i = 0; i < s_nwin; i++) {
+    if (s_win[i] != f) continue;
+    if (i + 1 < s_nwin) wm_raise(s_win[i + 1]);
+    else s_icon_focus = 1;         /* the last window -> the desktop */
+    desktop_repaint();
+    return;
+  }
+  s_icon_focus = 1;
+  desktop_repaint();
 }
 
 static void nudge(int16_t dx, int16_t dy) {
@@ -597,7 +650,7 @@ int desktop_key(uint8_t key) {
                     : (wm_focus() != WIN_NONE ? app_of(wm_focus()) : NULL);
     s_help = 1;
     help_paint(a ? a->name : "Desktop", a ? a->help : NULL,
-               "ctrl-s\tstart menu\nctrl-f\tfullscreen / window\nctrl-w\tclose window\nctrl-p\tkeyboard pointer\ntab\tnext window\nescape\tthe console\nctrl-h\tclose this\n");
+               "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nctrl-s\tstart menu\nctrl-f\tfullscreen / window\nctrl-w\tclose window\nescape\tthe console\nctrl-h\tclose this\n");
     return 0;
   }
 
@@ -667,6 +720,21 @@ int desktop_key(uint8_t key) {
       r.buttons = s_kbd_btn ? MOUSE_LEFT : 0;
       desktop_mouse(&r);
       return 0;
+    default: break;
+    }
+  }
+
+  /* The icons have the keyboard when no window does. Arrows move the
+   * selection, enter or space opens it -- the same two gestures the carousel
+   * uses, so the two shells do not need learning separately. */
+  if (s_icon_focus || wm_focus() == WIN_NONE) {
+    switch (key) {
+    case KEY_LEFT:  select_icon(-1); desktop_flush(); return 0;
+    case KEY_RIGHT: select_icon(1);  desktop_flush(); return 0;
+    case KEY_UP:    select_icon(-icons_per_row()); desktop_flush(); return 0;
+    case KEY_DOWN:  select_icon(icons_per_row());  desktop_flush(); return 0;
+    case KEY_ENTER:
+    case ' ':       launch_selected(); return 0;
     default: break;
     }
   }
@@ -781,6 +849,8 @@ void desktop_init(void) {
   s_start_open = 0;
   s_start_sel = 0;
   s_full = NULL;
+  s_icon_focus = 1;
+  s_sel_icon = 0;
   for (i = 0; i < MAX_OPEN; i++) { s_win[i] = WIN_NONE; s_app[i] = NULL; }
 
   desktop_reload_icons();
