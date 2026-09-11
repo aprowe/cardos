@@ -211,16 +211,31 @@ the one command that does not return.
 
 ## Success criteria
 
-1. `apps` lists the real firmware on the card with project names and versions.
-2. `boot cardlet` runs unmodified third-party Cardputer firmware.
-3. Pressing reset afterwards returns to CardOS, with no key held and no
-   cooperation from the guest.
-4. A truncated, wrong-chip, or full-flash-dump image is refused with a clear
-   message, without touching `ota_0`.
-5. A guest that uses LittleFS finds its data partition.
-6. `cardlet.bin` reaches WiFi without crashing — the bootloader-version risk.
-7. Launching the same app twice does not re-copy it.
-8. CardOS survives its own OTA update rather than rolling itself back.
+Verified on hardware 2026-09-10 unless noted.
+
+1. **Done.** `apps` lists the real firmware on the card with project names and
+   versions read out of each app descriptor: clock, cardlet, sdfiles,
+   slideshow.
+2. **Done.** `boot! clock` copied 419 KB from SD into `ota_0`, verified it,
+   armed the rollback, and restarted into it. The guest ran.
+3. **Done.** Pressing reset afterwards returned to CardOS: the bootloader
+   logged `Defaulting to factory image` with no key held and no cooperation
+   from the guest, which is exactly the mechanism this spec is built on.
+4. **Partly.** `boot nosuchapp` is refused cleanly. The truncated, wrong-chip
+   and full-flash-dump paths are covered by host tests but have not yet been
+   fed to the device as real files.
+5. **Not yet tested.** No guest that uses LittleFS has been run.
+6. **Not yet tested.** `cardlet.bin` has not been booted, so the
+   bootloader-version risk below is still open. `clock.bin` is a Rust firmware
+   that does not bring up WiFi, so it does not exercise it.
+7. **Not yet implemented.** Re-flash avoidance; every launch re-copies.
+8. **Not yet tested.** CardOS has only ever run from `factory`, never from an
+   OTA slot, so its own self-validation path is unexercised.
+
+Recorded from the run: `bootinfo` reads the guest slot straight out of flash
+and reported the previous occupant (a 554 KB Arduino app left there by
+CardLaunch) before the copy, and `libespidf f903451-dirty 419K` after -- which
+also confirms the `allow_trailing` parse works against a real partition.
 
 ## Deliberately not in scope
 
