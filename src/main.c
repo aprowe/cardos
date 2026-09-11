@@ -241,7 +241,11 @@ void app_main(void) {
       /* Drain whatever the radio queued. It arrives on the Bluetooth task,
        * which must not touch the display, so this is where it turns into
        * pointer movement. */
-      while (btmouse_poll(&mr)) desktop_mouse(&mr);
+      {
+        int got = 0;
+        while (btmouse_poll(&mr)) { desktop_mouse_apply(&mr); got = 1; }
+        if (got) desktop_mouse_done();   /* one repaint for the whole burst */
+      }
       desktop_tick((uint32_t)(esp_timer_get_time() / 1000));
       if (k && desktop_key(k)) {
         /* ESC left the desktop: hand the screen back to the console. */

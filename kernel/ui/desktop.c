@@ -80,10 +80,11 @@ static void paint_window(WinId w, Rect clip) {
   {
     const AppDef *a = app_of(w);
     Rect inner = rect_inset(content, 2);
-    if (a->paint && !rect_is_empty(inner)) {
+    Rect vis = rect_intersect(clip, inner);
+    if (a->paint && !rect_is_empty(vis)) {
       /* Confine the app to its own content well: an app that draws too far
        * must not be able to scribble over another window's chrome. */
-      draw_set_clip(rect_intersect(clip, inner));
+      draw_set_clip(vis);
       a->paint(a->state, inner);
     }
   }
@@ -347,6 +348,15 @@ void desktop_set_kbd_mouse(int on) {
 }
 
 void desktop_mouse(const MouseReport *r) {
+  desktop_mouse_apply(r);
+  desktop_mouse_done();
+}
+
+void desktop_mouse_done(void) {
+  desktop_flush();        /* draws the pointer last, on top of everything */
+}
+
+void desktop_mouse_apply(const MouseReport *r) {
   Rect before = cursor_rect();
   WinId hit;
 
@@ -366,8 +376,6 @@ void desktop_mouse(const MouseReport *r) {
     if (f != WIN_NONE)
       wm_move(f, (int16_t)(mouse_x() - s_drag_dx), (int16_t)(mouse_y() - s_drag_dy));
     if (mouse_released(MOUSE_LEFT)) s_dragging = 0;
-    desktop_flush();
-    draw_pointer();
     return;
   }
 
@@ -378,7 +386,6 @@ void desktop_mouse(const MouseReport *r) {
       if (mouse_y() >= DESK_H && mouse_x() < 38) {
         s_start_open = !s_start_open;
         desktop_repaint();
-        draw_pointer();
         return;
       }
     } else {
@@ -387,7 +394,6 @@ void desktop_mouse(const MouseReport *r) {
       if (what == WM_HIT_CLOSE) {
         close_focused();
         desktop_repaint();
-        draw_pointer();
         return;
       }
       if (what == WM_HIT_TITLE || what == WM_HIT_BORDER) {

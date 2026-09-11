@@ -30,35 +30,54 @@ static void about_paint(void *state, Rect c) {
 
 /* ------------------------------------------------------------- Files ---- */
 
-typedef struct { int top; } FilesState;
+/* The listing is cached rather than read in paint. Reading the card inside a
+ * paint callback meant every cursor movement that crossed this window did SD
+ * SPI I/O -- tens of milliseconds each -- which is what made the mouse lag.
+ * A paint callback has to be cheap, because damage repaints it. */
+#define FILES_MAX 24
+#define FILES_NAME 26
+typedef struct {
+  int  top;
+  int  count;
+  char name[FILES_MAX][FILES_NAME];
+} FilesState;
 static FilesState s_files;
+
+static void files_reload(FilesState *st) {
+  FsDir d;
+  FsEntry e;
+  st->count = 0;
+  if (fs_opendir("/", &d) != 0) return;
+  while (st->count < FILES_MAX && fs_readdir(&d, &e) == 1) {
+    snprintf(st->name[st->count], FILES_NAME, "%.24s%s", e.name,
+             e.is_dir ? "/" : "");
+    st->count++;
+  }
+  fs_closedir(&d);
+}
 
 static void files_paint(void *state, Rect c) {
   FilesState *st = (FilesState *)state;
-  FsDir d;
-  FsEntry e;
-  int i = 0, shown = 0;
-  int rows = c.h / LINE_H;
-  char buf[40];
+  int rows = c.h / LINE_H, i;
 
-  if (fs_opendir("/", &d) != 0) { line(c, 0, "no card"); return; }
-  while (fs_readdir(&d, &e) == 1 && shown < rows) {
-    if (i++ < st->top) continue;
-    snprintf(buf, sizeof buf, "%.24s%s", e.name, e.is_dir ? "/" : "");
-    line(c, shown++, buf);
-  }
-  fs_closedir(&d);
-  if (shown == 0) line(c, 0, "(end)");
+  if (st->count == 0) { line(c, 0, "no card"); return; }
+  for (i = 0; i < rows && st->top + i < st->count; i++)
+    line(c, i, st->name[st->top + i]);
 }
 
 static int files_key(void *state, uint8_t k) {
   FilesState *st = (FilesState *)state;
-  if (k == 'j' || k == 0x81 /*down*/) { st->top++; return 1; }
-  if ((k == 'k' || k == 0x80 /*up*/) && st->top > 0) { st->top--; return 1; }
+  if ((k == 'j' || k == 0x81) && st->top + 1 < st->count) { st->top++; return 1; }
+  if ((k == 'k' || k == 0x80) && st->top > 0) { st->top--; return 1; }
+  if (k == 'r' || k == 'R') { files_reload(st); return 1; }   /* rescan */
   return 0;
 }
 
-static void files_open(void *state) { ((FilesState *)state)->top = 0; }
+static void files_open(void *state) {
+  FilesState *st = (FilesState *)state;
+  st->top = 0;
+  files_reload(st);
+}
 
 /* ------------------------------------------------------------ Memory ---- */
 

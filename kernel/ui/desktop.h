@@ -33,6 +33,12 @@ void desktop_tick(uint32_t ms);
  * the close box. Safe to call whether or not a real mouse exists. */
 void desktop_mouse(const MouseReport *r);
 
+/* Apply a report without repainting, then repaint once. A mouse sends reports
+ * far faster than the panel can be redrawn, and repainting per report is what
+ * makes it flicker and lag rather than move. */
+void desktop_mouse_apply(const MouseReport *r);
+void desktop_mouse_done(void);
+
 /* Keyboard-driven pointer, for when no mouse is paired. Arrows move it and
  * space clicks -- which is also how the whole interaction path gets tested
  * before the radio exists. */
