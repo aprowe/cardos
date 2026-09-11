@@ -1,10 +1,13 @@
 idf_component_register(
   SRCS
     "main.c"
+    "shellcmd.c"
     "../kernel/drv/display.c"
     "../kernel/drv/keyboard.c"
     "../kernel/console/console.c"
     "../kernel/task/sched.c"
+    "../kernel/fs/path.c"
+    "../kernel/fs/fs_fat.c"
     "../kernel/mem/mem.c"
     "../kernel/swap/swap.c"
     "../kernel/app/appimage.c"
@@ -14,6 +17,8 @@ idf_component_register(
   REQUIRES
     driver
     esp_lcd
+    fatfs
+    sdmmc
     app_update
     esp_timer
 )

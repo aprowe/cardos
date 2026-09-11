@@ -21,6 +21,8 @@
 #include "drv/keyboard.h"
 #include "mem/mem.h"
 #include "task/sched.h"
+#include "fs/fs.h"
+#include "shellcmd.h"
 
 #define CARDOS_LINE_MAX 63
 
@@ -37,7 +39,7 @@ static int      s_len;
 
 static void prompt(void) {
   con_set_color(COLOR_AMBER);
-  con_write("cardos> ");
+  con_printf("%s> ", shell_cwd());
   con_set_color(COLOR_GREEN);
 }
 
@@ -77,26 +79,41 @@ static void cmd_ps(void) {
 }
 
 static void cmd_help(void) {
-  con_write("help   this list\n");
-  con_write("mem    memory statistics\n");
-  con_write("ps     list tasks\n");
-  con_write("clear  clear the screen\n");
-  con_write("echo   print the rest of the line\n");
-  con_write("reboot restart the device\n");
+  con_write("ls cd pwd cat mkdir rm df apps\n");
+  con_write("mem ps clear echo reboot help\n");
 }
 
-/* A stand-in for the real shell, which needs the scheduler and filesystem. */
+/* A stand-in for the real shell, which needs the context switch so it can run
+ * as a task and block on the keyboard rather than polling it. */
 static void run_line(char *line) {
+  char *arg;
+
   while (*line == ' ') line++;
   if (*line == 0) return;
+
+  /* Split off the first argument at the first space. */
+  arg = strchr(line, ' ');
+  if (arg) {
+    *arg++ = '\0';
+    while (*arg == ' ') arg++;
+  } else {
+    arg = line + strlen(line);      /* empty, never NULL */
+  }
 
   if (!strcmp(line, "help"))        cmd_help();
   else if (!strcmp(line, "mem"))    cmd_mem();
   else if (!strcmp(line, "ps"))     cmd_ps();
+  else if (!strcmp(line, "ls"))     cmd_ls(arg);
+  else if (!strcmp(line, "cd"))     cmd_cd(arg);
+  else if (!strcmp(line, "pwd"))    cmd_pwd();
+  else if (!strcmp(line, "cat"))    cmd_cat(arg);
+  else if (!strcmp(line, "mkdir"))  cmd_mkdir(arg);
+  else if (!strcmp(line, "rm"))     cmd_rm(arg);
+  else if (!strcmp(line, "df"))     cmd_df();
+  else if (!strcmp(line, "apps"))   cmd_apps();
   else if (!strcmp(line, "clear"))  con_clear();
   else if (!strcmp(line, "reboot")) esp_restart();
-  else if (!strncmp(line, "echo ", 5)) { con_write(line + 5); con_putc('\n'); }
-  else if (!strcmp(line, "echo"))   con_putc('\n');
+  else if (!strcmp(line, "echo"))   { con_write(arg); con_putc('\n'); }
   else con_printf("unknown command: %s\n", line);
 }
 
@@ -153,6 +170,22 @@ void app_main(void) {
   sched_init(clock_ms, NULL);
   sched_create("shell");
   sched_next();                  /* mark it running, so it owns its locks */
+
+  /* A missing card is a normal condition, not a boot failure: CardOS runs
+   * without one, just without apps or swap. Say which, rather than leaving
+   * the user to guess why `ls` is empty. */
+  if (fs_mount() == 0) {
+    uint64_t total = 0, freeb = 0;
+    fs_ensure_layout();
+    fs_space(&total, &freeb);
+    con_printf("sd %u MB, %u MB free\n",
+               (unsigned)(total / (1024 * 1024)),
+               (unsigned)(freeb / (1024 * 1024)));
+  } else {
+    con_set_color(COLOR_GREY);
+    con_write("no sd card: no apps, no swap\n");
+    con_set_color(COLOR_GREEN);
+  }
 
   /* Success criterion 6: the free heap is reported and understood. */
   con_printf("heap %u KB free at boot\n", (unsigned)(heap_at_boot / 1024));
