@@ -41,6 +41,8 @@ static int   s_nwin;
  * picture viewer worth having on a 240x135 screen. */
 static const AppDef *s_full;
 static int s_full_dirty;
+static int s_full_clear;     /* the desktop is still on the panel underneath */
+static Rect s_full_rect;
 
 /* The pointer can also ask to leave for the console, and a mouse handler has
  * no return value that reaches the main loop. */
@@ -358,11 +360,24 @@ static void paint_job(void *ctx, WinId w, Rect r) {
  * to merge and no window to clip against -- the render loop is one call into
  * the app's paint with the screen as its rectangle. */
 static void paint_fullscreen(void) {
-  Rect all = R(0, 0, DISPLAY_W, DISPLAY_H);
   if (!s_full_dirty) return;
   s_full_dirty = 0;
-  draw_set_clip(all);
-  if (s_full->paint) s_full->paint(s_full->state, all);
+
+  /* The desktop is still on the panel when an app takes it over, and an app
+   * that does not cover every pixel would otherwise be drawn on top of it.
+   * Once on entry, not per frame: per frame would flicker. */
+  if (s_full_clear) {
+    s_full_clear = 0;
+    draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+    draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
+    draw_rect(s_full_rect, C_WHITE);
+    if (s_full_rect.w < DISPLAY_W || s_full_rect.h < DISPLAY_H)
+      draw_frame(rect_inset(s_full_rect, -1), C_SHADOW);
+  }
+
+  draw_set_clip(s_full_rect);
+  if (s_full->paint) s_full->paint(s_full->state, s_full_rect);
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
 }
 
 void desktop_flush(void) {
@@ -412,8 +427,13 @@ static void launch_icon(int i) {
   if (ic->kind == ICON_CAPP) capprun_set_file(ic->slot, ic->path);
 
   if (ic->kind == ICON_CAPP && capprun_fullscreen(ic->slot)) {
+    int16_t w = DISPLAY_W, h = DISPLAY_H;
+    if (a->pref_w > 0 && a->pref_w < w) w = a->pref_w;
+    if (a->pref_h > 0 && a->pref_h < h) h = a->pref_h;
     if (a->open) a->open(a->state);
     s_full = a;
+    s_full_rect = R((DISPLAY_W - w) / 2, (DISPLAY_H - h) / 2, w, h);
+    s_full_clear = 1;
     s_full_dirty = 1;
     desktop_flush();
     return;
@@ -740,7 +760,9 @@ void desktop_mouse_apply(const MouseReport *r) {
             : mouse_pressed(MOUSE_RIGHT) ? MOUSE_RIGHT : 0;
     s_cursor_on = 0;
     if (btn && s_full->click &&
-        s_full->click(s_full->state, (int16_t)mouse_x(), (int16_t)mouse_y(), btn)) {
+        rect_contains(s_full_rect, (int16_t)mouse_x(), (int16_t)mouse_y()) &&
+        s_full->click(s_full->state, (int16_t)(mouse_x() - s_full_rect.x),
+                      (int16_t)(mouse_y() - s_full_rect.y), btn)) {
       s_full_dirty = 1;
       desktop_flush();
     }

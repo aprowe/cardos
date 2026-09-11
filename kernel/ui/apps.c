@@ -1,5 +1,12 @@
 /* The built-in apps. See app.h. */
 
+/* Every paint callback clears its own rectangle first.
+ *
+ * These used to rely on the desktop filling the content well before calling
+ * them, which worked right up until the launcher started hosting them
+ * fullscreen -- and then they drew over whatever was already on the panel. An
+ * app that paints all of itself works under any host, which is the property
+ * worth having. */
 #include "kernel/ui/app.h"
 #include "kernel/ui/settings.h"
 #include "kernel/ui/draw.h"
@@ -22,6 +29,7 @@ static void line(Rect c, int n, const char *s) {
 static void about_paint(void *state, Rect c) {
   char buf[40];
   (void)state;
+  draw_rect(c, C_WHITE);
   line(c, 0, "CardOS 0.1");
   line(c, 1, "M5Stack Cardputer");
   snprintf(buf, sizeof buf, "heap %uK free",
@@ -62,6 +70,7 @@ static void files_paint(void *state, Rect c) {
   FilesState *st = (FilesState *)state;
   int rows = c.h / LINE_H, i;
 
+  draw_rect(c, C_WHITE);
   if (st->count == 0) { line(c, 0, "no card"); return; }
   for (i = 0; i < rows && st->top + i < st->count; i++)
     line(c, i, st->name[st->top + i]);
@@ -87,6 +96,7 @@ static void mem_paint(void *state, Rect c) {
   MemStats st;
   char buf[40];
   (void)state;
+  draw_rect(c, C_WHITE);
   kmem_stats(&st);
   snprintf(buf, sizeof buf, "heap   %uK", (unsigned)(st.heap_size / 1024));
   line(c, 0, buf);

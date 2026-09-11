@@ -58,6 +58,8 @@ static char     s_note[48];
 /* The app currently running fullscreen, or NULL for the carousel. */
 static const AppDef *s_app;
 static int            s_app_dirty;
+static int            s_app_clear;    /* the screen still has the carousel on it */
+static Rect           s_app_rect;
 
 static Rect R(int x, int y, int w, int h) {
   Rect r;
@@ -164,10 +166,35 @@ static void paint_carousel(void) {
   paint_pips(n);
 }
 
+/* Where an app sits. One that asked for a size smaller than the panel gets
+ * exactly that, centred, rather than being stretched -- Minesweeper's board is
+ * 90x106 and has no meaningful way to fill 240x135. */
+static Rect app_rect(const AppDef *a) {
+  int16_t w = DISPLAY_W, h = DISPLAY_H;
+  if (a->pref_w > 0 && a->pref_w < w) w = a->pref_w;
+  if (a->pref_h > 0 && a->pref_h < h) h = a->pref_h;
+  return R((DISPLAY_W - w) / 2, (DISPLAY_H - h) / 2, w, h);
+}
+
 static void paint_app(void) {
-  Rect all = R(0, 0, DISPLAY_W, DISPLAY_H);
-  draw_set_clip(all);
-  if (s_app->paint) s_app->paint(s_app->state, all);
+  /* The carousel is still on the panel when an app opens, and an app that does
+   * not cover every pixel would otherwise be drawn on top of it. Clearing is
+   * done once on entry rather than every frame: doing it per frame would make
+   * anything that repaints itself flicker. */
+  if (s_app_clear) {
+    s_app_clear = 0;
+    draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+    draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
+    draw_rect(s_app_rect, C_WHITE);
+    if (s_app_rect.w < DISPLAY_W || s_app_rect.h < DISPLAY_H)
+      draw_frame(rect_inset(s_app_rect, -1), C_SHADOW);
+  }
+
+  /* Clipped to its own rectangle, so an app that draws past its declared size
+   * cannot scribble over the surround it does not own. */
+  draw_set_clip(s_app_rect);
+  if (s_app->paint) s_app->paint(s_app->state, s_app_rect);
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
 }
 
 static void flush(void) {
@@ -223,6 +250,8 @@ static void launch(int i) {
   /* Everything runs fullscreen here, whatever size it asked for: there is no
    * desktop behind it for a window to sit on. */
   s_app = a;
+  s_app_rect = app_rect(a);
+  s_app_clear = 1;
   s_app_dirty = 1;
   flush();
 }
@@ -324,8 +353,11 @@ void launchui_mouse_apply(const MouseReport *r) {
   mouse_take_moved();
 
   if (s_app) {
-    if (btn && s_app->click &&
-        s_app->click(s_app->state, (int16_t)mouse_x(), (int16_t)mouse_y(), btn)) {
+    int16_t lx = (int16_t)(mouse_x() - s_app_rect.x);
+    int16_t ly = (int16_t)(mouse_y() - s_app_rect.y);
+    if (btn && s_app->click && rect_contains(s_app_rect, (int16_t)mouse_x(),
+                                             (int16_t)mouse_y()) &&
+        s_app->click(s_app->state, lx, ly, btn)) {
       s_app_dirty = 1;
       flush();
     }
