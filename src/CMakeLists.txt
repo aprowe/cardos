@@ -25,4 +25,5 @@ idf_component_register(
     sdmmc
     app_update
     esp_timer
+    esp_driver_usb_serial_jtag
 )

@@ -15,6 +15,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "esp_partition.h"
 
 #include "console/console.h"
 #include "drv/display.h"
@@ -115,6 +116,12 @@ static void run_line(char *line) {
   else if (!strcmp(line, "boot"))   cmd_boot(arg, 0);
   else if (!strcmp(line, "boot!"))  cmd_boot(arg, 1);
   else if (!strcmp(line, "bootinfo")) cmd_bootinfo();
+  else if (!strcmp(line, "flip")) {
+    display_set_orient(display_orient() + 1);
+    con_clear();
+    con_printf("orientation %d of %d\n", display_orient(), DISPLAY_ORIENTS);
+    con_write("flip again if this is not right\n");
+  }
   else if (!strcmp(line, "clear"))  con_clear();
   else if (!strcmp(line, "reboot")) esp_restart();
   else if (!strcmp(line, "echo"))   { con_write(arg); con_putc('\n'); }
@@ -132,9 +139,16 @@ void app_main(void) {
   int blink = 0;
   size_t heap_at_boot;
 
-  /* Tell the bootloader this image is good. Without it, an OTA-updated CardOS
-   * would roll itself back on the next reset -- see the app launcher spec. */
-  esp_ota_mark_app_valid_cancel_rollback();
+  /* Tell the bootloader this image is good, so an OTA-updated CardOS does not
+   * roll itself back on the next reset -- see the app launcher spec. Only
+   * meaningful from an OTA slot: running from factory it just logs an error,
+   * which is noise on every boot. */
+  {
+    const esp_partition_t *self = esp_ota_get_running_partition();
+    if (self && self->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
+        self->subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_15)
+      esp_ota_mark_app_valid_cancel_rollback();
+  }
 
   if (display_init() != 0) {
     /* Nothing to show it on, so the serial port is the only channel left. */
@@ -142,6 +156,7 @@ void app_main(void) {
     return;
   }
   con_init();
+  con_set_serial(1);      /* same text on the panel and the wire */
   display_backlight(1);
 
   con_set_color(COLOR_WHITE);
@@ -201,6 +216,16 @@ void app_main(void) {
 
   for (;;) {
     uint8_t k = keyboard_poll();
+
+    /* A character arriving on the serial console counts as a keypress, so the
+     * shell can be driven from a PC as well as from the keyboard. */
+    if (!k) {
+      int sc = con_serial_key();
+      if (sc == '\r' || sc == '\n') k = KEY_ENTER;
+      else if (sc == 0x7F || sc == 0x08) k = KEY_BACKSPACE;
+      else if (sc == 0x1B) k = KEY_ESC;
+      else if (sc > 0) k = (uint8_t)sc;
+    }
 
     if (k) {
       con_cursor(0);

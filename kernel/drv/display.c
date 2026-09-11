@@ -41,6 +41,36 @@
 static const char *TAG = "display";
 static esp_lcd_panel_handle_t s_panel;
 
+/* mirror_x, mirror_y, x_gap, y_gap. swap_xy is always on: the panel is
+ * natively portrait and CardOS is landscape. */
+static const struct { int mx, my, gx, gy; } ORIENT[DISPLAY_ORIENTS] = {
+  { 0, 0, GAP_PORTRAIT_Y, GAP_PORTRAIT_X     },
+  { 1, 0, GAP_PORTRAIT_Y, GAP_PORTRAIT_X     },
+  { 0, 1, GAP_PORTRAIT_Y, GAP_PORTRAIT_X     },
+  { 1, 1, GAP_PORTRAIT_Y, GAP_PORTRAIT_X     },
+  { 0, 0, GAP_PORTRAIT_Y, GAP_PORTRAIT_X + 1 },
+  { 1, 0, GAP_PORTRAIT_Y, GAP_PORTRAIT_X + 1 },
+  { 0, 1, GAP_PORTRAIT_Y, GAP_PORTRAIT_X + 1 },
+  { 1, 1, GAP_PORTRAIT_Y, GAP_PORTRAIT_X + 1 },
+};
+
+/* Confirmed on the real panel 2026-09-10: orientation 2 came out upside down,
+ * so both mirror axes invert. If the image is ever a pixel out at an edge, the
+ * +1 x-gap variants are indices 4..7 -- use the `flip` command to find it
+ * rather than guessing. */
+#define DISPLAY_ORIENT_DEFAULT 1
+static int s_orient = DISPLAY_ORIENT_DEFAULT;
+
+int display_orient(void) { return s_orient; }
+
+void display_set_orient(int n) {
+  if (!s_panel) return;
+  s_orient = ((n % DISPLAY_ORIENTS) + DISPLAY_ORIENTS) % DISPLAY_ORIENTS;
+  esp_lcd_panel_swap_xy(s_panel, true);
+  esp_lcd_panel_mirror(s_panel, ORIENT[s_orient].mx, ORIENT[s_orient].my);
+  esp_lcd_panel_set_gap(s_panel, ORIENT[s_orient].gx, ORIENT[s_orient].gy);
+}
+
 int display_init(void) {
   esp_lcd_panel_io_handle_t io = NULL;
 
@@ -94,9 +124,7 @@ int display_init(void) {
   esp_lcd_panel_reset(s_panel);
   esp_lcd_panel_init(s_panel);
   esp_lcd_panel_invert_color(s_panel, true);   /* these panels are inverted */
-  esp_lcd_panel_swap_xy(s_panel, true);        /* portrait 135x240 -> 240x135 */
-  esp_lcd_panel_mirror(s_panel, false, true);
-  esp_lcd_panel_set_gap(s_panel, GAP_PORTRAIT_Y, GAP_PORTRAIT_X);
+  display_set_orient(s_orient);
   esp_lcd_panel_disp_on_off(s_panel, true);
 
   display_fill(COLOR_BLACK);

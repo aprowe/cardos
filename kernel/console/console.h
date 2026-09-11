@@ -21,4 +21,12 @@ void con_cursor(int visible);
 
 void con_set_color(uint16_t fg);
 
+/* Mirror everything the console prints to stdout as well as the panel, and
+ * let characters arriving on stdin act as keypresses. The Cardputer's screen
+ * is 40x16 and cannot be photographed into a bug report, so having the same
+ * text on the wire is the difference between debugging and guessing. Costs
+ * nothing when nothing is listening. */
+void con_set_serial(int on);
+int  con_serial_key(void);   /* next character from stdin, or 0 */
+
 #endif /* CARDOS_CONSOLE_H */

@@ -17,11 +17,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h" 
+
 static char     s_grid[CON_ROWS][CON_COLS];
 static int      s_cx, s_cy;
 static uint16_t s_fg = COLOR_GREEN;      /* a terminal, obviously */
 static uint16_t s_bg = COLOR_BLACK;
 static int      s_cursor_on;
+static int      s_serial;
 
 /* One character cell, expanded to pixels on the way out. */
 static uint16_t s_cell[FONT_W * FONT_H];
@@ -76,7 +80,31 @@ void con_clear(void) {
   display_fill(s_bg);
 }
 
+void con_set_serial(int on) {
+  usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+
+  s_serial = 0;
+  if (!on) return;
+
+  /* Read through the driver rather than fgetc(stdin). The console VFS ignores
+   * O_NONBLOCK, so fgetc blocks forever with nothing to read -- which wedged
+   * the whole main loop, keyboard included, on the first attempt.
+   * usb_serial_jtag_read_bytes with a zero timeout genuinely does not block. */
+  if (usb_serial_jtag_driver_install(&cfg) != ESP_OK) return;
+  usb_serial_jtag_vfs_use_driver();
+  setvbuf(stdout, NULL, _IONBF, 0);
+  s_serial = 1;
+}
+
+int con_serial_key(void) {
+  uint8_t c;
+  if (!s_serial) return 0;
+  if (usb_serial_jtag_read_bytes(&c, 1, 0) != 1) return 0;
+  return (int)c;
+}
+
 void con_putc(char c) {
+  if (s_serial) fputc(c, stdout);
   if (s_cursor_on) { draw_cell(s_cx, s_cy, s_grid[s_cy][s_cx], 0); s_cursor_on = 0; }
 
   switch (c) {
