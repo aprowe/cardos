@@ -42,6 +42,17 @@ void desktop_mouse_done(void);
 /* Keyboard-driven pointer, for when no mouse is paired. Arrows move it and
  * space clicks -- which is also how the whole interaction path gets tested
  * before the radio exists. */
+/* Icons live in /desktop on the card: NAME.app opens a built-in app, and any
+ * .bin is a firmware to chain-boot. Clicking selects, double-clicking runs. */
+void desktop_icon_click(int16_t x, int16_t y);
+void desktop_reload_icons(void);
+
+/* Remembered across a reboot: set when the desktop launches a firmware, so
+ * that the rollback after the guest is reset lands back on the desktop rather
+ * than at a console the user never asked for. */
+void desktop_set_autostart(int on);
+int  desktop_autostart(void);
+
 void desktop_set_kbd_mouse(int on);
 int  desktop_kbd_mouse(void);
 

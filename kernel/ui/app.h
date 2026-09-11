@@ -31,6 +31,10 @@ typedef struct {
    * repainting as a result. */
   int (*key)(void *state, uint8_t k);
 
+  /* A click landed in the content area, in content-relative pixels. Return 1
+   * if the window needs repainting. */
+  int (*click)(void *state, int16_t x, int16_t y, int button);
+
   /* Called when a window opens, so a second instance starts clean. */
   void (*open)(void *state);
 
@@ -40,5 +44,6 @@ typedef struct {
 /* The apps the Start menu offers. */
 int            app_count(void);
 const AppDef  *app_at(int i);
+int            app_index_by_name(const char *name);
 
 #endif /* CARDOS_APP_H */

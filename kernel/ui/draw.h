@@ -25,6 +25,7 @@
 #define C_TITLE_FG RGB565(255, 255, 255)
 #define C_TEXT     RGB565(0,   0,   0)
 #define C_WHITE    RGB565(255, 255, 255)
+#define C_RED      RGB565(200, 0,   0)   /* the selection cursor in Mines */
 
 void draw_set_clip(Rect r);
 Rect draw_clip(void);

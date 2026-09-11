@@ -221,7 +221,14 @@ void app_main(void) {
                  (unsigned)(CARDOS_HEAP_BYTES / 1024));
   con_write("type help\n\n");
 
-  prompt();
+  /* Came back from a firmware the desktop launched: return there, rather than
+   * to a console nobody asked for. */
+  if (desktop_autostart()) {
+    desktop_init();
+    s_desktop = 1;
+  } else {
+    prompt();
+  }
 
   for (;;) {
     uint8_t k = keyboard_poll();
