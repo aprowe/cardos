@@ -32,4 +32,12 @@ int http_request(const char *method, const char *url,
                  const char *bearer,
                  char *out, size_t out_size, int timeout_ms);
 
+/* Straight to a file, in chunks, for a body too large to hold. Returns the
+ * number of bytes written, or the same negative codes as above.
+ *
+ * The alternative -- a buffer the caller sizes -- does not exist for a 200 KB
+ * page on a board with 150 KB of heap, which is the whole reason this is
+ * separate. */
+int http_download(const char *url, const char *path, int timeout_ms);
+
 #endif /* CARDOS_HTTP_H */

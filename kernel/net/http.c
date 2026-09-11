@@ -2,6 +2,7 @@
 
 #include "kernel/net/http.h"
 #include "kernel/net/wifi.h"
+#include "kernel/fs/fs.h"
 
 #include <string.h>
 
@@ -99,4 +100,61 @@ int http_request(const char *method, const char *url,
 
 int http_get(const char *url, char *buf, size_t size, int timeout_ms) {
   return http_request("GET", url, NULL, NULL, NULL, buf, size, timeout_ms);
+}
+
+int http_download(const char *url, const char *path, int timeout_ms) {
+  esp_http_client_config_t cfg;
+  esp_http_client_handle_t cli;
+  static char chunk[1024];        /* static: task stacks here are 1 KB */
+  int status, fd, total = 0, rc = -3;
+
+  if (!url || !path) return -2;
+  if (!wifi_is_connected() && wifi_connect_saved(20000) != 0) return -1;
+
+  memset(&cfg, 0, sizeof cfg);
+  cfg.url = url;
+  cfg.timeout_ms = timeout_ms;
+  cfg.crt_bundle_attach = esp_crt_bundle_attach;
+  cfg.buffer_size = 1024;
+
+  cli = esp_http_client_init(&cfg);
+  if (!cli) return -2;
+
+  if (esp_http_client_open(cli, 0) != ESP_OK) {
+    esp_http_client_cleanup(cli);
+    return -3;
+  }
+  if (esp_http_client_fetch_headers(cli) < 0) goto done;
+
+  status = esp_http_client_get_status_code(cli);
+  if (status < 200 || status >= 300) {
+    ESP_LOGW(TAG, "%s -> %d", url, status);
+    rc = (status > 0 && status < 1000) ? -status : -4;
+    goto done;
+  }
+
+  fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+  if (fd < 0) { rc = -2; goto done; }
+
+  for (;;) {
+    int n = esp_http_client_read(cli, chunk, sizeof chunk);
+    int put = 0;
+    if (n <= 0) break;
+    /* Written in full or not at all: fs_write returns -1 on a short write and
+     * leaves the partial bytes behind, which is how a truncated file gets
+     * written and believed. */
+    while (put < n) {
+      int w = fs_write(fd, chunk + put, (size_t)(n - put));
+      if (w <= 0) { fs_close(fd); rc = -3; goto done; }
+      put += w;
+    }
+    total += n;
+  }
+  fs_close(fd);
+  rc = total;
+
+done:
+  esp_http_client_close(cli);
+  esp_http_client_cleanup(cli);
+  return rc;
 }

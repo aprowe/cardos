@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 10
+#define CAPP_API_VERSION 11
 
 #define CAPP_ICON_W 16
 #define CAPP_ICON_H 16
@@ -153,6 +153,10 @@ typedef struct {
   /* Why the network is or is not up, as a sentence. An app that reports
    * "error -1" has told the user nothing they can act on. */
   const char *(*net_status)(void);
+
+  /* Straight to a file, for a body too large to hold -- a rendered page is
+   * 200 KB and the heap is 150. Returns bytes written, or negative. */
+  int (*http_download)(const char *url, const char *path, int timeout_ms);
 
   /* The general form. method is "GET", "POST", "PATCH", "PUT" or "DELETE";
    * body and content_type are NULL for a request without one; bearer is an

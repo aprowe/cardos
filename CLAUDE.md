@@ -33,6 +33,13 @@ form, and tab completes commands and paths. PATH and a few other variables live
 in NVS -- see `env` and `set`. The launcher's app list is searched last, after
 PATH, so `edit` works even when nothing on PATH is called that.
 
+There is a web browser, of a sort. The device has no HTML parser and no layout
+engine; `tools/webproxy.py` renders a page with headless Chrome at a **240px
+viewport** -- so sites serve their narrowest mobile layout and render text at
+that size rather than being shrunk into mush -- and ships RLE'd RGB565 rows.
+The device decodes one row at a time and blits it, holding 480 bytes rather
+than a page. See `apps/web.c`.
+
 Also working: BLE mouse and keyboard (two links at once), WiFi with an HTTPS
 client apps can call, SD card, and chain-booting third-party firmware with a
 one-shot rollback home.
