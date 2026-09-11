@@ -8,6 +8,8 @@ idf_component_register(
     "../kernel/task/sched.c"
     "../kernel/fs/path.c"
     "../kernel/input/mouse.c"
+    "../kernel/ui/rect.c"
+    "../kernel/ui/wm.c"
     "../kernel/fs/fs_fat.c"
     "../kernel/mem/mem.c"
     "../kernel/swap/swap.c"
