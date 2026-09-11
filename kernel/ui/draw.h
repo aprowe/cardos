@@ -46,4 +46,10 @@ void draw_text_ellipsis(int16_t x, int16_t y, int16_t max_w, const char *s,
 
 int16_t draw_text_width(const char *s);
 
+/* The pointer. 8x12 plus a one-pixel outline, so it stays visible over the
+ * teal desktop, a grey window and a white content well alike. */
+#define CURSOR_W 9
+#define CURSOR_H 13
+void draw_cursor(int16_t x, int16_t y);
+
 #endif /* CARDOS_DRAW_H */

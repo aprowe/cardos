@@ -115,3 +115,61 @@ void draw_text_ellipsis(int16_t x, int16_t y, int16_t max_w, const char *s,
     }
   }
 }
+
+
+/* ------------------------------------------------------------ cursor ---- */
+
+/* Bit 0 is the leftmost pixel. The classic arrow: a filled wedge with a tail.
+ * The outline is derived rather than stored -- a pixel is outline if it is not
+ * fill but touches fill -- which keeps one table instead of two in step. */
+static const uint8_t ARROW[12] = {
+  0x01, 0x03, 0x07, 0x0F, 0x1F, 0x3F,
+  0x7F, 0xFF, 0x1F, 0x31, 0x60, 0x60,
+};
+
+static int arrow_fill(int col, int row) {
+  if (row < 0 || row >= 12 || col < 0 || col >= 8) return 0;
+  return (ARROW[row] >> col) & 1;
+}
+
+static int arrow_outline(int col, int row) {
+  int dc, dr;
+  if (arrow_fill(col, row)) return 0;
+  for (dr = -1; dr <= 1; dr++)
+    for (dc = -1; dc <= 1; dc++)
+      if (arrow_fill(col + dc, row + dr)) return 1;
+  return 0;
+}
+
+void draw_cursor(int16_t x, int16_t y) {
+  Rect box, v;
+  int16_t px, py;
+
+  box.x = x; box.y = y; box.w = CURSOR_W; box.h = CURSOR_H;
+  v = rect_intersect(box, s_clip);
+  if (rect_is_empty(v)) return;
+
+  for (py = v.y; py < v.y + v.h; py++) {
+    int row = py - y;
+    int any = 0;
+    int16_t run_start = -1;
+
+    /* Build the whole scanline, then blit once. Anything not part of the
+       cursor has to be left alone, so transparent pixels are emitted as
+       separate runs rather than as a background colour. */
+    for (px = v.x; px <= v.x + v.w; px++) {
+      int col = px - x;
+      int solid = (px < v.x + v.w) &&
+                  (arrow_fill(col, row) || arrow_outline(col, row));
+      if (solid) {
+        if (run_start < 0) run_start = px;
+        s_row[px - run_start] = arrow_fill(col, row) ? C_DARK : C_LIGHT;
+        any = 1;
+      } else if (run_start >= 0) {
+        display_blit(run_start, py, px - run_start, 1, s_row);
+        run_start = -1;
+      }
+    }
+    (void)any;
+  }
+}

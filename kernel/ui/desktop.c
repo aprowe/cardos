@@ -21,6 +21,7 @@ static WinId s_win[MAX_OPEN];
 static int   s_app[MAX_OPEN];       /* index into the app registry */
 static int   s_nwin;
 
+static int      s_kbd_btn;
 static int      s_start_open;
 static int      s_start_sel;
 static uint32_t s_now_ms;
@@ -150,6 +151,10 @@ static void paint_start_menu(void) {
   }
 }
 
+static void draw_pointer(void);
+static int  s_kbd_mouse;
+static int  s_dragging;
+
 /* ------------------------------------------------------------ paint ----- */
 
 static void paint_job(void *ctx, WinId w, Rect r) {
@@ -167,6 +172,7 @@ void desktop_flush(void) {
   wm_paint(paint_job, NULL);
   paint_taskbar();
   paint_start_menu();
+  draw_pointer();      /* always last: the pointer is above everything */
 }
 
 void desktop_repaint(void) {
@@ -245,7 +251,28 @@ int desktop_key(uint8_t key) {
   /* Desktop commands are ctrl-chords, so every ordinary key stays free to
    * reach the focused app. Without that a window you can type into is
    * impossible: `s` would always mean Start. */
+  if (s_kbd_mouse) {
+    MouseReport r;
+    memset(&r, 0, sizeof r);
+    r.buttons = s_kbd_btn ? MOUSE_LEFT : 0;
+    switch (key) {
+    case KEY_LEFT:  r.dx = -4; desktop_mouse(&r); return 0;
+    case KEY_RIGHT: r.dx =  4; desktop_mouse(&r); return 0;
+    case KEY_UP:    r.dy = -4; desktop_mouse(&r); return 0;
+    case KEY_DOWN:  r.dy =  4; desktop_mouse(&r); return 0;
+    case ' ':
+      /* Space latches the button rather than clicking, so a drag is
+       * possible: press over a title bar, steer, press again to drop. */
+      s_kbd_btn = !s_kbd_btn;
+      r.buttons = s_kbd_btn ? MOUSE_LEFT : 0;
+      desktop_mouse(&r);
+      return 0;
+    default: break;
+    }
+  }
+
   switch (key) {
+  case 0x10: desktop_set_kbd_mouse(!s_kbd_mouse); return 0;                  /* ctrl-P */
   case 0x13: s_start_open = 1; s_start_sel = 0; desktop_repaint(); return 0; /* ctrl-S */
   case 0x17: close_focused(); desktop_repaint(); return 0;                   /* ctrl-W */
   case '\t':      cycle_focus();   desktop_flush(); return 0;
@@ -289,4 +316,89 @@ void desktop_init(void) {
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
   desktop_repaint();
+}
+
+/* ------------------------------------------------------------- mouse ---- */
+
+static int s_cursor_on;
+static int16_t s_drag_dx, s_drag_dy;   /* pointer offset within the frame */
+
+static Rect cursor_rect(void) {
+  Rect r;
+  r.x = (int16_t)mouse_x();
+  r.y = (int16_t)mouse_y();
+  r.w = CURSOR_W;
+  r.h = CURSOR_H;
+  return r;
+}
+
+static void draw_pointer(void) {
+  if (!s_cursor_on) return;
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  draw_cursor((int16_t)mouse_x(), (int16_t)mouse_y());
+}
+
+int desktop_kbd_mouse(void) { return s_kbd_mouse; }
+
+void desktop_set_kbd_mouse(int on) {
+  s_kbd_mouse = on;
+  s_cursor_on = on;
+  desktop_repaint();
+}
+
+void desktop_mouse(const MouseReport *r) {
+  Rect before = cursor_rect();
+  WinId hit;
+
+  mouse_apply(r);
+  s_cursor_on = 1;
+
+  /* The panel cannot be read back -- it is wired three-wire, no MISO -- so
+   * there is no saving the pixels under the pointer. Moving it is just two
+   * damage rectangles, which is what the compositor is already for. */
+  if (mouse_take_moved()) {
+    wm_damage(before);
+    wm_damage(cursor_rect());
+  }
+
+  if (s_dragging) {
+    WinId f = wm_focus();
+    if (f != WIN_NONE)
+      wm_move(f, (int16_t)(mouse_x() - s_drag_dx), (int16_t)(mouse_y() - s_drag_dy));
+    if (mouse_released(MOUSE_LEFT)) s_dragging = 0;
+    desktop_flush();
+    draw_pointer();
+    return;
+  }
+
+  if (mouse_pressed(MOUSE_LEFT)) {
+    hit = wm_at((int16_t)mouse_x(), (int16_t)mouse_y());
+    if (hit == WIN_NONE) {
+      /* A click on the taskbar's Start button, or on bare desktop. */
+      if (mouse_y() >= DESK_H && mouse_x() < 38) {
+        s_start_open = !s_start_open;
+        desktop_repaint();
+        draw_pointer();
+        return;
+      }
+    } else {
+      WmHit what = wm_hit_test(hit, (int16_t)mouse_x(), (int16_t)mouse_y());
+      wm_raise(hit);
+      if (what == WM_HIT_CLOSE) {
+        close_focused();
+        desktop_repaint();
+        draw_pointer();
+        return;
+      }
+      if (what == WM_HIT_TITLE || what == WM_HIT_BORDER) {
+        Rect f = wm_frame(hit);
+        s_dragging = 1;
+        s_drag_dx = (int16_t)(mouse_x() - f.x);
+        s_drag_dy = (int16_t)(mouse_y() - f.y);
+      }
+    }
+  }
+
+  desktop_flush();
+  draw_pointer();
 }

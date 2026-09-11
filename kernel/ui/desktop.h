@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "ui/wm.h"
+#include "input/mouse.h"
 
 #define TASKBAR_H 13
 
@@ -27,5 +28,15 @@ int  desktop_key(uint8_t key);
 
 /* Content painter for a window; the desktop supplies one per window. */
 void desktop_tick(uint32_t ms);
+
+/* Feed one decoded mouse report in. Handles the cursor, focus, dragging and
+ * the close box. Safe to call whether or not a real mouse exists. */
+void desktop_mouse(const MouseReport *r);
+
+/* Keyboard-driven pointer, for when no mouse is paired. Arrows move it and
+ * space clicks -- which is also how the whole interaction path gets tested
+ * before the radio exists. */
+void desktop_set_kbd_mouse(int on);
+int  desktop_kbd_mouse(void);
 
 #endif /* CARDOS_DESKTOP_H */
