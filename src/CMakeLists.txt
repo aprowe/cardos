@@ -21,6 +21,7 @@ idf_component_register(
     "../kernel/ui/launchui.c"
     "../kernel/ui/shell.c"
     "../kernel/ui/help.c"
+    "../kernel/sys/env.c"
     "../kernel/net/wifi.c"
     "../kernel/net/http.c"
     "../kernel/fs/fs_fat.c"

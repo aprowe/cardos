@@ -29,6 +29,7 @@
 #include "kernel/ui/launchui.h"
 #include "kernel/net/wifi.h"
 #include "kernel/ui/shell.h"
+#include "kernel/sys/env.h"
 #include "kernel/drv/bthid.h"
 
 #define CARDOS_LINE_MAX 63
@@ -153,6 +154,8 @@ static void run_line(char *line) {
   }
   else if (!strcmp(line, "wifi")) cmd_wifi(arg);
   else if (!strcmp(line, "get"))  cmd_get(arg);
+  else if (!strcmp(line, "env"))  cmd_env();
+  else if (!strcmp(line, "set"))  cmd_set(arg);
   else if (!strcmp(line, "run")) {
     /* cmd_run starts it; the mode has to change here, where the loop is. */
     cmd_run(arg);
@@ -161,7 +164,17 @@ static void run_line(char *line) {
   else if (!strcmp(line, "clear"))  con_clear();
   else if (!strcmp(line, "reboot")) esp_restart();
   else if (!strcmp(line, "echo"))   { con_write(arg); con_putc('\n'); }
-  else con_printf("unknown command: %s\n", line);
+  else {
+    /* Not a built-in: try to run it. "./grep x" is a path and "grep x" is a
+     * PATH lookup, and both end in the same place -- which is what makes a
+     * command that lives on the card indistinguishable from one that does
+     * not. */
+    if (shell_exec(line, (arg && *arg) ? arg : NULL) == 0) {
+      if (ui_shell() == UI_LAUNCHER) s_mode = MODE_LAUNCHER;
+    } else {
+      con_printf("unknown command: %s\n", line);
+    }
+  }
 }
 
 
@@ -365,6 +378,7 @@ void app_main(void) {
   /* The scheduler's policy half runs now; the Xtensa context switch does not
    * exist yet, so this loop *is* the shell task rather than being switched to
    * it. `ps` therefore shows one task. spawn/kill arrive with the switch. */
+  env_init();
   sched_init(clock_ms, NULL);
   sched_create("shell");
   sched_next();                  /* mark it running, so it owns its locks */

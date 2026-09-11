@@ -49,6 +49,7 @@ static void about_paint(void *state, Rect c) {
 typedef struct {
   int  top;
   int  count;
+  char dir[64];
   char name[FILES_MAX][FILES_NAME];
 } FilesState;
 static FilesState s_files;
@@ -57,7 +58,8 @@ static void files_reload(FilesState *st) {
   FsDir d;
   FsEntry e;
   st->count = 0;
-  if (fs_opendir("/", &d) != 0) return;
+  if (!st->dir[0]) snprintf(st->dir, sizeof st->dir, "%s", "/");
+  if (fs_opendir(st->dir, &d) != 0) return;
   while (st->count < FILES_MAX && fs_readdir(&d, &e) == 1) {
     snprintf(st->name[st->count], FILES_NAME, "%.24s%s", e.name,
              e.is_dir ? "/" : "");
@@ -86,6 +88,14 @@ static int files_key(void *state, uint8_t k) {
 
 static void files_open(void *state) {
   FilesState *st = (FilesState *)state;
+  st->top = 0;
+  files_reload(st);
+}
+
+/* "run files /desktop" -- the one argument a file browser could want. */
+static void files_set_args(void *state, const char *args) {
+  FilesState *st = (FilesState *)state;
+  snprintf(st->dir, sizeof st->dir, "%s", args);
   st->top = 0;
   files_reload(st);
 }
@@ -119,11 +129,11 @@ static void mem_paint(void *state, Rect c) {
  * loadable: a file browser, a heap view, and an about box. */
 static const AppDef APPS[] = {
   { "Files",  files_paint, files_key, NULL, files_open, &s_files, NULL, 0, 0,
-    NULL, "arrows\tscroll the listing\nr\tre-read the card\n" },
+    NULL, "arrows\tscroll the listing\nr\tre-read the card\n", files_set_args },
   { "Memory", mem_paint,   NULL,      NULL, NULL,       NULL,     NULL, 0, 0,
-    NULL, NULL },
+    NULL, NULL, NULL },
   { "About",  about_paint, NULL,      NULL, NULL,       NULL,     NULL, 0, 0,
-    NULL, NULL },
+    NULL, NULL, NULL },
 };
 
 /* Settings lives in its own file -- it reaches across the radio, the panel and

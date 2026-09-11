@@ -14,7 +14,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 4
+#define CAPP_API_VERSION 5
 #define CAPP_ICON_W 16
 #define CAPP_ICON_H 16
 #define CAPP_ICON_BYTES ((CAPP_ICON_W / 8) * CAPP_ICON_H)   /* 1bpp, 32 bytes */
@@ -109,10 +109,15 @@ typedef struct {
   int  (*click)(void *state, int16_t x, int16_t y, int button);
   void (*open)(void *state);
 
-  /* Optional: set when the app was opened on a particular file rather than
-   * bare, and called before open(). NULL means the app does not take one, and
-   * a double-click on a file it does not want is simply refused. */
-  void (*set_file)(void *state, const char *path);
+  /* Optional: the arguments the app was started with, as one string --
+   * "run edit /notes.txt" reaches Edit as "/notes.txt". Called *after* open(),
+   * because open() resets the app and would otherwise throw the arguments
+   * away. Not called at all when there are none, so an app can tell "started
+   * bare" from "started with an empty string".
+   *
+   * One string rather than argv: an app that wants words can split them, and
+   * every app that has wanted arguments so far wanted exactly one path. */
+  void (*set_args)(void *state, const char *args);
 
   /* Natural height at this width, for contents that do not fit the window.
    * NULL means it always fits. */

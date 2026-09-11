@@ -241,7 +241,7 @@ static void leave_app(void) {
   flush();
 }
 
-static void launch(int i) {
+static void launch_with(int i, const char *args) {
   const Icon *ic = icon_at(i);
   const AppDef *a;
 
@@ -260,10 +260,13 @@ static void launch(int i) {
 
   a = icon_app(i);
   if (!a) return;
-  /* Deliberately not capprun_set_file(ic->path): that path is the app's own
-   * binary, and handing Edit its own .capp made it open 14 KB of ELF as text.
-   * set_file is for an icon that names a document, which nothing does yet. */
   if (a->open) a->open(a->state);
+
+  /* After open, never before: open resets the app, so arguments applied first
+   * are the arguments thrown away. The icon's own path is deliberately not
+   * passed -- it is the app's binary, and handing Edit its own .capp made it
+   * open 14 KB of ELF as text. */
+  if (args && *args && a->set_args) a->set_args(a->state, args);
 
   /* Everything runs fullscreen here, whatever size it asked for: there is no
    * desktop behind it for a window to sit on. */
@@ -273,6 +276,8 @@ static void launch(int i) {
   s_app_dirty = 1;
   flush();
 }
+
+static void launch(int i) { launch_with(i, NULL); }
 
 static void move(int delta) {
   if (icons_count() == 0) return;
@@ -310,7 +315,7 @@ static int same_name(const char *a, const char *b) {
   return *a == 0 && *b == 0;
 }
 
-int launchui_run(const char *name) {
+int launchui_run(const char *name, const char *args) {
   int i;
 
   if (!name || !*name) return -1;
@@ -320,10 +325,46 @@ int launchui_run(const char *name) {
     const Icon *ic = icon_at(i);
     if (!ic || !same_name(ic->name, name)) continue;
     s_sel = i;
-    launch(i);
+    launch_with(i, args);
     return 0;
   }
   return -1;
+}
+
+/* An app not on the carousel: loaded on demand, into a slot of its own. An
+ * icon already pointing at this file is reused rather than loaded twice --
+ * executable RAM is not a thing to spend on a second copy of a program that is
+ * already resident. */
+int launchui_run_path(const char *path, const char *args) {
+  const AppDef *a;
+  int i, slot;
+
+  if (!path || !*path) return -1;
+  launchui_init();
+
+  for (i = 0; i < icons_count(); i++) {
+    const Icon *ic = icon_at(i);
+    if (ic && ic->kind == ICON_CAPP && strcmp(ic->path, path) == 0) {
+      s_sel = i;
+      launch_with(i, args);
+      return 0;
+    }
+  }
+
+  slot = capprun_load(path);
+  if (slot < 0) return -1;
+  a = capprun_def(slot);
+  if (!a) return -1;
+
+  if (a->open) a->open(a->state);
+  if (args && *args && a->set_args) a->set_args(a->state, args);
+
+  s_app = a;
+  s_app_rect = app_rect(a);
+  s_app_clear = 1;
+  s_app_dirty = 1;
+  flush();
+  return 0;
 }
 
 int launchui_key(uint8_t key) {

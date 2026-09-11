@@ -31,4 +31,15 @@ void cmd_get(const char *arg);
  * run NAME     -- start it fullscreen; escape returns to the launcher */
 void cmd_run(const char *arg);
 
+/* env            -- list the variables
+ * set NAME=VALUE -- set one, or unset it with an empty value */
+void cmd_env(void);
+void cmd_set(const char *arg);
+
+/* Resolve a bare word or a path into something runnable and start it. This is
+ * what an unrecognised command falls through to, so "./grep x" and "grep x"
+ * both work -- the first as a path, the second through PATH. Returns 0 if it
+ * started something. */
+int  shell_exec(const char *word, const char *args);
+
 #endif /* CARDOS_SHELLCMD_H */

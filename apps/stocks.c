@@ -298,7 +298,7 @@ const CappApp *capp_register(const CardApi *a) {
   APP.key = app_key;
   APP.click = app_click;
   APP.open = app_open;
-  APP.set_file = 0;
+  APP.set_args = 0;
   APP.height = 0;
   APP.pref_w = 0;
   APP.pref_h = 0;

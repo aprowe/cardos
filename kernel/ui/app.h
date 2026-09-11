@@ -65,6 +65,10 @@ typedef struct {
    * an app's keys do not change while it runs, and one that did would be a
    * worse app. */
   const char *help;
+
+  /* The arguments the app was started with, as one string. Called after open,
+   * and not at all when there are none. */
+  void (*set_args)(void *state, const char *args);
 } AppDef;
 
 /* The apps the Start menu offers. */

@@ -11,6 +11,7 @@
 #include "kernel/net/http.h"
 #include "kernel/ui/icons.h"
 #include "kernel/ui/launchui.h"
+#include "kernel/sys/env.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -428,6 +429,9 @@ static const char *run_kind(IconKind k) {
 }
 
 void cmd_run(const char *arg) {
+  char name[24];
+  const char *args = NULL;
+  const char *sp;
   int i;
 
   if (!arg || !*arg) {
@@ -437,8 +441,22 @@ void cmd_run(const char *arg) {
       const Icon *ic = icon_at(i);
       con_printf("  %-14s %-9s %s\n", ic->name, run_kind(ic->kind), ic->path);
     }
-    con_write("run NAME\n");
+    con_write("run NAME [arguments]\n");
     return;
+  }
+
+  /* The first word names the app; everything after it is handed over as one
+   * string. Splitting into words here would mean guessing how each app wants
+   * them, and every app so far has wanted exactly one path. */
+  sp = strchr(arg, ' ');
+  if (sp) {
+    int n = (int)(sp - arg);
+    if (n >= (int)sizeof name) n = (int)sizeof name - 1;
+    snprintf(name, sizeof name, "%.*s", n, arg);
+    while (*sp == ' ') sp++;
+    args = *sp ? sp : NULL;
+  } else {
+    snprintf(name, sizeof name, "%s", arg);
   }
 
   /* Firmware goes through boot, which asks first: it ends CardOS, and a
@@ -446,8 +464,7 @@ void cmd_run(const char *arg) {
   icons_reload();
   for (i = 0; i < icons_count(); i++) {
     const Icon *ic = icon_at(i);
-    if (!ic) continue;
-    if (strcasecmp(ic->name, arg) != 0) continue;
+    if (!ic || strcasecmp(ic->name, name) != 0) continue;
     if (ic->kind == ICON_FIRMWARE) {
       con_printf("%s is firmware. use: boot %s\n", ic->name, ic->name);
       return;
@@ -455,8 +472,79 @@ void cmd_run(const char *arg) {
     break;
   }
 
-  if (launchui_run(arg) != 0) {
-    err(arg, "no such app -- run with no argument lists them");
-    return;
+  if (launchui_run(name, args) != 0)
+    err(name, "no such app -- run with no argument lists them");
+}
+
+/* ------------------------------------------------------------------ env --- */
+
+void cmd_env(void) {
+  int i;
+  for (i = 0; i < env_count(); i++)
+    con_printf("%s=%s\n", env_name_at(i), env_value_at(i));
+}
+
+void cmd_set(const char *arg) {
+  char name[ENV_NAME_MAX];
+  const char *eq;
+
+  if (!arg || !*arg) { cmd_env(); return; }
+  eq = strchr(arg, '=');
+  if (!eq) { err("set", "needs NAME=VALUE"); return; }
+
+  {
+    int n = (int)(eq - arg);
+    if (n >= (int)sizeof name) n = (int)sizeof name - 1;
+    snprintf(name, sizeof name, "%.*s", n, arg);
   }
+  if (env_set(name, eq + 1) != 0) { err("set", "no room for another variable"); return; }
+  con_printf("%s=%s\n", name, eq + 1);
+}
+
+/* ----------------------------------------------------------------- exec --- */
+
+/* Does this name a file we can open? The only test available -- there is no
+ * stat -- and enough, because a directory refuses to open for reading. */
+static int readable(const char *path) {
+  int fd = fs_open(path, FS_O_READ);
+  if (fd < 0) return 0;
+  fs_close(fd);
+  return 1;
+}
+
+/* A candidate is the name as given and the name with .capp appended, so both
+ * "grep" and "grep.capp" find /desktop/grep.capp. */
+static int try_run(const char *path, const char *args) {
+  char with_ext[FS_PATH_MAX + 8];
+
+  if (readable(path) && launchui_run_path(path, args) == 0) return 0;
+  snprintf(with_ext, sizeof with_ext, "%s.capp", path);
+  if (readable(with_ext) && launchui_run_path(with_ext, args) == 0) return 0;
+  return -1;
+}
+
+int shell_exec(const char *word, const char *args) {
+  char path[FS_PATH_MAX], dir[64];
+  int iter = 0;
+
+  if (!word || !*word) return -1;
+
+  /* A word with a slash in it is a path, not a PATH lookup -- which is the
+   * whole point of typing ./grep rather than grep. Resolved against the
+   * working directory, so ./ and ../ mean what they say. */
+  if (strchr(word, '/')) {
+    if (path_resolve(shell_cwd(), word, path, sizeof path) != 0) return -1;
+    return try_run(path, args);
+  }
+
+  while (env_path_next(&iter, dir, sizeof dir)) {
+    /* Bounded by field width rather than by hoping: a PATH entry and a command
+     * name can each be long enough on their own to fill the buffer. */
+    snprintf(path, sizeof path, "%.63s/%.48s", dir, word);
+    if (try_run(path, args) == 0) return 0;
+  }
+
+  /* Last: an app by the name the launcher shows it under, so "run edit" and
+   * "edit" agree even though the file is edit.capp. */
+  return launchui_run(word, args);
 }

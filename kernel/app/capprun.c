@@ -42,6 +42,11 @@ static int16_t tr_height(void *state, int16_t w) {
   return s->la.app->height ? s->la.app->height(s->la.app->state, w) : 0;
 }
 
+static void tr_set_args(void *state, const char *args) {
+  Slot *s = (Slot *)state;
+  if (s->la.app->set_args) s->la.app->set_args(s->la.app->state, args);
+}
+
 static int tr_wants_text(void *state) {
   Slot *s = (Slot *)state;
   return s->la.app->wants_text ? s->la.app->wants_text(s->la.app->state) : 0;
@@ -76,6 +81,7 @@ int capprun_load(const char *path) {
   /* The string lives in the app's own data allocation and was relocated with
    * everything else, so it can be handed straight over. */
   s_slot[i].def.help = s_slot[i].la.app->help;
+  s_slot[i].def.set_args = s_slot[i].la.app->set_args ? tr_set_args : NULL;
   s_slot[i].def.state = &s_slot[i];
   s_slot[i].used = 1;
   return i;
@@ -105,11 +111,11 @@ int capprun_fullscreen(int slot) {
   return s_slot[slot].la.app->fullscreen ? 1 : 0;
 }
 
-void capprun_set_file(int slot, const char *path) {
+void capprun_set_args(int slot, const char *args) {
   const CappApp *a;
   if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return;
   a = s_slot[slot].la.app;
-  if (a->set_file) a->set_file(a->state, path);
+  if (a->set_args) a->set_args(a->state, args);
 }
 
 uint32_t capprun_exec_free(void) { return capp_exec_free(); }

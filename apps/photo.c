@@ -161,7 +161,7 @@ static int app_click(void *st, short x, short y, int button) {
   return 1;
 }
 
-static void app_set_file(void *st, const char *path) {
+static void app_set_args(void *st, const char *path) {
   size_t i, cut = 0;
   (void)st;
   for (i = 0; path[i]; i++) if (path[i] == '/') cut = i;
@@ -195,7 +195,7 @@ const CappApp *capp_register(const CardApi *a) {
   APP.key = app_key;
   APP.click = app_click;
   APP.open = app_open;
-  APP.set_file = app_set_file;
+  APP.set_args = app_set_args;
   APP.wants_text = 0;      /* a list or a board, never a text field */
   APP.help = "arrows\tprevious and next\nspace\tnext\nclick\tleft back, right forward\nr\trescan the folder\n";
   APP.state = 0;

@@ -537,7 +537,7 @@ static void app_open(void *st) {
   rescan();
 }
 
-static void app_set_file(void *st, const char *path) {
+static void app_set_args(void *st, const char *path) {
   (void)st;
   load(path);
   E.view = VIEW_EDIT;
@@ -564,7 +564,7 @@ const CappApp *capp_register(const CardApi *a) {
   APP.key = app_key;
   APP.click = app_click;
   APP.open = app_open;
-  APP.set_file = app_set_file;
+  APP.set_args = app_set_args;
   APP.height = 0;
   APP.pref_w = 0;
   APP.pref_h = 0;

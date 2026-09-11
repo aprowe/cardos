@@ -27,6 +27,12 @@ are embedded in the firmware so first boot writes them out. See
 `kernel/app/elfload.h` for why the loader is short, and `apps/capp.ld` for the
 one hardware fact that shapes all of it.
 
+The console runs apps like a shell would: `grep TODO /desktop` finds
+grep.capp on PATH, `./grep` runs one by path, `run NAME args` is the explicit
+form, and tab completes commands and paths. PATH and a few other variables live
+in NVS -- see `env` and `set`. The launcher's app list is searched last, after
+PATH, so `edit` works even when nothing on PATH is called that.
+
 Also working: BLE mouse and keyboard (two links at once), WiFi with an HTTPS
 client apps can call, SD card, and chain-booting third-party firmware with a
 one-shot rollback home.

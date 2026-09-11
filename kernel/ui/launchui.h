@@ -24,11 +24,17 @@ void launchui_repaint(void);
 
 /* Open a named app straight away, skipping the carousel -- what the console's
  * `run` command does. The name is matched against what the launcher shows,
- * case-insensitively. Returns 0 if it was found and started.
+ * case-insensitively, and `args` is handed to it after it opens -- so
+ * "run edit /notes.txt" reaches Edit as "/notes.txt". NULL for none.
+ * Returns 0 if it was found and started.
  *
  * Escape then returns to the carousel rather than to the console, because that
  * is what Escape does everywhere else in this shell. */
-int launchui_run(const char *name);
+int launchui_run(const char *name, const char *args);
+
+/* Run the .capp at this exact path, loading it if it is not already. What
+ * "./grep" and a PATH lookup both end at. Returns 0 if it started. */
+int launchui_run_path(const char *path, const char *args);
 
 /* Returns 1 when the user asked to leave for the text console. */
 int  launchui_key(uint8_t key);
