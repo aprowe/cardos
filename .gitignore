@@ -4,3 +4,8 @@ sdkconfig
 sdkconfig.old
 *.log
 .pio/
+
+# Generated: the app binaries and the header that embeds them. Both come out of
+# tools/build_apps.py, and a stale committed copy is worse than no copy -- the
+# firmware would carry app binaries built against a different API version.
+kernel/app/capp_blobs.h

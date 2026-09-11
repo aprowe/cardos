@@ -23,6 +23,10 @@ void desktop_flush(void);
  * expressed as damage. */
 void desktop_repaint(void);
 
+/* Set when something other than a keypress asked to leave -- the Console entry
+ * in the Start menu, clicked rather than typed. Clears on read. */
+int  desktop_take_leave(void);
+
 /* Returns 0 to stay in the desktop, 1 to leave for the text console. */
 int  desktop_key(uint8_t key);
 
@@ -52,6 +56,10 @@ void desktop_reload_icons(void);
  * than at a console the user never asked for. */
 void desktop_set_autostart(int on);
 int  desktop_autostart(void);
+
+/* Bring a band of the focused window's content into view, for an app whose
+ * selection moved somewhere the window is currently scrolled away from. */
+void desktop_scroll_into_view(int16_t y, int16_t h);
 
 void desktop_set_kbd_mouse(int on);
 int  desktop_kbd_mouse(void);

@@ -30,7 +30,7 @@ static uint8_t  g_owner;      /* task currently running; 0 = kernel */
 
 /* Xtensa faults on a misaligned 32-bit access, and the first thing a caller
  * does with a block is usually to put a struct in it -- so every block starts
- * on a 4-byte boundary. Sizes are not rounded: mem_size still reports what was
+ * on a 4-byte boundary. Sizes are not rounded: kmem_size still reports what was
  * asked for, and the padding lives between blocks. */
 #define MEM_ALIGN 4u
 #define ALIGN_UP(x) (((x) + (MEM_ALIGN - 1u)) & ~(MEM_ALIGN - 1u))
@@ -60,7 +60,7 @@ MemDesc *mem_desc(Handle h) {
   return d;
 }
 
-int mem_valid(Handle h) { return mem_desc(h) != NULL; }
+int kmem_valid(Handle h) { return mem_desc(h) != NULL; }
 
 static Handle handle_of(const MemDesc *d) {
   uint8_t idx = (uint8_t)(d - g_table);
@@ -175,7 +175,7 @@ static int fixed_alloc(uint32_t size, uint32_t *out_off) {
 
 /* ------------------------------------------------------------- lifetime -- */
 
-void mem_init(void *heap, size_t bytes) {
+void kmem_init(void *heap, size_t bytes) {
   int i;
   memset(g_table, 0, sizeof g_table);
   for (i = 0; i < MEM_MAX_HANDLES; i++) {
@@ -200,20 +200,20 @@ void mem_init(void *heap, size_t bytes) {
   g_lru_head = g_lru_tail = MEM_NO_LRU;
 }
 
-size_t mem_size(Handle h) {
+size_t kmem_size(Handle h) {
   MemDesc *d = mem_desc(h);
   return d ? d->size : 0;
 }
 
-void mem_set_owner(uint8_t owner) { g_owner = owner; }
+void kmem_set_owner(uint8_t owner) { g_owner = owner; }
 
-int mem_locked(Handle h) {
+int kmem_locked(Handle h) {
   MemDesc *d = mem_desc(h);
   return d ? d->lock : 0;
 }
 
 /* Hand back every lock held by a task that is going away. */
-int mem_release_owner(uint8_t owner) {
+int kmem_release_owner(uint8_t owner) {
   int i, n = 0;
   if (owner == 0) return 0;          /* unowned locks belong to no task */
   for (i = 0; i < MEM_MAX_HANDLES; i++) {
@@ -227,12 +227,12 @@ int mem_release_owner(uint8_t owner) {
   return n;
 }
 
-int mem_resident(Handle h) {
+int kmem_resident(Handle h) {
   MemDesc *d = mem_desc(h);
   return d && (d->flags & D_RESIDENT) ? 1 : 0;
 }
 
-void mem_stats(MemStats *out) {
+void kmem_stats(MemStats *out) {
   int i;
   memset(out, 0, sizeof *out);
   out->heap_size    = g_size;
@@ -327,7 +327,7 @@ static void compact_from(uint32_t dst_start) {
   g_compactions++;
 }
 
-void mem_compact(void) { compact_from(0); }
+void kmem_compact(void) { compact_from(0); }
 
 #ifdef CARDOS_MEM_PARANOID
 /* Host-test builds only. Deliberately relocate every unpinned block on every
@@ -384,7 +384,7 @@ static int evict_one(void) {
 
   if ((d->flags & D_BACKED) && !(d->flags & D_DIRTY)) {
     /* Its copy in swap is still valid, so this eviction is free. This is what
-     * mem_lock_ro buys: read-mostly data costs one write, ever. */
+     * kmem_lock_ro buys: read-mostly data costs one write, ever. */
   } else {
     if (!(d->flags & D_BACKED)) {
       uint16_t first = swap_alloc_pages(need);
@@ -410,10 +410,10 @@ static int evict_one(void) {
  * blocks until the request fits, then give up and let the caller handle it. */
 static int arena_alloc(uint32_t size, int fixed, uint32_t *out_off) {
   if (fixed ? fixed_alloc(size, out_off) : movable_place(size, out_off)) return 1;
-  mem_compact();
+  kmem_compact();
   if (fixed ? fixed_alloc(size, out_off) : movable_place(size, out_off)) return 1;
   while (evict_one()) {
-    mem_compact();
+    kmem_compact();
     if (fixed ? fixed_alloc(size, out_off) : movable_place(size, out_off)) return 1;
   }
   return 0;
@@ -425,7 +425,7 @@ static int movable_alloc(uint32_t size, uint32_t *out_off) {
 
 /* ----------------------------------------------------------- public API -- */
 
-Handle mem_alloc(size_t bytes, uint16_t flags) {
+Handle kmem_alloc(size_t bytes, uint16_t flags) {
   MemDesc *d;
   uint32_t off, size = (uint32_t)bytes;
   int ok;
@@ -454,7 +454,7 @@ Handle mem_alloc(size_t bytes, uint16_t flags) {
   return handle_of(d);
 }
 
-void mem_free(Handle h) {
+void kmem_free(Handle h) {
   MemDesc *d = mem_desc(h);
   if (!d) return;
   lru_remove(d);
@@ -492,10 +492,10 @@ static void *lock_common(Handle h, int mark_dirty) {
   return g_base + d->off;
 }
 
-void *mem_lock(Handle h)    { return lock_common(h, 1); }
-void *mem_lock_ro(Handle h) { return lock_common(h, 0); }
+void *kmem_lock(Handle h)    { return lock_common(h, 1); }
+void *kmem_lock_ro(Handle h) { return lock_common(h, 0); }
 
-void mem_unlock(Handle h) {
+void kmem_unlock(Handle h) {
   MemDesc *d = mem_desc(h);
   if (!d || d->lock == 0) return;
   d->lock--;

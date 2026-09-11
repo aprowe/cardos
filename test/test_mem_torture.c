@@ -44,7 +44,7 @@ static FakeSwapDev *begin(uint32_t seed) {
   SwapExtent ex[1] = { { 0, 8192 } };            /* 4 MB, as on the card */
   FakeSwapDev *f = fake_swapdev_create(8192);
   swap_init(fake_swapdev_dev(f), ex, 1, bitmap, sizeof bitmap);
-  mem_init(heap, sizeof heap);
+  kmem_init(heap, sizeof heap);
   rng_state = seed;
   return f;
 }
@@ -65,40 +65,40 @@ void test_torture_every_byte_survives_thousands_of_operations(void) {
     case 0:                                       /* allocate and fill */
       if (s[i].h == 0) {
         uint32_t n = 64 + rnd() % 6000;
-        Handle h = mem_alloc(n, 0);
+        Handle h = kmem_alloc(n, 0);
         if (!h) { alloc_fails++; break; }
         {
-          unsigned char *p = mem_lock(h);
+          unsigned char *p = kmem_lock(h);
           if (p) {
             s[i].h = h; s[i].size = n; s[i].seed = (unsigned char)rnd();
             write_pattern(p, n, s[i].seed);
-            mem_unlock(h);
+            kmem_unlock(h);
             allocs++;
           } else {
             lock_fails++;
-            mem_free(h);
+            kmem_free(h);
           }
         }
       }
       break;
     case 1:                                       /* verify, read-only */
       if (s[i].h && !s[i].locked) {
-        unsigned char *p = mem_lock_ro(s[i].h);
+        unsigned char *p = kmem_lock_ro(s[i].h);
         if (p) {
           if (!verify_pattern(p, s[i].size, s[i].seed)) mismatches++;
-          mem_unlock(s[i].h);
+          kmem_unlock(s[i].h);
         }
       }
       break;
     case 2:                                       /* free */
       if (s[i].h && !s[i].locked) {
-        mem_free(s[i].h);
+        kmem_free(s[i].h);
         memset(&s[i], 0, sizeof s[i]);
       }
       break;
     case 3:                                       /* hold a lock across other work */
       if (s[i].h && !s[i].locked) {
-        unsigned char *p = mem_lock(s[i].h);
+        unsigned char *p = kmem_lock(s[i].h);
         if (p) {
           s[i].locked = 1;
           locked_now++;
@@ -108,12 +108,12 @@ void test_torture_every_byte_survives_thousands_of_operations(void) {
           if (!verify_pattern(p, s[i].size, s[i].seed)) mismatches++;
         }
       } else if (s[i].locked) {
-        unsigned char *p = mem_lock_ro(s[i].h);   /* still valid while pinned */
+        unsigned char *p = kmem_lock_ro(s[i].h);   /* still valid while pinned */
         if (p) {
           if (!verify_pattern(p, s[i].size, s[i].seed)) mismatches++;
-          mem_unlock(s[i].h);
+          kmem_unlock(s[i].h);
         }
-        mem_unlock(s[i].h);
+        kmem_unlock(s[i].h);
         s[i].locked = 0;
         locked_now--;
         pinned_bytes -= s[i].size;
@@ -121,12 +121,12 @@ void test_torture_every_byte_survives_thousands_of_operations(void) {
       break;
     }
   }
-  for (i = 0; i < SLOTS; i++) if (s[i].locked) { mem_unlock(s[i].h); s[i].locked = 0; }
+  for (i = 0; i < SLOTS; i++) if (s[i].locked) { kmem_unlock(s[i].h); s[i].locked = 0; }
 
   CHECK_EQ(mismatches, 0);
   CHECK(allocs > 1000);                           /* it really did work hard */
 
-  mem_stats(&st);
+  kmem_stats(&st);
   printf("    torture: %lu allocs, %lu compactions, %lu evictions "
          "(%lu wrote), %lu page-ins, %lu alloc fails, %lu lock fails\n"
          "             max %lu blocks pinned = %lu bytes of a %lu byte heap\n",
@@ -139,8 +139,8 @@ void test_torture_every_byte_survives_thousands_of_operations(void) {
   CHECK(st.evictions > 100);                      /* the pressure was real */
   CHECK(st.page_ins > 100);
 
-  for (i = 0; i < SLOTS; i++) if (s[i].h) mem_free(s[i].h);
-  mem_stats(&end);
+  for (i = 0; i < SLOTS; i++) if (s[i].h) kmem_free(s[i].h);
+  kmem_stats(&end);
   CHECK_EQ(end.handles_used, 0);                  /* nothing leaked */
   CHECK_EQ(swap_pages_free(), swap_pages_total()); /* no swap leaked either */
   fake_swapdev_destroy(f);
@@ -159,37 +159,37 @@ void test_torture_with_fixed_blocks_interleaved(void) {
   for (step = 0; step < 8000; step++) {
     if (step % 37 == 0) {                         /* task stacks churning */
       k = (int)(rnd() % 8);
-      if (stacks[k]) { mem_free(stacks[k]); stacks[k] = 0; }
-      else stacks[k] = mem_alloc(1024, MEM_FIXED | MEM_ZERO);
+      if (stacks[k]) { kmem_free(stacks[k]); stacks[k] = 0; }
+      else stacks[k] = kmem_alloc(1024, MEM_FIXED | MEM_ZERO);
     }
     i = (int)(rnd() % SLOTS);
     if (s[i].h == 0) {
       uint32_t n = 64 + rnd() % 4000;
-      Handle h = mem_alloc(n, 0);
+      Handle h = kmem_alloc(n, 0);
       if (h) {
-        unsigned char *p = mem_lock(h);
+        unsigned char *p = kmem_lock(h);
         if (p) {
           s[i].h = h; s[i].size = n; s[i].seed = (unsigned char)rnd();
           write_pattern(p, n, s[i].seed);
-          mem_unlock(h);
+          kmem_unlock(h);
         } else {
-          mem_free(h);
+          kmem_free(h);
         }
       }
     } else {
-      unsigned char *p = mem_lock_ro(s[i].h);
+      unsigned char *p = kmem_lock_ro(s[i].h);
       if (p) {
         if (!verify_pattern(p, s[i].size, s[i].seed)) mismatches++;
-        mem_unlock(s[i].h);
+        kmem_unlock(s[i].h);
       }
-      if (rnd() % 3 == 0) { mem_free(s[i].h); memset(&s[i], 0, sizeof s[i]); }
+      if (rnd() % 3 == 0) { kmem_free(s[i].h); memset(&s[i], 0, sizeof s[i]); }
     }
   }
   CHECK_EQ(mismatches, 0);
 
-  for (i = 0; i < SLOTS; i++) if (s[i].h) mem_free(s[i].h);
-  for (k = 0; k < 8; k++) if (stacks[k]) mem_free(stacks[k]);
-  mem_stats(&end);
+  for (i = 0; i < SLOTS; i++) if (s[i].h) kmem_free(s[i].h);
+  for (k = 0; k < 8; k++) if (stacks[k]) kmem_free(stacks[k]);
+  kmem_stats(&end);
   CHECK_EQ(end.handles_used, 0);
   CHECK_EQ(end.fixed_used, 0);                    /* the fixed arena unwound */
   CHECK_EQ(swap_pages_free(), swap_pages_total());
@@ -200,25 +200,25 @@ void test_torture_with_fixed_blocks_interleaved(void) {
  * safety net could quietly be doing nothing. */
 void test_paranoid_mode_relocates_unpinned_blocks(void) {
   FakeSwapDev *f = begin(1u);
-  Handle a = mem_alloc(1024, 0);
+  Handle a = kmem_alloc(1024, 0);
   unsigned char *first, *second;
   int moved = 0, i;
 
-  first = mem_lock_ro(a);
-  mem_unlock(a);
+  first = kmem_lock_ro(a);
+  kmem_unlock(a);
   for (i = 0; i < 4; i++) {
-    Handle t = mem_alloc(64, 0);            /* an unrelated allocation ... */
-    second = mem_lock_ro(a);
-    mem_unlock(a);
+    Handle t = kmem_alloc(64, 0);            /* an unrelated allocation ... */
+    second = kmem_lock_ro(a);
+    kmem_unlock(a);
     if (second != first) moved = 1;         /* ... must be able to move a */
-    mem_free(t);
+    kmem_free(t);
   }
 #ifdef CARDOS_MEM_PARANOID
   CHECK_EQ(moved, 1);
 #else
   (void)moved;
 #endif
-  CHECK_EQ(mem_size(a), 1024);
-  mem_free(a);
+  CHECK_EQ(kmem_size(a), 1024);
+  kmem_free(a);
   fake_swapdev_destroy(f);
 }

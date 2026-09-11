@@ -7,6 +7,8 @@
  */
 
 #include "shellcmd.h"
+#include "kernel/net/wifi.h"
+#include "kernel/net/http.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -19,7 +21,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
-#include "kernel/drv/btmouse.h"
+#include "kernel/drv/bthid.h"
 #include "kernel/fs/path.h"
 
 static char s_cwd[FS_PATH_MAX] = "/";
@@ -322,23 +324,93 @@ void cmd_taskcost(void) {
 
 void cmd_mouse(const char *arg) {
   if (arg && !strcmp(arg, "off")) {
-    btmouse_stop();
-    con_printf("mouse %s\n", btmouse_status());
+    bthid_stop(BTHID_MOUSE);
+    con_printf("mouse %s\n", bthid_status(BTHID_MOUSE));
     return;
   }
   if (arg && !strcmp(arg, "status")) {
-    con_printf("mouse %s\n", btmouse_status());
-    if (btmouse_heap_cost())
-      con_printf("radio cost %u KB\n", (unsigned)(btmouse_heap_cost() / 1024));
+    con_printf("mouse %s\n", bthid_status(BTHID_MOUSE));
+    if (bthid_heap_cost())
+      con_printf("radio cost %u KB\n", (unsigned)(bthid_heap_cost() / 1024));
     return;
   }
 
   con_write("pairing mode only needed once\n");
   con_write("scanning 6s...\n");
-  btmouse_start(6);
-  con_printf("%s\n", btmouse_status());
-  if (btmouse_heap_cost())
+  bthid_start(6, BTHID_MOUSE);
+  con_printf("%s\n", bthid_status(BTHID_MOUSE));
+  if (bthid_heap_cost())
     con_printf("radio cost %u KB, heap %u KB\n",
-               (unsigned)(btmouse_heap_cost() / 1024),
+               (unsigned)(bthid_heap_cost() / 1024),
                (unsigned)(esp_get_free_heap_size() / 1024));
+}
+
+
+/* ---------------------------------------------------------------- wifi --- */
+
+void cmd_wifi(const char *arg) {
+  char ssid[WIFI_SSID_MAX], pass[WIFI_PASS_MAX];
+  const char *sp;
+
+  if (!arg || !*arg) {
+    con_printf("wifi: %s\n", wifi_status());
+    if (wifi_saved_ssid()[0])
+      con_printf("saved: %s\n", wifi_saved_ssid());
+    con_printf("radio cost %u KB\n", (unsigned)(wifi_heap_cost() / 1024));
+    con_write("wifi scan | wifi SSID PASS | wifi saved | wifi forget | wifi off\n");
+    return;
+  }
+
+  if (!strcmp(arg, "scan")) {
+    WifiAp aps[WIFI_MAX_SCAN];
+    int n, i;
+    con_write("scanning...\n");
+    n = wifi_scan(aps, WIFI_MAX_SCAN);
+    if (n == 0) { con_write("nothing found\n"); return; }
+    for (i = 0; i < n; i++)
+      con_printf("  %-24s %4d dBm%s\n", aps[i].ssid, aps[i].rssi,
+                 aps[i].open ? "  open" : "");
+    return;
+  }
+
+  if (!strcmp(arg, "off"))    { wifi_stop(); con_write("radio off\n"); return; }
+  if (!strcmp(arg, "forget")) { wifi_forget(); con_write("forgotten\n"); return; }
+  if (!strcmp(arg, "saved")) {
+    con_write("joining saved network...\n");
+    wifi_connect_saved(20000);
+    con_printf("%s\n", wifi_status());
+    return;
+  }
+
+  /* wifi SSID PASS. An SSID with a space in it has to be joined from the
+   * Settings app instead; splitting on the first space is the price of a
+   * one-line shell. */
+  sp = strchr(arg, ' ');
+  if (!sp) {
+    snprintf(ssid, sizeof ssid, "%s", arg);
+    pass[0] = 0;
+  } else {
+    int n = (int)(sp - arg);
+    if (n >= (int)sizeof ssid) n = (int)sizeof ssid - 1;
+    snprintf(ssid, sizeof ssid, "%.*s", n, arg);
+    snprintf(pass, sizeof pass, "%s", sp + 1);
+  }
+  con_printf("joining %s...\n", ssid);
+  wifi_connect(ssid, pass, 20000);
+  con_printf("%s\n", wifi_status());
+}
+
+void cmd_get(const char *arg) {
+  static char buf[1600];
+  int n;
+
+  if (!arg || !*arg) { con_write("usage: get URL\n"); return; }
+  if (!wifi_is_connected()) {
+    con_write("no network, joining saved...\n");
+    wifi_connect_saved(20000);
+  }
+  con_printf("GET %s\n", arg);
+  n = http_get(arg, buf, sizeof buf, 15000);
+  if (n < 0) { con_printf("failed (%d)\n", n); return; }
+  con_printf("%d bytes\n%.600s\n", n, buf);
 }

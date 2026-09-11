@@ -7,6 +7,11 @@
  * indirection is what makes a block relocatable (so the heap compacts instead
  * of fragmenting) and evictable (so it can go to swap).
  */
+/* Named kmem_* rather than mem_*: lwIP exports mem_init, mem_free and
+ * mem_malloc from its own heap, and once WiFi is linked in the two collide at
+ * link time with a "multiple definition" that names neither module usefully.
+ * The same thing happened with console_write and ESP-IDF's esp_stdio.
+ */
 #ifndef CARDOS_MEM_H
 #define CARDOS_MEM_H
 
@@ -15,7 +20,7 @@
 
 /* Low 8 bits are the descriptor index, high 8 bits a generation counter that
  * is never 0. A live handle is therefore never 0, and a handle left over from
- * a freed block fails mem_valid() instead of silently addressing whatever now
+ * a freed block fails kmem_valid() instead of silently addressing whatever now
  * occupies its slot. */
 typedef uint16_t Handle;
 
@@ -45,42 +50,42 @@ typedef struct {
   uint32_t page_ins;
 } MemStats;
 
-void   mem_init(void *heap, size_t bytes);
+void   kmem_init(void *heap, size_t bytes);
 
-Handle mem_alloc(size_t bytes, uint16_t flags);
-void   mem_free(Handle h);
+Handle kmem_alloc(size_t bytes, uint16_t flags);
+void   kmem_free(Handle h);
 
 /* Pin a block and return a writable pointer, paging it in if it was swapped.
  * Returns NULL if the handle is stale or if the page-in cannot be satisfied
  * because RAM is full of pinned blocks. Callers must check. Locks nest. */
-void  *mem_lock(Handle h);
+void  *kmem_lock(Handle h);
 
-/* As mem_lock, but does not mark the block dirty. A clean block that already
+/* As kmem_lock, but does not mark the block dirty. A clean block that already
  * has a swap page can be evicted again without writing it, which is what
  * makes read-mostly data such as console scrollback cheap to hold. */
-void  *mem_lock_ro(Handle h);
+void  *kmem_lock_ro(Handle h);
 
-void   mem_unlock(Handle h);
+void   kmem_unlock(Handle h);
 
-size_t mem_size(Handle h);
-int    mem_valid(Handle h);
-int    mem_resident(Handle h);
+size_t kmem_size(Handle h);
+int    kmem_valid(Handle h);
+int    kmem_resident(Handle h);
 
 /* Slide unpinned movable blocks down to close gaps. Called automatically by
- * mem_alloc before it resorts to eviction; public because the shell's `mem`
+ * kmem_alloc before it resorts to eviction; public because the shell's `mem`
  * command triggers it. */
-void   mem_compact(void);
+void   kmem_compact(void);
 
-int    mem_locked(Handle h);   /* current lock count */
+int    kmem_locked(Handle h);   /* current lock count */
 
 /* Lock ownership. The scheduler stamps the running task before switching to
  * it, so that when a task dies its locks can be handed back -- otherwise the
  * counts stay raised forever and the blocks are pinned for the life of the
  * system. Owner 0 means unowned (kernel allocations made before any task
  * exists) and is never released. */
-void   mem_set_owner(uint8_t owner);
-int    mem_release_owner(uint8_t owner);   /* returns blocks released */
+void   kmem_set_owner(uint8_t owner);
+int    kmem_release_owner(uint8_t owner);   /* returns blocks released */
 
-void   mem_stats(MemStats *out);
+void   kmem_stats(MemStats *out);
 
 #endif /* CARDOS_MEM_H */

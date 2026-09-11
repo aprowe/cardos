@@ -117,6 +117,32 @@ void draw_text_ellipsis(int16_t x, int16_t y, int16_t max_w, const char *s,
 }
 
 
+/* ------------------------------------------------------------ bitmap ---- */
+
+void draw_bitmap1(int16_t x, int16_t y, int16_t w, int16_t h,
+                  const uint8_t *bits, uint16_t fg, uint16_t bg) {
+  Rect box, v;
+  int16_t px, py;
+  int stride;
+
+  if (!bits || w <= 0 || h <= 0) return;
+  stride = (w + 7) / 8;
+
+  box.x = x; box.y = y; box.w = w; box.h = h;
+  v = rect_intersect(box, s_clip);
+  if (rect_is_empty(v)) return;
+
+  for (py = v.y; py < v.y + v.h; py++) {
+    const uint8_t *row = bits + (size_t)(py - y) * (size_t)stride;
+    for (px = v.x; px < v.x + v.w; px++) {
+      int col = px - x;
+      int on = (row[col >> 3] >> (7 - (col & 7))) & 1;
+      s_row[px - v.x] = on ? fg : bg;
+    }
+    display_blit(v.x, py, v.w, 1, s_row);
+  }
+}
+
 /* ------------------------------------------------------------ cursor ---- */
 
 /* Bit 0 is the leftmost pixel. The classic arrow: a filled wedge with a tail.
@@ -141,35 +167,40 @@ static int arrow_outline(int col, int row) {
   return 0;
 }
 
+Rect draw_cursor_bounds(int16_t x, int16_t y) {
+  Rect r;
+  r.x = (int16_t)(x - 1);       /* room for the outline left of the tip */
+  r.y = (int16_t)(y - 1);
+  r.w = CURSOR_W;
+  r.h = CURSOR_H;
+  return r;
+}
+
 void draw_cursor(int16_t x, int16_t y) {
-  Rect box, v;
+  Rect box = draw_cursor_bounds(x, y), v;
   int16_t px, py;
 
-  box.x = x; box.y = y; box.w = CURSOR_W; box.h = CURSOR_H;
   v = rect_intersect(box, s_clip);
   if (rect_is_empty(v)) return;
 
   for (py = v.y; py < v.y + v.h; py++) {
     int row = py - y;
-    int any = 0;
     int16_t run_start = -1;
 
-    /* Build the whole scanline, then blit once. Anything not part of the
-       cursor has to be left alone, so transparent pixels are emitted as
-       separate runs rather than as a background colour. */
+    /* Build the whole scanline, then blit each solid run. Anything not part of
+       the pointer has to be left alone, so transparent pixels break the run
+       rather than being emitted as a background colour. */
     for (px = v.x; px <= v.x + v.w; px++) {
       int col = px - x;
       int solid = (px < v.x + v.w) &&
                   (arrow_fill(col, row) || arrow_outline(col, row));
       if (solid) {
         if (run_start < 0) run_start = px;
-        s_row[px - run_start] = arrow_fill(col, row) ? C_DARK : C_LIGHT;
-        any = 1;
+        s_row[px - run_start] = arrow_fill(col, row) ? C_DARK : C_WHITE;
       } else if (run_start >= 0) {
         display_blit(run_start, py, px - run_start, 1, s_row);
         run_start = -1;
       }
     }
-    (void)any;
   }
 }

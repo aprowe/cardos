@@ -51,12 +51,12 @@ Apps never hold raw pointers across a yield. They hold handles.
 ```c
 typedef uint16_t Handle;                  /* 0 = invalid */
 
-Handle  mem_alloc(size_t bytes, uint16_t flags);   /* MEM_ZERO, MEM_FIXED */
-void   *mem_lock(Handle h);               /* pins; pages in if swapped */
-void    mem_unlock(Handle h);             /* now relocatable and evictable */
-size_t  mem_size(Handle h);
-void    mem_free(Handle h);
-void    mem_stats(MemStats *out);
+Handle  kmem_alloc(size_t bytes, uint16_t flags);   /* MEM_ZERO, MEM_FIXED */
+void   *kmem_lock(Handle h);               /* pins; pages in if swapped */
+void    kmem_unlock(Handle h);             /* now relocatable and evictable */
+size_t  kmem_size(Handle h);
+void    kmem_free(Handle h);
+void    kmem_stats(MemStats *out);
 ```
 
 **Handle table.** A fixed array of 256 descriptors (~12 bytes each, ~3 KB
@@ -67,7 +67,7 @@ index, lock count, flags, LRU links.
 *relocatable*, so the manager compacts the heap rather than fragmenting to
 death; and it is *evictable*, so it can go to swap.
 
-**Eviction.** When `mem_alloc` or a page-in cannot be satisfied:
+**Eviction.** When `kmem_alloc` or a page-in cannot be satisfied:
 1. Try compaction (move unlocked resident blocks down, coalesce free space).
 2. Still short: evict least-recently-used unlocked blocks to swap until the
    request fits.
@@ -76,7 +76,7 @@ death; and it is *evictable*, so it can go to swap.
 `MEM_FIXED` blocks are never moved or evicted — for task stacks, DMA buffers
 and anything an interrupt can touch.
 
-**Lock discipline.** `mem_lock` nests (lock count, not a boolean). A block
+**Lock discipline.** `kmem_lock` nests (lock count, not a boolean). A block
 locked across a yield simply stays resident; that is legal but costs RAM. The
 shell's own code is the reference example of correct discipline.
 

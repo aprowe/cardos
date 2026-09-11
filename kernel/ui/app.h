@@ -39,6 +39,17 @@ typedef struct {
   void (*open)(void *state);
 
   void *state;
+
+  /* Natural height in pixels at this width, for apps whose contents do not
+   * fit. NULL means "whatever the window is" -- the common case. The window
+   * system scrolls the difference and draws a scrollbar; an app that answers
+   * this never has to know it is being scrolled. */
+  int16_t (*height)(void *state, int16_t width);
+
+  /* Preferred content size. Zero means "whatever the desktop hands out".
+   * A game with a fixed board has a right answer here and nothing else
+   * does. */
+  int16_t pref_w, pref_h;
 } AppDef;
 
 /* The apps the Start menu offers. */

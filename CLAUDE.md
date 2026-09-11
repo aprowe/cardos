@@ -12,9 +12,28 @@ core, and its MVP is a working shell.
 
 ## Where things stand
 
-Design approved 2026-09-10. Nothing implemented yet. Next step is an
-implementation plan (superpowers:writing-plans), then TDD implementation
-starting with the host-testable memory manager.
+The kernel core works on hardware. Three shells over it, all switchable:
+
+- **launcher** (`launch`) -- fullscreen icon grid, apps run fullscreen, Escape
+  leaves. Boots into this, because it is the one that is actually useful.
+- **desktop** (`desk`) -- windows, taskbar, Start menu, pointer. Proof the
+  window system works more than a daily driver.
+- **console** -- the development shell. `help` lists it.
+
+Apps come in two kinds. Built-ins (Files, Memory, About, Settings) are compiled
+in. Loadable apps are `.capp` files: ELF, linked complete, relocated at load.
+They live in `/desktop` on the card, carry their own name and 16x16 icon, and
+are embedded in the firmware so first boot writes them out. See
+`kernel/app/elfload.h` for why the loader is short, and `apps/capp.ld` for the
+one hardware fact that shapes all of it.
+
+Also working: BLE mouse and keyboard (two links at once), WiFi with an HTTPS
+client apps can call, SD card, and chain-booting third-party firmware with a
+one-shot rollback home.
+
+**Measured memory, with both radios up: 83 KB of heap free.** See
+`tools/mapsize.py` and the `mem` command. Both numbers moved a lot during
+bring-up -- do not trust any figure here that you have not re-measured.
 
 ## Hardware facts — measured on the actual device, not from a datasheet
 
@@ -49,6 +68,16 @@ The `` ` `` key (labelled ESC) is the universal escape. Arrow keys are the
 
 ## Toolchain
 
+- **`python tools/build_apps.py` before the firmware build**, whenever anything
+  in `apps/` or `kernel/app/capp.h` changed. It compiles each app, refuses any
+  binary the on-device loader could not load, and regenerates
+  `kernel/app/capp_blobs.h`, which is gitignored precisely so a stale copy
+  cannot ship. Forgetting it means the firmware embeds apps built against a
+  different API version, and the loader refuses them at boot with
+  "built for a different API version".
+- `python tools/make_font.py` regenerates the 6x8 font from pictures.
+  `--show` renders the table back out; edit the pictures, never the hex.
+- `python tools/mapsize.py` says where the flash and RAM went, per component.
 - PlatformIO is installed under the user Python: **`python -m platformio`**
   (there is no `pio` on PATH). `python -m platformio run -t upload --upload-port COM3`.
 - For CardOS use `framework = espidf`, **not** Arduino.
@@ -69,7 +98,11 @@ hardware-specific. What it cost to learn:
   the console is configured to go before concluding the firmware is dead.
 - **Measure memory, never assume it.** Cardlet shipped a hardcoded Lua budget
   that was wrong in both directions and cost a long debugging session. Every
-  memory number in the spec above was measured on this device.
+  memory number in the spec above was measured on this device. CardOS then made
+  the same mistake in miniature: the memory manager's arena was fixed at 128 KB
+  before either radio existed, and with WiFi and Bluetooth both up that left
+  1156 bytes free and the WiFi driver failing buffer allocations in a loop. It
+  is 48 KB now. Run `mem` after adding anything that allocates.
 - **A firmware that seems dead is usually a serial problem**, not a crash —
   check whether the device is still doing its job by some other channel first.
 
@@ -82,3 +115,8 @@ hardware-specific. What it cost to learn:
 - Measure before optimising, and put the measurement in the commit message.
 - When something cannot work on this hardware, say so plainly and early
   rather than building a version that pretends.
+- Watch for name collisions with ESP-IDF and its vendored stacks. Three so far:
+  `console_write` (esp_stdio), `LINE_MAX` (picolibc), and `mem_init`/`mem_free`
+  (lwIP, once WiFi was linked). The CardOS memory manager is `kmem_*` for that
+  reason. A collision surfaces as a "multiple definition" that names neither
+  module usefully.

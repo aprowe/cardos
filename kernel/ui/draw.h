@@ -49,8 +49,20 @@ int16_t draw_text_width(const char *s);
 
 /* The pointer. 8x12 plus a one-pixel outline, so it stays visible over the
  * teal desktop, a grey window and a white content well alike. */
-#define CURSOR_W 9
-#define CURSOR_H 13
+/* The pointer's bounding box. The arrow is 8x12 of fill, and its outline is
+ * one pixel outside that on every side -- including the left and the top, so
+ * the box has to start a pixel before the tip or the white edge is simply cut
+ * off, which is what it looked like. */
+#define CURSOR_W 10
+#define CURSOR_H 14
+/* x, y is the tip. The box extends one pixel up and to the left of it. */
+/* A 1bpp bitmap, `w` pixels wide and packed row by row with bit 7 leftmost --
+ * the shape a loaded app supplies its icon in. Set bits get `fg`; clear bits
+ * get `bg`, or are left alone if `bg` equals `fg`. */
+void draw_bitmap1(int16_t x, int16_t y, int16_t w, int16_t h,
+                  const uint8_t *bits, uint16_t fg, uint16_t bg);
+
 void draw_cursor(int16_t x, int16_t y);
+Rect draw_cursor_bounds(int16_t x, int16_t y);
 
 #endif /* CARDOS_DRAW_H */

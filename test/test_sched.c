@@ -234,18 +234,18 @@ void test_a_dying_task_hands_back_the_locks_it_held(void) {
   Tid a, b;
   Handle h;
   setup();
-  mem_init(sched_heap, sizeof sched_heap);
+  kmem_init(sched_heap, sizeof sched_heap);
   a = sched_create("a");
   b = sched_create("b");
 
   CHECK_EQ(sched_next(), a);          /* a is running, so a owns what it locks */
-  h = mem_alloc(1024, 0);
-  CHECK(mem_lock(h) != NULL);
-  CHECK_EQ(mem_locked(h), 1);
+  h = kmem_alloc(1024, 0);
+  CHECK(kmem_lock(h) != NULL);
+  CHECK_EQ(kmem_locked(h), 1);
 
   sched_exit(a);
-  CHECK_EQ(mem_locked(h), 0);         /* released by the exit, not leaked */
-  CHECK_EQ(mem_valid(h), 1);          /* the block itself still exists */
+  CHECK_EQ(kmem_locked(h), 0);         /* released by the exit, not leaked */
+  CHECK_EQ(kmem_valid(h), 1);          /* the block itself still exists */
   (void)b;
 }
 
@@ -253,18 +253,18 @@ void test_one_task_exiting_leaves_another_s_locks_alone(void) {
   Tid a, b;
   Handle ha, hb;
   setup();
-  mem_init(sched_heap, sizeof sched_heap);
+  kmem_init(sched_heap, sizeof sched_heap);
   a = sched_create("a");
   b = sched_create("b");
 
   CHECK_EQ(sched_next(), a);
-  ha = mem_alloc(1024, 0);
-  mem_lock(ha);
+  ha = kmem_alloc(1024, 0);
+  kmem_lock(ha);
   CHECK_EQ(sched_next(), b);
-  hb = mem_alloc(1024, 0);
-  mem_lock(hb);
+  hb = kmem_alloc(1024, 0);
+  kmem_lock(hb);
 
   sched_exit(b);
-  CHECK_EQ(mem_locked(hb), 0);
-  CHECK_EQ(mem_locked(ha), 1);        /* a is still very much alive */
+  CHECK_EQ(kmem_locked(hb), 0);
+  CHECK_EQ(kmem_locked(ha), 1);        /* a is still very much alive */
 }

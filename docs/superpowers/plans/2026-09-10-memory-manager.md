@@ -16,7 +16,7 @@
 - **Handle is `uint16_t`:** low 8 bits index, high 8 bits generation. Generation is never 0, so a live handle is never 0 and `0` stays the invalid handle.
 - **256 handle descriptors**, 16 bytes each = 4 KB. The descriptor stores a `uint32_t` heap *offset*, not a pointer, so its layout is identical on a 64-bit host and a 32-bit device.
 - **Maximum block size is 32 KB** (`MEM_MAX_BLOCK`). Larger requests fail. This is what makes a page-in provably satisfiable.
-- **`mem_lock` may return NULL** and every caller must check it.
+- **`kmem_lock` may return NULL** and every caller must check it.
 - **Swap page size is 4096 bytes = 8 sectors of 512 bytes.**
 - Measured hardware budget the design must fit (from the spec): 322 KB free heap after chip and display init, 65 KB full-screen canvas, no PSRAM.
 - Every task ends with the whole suite green and a commit.
@@ -122,9 +122,9 @@ rtk git add CMakeLists.txt build.bat test/ .gitignore && rtk git commit -m "test
 
 **Interfaces:**
 - Consumes: `test/tinytest.h`.
-- Produces: `Handle`, `MEM_ZERO`, `MEM_FIXED`, `MEM_MAX_HANDLES`, `MEM_MAX_BLOCK`, `MemStats`, `mem_init(void *heap, size_t bytes)`, `mem_alloc(size_t, uint16_t) -> Handle`, `mem_free(Handle)`, `mem_size(Handle) -> size_t`, `mem_valid(Handle) -> int`, `mem_stats(MemStats *)`. Internals for tests via `mem_internal.h`: `MemDesc`, `mem_desc(Handle) -> MemDesc *`, `mem_index(Handle)`, `mem_generation(Handle)`.
+- Produces: `Handle`, `MEM_ZERO`, `MEM_FIXED`, `MEM_MAX_HANDLES`, `MEM_MAX_BLOCK`, `MemStats`, `kmem_init(void *heap, size_t bytes)`, `kmem_alloc(size_t, uint16_t) -> Handle`, `kmem_free(Handle)`, `kmem_size(Handle) -> size_t`, `kmem_valid(Handle) -> int`, `kmem_stats(MemStats *)`. Internals for tests via `mem_internal.h`: `MemDesc`, `mem_desc(Handle) -> MemDesc *`, `mem_index(Handle)`, `mem_generation(Handle)`.
 
-Rationale for the encoding: with 256 descriptors an index needs exactly 8 bits, leaving 8 bits of generation inside the existing `uint16_t`. Generation increments on every free and skips 0. A handle whose generation does not match its descriptor is rejected by `mem_valid`, so use-after-free is detected rather than silently reading another block.
+Rationale for the encoding: with 256 descriptors an index needs exactly 8 bits, leaving 8 bits of generation inside the existing `uint16_t`. Generation increments on every free and skips 0. A handle whose generation does not match its descriptor is rejected by `kmem_valid`, so use-after-free is detected rather than silently reading another block.
 
 - [ ] **Step 1: Write the failing test `test/test_mem_handles.c`**
 
@@ -137,52 +137,52 @@ Rationale for the encoding: with 256 descriptors an index needs exactly 8 bits, 
 static unsigned char heap[64 * 1024];
 
 void test_alloc_returns_distinct_nonzero_handles(void) {
-  mem_init(heap, sizeof heap);
-  Handle a = mem_alloc(100, 0), b = mem_alloc(100, 0);
+  kmem_init(heap, sizeof heap);
+  Handle a = kmem_alloc(100, 0), b = kmem_alloc(100, 0);
   CHECK(a != 0); CHECK(b != 0); CHECK(a != b);
-  CHECK_EQ(mem_size(a), 100);
+  CHECK_EQ(kmem_size(a), 100);
 }
 
 void test_handle_zero_is_always_invalid(void) {
-  mem_init(heap, sizeof heap);
-  CHECK_EQ(mem_valid(0), 0);
-  CHECK_EQ(mem_size(0), 0);
+  kmem_init(heap, sizeof heap);
+  CHECK_EQ(kmem_valid(0), 0);
+  CHECK_EQ(kmem_size(0), 0);
 }
 
 void test_freed_handle_is_detected_as_stale(void) {
-  mem_init(heap, sizeof heap);
-  Handle a = mem_alloc(100, 0);
-  mem_free(a);
-  CHECK_EQ(mem_valid(a), 0);          /* the whole point of the generation */
-  Handle b = mem_alloc(100, 0);
+  kmem_init(heap, sizeof heap);
+  Handle a = kmem_alloc(100, 0);
+  kmem_free(a);
+  CHECK_EQ(kmem_valid(a), 0);          /* the whole point of the generation */
+  Handle b = kmem_alloc(100, 0);
   CHECK_EQ(mem_index(b), mem_index(a));   /* slot reused ... */
   CHECK(b != a);                          /* ... but the handle differs */
-  CHECK_EQ(mem_valid(a), 0);
-  CHECK_EQ(mem_valid(b), 1);
+  CHECK_EQ(kmem_valid(a), 0);
+  CHECK_EQ(kmem_valid(b), 1);
 }
 
 void test_generation_never_becomes_zero(void) {
-  mem_init(heap, sizeof heap);
+  kmem_init(heap, sizeof heap);
   for (int i = 0; i < 600; i++) {         /* wraps the 8-bit generation twice */
-    Handle h = mem_alloc(16, 0);
+    Handle h = kmem_alloc(16, 0);
     CHECK(h != 0);
     CHECK(mem_generation(h) != 0);
-    mem_free(h);
+    kmem_free(h);
   }
 }
 
 void test_handle_table_exhaustion_returns_zero(void) {
-  mem_init(heap, sizeof heap);
+  kmem_init(heap, sizeof heap);
   int got = 0;
   for (int i = 0; i < MEM_MAX_HANDLES + 10; i++)
-    if (mem_alloc(16, 0)) got++;
+    if (kmem_alloc(16, 0)) got++;
   CHECK_EQ(got, MEM_MAX_HANDLES);
 }
 
 void test_oversized_allocation_is_refused(void) {
-  mem_init(heap, sizeof heap);
-  CHECK_EQ(mem_alloc(MEM_MAX_BLOCK + 1, 0), 0);
-  CHECK_EQ(mem_alloc(0, 0), 0);
+  kmem_init(heap, sizeof heap);
+  CHECK_EQ(kmem_alloc(MEM_MAX_BLOCK + 1, 0), 0);
+  CHECK_EQ(kmem_alloc(0, 0), 0);
 }
 ```
 
@@ -212,9 +212,9 @@ rtk git add kernel/mem test/test_mem_handles.c test/test_main.c CMakeLists.txt &
 
 **Interfaces:**
 - Consumes: Task 2's handle table.
-- Produces: `mem_lock(Handle) -> void *` (NULL on failure), `mem_lock_ro(Handle) -> void *`, `mem_unlock(Handle)`.
+- Produces: `kmem_lock(Handle) -> void *` (NULL on failure), `kmem_lock_ro(Handle) -> void *`, `kmem_unlock(Handle)`.
 
-`mem_lock` pins a block and returns a writable pointer, marking it dirty. `mem_lock_ro` pins without marking dirty, so a clean block that already has a swap page can be evicted again without a write — this is what makes the console scrollback cheap. Lock counts nest.
+`kmem_lock` pins a block and returns a writable pointer, marking it dirty. `kmem_lock_ro` pins without marking dirty, so a clean block that already has a swap page can be evicted again without a write — this is what makes the console scrollback cheap. Lock counts nest.
 
 - [ ] **Step 1: Write the failing test `test/test_mem_alloc.c`**
 
@@ -226,54 +226,54 @@ rtk git add kernel/mem test/test_mem_handles.c test/test_main.c CMakeLists.txt &
 static unsigned char heap[64 * 1024];
 
 void test_locked_pointer_is_writable_and_stable(void) {
-  mem_init(heap, sizeof heap);
-  Handle h = mem_alloc(256, 0);
-  unsigned char *p = mem_lock(h);
+  kmem_init(heap, sizeof heap);
+  Handle h = kmem_alloc(256, 0);
+  unsigned char *p = kmem_lock(h);
   CHECK(p != NULL);
   memset(p, 0xAB, 256);
-  unsigned char *q = mem_lock(h);        /* nested lock */
+  unsigned char *q = kmem_lock(h);        /* nested lock */
   CHECK_EQ(p == q, 1);
   CHECK_EQ(p[255], 0xAB);
-  mem_unlock(h); mem_unlock(h);
+  kmem_unlock(h); kmem_unlock(h);
 }
 
 void test_mem_zero_clears_the_block(void) {
-  mem_init(heap, sizeof heap);
-  Handle h = mem_alloc(64, MEM_ZERO);
-  unsigned char *p = mem_lock(h);
+  kmem_init(heap, sizeof heap);
+  Handle h = kmem_alloc(64, MEM_ZERO);
+  unsigned char *p = kmem_lock(h);
   for (int i = 0; i < 64; i++) CHECK_EQ(p[i], 0);
-  mem_unlock(h);
+  kmem_unlock(h);
 }
 
 void test_blocks_do_not_overlap(void) {
-  mem_init(heap, sizeof heap);
-  Handle a = mem_alloc(1000, 0), b = mem_alloc(1000, 0);
-  unsigned char *pa = mem_lock(a), *pb = mem_lock(b);
+  kmem_init(heap, sizeof heap);
+  Handle a = kmem_alloc(1000, 0), b = kmem_alloc(1000, 0);
+  unsigned char *pa = kmem_lock(a), *pb = kmem_lock(b);
   memset(pa, 1, 1000); memset(pb, 2, 1000);
   for (int i = 0; i < 1000; i++) { CHECK_EQ(pa[i], 1); CHECK_EQ(pb[i], 2); }
-  mem_unlock(a); mem_unlock(b);
+  kmem_unlock(a); kmem_unlock(b);
 }
 
 void test_lock_of_stale_handle_returns_null(void) {
-  mem_init(heap, sizeof heap);
-  Handle h = mem_alloc(64, 0);
-  mem_free(h);
-  CHECK(mem_lock(h) == NULL);
+  kmem_init(heap, sizeof heap);
+  Handle h = kmem_alloc(64, 0);
+  kmem_free(h);
+  CHECK(kmem_lock(h) == NULL);
 }
 
 void test_alloc_fails_cleanly_when_heap_is_full(void) {
-  mem_init(heap, sizeof heap);
+  kmem_init(heap, sizeof heap);
   int n = 0;
-  while (mem_alloc(MEM_MAX_BLOCK, 0)) n++;
+  while (kmem_alloc(MEM_MAX_BLOCK, 0)) n++;
   CHECK(n >= 1);
-  MemStats s; mem_stats(&s);
+  MemStats s; kmem_stats(&s);
   CHECK(s.free_bytes < MEM_MAX_BLOCK);   /* it really did run out */
 }
 ```
 
-- [ ] **Step 2: Run and verify it fails.** Expected: `mem_lock` undefined.
+- [ ] **Step 2: Run and verify it fails.** Expected: `kmem_lock` undefined.
 
-- [ ] **Step 3: Implement** the movable bump arena in `mem.c`: `movable_top` grows up from offset 0, allocation places a block at `movable_top` when `movable_top + size <= fixed_bottom`, `mem_lock`/`mem_lock_ro` return `heap_base + desc->off` after validating and incrementing `lock`, `mem_unlock` decrements. Register the tests.
+- [ ] **Step 3: Implement** the movable bump arena in `mem.c`: `movable_top` grows up from offset 0, allocation places a block at `movable_top` when `movable_top + size <= fixed_bottom`, `kmem_lock`/`kmem_lock_ro` return `heap_base + desc->off` after validating and incrementing `lock`, `kmem_unlock` decrements. Register the tests.
 
 - [ ] **Step 4: Run the tests.** Expected: all five pass, plus Task 2's still green.
 
@@ -307,53 +307,53 @@ This is the change to the approved spec from the review: fixed blocks allocate *
 static unsigned char heap[64 * 1024];
 
 void test_fixed_blocks_sit_above_movable_blocks(void) {
-  mem_init(heap, sizeof heap);
-  Handle m = mem_alloc(1024, 0);
-  Handle f = mem_alloc(1024, MEM_FIXED);
-  unsigned char *pm = mem_lock(m), *pf = mem_lock(f);
+  kmem_init(heap, sizeof heap);
+  Handle m = kmem_alloc(1024, 0);
+  Handle f = kmem_alloc(1024, MEM_FIXED);
+  unsigned char *pm = kmem_lock(m), *pf = kmem_lock(f);
   CHECK(pf > pm);                         /* fixed lives at the top */
-  mem_unlock(m); mem_unlock(f);
+  kmem_unlock(m); kmem_unlock(f);
 }
 
 void test_fixed_block_never_moves_across_a_compaction(void) {
-  mem_init(heap, sizeof heap);
-  Handle a = mem_alloc(2048, 0);
-  Handle f = mem_alloc(1024, MEM_FIXED);
-  unsigned char *pf = mem_lock(f);
+  kmem_init(heap, sizeof heap);
+  Handle a = kmem_alloc(2048, 0);
+  Handle f = kmem_alloc(1024, MEM_FIXED);
+  unsigned char *pf = kmem_lock(f);
   memset(pf, 0x5A, 1024);
-  mem_unlock(f);                          /* unlocked, but FIXED */
-  mem_free(a);                            /* leaves a gap ... */
-  mem_compact();                          /* ... which compaction closes */
-  unsigned char *pf2 = mem_lock(f);
+  kmem_unlock(f);                          /* unlocked, but FIXED */
+  kmem_free(a);                            /* leaves a gap ... */
+  kmem_compact();                          /* ... which compaction closes */
+  unsigned char *pf2 = kmem_lock(f);
   CHECK_EQ(pf == pf2, 1);                 /* the fixed block did not budge */
   CHECK_EQ(pf2[1023], 0x5A);
-  mem_unlock(f);
+  kmem_unlock(f);
 }
 
 void test_freed_fixed_blocks_are_coalesced_and_reused(void) {
-  mem_init(heap, sizeof heap);
-  Handle a = mem_alloc(1024, MEM_FIXED);
-  Handle b = mem_alloc(1024, MEM_FIXED);
-  MemStats before; mem_stats(&before);
-  mem_free(a); mem_free(b);
-  Handle c = mem_alloc(2048, MEM_FIXED);  /* only fits if the two coalesced */
+  kmem_init(heap, sizeof heap);
+  Handle a = kmem_alloc(1024, MEM_FIXED);
+  Handle b = kmem_alloc(1024, MEM_FIXED);
+  MemStats before; kmem_stats(&before);
+  kmem_free(a); kmem_free(b);
+  Handle c = kmem_alloc(2048, MEM_FIXED);  /* only fits if the two coalesced */
   CHECK(c != 0);
-  MemStats after; mem_stats(&after);
+  MemStats after; kmem_stats(&after);
   CHECK_EQ(before.fixed_used, after.fixed_used);
 }
 
 void test_fixed_and_movable_arenas_cannot_collide(void) {
-  mem_init(heap, sizeof heap);
-  while (mem_alloc(MEM_MAX_BLOCK, MEM_FIXED)) { }
-  MemStats s; mem_stats(&s);
+  kmem_init(heap, sizeof heap);
+  while (kmem_alloc(MEM_MAX_BLOCK, MEM_FIXED)) { }
+  MemStats s; kmem_stats(&s);
   CHECK(s.movable_used + s.fixed_used <= s.heap_size);
-  CHECK_EQ(mem_alloc(MEM_MAX_BLOCK, 0), 0);
+  CHECK_EQ(kmem_alloc(MEM_MAX_BLOCK, 0), 0);
 }
 ```
 
-- [ ] **Step 2: Run and verify it fails.** Expected: `mem_compact` undefined and the placement assertions fail.
+- [ ] **Step 2: Run and verify it fails.** Expected: `kmem_compact` undefined and the placement assertions fail.
 
-- [ ] **Step 3: Implement** the downward bump allocator plus a sorted free-range list (first fit, coalesce with both neighbours on free, and raise `fixed_bottom` when the coalesced range reaches it). Declare `void mem_compact(void)` in `mem.h` — it is public because the shell's `mem` command triggers it.
+- [ ] **Step 3: Implement** the downward bump allocator plus a sorted free-range list (first fit, coalesce with both neighbours on free, and raise `fixed_bottom` when the coalesced range reaches it). Declare `void kmem_compact(void)` in `mem.h` — it is public because the shell's `mem` command triggers it.
 
 - [ ] **Step 4: Run the tests.** Expected: all green.
 
@@ -373,7 +373,7 @@ rtk git add -A && rtk git commit -m "feat(mem): fixed arena grows down from the 
 
 **Interfaces:**
 - Consumes: Tasks 2–4.
-- Produces: `mem_compact(void)`; `MemStats.compactions`, `MemStats.largest_free`.
+- Produces: `kmem_compact(void)`; `MemStats.compactions`, `MemStats.largest_free`.
 
 Compaction walks movable blocks in address order carrying a destination cursor. A block that is **locked** is pinned and cannot move (a caller holds its pointer), so the cursor jumps past it; every other movable block slides down to the cursor. This means compaction is partial when blocks are locked, which is correct and is what the lock discipline in the spec is buying.
 
@@ -386,22 +386,22 @@ Compaction walks movable blocks in address order carrying a destination cursor. 
 
 static unsigned char heap[64 * 1024];
 static void fill(Handle h, unsigned char v) {
-  unsigned char *p = mem_lock(h); memset(p, v, mem_size(h)); mem_unlock(h);
+  unsigned char *p = kmem_lock(h); memset(p, v, kmem_size(h)); kmem_unlock(h);
 }
 static int check_fill(Handle h, unsigned char v) {
-  unsigned char *p = mem_lock(h); if (!p) return 0;
-  for (size_t i = 0; i < mem_size(h); i++) if (p[i] != v) { mem_unlock(h); return 0; }
-  mem_unlock(h); return 1;
+  unsigned char *p = kmem_lock(h); if (!p) return 0;
+  for (size_t i = 0; i < kmem_size(h); i++) if (p[i] != v) { kmem_unlock(h); return 0; }
+  kmem_unlock(h); return 1;
 }
 
 void test_compaction_closes_a_gap_and_preserves_contents(void) {
-  mem_init(heap, sizeof heap);
-  Handle a = mem_alloc(4096, 0), b = mem_alloc(4096, 0), c = mem_alloc(4096, 0);
+  kmem_init(heap, sizeof heap);
+  Handle a = kmem_alloc(4096, 0), b = kmem_alloc(4096, 0), c = kmem_alloc(4096, 0);
   fill(a, 0xA1); fill(b, 0xB2); fill(c, 0xC3);
-  mem_free(b);                            /* gap in the middle */
-  MemStats before; mem_stats(&before);
-  mem_compact();
-  MemStats after; mem_stats(&after);
+  kmem_free(b);                            /* gap in the middle */
+  MemStats before; kmem_stats(&before);
+  kmem_compact();
+  MemStats after; kmem_stats(&after);
   CHECK(after.largest_free > before.largest_free);
   CHECK_EQ(after.compactions, before.compactions + 1);
   CHECK_EQ(check_fill(a, 0xA1), 1);
@@ -409,44 +409,44 @@ void test_compaction_closes_a_gap_and_preserves_contents(void) {
 }
 
 void test_compaction_does_not_move_a_locked_block(void) {
-  mem_init(heap, sizeof heap);
-  Handle a = mem_alloc(4096, 0), b = mem_alloc(4096, 0), c = mem_alloc(4096, 0);
+  kmem_init(heap, sizeof heap);
+  Handle a = kmem_alloc(4096, 0), b = kmem_alloc(4096, 0), c = kmem_alloc(4096, 0);
   fill(a, 0xA1); fill(c, 0xC3);
-  unsigned char *pc = mem_lock(c);        /* pinned across the compaction */
+  unsigned char *pc = kmem_lock(c);        /* pinned across the compaction */
   memset(pc, 0xC3, 4096);
-  mem_free(b);
-  mem_compact();
-  CHECK_EQ(mem_lock(c) == pc, 1);         /* still exactly where it was */
+  kmem_free(b);
+  kmem_compact();
+  CHECK_EQ(kmem_lock(c) == pc, 1);         /* still exactly where it was */
   CHECK_EQ(pc[4095], 0xC3);
-  mem_unlock(c); mem_unlock(c);
+  kmem_unlock(c); kmem_unlock(c);
   CHECK_EQ(check_fill(a, 0xA1), 1);
 }
 
 void test_alloc_compacts_automatically_when_it_would_otherwise_fail(void) {
-  mem_init(heap, sizeof heap);
-  Handle h[8]; for (int i = 0; i < 8; i++) { h[i] = mem_alloc(7000, 0); CHECK(h[i] != 0); }
-  for (int i = 0; i < 8; i += 2) mem_free(h[i]);   /* alternating gaps */
-  MemStats before; mem_stats(&before);
-  Handle big = mem_alloc(20000, 0);       /* only fits after compaction */
+  kmem_init(heap, sizeof heap);
+  Handle h[8]; for (int i = 0; i < 8; i++) { h[i] = kmem_alloc(7000, 0); CHECK(h[i] != 0); }
+  for (int i = 0; i < 8; i += 2) kmem_free(h[i]);   /* alternating gaps */
+  MemStats before; kmem_stats(&before);
+  Handle big = kmem_alloc(20000, 0);       /* only fits after compaction */
   CHECK(big != 0);
-  MemStats after; mem_stats(&after);
+  MemStats after; kmem_stats(&after);
   CHECK(after.compactions > before.compactions);
 }
 
 void test_compaction_is_a_noop_when_there_are_no_gaps(void) {
-  mem_init(heap, sizeof heap);
-  Handle a = mem_alloc(4096, 0);
+  kmem_init(heap, sizeof heap);
+  Handle a = kmem_alloc(4096, 0);
   fill(a, 0x11);
-  unsigned char *before = mem_lock(a); mem_unlock(a);
-  mem_compact();
-  CHECK_EQ(mem_lock(a) == before, 1); mem_unlock(a);
+  unsigned char *before = kmem_lock(a); kmem_unlock(a);
+  kmem_compact();
+  CHECK_EQ(kmem_lock(a) == before, 1); kmem_unlock(a);
   CHECK_EQ(check_fill(a, 0x11), 1);
 }
 ```
 
 - [ ] **Step 2: Run and verify it fails.**
 
-- [ ] **Step 3: Implement** compaction: collect resident movable descriptor indices, insertion-sort them by offset, sweep with a cursor moving pinned blocks past and `memmove`-ing the rest down. Then wire `mem_alloc` to call `mem_compact()` and retry once before giving up.
+- [ ] **Step 3: Implement** compaction: collect resident movable descriptor indices, insertion-sort them by offset, sweep with a cursor moving pinned blocks past and `memmove`-ing the rest down. Then wire `kmem_alloc` to call `kmem_compact()` and retry once before giving up.
 
 - [ ] **Step 4: Run the tests.** Expected: all green.
 
@@ -714,7 +714,7 @@ rtk git add -A && rtk git commit -m "feat(swap): sector-level page read/write wi
 
 **Interfaces:**
 - Consumes: every earlier task.
-- Produces: `mem_attach_swap(void)` wiring, `MemStats.evictions`, `MemStats.page_ins`, `MemStats.swapped_bytes`, `MemStats.resident_bytes`; `mem_lock` returning NULL when a page-in cannot be satisfied.
+- Produces: `mem_attach_swap(void)` wiring, `MemStats.evictions`, `MemStats.page_ins`, `MemStats.swapped_bytes`, `MemStats.resident_bytes`; `kmem_lock` returning NULL when a page-in cannot be satisfied.
 
 The LRU list is an intrusive doubly-linked list threaded through the descriptors with `uint8_t` indices — no clock interface is needed, which drops one dependency the spec anticipated. A block joins the MRU end when unlocked and leaves when locked, freed or evicted. Only unlocked, resident, non-`MEM_FIXED` blocks are ever on it, so eviction never has to filter.
 
@@ -736,119 +736,119 @@ static void setup(void) {
   f = fake_swapdev_create(4096);
   SwapExtent ex[1] = { { 0, 4096 } };
   swap_init(fake_swapdev_dev(f), ex, 1, bitmap, sizeof bitmap);
-  mem_init(heap, sizeof heap);
+  kmem_init(heap, sizeof heap);
 }
 static void fill(Handle h, unsigned char v) {
-  unsigned char *p = mem_lock(h); memset(p, v, mem_size(h)); mem_unlock(h);
+  unsigned char *p = kmem_lock(h); memset(p, v, kmem_size(h)); kmem_unlock(h);
 }
 static int check_fill(Handle h, unsigned char v) {
-  unsigned char *p = mem_lock(h); if (!p) return 0;
-  for (size_t i = 0; i < mem_size(h); i++) if (p[i] != v) { mem_unlock(h); return 0; }
-  mem_unlock(h); return 1;
+  unsigned char *p = kmem_lock(h); if (!p) return 0;
+  for (size_t i = 0; i < kmem_size(h); i++) if (p[i] != v) { kmem_unlock(h); return 0; }
+  kmem_unlock(h); return 1;
 }
 
 void test_allocation_pressure_evicts_and_page_in_restores_bytes(void) {
   setup();
   Handle h[12]; 
   for (int i = 0; i < 12; i++) {           /* 12 x 8 KB = 96 KB into a 64 KB heap */
-    h[i] = mem_alloc(8192, 0);
+    h[i] = kmem_alloc(8192, 0);
     CHECK(h[i] != 0);
     fill(h[i], (unsigned char)(0x40 + i));
   }
-  MemStats s; mem_stats(&s);
+  MemStats s; kmem_stats(&s);
   CHECK(s.evictions > 0);
   for (int i = 0; i < 12; i++)             /* every byte survives the round trip */
     CHECK_EQ(check_fill(h[i], (unsigned char)(0x40 + i)), 1);
-  mem_stats(&s);
+  kmem_stats(&s);
   CHECK(s.page_ins > 0);
 }
 
 void test_least_recently_used_block_is_evicted_first(void) {
   setup();
-  Handle a = mem_alloc(16384, 0), b = mem_alloc(16384, 0);
+  Handle a = kmem_alloc(16384, 0), b = kmem_alloc(16384, 0);
   fill(a, 0xAA); fill(b, 0xBB);
   CHECK_EQ(check_fill(a, 0xAA), 1);        /* a is now the most recently used */
-  Handle c = mem_alloc(32768, 0);          /* forces one of them out */
+  Handle c = kmem_alloc(32768, 0);          /* forces one of them out */
   CHECK(c != 0);
-  CHECK_EQ(mem_resident(b), 0);            /* b was least recently used */
-  CHECK_EQ(mem_resident(a), 1);
+  CHECK_EQ(kmem_resident(b), 0);            /* b was least recently used */
+  CHECK_EQ(kmem_resident(a), 1);
 }
 
 void test_locked_blocks_are_never_evicted(void) {
   setup();
-  Handle pinned = mem_alloc(16384, 0);
-  unsigned char *p = mem_lock(pinned);
+  Handle pinned = kmem_alloc(16384, 0);
+  unsigned char *p = kmem_lock(pinned);
   memset(p, 0x77, 16384);
   Handle rest[8];
-  for (int i = 0; i < 8; i++) rest[i] = mem_alloc(8192, 0);
-  CHECK_EQ(mem_resident(pinned), 1);
+  for (int i = 0; i < 8; i++) rest[i] = kmem_alloc(8192, 0);
+  CHECK_EQ(kmem_resident(pinned), 1);
   CHECK_EQ(p[16383], 0x77);                /* pointer still valid */
-  CHECK_EQ(mem_lock(pinned) == p, 1);
-  mem_unlock(pinned); mem_unlock(pinned);
+  CHECK_EQ(kmem_lock(pinned) == p, 1);
+  kmem_unlock(pinned); kmem_unlock(pinned);
   (void)rest;
 }
 
 void test_fixed_blocks_are_never_evicted(void) {
   setup();
-  Handle fx = mem_alloc(8192, MEM_FIXED);
+  Handle fx = kmem_alloc(8192, MEM_FIXED);
   fill(fx, 0x33);
-  for (int i = 0; i < 8; i++) mem_alloc(8192, 0);
-  CHECK_EQ(mem_resident(fx), 1);
+  for (int i = 0; i < 8; i++) kmem_alloc(8192, 0);
+  CHECK_EQ(kmem_resident(fx), 1);
   CHECK_EQ(check_fill(fx, 0x33), 1);
 }
 
 void test_clean_block_is_evicted_without_a_second_write(void) {
   setup();
-  Handle a = mem_alloc(16384, 0);
+  Handle a = kmem_alloc(16384, 0);
   fill(a, 0x9C);
-  Handle b = mem_alloc(32768, 0);          /* evicts a: one write */
+  Handle b = kmem_alloc(32768, 0);          /* evicts a: one write */
   CHECK(b != 0);
-  CHECK_EQ(mem_resident(a), 0);
-  unsigned char *p = mem_lock_ro(a);       /* pages a back in, stays clean */
+  CHECK_EQ(kmem_resident(a), 0);
+  unsigned char *p = kmem_lock_ro(a);       /* pages a back in, stays clean */
   CHECK(p != NULL);
   CHECK_EQ(p[16383], 0x9C);
-  mem_unlock(a);
+  kmem_unlock(a);
   unsigned long writes_before = fake_swapdev_writes(f);
-  mem_free(b);
-  Handle c = mem_alloc(32768, 0);          /* evicts a again */
+  kmem_free(b);
+  Handle c = kmem_alloc(32768, 0);          /* evicts a again */
   CHECK(c != 0);
-  CHECK_EQ(mem_resident(a), 0);
+  CHECK_EQ(kmem_resident(a), 0);
   CHECK_EQ(fake_swapdev_writes(f), writes_before);   /* clean: no rewrite */
   CHECK_EQ(check_fill(a, 0x9C), 1);
 }
 
 void test_lock_returns_null_when_page_in_cannot_be_satisfied(void) {
   setup();
-  Handle victim = mem_alloc(MEM_MAX_BLOCK, 0);
+  Handle victim = kmem_alloc(MEM_MAX_BLOCK, 0);
   fill(victim, 0xD1);
   Handle hogs[2];
-  for (int i = 0; i < 2; i++) { hogs[i] = mem_alloc(MEM_MAX_BLOCK, 0); CHECK(hogs[i] != 0); }
-  CHECK_EQ(mem_resident(victim), 0);       /* pushed out */
-  unsigned char *p0 = mem_lock(hogs[0]);   /* pin the whole heap */
-  unsigned char *p1 = mem_lock(hogs[1]);
+  for (int i = 0; i < 2; i++) { hogs[i] = kmem_alloc(MEM_MAX_BLOCK, 0); CHECK(hogs[i] != 0); }
+  CHECK_EQ(kmem_resident(victim), 0);       /* pushed out */
+  unsigned char *p0 = kmem_lock(hogs[0]);   /* pin the whole heap */
+  unsigned char *p1 = kmem_lock(hogs[1]);
   CHECK(p0 != NULL); CHECK(p1 != NULL);
-  CHECK(mem_lock(victim) == NULL);         /* no room, and it says so */
-  mem_unlock(hogs[0]); mem_unlock(hogs[1]);
-  CHECK(mem_lock(victim) != NULL);         /* room again once unpinned */
-  mem_unlock(victim);
+  CHECK(kmem_lock(victim) == NULL);         /* no room, and it says so */
+  kmem_unlock(hogs[0]); kmem_unlock(hogs[1]);
+  CHECK(kmem_lock(victim) != NULL);         /* room again once unpinned */
+  kmem_unlock(victim);
 }
 
 void test_freeing_a_swapped_block_releases_its_swap_pages(void) {
   setup();
-  Handle a = mem_alloc(16384, 0);
+  Handle a = kmem_alloc(16384, 0);
   fill(a, 0x5E);
-  Handle b = mem_alloc(32768, 0);
-  CHECK_EQ(mem_resident(a), 0);
+  Handle b = kmem_alloc(32768, 0);
+  CHECK_EQ(kmem_resident(a), 0);
   uint16_t free_before = swap_pages_free();
-  mem_free(a);
+  kmem_free(a);
   CHECK(swap_pages_free() > free_before);
   (void)b;
 }
 ```
 
-- [ ] **Step 2: Run and verify it fails.** Expected: `mem_resident` and `fake_swapdev_writes` undefined.
+- [ ] **Step 2: Run and verify it fails.** Expected: `kmem_resident` and `fake_swapdev_writes` undefined.
 
-- [ ] **Step 3: Implement**: the LRU list; `mem_evict_one()` picking the LRU tail, allocating a page run, writing it only when the dirty flag is set (reusing its existing run when clean and already backed), clearing `resident`; the `mem_alloc` escalation of compact → evict → compact → retry; page-in inside `mem_lock`/`mem_lock_ro` allocating space by the same escalation and returning NULL if it still cannot fit; `mem_free` releasing swap pages. Add `mem_resident(Handle)` to `mem.h` and `fake_swapdev_writes` to the fake.
+- [ ] **Step 3: Implement**: the LRU list; `mem_evict_one()` picking the LRU tail, allocating a page run, writing it only when the dirty flag is set (reusing its existing run when clean and already backed), clearing `resident`; the `kmem_alloc` escalation of compact → evict → compact → retry; page-in inside `kmem_lock`/`kmem_lock_ro` allocating space by the same escalation and returning NULL if it still cannot fit; `kmem_free` releasing swap pages. Add `kmem_resident(Handle)` to `mem.h` and `fake_swapdev_writes` to the fake.
 
 - [ ] **Step 4: Run the tests.** Expected: all seven pass, plus every earlier test still green.
 
@@ -907,7 +907,7 @@ void test_torture_every_byte_survives_thousands_of_operations(void) {
   FakeSwapDev *f = fake_swapdev_create(8192);        /* 4 MB, as on the card */
   SwapExtent ex[1] = { { 0, 8192 } };
   swap_init(fake_swapdev_dev(f), ex, 1, bitmap, sizeof bitmap);
-  mem_init(heap, sizeof heap);
+  kmem_init(heap, sizeof heap);
   rng_state = 0xC0FFEEu;
 
   Slot s[SLOTS]; memset(s, 0, sizeof s);
@@ -919,49 +919,49 @@ void test_torture_every_byte_survives_thousands_of_operations(void) {
     case 0:                                          /* allocate */
       if (s[i].h == 0) {
         uint32_t n = 64 + rnd() % 6000;
-        Handle h = mem_alloc(n, 0);
+        Handle h = kmem_alloc(n, 0);
         if (h) {
-          unsigned char *p = mem_lock(h);
+          unsigned char *p = kmem_lock(h);
           if (p) { s[i].h = h; s[i].size = n; s[i].seed = (unsigned char)rnd();
-                   write_pattern(p, n, s[i].seed); mem_unlock(h); allocs++; }
-          else mem_free(h);
+                   write_pattern(p, n, s[i].seed); kmem_unlock(h); allocs++; }
+          else kmem_free(h);
         }
       }
       break;
     case 1:                                          /* verify */
       if (s[i].h) {
-        unsigned char *p = mem_lock_ro(s[i].h);
+        unsigned char *p = kmem_lock_ro(s[i].h);
         if (p) {
           if (!verify_pattern(p, s[i].size, s[i].seed)) mismatches++;
-          mem_unlock(s[i].h);
+          kmem_unlock(s[i].h);
         }
       }
       break;
     case 2:                                          /* free */
-      if (s[i].h && !s[i].locked) { mem_free(s[i].h); memset(&s[i], 0, sizeof s[i]); }
+      if (s[i].h && !s[i].locked) { kmem_free(s[i].h); memset(&s[i], 0, sizeof s[i]); }
       break;
     case 3:                                          /* hold a lock across other work */
       if (s[i].h && !s[i].locked) {
-        unsigned char *p = mem_lock(s[i].h);
+        unsigned char *p = kmem_lock(s[i].h);
         if (p) { s[i].locked = 1; if (!verify_pattern(p, s[i].size, s[i].seed)) mismatches++; }
-      } else if (s[i].locked) { mem_unlock(s[i].h); s[i].locked = 0; }
+      } else if (s[i].locked) { kmem_unlock(s[i].h); s[i].locked = 0; }
       break;
     }
   }
-  for (int i = 0; i < SLOTS; i++) if (s[i].locked) mem_unlock(s[i].h);
+  for (int i = 0; i < SLOTS; i++) if (s[i].locked) kmem_unlock(s[i].h);
 
   CHECK_EQ(mismatches, 0);
   CHECK(allocs > 1000);                              /* it really did work hard */
 
-  MemStats st; mem_stats(&st);
+  MemStats st; kmem_stats(&st);
   printf("    torture: %u allocs, %u compactions, %u evictions, %u page-ins\n",
          (unsigned)allocs, (unsigned)st.compactions,
          (unsigned)st.evictions, (unsigned)st.page_ins);
   CHECK(st.evictions > 100);                         /* pressure was real */
   CHECK(st.page_ins > 100);
 
-  for (int i = 0; i < SLOTS; i++) if (s[i].h) mem_free(s[i].h);
-  MemStats end; mem_stats(&end);
+  for (int i = 0; i < SLOTS; i++) if (s[i].h) kmem_free(s[i].h);
+  MemStats end; kmem_stats(&end);
   CHECK_EQ(end.handles_used, 0);                     /* nothing leaked */
   CHECK_EQ(swap_pages_free(), swap_pages_total());   /* no swap leaked either */
   fake_swapdev_destroy(f);
@@ -971,7 +971,7 @@ void test_torture_with_fixed_blocks_interleaved(void) {
   FakeSwapDev *f = fake_swapdev_create(8192);
   SwapExtent ex[1] = { { 0, 8192 } };
   swap_init(fake_swapdev_dev(f), ex, 1, bitmap, sizeof bitmap);
-  mem_init(heap, sizeof heap);
+  kmem_init(heap, sizeof heap);
   rng_state = 0x1234567u;
 
   Handle stacks[8]; memset(stacks, 0, sizeof stacks);
@@ -981,32 +981,32 @@ void test_torture_with_fixed_blocks_interleaved(void) {
   for (int step = 0; step < 8000; step++) {
     if (step % 37 == 0) {                            /* task stacks churning */
       int k = (int)(rnd() % 8);
-      if (stacks[k]) { mem_free(stacks[k]); stacks[k] = 0; }
-      else stacks[k] = mem_alloc(1024, MEM_FIXED | MEM_ZERO);
+      if (stacks[k]) { kmem_free(stacks[k]); stacks[k] = 0; }
+      else stacks[k] = kmem_alloc(1024, MEM_FIXED | MEM_ZERO);
     }
     int i = (int)(rnd() % SLOTS);
     if (s[i].h == 0) {
       uint32_t n = 64 + rnd() % 4000;
-      Handle h = mem_alloc(n, 0);
+      Handle h = kmem_alloc(n, 0);
       if (h) {
-        unsigned char *p = mem_lock(h);
+        unsigned char *p = kmem_lock(h);
         if (p) { s[i].h = h; s[i].size = n; s[i].seed = (unsigned char)rnd();
-                 write_pattern(p, n, s[i].seed); mem_unlock(h); }
-        else mem_free(h);
+                 write_pattern(p, n, s[i].seed); kmem_unlock(h); }
+        else kmem_free(h);
       }
     } else {
-      unsigned char *p = mem_lock_ro(s[i].h);
+      unsigned char *p = kmem_lock_ro(s[i].h);
       if (p) {
         if (!verify_pattern(p, s[i].size, s[i].seed)) mismatches++;
-        mem_unlock(s[i].h);
+        kmem_unlock(s[i].h);
       }
-      if (rnd() % 3 == 0) { mem_free(s[i].h); memset(&s[i], 0, sizeof s[i]); }
+      if (rnd() % 3 == 0) { kmem_free(s[i].h); memset(&s[i], 0, sizeof s[i]); }
     }
   }
   CHECK_EQ(mismatches, 0);
-  for (int i = 0; i < SLOTS; i++) if (s[i].h) mem_free(s[i].h);
-  for (int k = 0; k < 8; k++) if (stacks[k]) mem_free(stacks[k]);
-  MemStats end; mem_stats(&end);
+  for (int i = 0; i < SLOTS; i++) if (s[i].h) kmem_free(s[i].h);
+  for (int k = 0; k < 8; k++) if (stacks[k]) kmem_free(stacks[k]);
+  MemStats end; kmem_stats(&end);
   CHECK_EQ(end.handles_used, 0);
   CHECK_EQ(end.fixed_used, 0);
   fake_swapdev_destroy(f);

@@ -4,7 +4,8 @@ idf_component_register(
     "shellcmd.c"
     "../kernel/drv/display.c"
     "../kernel/drv/keyboard.c"
-    "../kernel/drv/btmouse.c"
+    "../kernel/drv/bthid.c"
+    "../kernel/input/kbd_hid.c"
     "../kernel/drv/vendor/esp_hid_gap.c"
     "../kernel/console/console.c"
     "../kernel/task/sched.c"
@@ -15,11 +16,20 @@ idf_component_register(
     "../kernel/ui/draw.c"
     "../kernel/ui/desktop.c"
     "../kernel/ui/apps.c"
+    "../kernel/ui/settings.c"
+    "../kernel/ui/icons.c"
+    "../kernel/ui/launchui.c"
+    "../kernel/ui/shell.c"
+    "../kernel/net/wifi.c"
+    "../kernel/net/http.c"
     "../kernel/fs/fs_fat.c"
     "../kernel/mem/mem.c"
     "../kernel/swap/swap.c"
     "../kernel/app/appimage.c"
     "../kernel/app/launcher.c"
+    "../kernel/app/elfload.c"
+    "../kernel/app/cardapi.c"
+    "../kernel/app/capprun.c"
   INCLUDE_DIRS
     "."
     ".."      # CardOS headers are included as "kernel/..."
@@ -34,4 +44,10 @@ idf_component_register(
     bt
     esp_hid
     nvs_flash
+    esp_wifi
+    esp_netif
+    esp_event
+    esp_http_client
+    esp-tls
+    mbedtls
 )

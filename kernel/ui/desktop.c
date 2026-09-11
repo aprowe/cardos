@@ -7,7 +7,10 @@
 #include "kernel/fs/fs.h"
 #include "kernel/ui/app.h"
 #include "kernel/app/launcher.h"
-#include "kernel/drv/btmouse.h"
+#include "kernel/app/capprun.h"
+#include "kernel/ui/icons.h"
+#include "kernel/ui/shell.h"
+#include "kernel/drv/bthid.h"
 #include "esp_timer.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -23,25 +26,32 @@
 #define MAX_OPEN 4
 
 static WinId s_win[MAX_OPEN];
-static int   s_app[MAX_OPEN];       /* index into the app registry */
+static const AppDef *s_app[MAX_OPEN];   /* built-in or loaded, indistinguishable */
+static int16_t s_scroll[MAX_OPEN];      /* pixels of content hidden above */
 static int   s_nwin;
+
+/* Width of the scrollbar taken out of the content well. Four pixels is enough
+ * to see and to hit with a pointer on a 240px screen, and it only appears when
+ * there is something to scroll. */
+#define SCROLL_W 4
+
+/* A fullscreen app owns the whole panel: no chrome, no taskbar, and the
+ * compositor is bypassed entirely -- the render loop paints its rectangle and
+ * nothing else, which is what the user asked for and also what makes a
+ * picture viewer worth having on a 240x135 screen. */
+static const AppDef *s_full;
+static int s_full_dirty;
+
+/* The pointer can also ask to leave for the console, and a mouse handler has
+ * no return value that reaches the main loop. */
+static int s_leave_for_console;
 
 /* ------------------------------------------------------------- icons ---- */
 
-#define ICONS_DIR  "/desktop"
-#define MAX_ICONS  8
 #define ICON_W     46
 #define ICON_H     34
 #define ICON_BOX   16
 
-typedef struct {
-  char name[20];        /* shown under the icon */
-  char path[80];        /* full path, for firmware */
-  int  app;             /* app registry index, or -1 for firmware */
-} Icon;
-
-static Icon s_icon[MAX_ICONS];
-static int  s_nicon;
 static int  s_sel_icon = -1;
 static int  s_last_icon = -1;
 static uint32_t s_last_click_ms;
@@ -68,75 +78,43 @@ static Rect R(int x, int y, int w, int h) {
   return r;
 }
 
-static const AppDef *app_of(WinId w) {
+static int win_index(WinId w) {
   int i;
-  for (i = 0; i < s_nwin; i++)
-    if (s_win[i] == w) return app_at(s_app[i]);
-  return app_at(0);
+  for (i = 0; i < s_nwin; i++) if (s_win[i] == w) return i;
+  return -1;
 }
 
-/* Seed the folder the first time, so a fresh card still has something to
- * click rather than an empty desktop with no clue what to do. */
-static void seed_icons_dir(void) {
-  static const char *seed[] = { "Files.app", "Edit.app", "Mines.app" };
-  size_t i;
-  char path[80];
-  FsDir d;
-  FsEntry e;
-  int any = 0;
+static const AppDef *app_of(WinId w) {
+  int i = win_index(w);
+  return i < 0 ? app_at(0) : s_app[i];
+}
 
-  if (fs_mkdir(ICONS_DIR) != 0) { /* already there, or no card */ }
-  if (fs_opendir(ICONS_DIR, &d) != 0) return;
-  while (fs_readdir(&d, &e) == 1) { any = 1; break; }
-  fs_closedir(&d);
-  if (any) return;
+/* How tall the app wants to be, and therefore whether this window scrolls.
+ * Zero from the app means "exactly the window", which is the common case. */
+static int16_t content_height(const AppDef *a, Rect inner) {
+  int16_t want = a->height ? a->height(a->state, inner.w) : 0;
+  return want > inner.h ? want : inner.h;
+}
 
-  for (i = 0; i < sizeof seed / sizeof seed[0]; i++) {
-    int fd;
-    snprintf(path, sizeof path, "%s/%s", ICONS_DIR, seed[i]);
-    fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
-    if (fd >= 0) { fs_write(fd, "cardos app\n", 11); fs_close(fd); }
-  }
+static void clamp_scroll(int idx, const AppDef *a, Rect inner) {
+  int16_t max = (int16_t)(content_height(a, inner) - inner.h);
+  if (max < 0) max = 0;
+  if (s_scroll[idx] > max) s_scroll[idx] = max;
+  if (s_scroll[idx] < 0) s_scroll[idx] = 0;
 }
 
 void desktop_reload_icons(void) {
-  FsDir d;
-  FsEntry e;
-
-  s_nicon = 0;
+  icons_reload();
   s_sel_icon = -1;
-  if (!fs_mounted()) return;
-
-  seed_icons_dir();
-  if (fs_opendir(ICONS_DIR, &d) != 0) return;
-
-  while (s_nicon < MAX_ICONS && fs_readdir(&d, &e) == 1) {
-    size_t n = strlen(e.name);
-    Icon *ic = &s_icon[s_nicon];
-    if (e.is_dir) continue;
-
-    if (n > 4 && strcmp(e.name + n - 4, ".app") == 0) {
-      char stem[20];
-      snprintf(stem, sizeof stem, "%.*s", (int)(n - 4), e.name);
-      ic->app = app_index_by_name(stem);
-      if (ic->app < 0) continue;             /* names an app we do not have */
-      snprintf(ic->name, sizeof ic->name, "%s", stem);
-    } else if (n > 4 && strcmp(e.name + n - 4, ".bin") == 0) {
-      ic->app = -1;
-      snprintf(ic->name, sizeof ic->name, "%.*s", (int)(n - 4), e.name);
-    } else {
-      continue;
-    }
-    snprintf(ic->path, sizeof ic->path, "%s/%s", ICONS_DIR, e.name);
-    s_nicon++;
-  }
-  fs_closedir(&d);
 }
 
 static void paint_icons(Rect clip) {
-  int i;
-  for (i = 0; i < s_nicon; i++) {
+  int i, n = icons_count();
+  for (i = 0; i < n; i++) {
+    const Icon *ic = icon_at(i);
     Rect r = icon_rect(i), box;
+    const uint8_t *bits;
+    if (r.y + r.h > DESK_H) break;
     if (!rect_overlaps(r, clip)) continue;
     draw_set_clip(rect_intersect(clip, r));
 
@@ -146,15 +124,23 @@ static void paint_icons(Rect clip) {
     box.h = ICON_BOX;
     /* Firmware gets a sunken slab, an app a raised one, so the two kinds are
      * distinguishable before reading the label. */
-    if (s_icon[i].app < 0) draw_bevel(box, C_TITLE_UN, C_SHADOW, C_LIGHT);
-    else                   draw_bevel(box, C_FACE, C_LIGHT, C_DARK);
-    draw_text((int16_t)(box.x + 5), (int16_t)(box.y + 4),
-              s_icon[i].app < 0 ? "F" : "A", C_TEXT,
-              s_icon[i].app < 0 ? C_TITLE_UN : C_FACE);
+    if (ic->kind == ICON_FIRMWARE) draw_bevel(box, C_TITLE_UN, C_SHADOW, C_LIGHT);
+    else                           draw_bevel(box, C_FACE, C_LIGHT, C_DARK);
+
+    bits = icon_bitmap(i);
+    if (bits) {
+      /* The app supplied this. 16x16 is exactly the slab, so it replaces the
+       * face rather than sitting inside it. */
+      draw_bitmap1(box.x, box.y, CAPP_ICON_W, CAPP_ICON_H, bits, C_TEXT, C_FACE);
+    } else {
+      draw_text((int16_t)(box.x + 5), (int16_t)(box.y + 4),
+                ic->kind == ICON_FIRMWARE ? "F" : "A", C_TEXT,
+                ic->kind == ICON_FIRMWARE ? C_TITLE_UN : C_FACE);
+    }
 
     if (i == s_sel_icon) draw_frame(r, C_TITLE_FG);
     draw_text_ellipsis(r.x, (int16_t)(r.y + ICON_BOX + 2), r.w,
-                       s_icon[i].name, C_TITLE_FG, C_DESKTOP);
+                       ic->name, C_TITLE_FG, C_DESKTOP);
     draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   }
 }
@@ -199,13 +185,40 @@ static void paint_window(WinId w, Rect clip) {
 
   {
     const AppDef *a = app_of(w);
+    int idx = win_index(w);
     Rect inner = rect_inset(content, 2);
-    Rect vis = rect_intersect(clip, inner);
+    Rect vis;
+    int16_t natural = content_height(a, inner);
+    int scrolls = (natural > inner.h) && idx >= 0;
+
+    if (scrolls) inner.w = (int16_t)(inner.w - SCROLL_W);
+    if (scrolls) clamp_scroll(idx, a, inner);
+
+    vis = rect_intersect(clip, inner);
     if (a->paint && !rect_is_empty(vis)) {
       /* Confine the app to its own content well: an app that draws too far
-       * must not be able to scribble over another window's chrome. */
+       * must not be able to scribble over another window's chrome. The clip is
+       * also what makes scrolling free -- the app paints its whole self at a
+       * shifted origin and everything outside the well is discarded. */
+      Rect full = inner;
+      if (scrolls) {
+        full.y = (int16_t)(inner.y - s_scroll[idx]);
+        full.h = natural;
+      }
       draw_set_clip(vis);
-      a->paint(a->state, inner);
+      a->paint(a->state, full);
+    }
+
+    if (scrolls) {
+      Rect bar = R(inner.x + inner.w, inner.y, SCROLL_W, inner.h);
+      int16_t th = (int16_t)((int32_t)inner.h * inner.h / natural);
+      int16_t ty;
+      if (th < 6) th = 6;
+      ty = (int16_t)(inner.y + (int32_t)(inner.h - th) * s_scroll[idx] /
+                     (natural - inner.h));
+      draw_set_clip(rect_intersect(clip, bar));
+      draw_rect(bar, C_TITLE_UN);
+      draw_bevel(R(bar.x, ty, SCROLL_W, th), C_FACE, C_LIGHT, C_DARK);
     }
   }
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
@@ -261,14 +274,39 @@ static void paint_taskbar(Rect clip) {
   }
 }
 
-static void paint_start_menu(void) {
-  Rect m;
-  int i;
-  if (!s_start_open) return;
+/* The menu is drawn on top of the compositor's output rather than through it,
+ * so it needs its own dirty flag: nothing else knows the region exists. */
+static Rect s_menu_rect;
+static int  s_menu_dirty;
+static int  s_menu_hit;      /* something repainted underneath it this pass */
 
-  {
-  int items = app_count() + 1;    /* apps, then Console */
-  m = R(2, DESK_H - (items * 11 + 6), 84, items * 11 + 6);
+static int menu_items(void) { return app_count() + 1; }   /* apps, then Console */
+
+static Rect menu_rect(void) {
+  int items = menu_items();
+  int h = items * 11 + 6;
+  return R(2, DESK_H - h, 84, h);
+}
+
+static void menu_touch(void) {
+  s_menu_rect = menu_rect();
+  s_menu_dirty = 1;
+}
+
+/* Closing has to go through the compositor: whatever the menu was covering
+ * must be repainted, and only the window system knows what that was. */
+static void menu_close(void) {
+  if (!s_start_open) return;
+  s_start_open = 0;
+  wm_damage(menu_rect());
+}
+
+static void paint_start_menu(void) {
+  Rect m = menu_rect();
+  int items = menu_items();
+  int i;
+
+  s_menu_rect = m;
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_bevel(m, C_FACE, C_LIGHT, C_DARK);
 
@@ -280,7 +318,16 @@ static void paint_start_menu(void) {
     draw_text((int16_t)(item.x + 2), (int16_t)(item.y + 1), label,
               sel ? C_TITLE_FG : C_TEXT, sel ? C_TITLE : C_FACE);
   }
-  }
+}
+
+/* Which item the pointer is over, or -1. */
+static int menu_item_at(int16_t x, int16_t y) {
+  Rect m = menu_rect();
+  int i;
+  if (!rect_contains(m, x, y)) return -1;
+  i = (y - (m.y + 3)) / 11;
+  if (i < 0 || i >= menu_items()) return -1;
+  return i;
 }
 
 static void draw_pointer(void);
@@ -292,6 +339,7 @@ static WinId s_drag_win;
 
 static void paint_job(void *ctx, WinId w, Rect r) {
   (void)ctx;
+  if (s_start_open && rect_overlaps(r, s_menu_rect)) s_menu_hit = 1;
   if (w == WIN_NONE) {
     draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
     draw_rect(rect_intersect(r, R(0, 0, DISPLAY_W, DESK_H)), C_DESKTOP);
@@ -305,48 +353,80 @@ static void paint_job(void *ctx, WinId w, Rect r) {
   }
 }
 
+/* A fullscreen app gets the panel and nothing else: no desktop, no chrome, no
+ * taskbar, no pointer. The compositor is not involved, so there is no damage
+ * to merge and no window to clip against -- the render loop is one call into
+ * the app's paint with the screen as its rectangle. */
+static void paint_fullscreen(void) {
+  Rect all = R(0, 0, DISPLAY_W, DISPLAY_H);
+  if (!s_full_dirty) return;
+  s_full_dirty = 0;
+  draw_set_clip(all);
+  if (s_full->paint) s_full->paint(s_full->state, all);
+}
+
 void desktop_flush(void) {
-  if (wm_damage_count() == 0) return;
-  wm_paint(paint_job, NULL);
-  paint_start_menu();
+  if (s_full) { paint_fullscreen(); return; }
+  if (wm_damage_count() == 0 && !s_menu_dirty) return;
+
+  s_menu_hit = 0;
+  if (wm_damage_count()) wm_paint(paint_job, NULL);
+
+  /* Redrawn only when its own contents changed, or when the compositor
+   * repainted something underneath it. Redrawing it on every flush was
+   * 84x100 pixels of bevels and text for a one-row selection change, which is
+   * what flickered. */
+  if (s_start_open && (s_menu_dirty || s_menu_hit)) paint_start_menu();
+  s_menu_dirty = 0;
+
   draw_pointer();      /* always last: the pointer is above everything */
 }
 
 void desktop_repaint(void) {
+  if (s_full) { s_full_dirty = 1; desktop_flush(); return; }
   wm_damage(R(0, 0, DISPLAY_W, DISPLAY_H));
   desktop_flush();
 }
 
+/* Leaving fullscreen throws away nothing: the window system's state was never
+ * touched, so the desktop comes back exactly as it was. */
+static void leave_fullscreen(void) {
+  if (!s_full) return;
+  s_full = NULL;
+  desktop_repaint();
+}
+
 /* ------------------------------------------------------------ input ----- */
 
-static void open_app(int k);
+static void open_def(const AppDef *a);
 
 static void launch_icon(int i) {
-  if (i < 0 || i >= s_nicon) return;
+  const Icon *ic = icon_at(i);
+  const AppDef *a;
 
-  if (s_icon[i].app >= 0) { open_app(s_icon[i].app); desktop_repaint(); return; }
+  if (!ic) return;
+  if (ic->kind == ICON_FIRMWARE) { icons_boot_firmware(i); return; }
 
-  /* Firmware. Remember that the desktop launched it, so that when the
-   * bootloader rolls back after the guest is reset we come straight back here
-   * rather than to a console the user never asked for. */
-  desktop_set_autostart(1);
-  {
-    AppImageInfo info;
-    AppImageResult why;
-    if (launcher_check(s_icon[i].path, &info, &why) != LAUNCH_OK) {
-      desktop_set_autostart(0);
-      return;
-    }
-    launcher_boot(s_icon[i].path, NULL, NULL);   /* does not return on success */
-    desktop_set_autostart(0);                    /* only reached on failure */
+  a = icon_app(i);
+  if (!a) return;
+  if (ic->kind == ICON_CAPP) capprun_set_file(ic->slot, ic->path);
+
+  if (ic->kind == ICON_CAPP && capprun_fullscreen(ic->slot)) {
+    if (a->open) a->open(a->state);
+    s_full = a;
+    s_full_dirty = 1;
+    desktop_flush();
+    return;
   }
+  open_def(a);
+  desktop_repaint();
 }
 
 void desktop_icon_click(int16_t x, int16_t y) {
   uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
   int i, hit = -1;
 
-  for (i = 0; i < s_nicon; i++)
+  for (i = 0; i < icons_count(); i++)
     if (rect_contains(icon_rect(i), x, y)) { hit = i; break; }
 
   if (hit < 0) {
@@ -366,21 +446,35 @@ void desktop_icon_click(int16_t x, int16_t y) {
   desktop_repaint();
 }
 
-static void open_app(int k) {
-  const AppDef *a = app_at(k);
+static void open_def(const AppDef *a) {
   Rect frame;
   WinId w;
-  if (s_nwin >= MAX_OPEN) return;
+  if (!a || s_nwin >= MAX_OPEN) return;
   /* Cascade, so a new window is visibly on top rather than exactly covering
-   * the last one. */
+   * the last one. An app with a preferred content size gets a frame built
+   * around it; the chrome is a border and title bar on top, and the content
+   * well costs two pixels a side. */
   frame = R(8 + s_nwin * 14, 6 + s_nwin * 10, 132, 74);
+  if (a->pref_w > 0 && a->pref_h > 0) {
+    frame.w = (int16_t)(a->pref_w + 2 * WM_BORDER + 6);
+    frame.h = (int16_t)(a->pref_h + 2 * WM_BORDER + WM_TITLE_H + 6);
+    if (frame.w > DISPLAY_W) frame.w = DISPLAY_W;
+    if (frame.h > DESK_H) frame.h = DESK_H;
+    if (frame.x + frame.w > DISPLAY_W) frame.x = (int16_t)(DISPLAY_W - frame.w);
+    if (frame.y + frame.h > DESK_H) frame.y = (int16_t)(DESK_H - frame.h);
+    if (frame.x < 0) frame.x = 0;
+    if (frame.y < 0) frame.y = 0;
+  }
   w = wm_create(a->name, frame);
   if (w == WIN_NONE) return;
   if (a->open) a->open(a->state);
   s_win[s_nwin] = w;
-  s_app[s_nwin] = k;
+  s_app[s_nwin] = a;
+  s_scroll[s_nwin] = 0;
   s_nwin++;
 }
+
+static void open_app(int k) { open_def(app_at(k)); }
 
 static void close_focused(void) {
   WinId f = wm_focus();
@@ -389,7 +483,11 @@ static void close_focused(void) {
   wm_destroy(f);
   for (i = 0; i < s_nwin; i++) {
     if (s_win[i] != f) continue;
-    for (j = i; j < s_nwin - 1; j++) { s_win[j] = s_win[j + 1]; s_app[j] = s_app[j + 1]; }
+    for (j = i; j < s_nwin - 1; j++) {
+      s_win[j] = s_win[j + 1];
+      s_app[j] = s_app[j + 1];
+      s_scroll[j] = s_scroll[j + 1];
+    }
     s_nwin--;
     break;
   }
@@ -416,29 +514,44 @@ static void nudge(int16_t dx, int16_t dy) {
 }
 
 int desktop_key(uint8_t key) {
+  /* A fullscreen app has the keyboard as well as the panel. Escape is the one
+   * key it does not get, because something has to bring the desktop back. */
+  if (s_full) {
+    if (key == KEY_ESC) { leave_fullscreen(); return 0; }
+    if (s_full->key && s_full->key(s_full->state, key)) {
+      s_full_dirty = 1;
+      desktop_flush();
+    }
+    return 0;
+  }
+
   if (s_start_open) {
     switch (key) {
-    case KEY_UP:   s_start_sel = (s_start_sel + app_count()) % (app_count() + 1); break;
-    case KEY_DOWN: s_start_sel = (s_start_sel + 1) % (app_count() + 1); break;
+    case KEY_UP:   s_start_sel = (s_start_sel + menu_items() - 1) % menu_items(); break;
+    case KEY_DOWN: s_start_sel = (s_start_sel + 1) % menu_items(); break;
     case KEY_ENTER:
-      s_start_open = 0;
+      menu_close();
       if (s_start_sel >= app_count()) {
         desktop_set_autostart(0);   /* leaving on purpose: stay at the console */
         return 1;
       }
       open_app(s_start_sel);
-      desktop_repaint();
+      desktop_flush();
       return 0;
-    case KEY_ESC: s_start_open = 0; desktop_repaint(); return 0;
+    case KEY_ESC: menu_close(); desktop_flush(); return 0;
     default: break;
     }
-    desktop_repaint();
+    menu_touch();
+    desktop_flush();
     return 0;
   }
 
-  /* Desktop commands are ctrl-chords, so every ordinary key stays free to
-   * reach the focused app. Without that a window you can type into is
-   * impossible: `s` would always mean Start. */
+  /* Escape always works, whatever has focus: it is the one way back to the
+   * console and must never be something an app can swallow. */
+  if (key == KEY_ESC) { desktop_set_autostart(0); return 1; }
+
+  /* The keyboard-driven pointer is an explicit mode, so while it is on the
+   * arrows belong to it rather than to the focused app. */
   if (s_kbd_mouse) {
     MouseReport r;
     memset(&r, 0, sizeof r);
@@ -459,27 +572,37 @@ int desktop_key(uint8_t key) {
     }
   }
 
+  /* The focused app gets first refusal on everything else, ctrl-chords
+   * included. Reserving chords for the shell meant an editor could not have
+   * ctrl-S -- the Start menu took it first -- and reserving the arrows meant
+   * no app could have a cursor at all. An app that wants a key has a better
+   * claim on it than the desktop does, and Escape above is the way out of an
+   * app that wants them all. */
+  {
+    WinId f = wm_focus();
+    if (f != WIN_NONE) {
+      const AppDef *a = app_of(f);
+      if (a->key && a->key(a->state, key)) {
+        wm_damage(wm_frame(f));
+        desktop_flush();
+        return 0;
+      }
+    }
+  }
+
   switch (key) {
   case 0x10: desktop_set_kbd_mouse(!s_kbd_mouse); return 0;                  /* ctrl-P */
-  case 0x13: s_start_open = 1; s_start_sel = 0; desktop_repaint(); return 0; /* ctrl-S */
+  case 0x13: s_start_open = 1; s_start_sel = 0; menu_touch();                 /* ctrl-S */
+             desktop_flush(); return 0;
   case 0x17: close_focused(); desktop_repaint(); return 0;                   /* ctrl-W */
-  case '\t':      cycle_focus();   desktop_flush(); return 0;
+  case '	':      cycle_focus();   desktop_flush(); return 0;
   case KEY_LEFT:  nudge(-6, 0);    desktop_flush(); return 0;
   case KEY_RIGHT: nudge(6, 0);     desktop_flush(); return 0;
   case KEY_UP:    nudge(0, -5);    desktop_flush(); return 0;
   case KEY_DOWN:  nudge(0, 5);     desktop_flush(); return 0;
-  case KEY_ESC:   desktop_set_autostart(0); return 1;   /* to the console */
   default: break;
   }
 
-  /* Everything else belongs to whichever window has focus. */
-  {
-    WinId f = wm_focus();
-    const AppDef *a;
-    if (f == WIN_NONE) return 0;
-    a = app_of(f);
-    if (a->key && a->key(a->state, key)) wm_damage(wm_frame(f));
-  }
   desktop_flush();
   return 0;
 }
@@ -489,17 +612,48 @@ void desktop_tick(uint32_t ms) {
   s_now_ms = ms;
   if (s_now_ms / 1000u == before) return;
 
+  /* Nothing of ours is on screen while an app owns it -- not the clock, and
+   * not a repaint that would trample the app's picture. */
+  if (s_full) return;
+
   /* A mouse that wanders out of range or sleeps drops the link. Look for it
    * again rather than sitting there with a dead pointer -- but not every
    * second, because each attempt is a six-second scan. */
-  if (btmouse_state() == BTM_FAILED && (s_now_ms / 1000u) % 15 == 0)
-    btmouse_start(4);
+  if (bthid_state(BTHID_MOUSE) == BTH_FAILED && (s_now_ms / 1000u) % 15 == 0)
+    bthid_start(4, BTHID_MOUSE);
   wm_damage(R(DISPLAY_W - 30, DESK_H + 2, 28, TASKBAR_H - 4));
   desktop_flush();
 }
 
 #define NVS_NS        "cardos"
 #define NVS_AUTOSTART "autodesk"
+
+/* Bring a band of the focused window's content into view. An app calls this
+ * from its key handler when it moves a selection that the window is scrolling:
+ * the window system knows where the viewport is, and the app knows where the
+ * selection went, and neither can work it out alone. */
+int desktop_take_leave(void) {
+  int v = s_leave_for_console;
+  s_leave_for_console = 0;
+  return v;
+}
+
+void desktop_scroll_into_view(int16_t y, int16_t h) {
+  int idx = win_index(wm_focus());
+  Rect inner;
+  const AppDef *a;
+
+  if (idx < 0) return;
+  a = s_app[idx];
+  inner = rect_inset(wm_content(s_win[idx]), 2);
+  if (content_height(a, inner) <= inner.h) return;
+  inner.w = (int16_t)(inner.w - SCROLL_W);
+
+  if (y < s_scroll[idx]) s_scroll[idx] = y;
+  else if (y + h > s_scroll[idx] + inner.h)
+    s_scroll[idx] = (int16_t)(y + h - inner.h);
+  clamp_scroll(idx, a, inner);
+}
 
 void desktop_set_autostart(int on) {
   nvs_handle_t h;
@@ -520,12 +674,14 @@ int desktop_autostart(void) {
 
 void desktop_init(void) {
   int i;
+  ui_set_shell(UI_DESKTOP);
   wm_init(DISPLAY_W, DISPLAY_H);
   mouse_init(DISPLAY_W, DISPLAY_H);
   s_nwin = 0;
   s_start_open = 0;
   s_start_sel = 0;
-  for (i = 0; i < MAX_OPEN; i++) s_win[i] = WIN_NONE;
+  s_full = NULL;
+  for (i = 0; i < MAX_OPEN; i++) { s_win[i] = WIN_NONE; s_app[i] = NULL; }
 
   desktop_reload_icons();
 
@@ -540,12 +696,7 @@ static int s_cursor_on;
 static int16_t s_drag_dx, s_drag_dy;   /* pointer offset within the frame */
 
 static Rect cursor_rect(void) {
-  Rect r;
-  r.x = (int16_t)mouse_x();
-  r.y = (int16_t)mouse_y();
-  r.w = CURSOR_W;
-  r.h = CURSOR_H;
-  return r;
+  return draw_cursor_bounds((int16_t)mouse_x(), (int16_t)mouse_y());
 }
 
 static void draw_pointer(void) {
@@ -559,7 +710,10 @@ int desktop_kbd_mouse(void) { return s_kbd_mouse; }
 void desktop_set_kbd_mouse(int on) {
   s_kbd_mouse = on;
   s_cursor_on = on;
-  desktop_repaint();
+  /* Through the shell, not straight to desktop_repaint: Settings can be open
+   * under the launcher, and painting a desktop over it would be the only
+   * visible effect. */
+  ui_repaint();
 }
 
 void desktop_mouse(const MouseReport *r) {
@@ -577,7 +731,41 @@ void desktop_mouse_apply(const MouseReport *r) {
   WinId hit;
 
   mouse_apply(r);
+
+  /* A fullscreen app sees clicks in screen coordinates and draws its own
+   * pointer if it wants one. Ours would have to be erased by repainting the
+   * area underneath, which only the app knows how to do. */
+  if (s_full) {
+    int btn = mouse_pressed(MOUSE_LEFT) ? MOUSE_LEFT
+            : mouse_pressed(MOUSE_RIGHT) ? MOUSE_RIGHT : 0;
+    s_cursor_on = 0;
+    if (btn && s_full->click &&
+        s_full->click(s_full->state, (int16_t)mouse_x(), (int16_t)mouse_y(), btn)) {
+      s_full_dirty = 1;
+      desktop_flush();
+    }
+    mouse_released(MOUSE_LEFT);
+    mouse_released(MOUSE_RIGHT);
+    mouse_take_moved();
+    return;
+  }
+
   s_cursor_on = 1;
+
+  /* The wheel scrolls whatever has focus, which is the only thing it could
+   * usefully mean on a machine with one pointer. */
+  {
+    int w = mouse_take_wheel();
+    int idx = win_index(wm_focus());
+    if (w && idx >= 0) {
+      const AppDef *a = s_app[idx];
+      Rect inner = rect_inset(wm_content(s_win[idx]), 2);
+      inner.w = (int16_t)(inner.w - SCROLL_W);
+      s_scroll[idx] = (int16_t)(s_scroll[idx] - w * 12);
+      clamp_scroll(idx, a, inner);
+      wm_damage(wm_frame(s_win[idx]));
+    }
+  }
 
   /* Consume both edges every time, whether or not they are used here.
    * Reading the release only while dragging left stale edges behind, so the
@@ -585,6 +773,26 @@ void desktop_mouse_apply(const MouseReport *r) {
    * move -- which is exactly what a drag that "sometimes works" looks like. */
   pressed = mouse_pressed(MOUSE_LEFT);
   released = mouse_released(MOUSE_LEFT);
+
+  /* The right button only ever means "the app's other gesture" -- there is no
+   * context menu to own it -- so it goes straight to whatever is under the
+   * pointer and skips focus, dragging and the chrome entirely. */
+  if (mouse_pressed(MOUSE_RIGHT)) {
+    WinId rw = wm_at((int16_t)mouse_x(), (int16_t)mouse_y());
+    if (rw != WIN_NONE &&
+        wm_hit_test(rw, (int16_t)mouse_x(), (int16_t)mouse_y()) == WM_HIT_CONTENT) {
+      const AppDef *a = app_of(rw);
+      int idx = win_index(rw);
+      Rect c = rect_inset(wm_content(rw), 2);
+      int16_t natural = content_height(a, c);
+      int16_t ly = (int16_t)(mouse_y() - c.y);
+      if (natural > c.h && idx >= 0) ly = (int16_t)(ly + s_scroll[idx]);
+      if (a->click &&
+          a->click(a->state, (int16_t)(mouse_x() - c.x), ly, MOUSE_RIGHT))
+        wm_damage(wm_frame(rw));
+    }
+  }
+  mouse_released(MOUSE_RIGHT);
 
   /* The panel cannot be read back -- three-wire, no MISO -- so there is no
    * saving the pixels under the pointer. Moving it is two damage rectangles,
@@ -615,12 +823,30 @@ void desktop_mouse_apply(const MouseReport *r) {
 
   if (!pressed) return;
 
+  /* An open menu is above every window, so it gets the click first. */
+  if (s_start_open) {
+    int item = menu_item_at((int16_t)mouse_x(), (int16_t)mouse_y());
+    if (item >= 0) {
+      s_start_sel = item;
+      menu_close();
+      if (item >= app_count()) { s_leave_for_console = 1; return; }
+      open_app(item);
+      return;
+    }
+  }
+
   hit = wm_at((int16_t)mouse_x(), (int16_t)mouse_y());
   if (hit == WIN_NONE) {
     if (mouse_y() >= DESK_H) {
       if (mouse_x() < 38) {                 /* Start button */
-        s_start_open = !s_start_open;
-        desktop_repaint();
+        if (s_start_open) {
+          menu_close();
+        } else {
+          s_start_open = 1;
+          s_start_sel = 0;
+          menu_touch();
+        }
+        wm_damage(R(0, DESK_H, 40, TASKBAR_H));
       } else {
         int i;                              /* a taskbar button raises it */
         int16_t x = 40;
@@ -631,7 +857,7 @@ void desktop_mouse_apply(const MouseReport *r) {
       return;
     }
     /* Bare desktop: dismiss the menu, and select or launch an icon. */
-    if (s_start_open) { s_start_open = 0; desktop_repaint(); return; }
+    if (s_start_open) { menu_close(); return; }
     desktop_icon_click((int16_t)mouse_x(), (int16_t)mouse_y());
     return;
   }
@@ -639,7 +865,7 @@ void desktop_mouse_apply(const MouseReport *r) {
   {
     WmHit what = wm_hit_test(hit, (int16_t)mouse_x(), (int16_t)mouse_y());
     wm_raise(hit);
-    if (s_start_open) { s_start_open = 0; desktop_repaint(); return; }
+    if (s_start_open) { menu_close(); return; }
     if (what == WM_HIT_CLOSE) {
       close_focused();
       desktop_repaint();
@@ -655,10 +881,23 @@ void desktop_mouse_apply(const MouseReport *r) {
     }
     if (what == WM_HIT_CONTENT) {
       const AppDef *a = app_of(hit);
+      int idx = win_index(hit);
       Rect c = rect_inset(wm_content(hit), 2);
-      if (a->click &&
-          a->click(a->state, (int16_t)(mouse_x() - c.x),
-                   (int16_t)(mouse_y() - c.y), MOUSE_LEFT))
+      int16_t natural = content_height(a, c);
+      int scrolls = (natural > c.h) && idx >= 0;
+      int16_t lx = (int16_t)(mouse_x() - c.x);
+      int16_t ly = (int16_t)(mouse_y() - c.y);
+
+      if (scrolls && lx >= c.w - SCROLL_W) {
+        /* On the bar: jump so the clicked fraction of the track becomes the
+         * same fraction of the content. */
+        s_scroll[idx] = (int16_t)((int32_t)ly * (natural - c.h) / c.h);
+        clamp_scroll(idx, a, R(c.x, c.y, c.w - SCROLL_W, c.h));
+        wm_damage(wm_frame(hit));
+        return;
+      }
+      if (scrolls) ly = (int16_t)(ly + s_scroll[idx]);
+      if (a->click && a->click(a->state, lx, ly, MOUSE_LEFT))
         wm_damage(wm_frame(hit));
     }
   }

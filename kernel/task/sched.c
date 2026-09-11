@@ -114,12 +114,12 @@ Tid sched_next(void) {
     s->slices++;
     g_cursor = k;
     g_current = tid_of(s);
-    mem_set_owner(OWNER_OF(k));      /* locks taken from here belong to it */
+    kmem_set_owner(OWNER_OF(k));      /* locks taken from here belong to it */
     return g_current;
   }
 
   g_current = TID_INVALID;         /* nothing runnable: the caller idles */
-  mem_set_owner(0);
+  kmem_set_owner(0);
   return TID_INVALID;
 }
 
@@ -149,7 +149,7 @@ void sched_exit(Tid t) {
   /* Hand back anything it had locked. Without this the lock counts stay
    * raised forever and those blocks can never be moved or evicted again --
    * a leak the approved spec does not account for. */
-  mem_release_owner(OWNER_OF(idx_of(t)));
+  kmem_release_owner(OWNER_OF(idx_of(t)));
   if (t == g_current) g_current = TID_INVALID;
 }
 

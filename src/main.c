@@ -25,21 +25,36 @@
 #include "kernel/fs/fs.h"
 #include "shellcmd.h"
 #include "kernel/ui/desktop.h"
-#include "kernel/drv/btmouse.h"
+#include "kernel/ui/launchui.h"
+#include "kernel/net/wifi.h"
+#include "kernel/ui/shell.h"
+#include "kernel/drv/bthid.h"
 
 #define CARDOS_LINE_MAX 63
 
 /* The handle heap. Carved once from the IDF heap at boot; everything CardOS
- * allocates afterwards comes through mem_alloc. Deliberately not "whatever is
+ * allocates afterwards comes through kmem_alloc. Deliberately not "whatever is
  * left" -- a fixed, stated size is what makes the numbers in `mem` mean
  * something, and CLAUDE.md is emphatic that memory here gets measured rather
  * than assumed. */
-#define CARDOS_HEAP_BYTES (128 * 1024)
+/* The memory manager's arena, reserved at boot.
+ *
+ * Was 128 KB, which was chosen when the radios did not exist. Measured with
+ * both up: WiFi costs 49792 bytes and Bluetooth 67108, and with a 128 KB
+ * arena the two together left 1156 bytes free and the WiFi driver began
+ * failing buffer allocations ("wifi:m f null" in a loop). 48 KB is still more
+ * than anything currently allocates from it and leaves the radios room to
+ * coexist. */
+#define CARDOS_HEAP_BYTES (48 * 1024)
 
 static uint8_t *s_heap;
 static char     s_line[CARDOS_LINE_MAX + 1];
 static int      s_len;
-static int      s_desktop;      /* the desktop owns the screen and keys */
+/* Three shells over the same kernel. The launcher is the one meant for daily
+ * use, the desktop is the demonstration that windows work, and the console is
+ * for development. */
+typedef enum { MODE_CONSOLE = 0, MODE_DESKTOP, MODE_LAUNCHER } Mode;
+static Mode     s_mode;
 
 static void prompt(void) {
   con_set_color(COLOR_AMBER);
@@ -48,17 +63,17 @@ static void prompt(void) {
 }
 
 static void cmd_mem(void) {
-  MemStats st;
-  mem_stats(&st);
-  con_printf("handle heap %u KB, %u used, %u free\n",
-                 (unsigned)(st.heap_size / 1024),
-                 (unsigned)(st.movable_used + st.fixed_used),
-                 (unsigned)st.free_bytes);
-  con_printf("handles %u/%u  compactions %u\n",
-                 (unsigned)st.handles_used, (unsigned)MEM_MAX_HANDLES,
-                 (unsigned)st.compactions);
-  con_printf("idf heap free %u KB\n",
-                 (unsigned)(esp_get_free_heap_size() / 1024));
+  con_printf("heap free        %6u B  (largest block %u)\n",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  con_printf("exec free        %6u B\n",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_EXEC));
+  con_printf("low water        %6u B\n",
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
+  con_printf("handle arena     %6u B  reserved at boot\n",
+             (unsigned)CARDOS_HEAP_BYTES);
+  con_printf("bluetooth        %6u B\n", (unsigned)bthid_heap_cost());
+  con_printf("wifi             %6u B\n", (unsigned)wifi_heap_cost());
 }
 
 static const char *state_name(TaskState st) {
@@ -129,8 +144,14 @@ static void run_line(char *line) {
   }
   else if (!strcmp(line, "desk")) {
     desktop_init();
-    s_desktop = 1;
+    s_mode = MODE_DESKTOP;
   }
+  else if (!strcmp(line, "launch") || !strcmp(line, "gui")) {
+    launchui_init();
+    s_mode = MODE_LAUNCHER;
+  }
+  else if (!strcmp(line, "wifi")) cmd_wifi(arg);
+  else if (!strcmp(line, "get"))  cmd_get(arg);
   else if (!strcmp(line, "clear"))  con_clear();
   else if (!strcmp(line, "reboot")) esp_restart();
   else if (!strcmp(line, "echo"))   { con_write(arg); con_putc('\n'); }
@@ -189,7 +210,7 @@ void app_main(void) {
                    (unsigned)(CARDOS_HEAP_BYTES / 1024));
     con_set_color(COLOR_GREEN);
   } else {
-    mem_init(s_heap, CARDOS_HEAP_BYTES);
+    kmem_init(s_heap, CARDOS_HEAP_BYTES);
   }
 
   /* The scheduler's policy half runs now; the Xtensa context switch does not
@@ -223,18 +244,25 @@ void app_main(void) {
 
   /* Came back from a firmware the desktop launched: return there, rather than
    * to a console nobody asked for. */
-  if (desktop_autostart()) {
-    desktop_init();
-    s_desktop = 1;
-  } else {
-    prompt();
-  }
+  /* Straight into the launcher. It is the shell that is actually useful, and
+   * a device that boots to a blinking prompt is a device you have to remember
+   * a command for. The console is one Escape away. */
+  launchui_init();
+  s_mode = MODE_LAUNCHER;
 
   for (;;) {
     uint8_t k = keyboard_poll();
 
     /* A character arriving on the serial console counts as a keypress, so the
      * shell can be driven from a PC as well as from the keyboard. */
+    /* A Bluetooth keyboard is the same keyboard as the built-in one from here
+     * on: the decoder emits the same byte alphabet, so nothing downstream
+     * needs to know which one a key came from. */
+    if (!k) {
+      bthid_tick((uint32_t)(esp_timer_get_time() / 1000));
+      bthid_poll_key(&k);
+    }
+
     if (!k) {
       int sc = con_serial_key();
       if (sc == '\r' || sc == '\n') k = KEY_ENTER;
@@ -243,25 +271,48 @@ void app_main(void) {
       else if (sc > 0) k = (uint8_t)sc;
     }
 
-    if (s_desktop) {
+    if (s_mode == MODE_LAUNCHER) {
+      MouseReport mr;
+      int got = 0;
+      while (bthid_poll_mouse(&mr)) { launchui_mouse_apply(&mr); got = 1; }
+      if (got) launchui_mouse_done();
+      launchui_tick((uint32_t)(esp_timer_get_time() / 1000));
+      if (k) {
+        int r = launchui_key(k);
+        if (r == 1) {
+          s_mode = MODE_CONSOLE;
+          ui_set_shell(UI_NONE);
+          con_clear();
+          con_write("back at the console\n");
+          prompt();
+        } else if (r == 2) {
+          s_mode = MODE_DESKTOP;      /* the launcher handed over */
+        }
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
+      continue;
+    }
+
+    if (s_mode == MODE_DESKTOP) {
       MouseReport mr;
       /* Drain whatever the radio queued. It arrives on the Bluetooth task,
        * which must not touch the display, so this is where it turns into
        * pointer movement. */
       {
         int got = 0;
-        while (btmouse_poll(&mr)) { desktop_mouse_apply(&mr); got = 1; }
+        while (bthid_poll_mouse(&mr)) { desktop_mouse_apply(&mr); got = 1; }
         if (got) desktop_mouse_done();   /* one repaint for the whole burst */
       }
       desktop_tick((uint32_t)(esp_timer_get_time() / 1000));
-      if (k && desktop_key(k)) {
+      if ((k && desktop_key(k)) || desktop_take_leave()) {
         /* ESC left the desktop: hand the screen back to the console. */
-        s_desktop = 0;
+        s_mode = MODE_CONSOLE;
+        ui_set_shell(UI_NONE);
         con_clear();
         con_write("back at the console\n");
         prompt();
       }
-      vTaskDelay(pdMS_TO_TICKS(10));
+      vTaskDelay(pdMS_TO_TICKS(5));
       continue;
     }
 
@@ -299,6 +350,6 @@ void app_main(void) {
 
     /* 5 ms while the desktop is up: the pointer wants to keep up with the
      * hand, and the keyboard matrix scan is cheap. */
-    vTaskDelay(pdMS_TO_TICKS(s_desktop ? 5 : 10));
+    vTaskDelay(pdMS_TO_TICKS(s_mode != MODE_CONSOLE ? 5 : 10));
   }
 }

@@ -24,32 +24,32 @@ void test_every_block_is_four_byte_aligned(void) {
   Handle h[sizeof sizes / sizeof sizes[0]];
   size_t i;
 
-  mem_init(HEAP, sizeof heap_words);
+  kmem_init(HEAP, sizeof heap_words);
   for (i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
     void *p;
-    h[i] = mem_alloc(sizes[i], 0);
+    h[i] = kmem_alloc(sizes[i], 0);
     CHECK(h[i] != 0);
-    p = mem_lock(h[i]);
+    p = kmem_lock(h[i]);
     CHECK(p != NULL);
     CHECK(IS_ALIGNED(p));
     if (!IS_ALIGNED(p))
       printf("      size %u landed at offset %u\n", (unsigned)sizes[i],
              (unsigned)((unsigned char *)p - HEAP));
-    mem_unlock(h[i]);
+    kmem_unlock(h[i]);
   }
 }
 
 void test_alignment_survives_compaction(void) {
   Handle a, b, c;
   void *p;
-  mem_init(HEAP, sizeof heap_words);
-  a = mem_alloc(37, 0);
-  b = mem_alloc(41, 0);
-  c = mem_alloc(53, 0);
-  mem_free(b);
-  mem_compact();
-  p = mem_lock(a); CHECK(IS_ALIGNED(p)); mem_unlock(a);
-  p = mem_lock(c); CHECK(IS_ALIGNED(p)); mem_unlock(c);
+  kmem_init(HEAP, sizeof heap_words);
+  a = kmem_alloc(37, 0);
+  b = kmem_alloc(41, 0);
+  c = kmem_alloc(53, 0);
+  kmem_free(b);
+  kmem_compact();
+  p = kmem_lock(a); CHECK(IS_ALIGNED(p)); kmem_unlock(a);
+  p = kmem_lock(c); CHECK(IS_ALIGNED(p)); kmem_unlock(c);
 }
 
 void test_fixed_blocks_are_aligned_too(void) {
@@ -57,26 +57,26 @@ void test_fixed_blocks_are_aligned_too(void) {
    * that gets diagnosed politely. */
   Handle a, b;
   void *p;
-  mem_init(HEAP, sizeof heap_words);
-  a = mem_alloc(101, MEM_FIXED);
-  b = mem_alloc(7, MEM_FIXED);
-  p = mem_lock(a); CHECK(IS_ALIGNED(p)); mem_unlock(a);
-  p = mem_lock(b); CHECK(IS_ALIGNED(p)); mem_unlock(b);
+  kmem_init(HEAP, sizeof heap_words);
+  a = kmem_alloc(101, MEM_FIXED);
+  b = kmem_alloc(7, MEM_FIXED);
+  p = kmem_lock(a); CHECK(IS_ALIGNED(p)); kmem_unlock(a);
+  p = kmem_lock(b); CHECK(IS_ALIGNED(p)); kmem_unlock(b);
 }
 
 void test_alignment_survives_eviction_and_page_in(void) {
   Handle h[10];
   int i;
-  mem_init(HEAP, sizeof heap_words);
+  kmem_init(HEAP, sizeof heap_words);
   for (i = 0; i < 10; i++) {
-    h[i] = mem_alloc(1000 + (uint32_t)i * 7, 0);   /* deliberately ragged */
-    if (h[i]) { void *p = mem_lock(h[i]); if (p) { CHECK(IS_ALIGNED(p)); mem_unlock(h[i]); } }
+    h[i] = kmem_alloc(1000 + (uint32_t)i * 7, 0);   /* deliberately ragged */
+    if (h[i]) { void *p = kmem_lock(h[i]); if (p) { CHECK(IS_ALIGNED(p)); kmem_unlock(h[i]); } }
   }
   for (i = 0; i < 10; i++) {
     if (!h[i]) continue;
     {
-      void *p = mem_lock_ro(h[i]);
-      if (p) { CHECK(IS_ALIGNED(p)); mem_unlock(h[i]); }
+      void *p = kmem_lock_ro(h[i]);
+      if (p) { CHECK(IS_ALIGNED(p)); kmem_unlock(h[i]); }
     }
   }
 }
@@ -85,7 +85,7 @@ void test_alignment_survives_eviction_and_page_in(void) {
  * accidentally rounding a whole block up. */
 void test_reported_size_is_the_requested_size(void) {
   Handle a;
-  mem_init(HEAP, sizeof heap_words);
-  a = mem_alloc(37, 0);
-  CHECK_EQ(mem_size(a), 37);      /* not 40 */
+  kmem_init(HEAP, sizeof heap_words);
+  a = kmem_alloc(37, 0);
+  CHECK_EQ(kmem_size(a), 37);      /* not 40 */
 }

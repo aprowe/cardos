@@ -16,7 +16,7 @@ file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
   ${ROOT}/kernel/app/appimage.c   # launcher.c is device-only (ESP-IDF)
   ${ROOT}/kernel/task/sched.c
   ${ROOT}/kernel/fs/path.c
-  ${ROOT}/kernel/input/mouse.c
+  ${ROOT}/kernel/input/mouse.c ${ROOT}/kernel/input/kbd_hid.c
   ${ROOT}/kernel/ui/rect.c ${ROOT}/kernel/ui/wm.c)  # draw/desktop are device-only   # task.c is device glue; sched.c is the policy
 add_executable(cardos_tests ${CARDOS_TEST_SOURCES} ${CARDOS_KERNEL_SOURCES})
 target_include_directories(cardos_tests PRIVATE ${ROOT}/test ${ROOT})
