@@ -290,6 +290,8 @@ void app_main(void) {
       }
     }
 
-    vTaskDelay(pdMS_TO_TICKS(10));          /* ~100 Hz scan */
+    /* 5 ms while the desktop is up: the pointer wants to keep up with the
+     * hand, and the keyboard matrix scan is cheap. */
+    vTaskDelay(pdMS_TO_TICKS(s_desktop ? 5 : 10));
   }
 }

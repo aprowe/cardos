@@ -21,3 +21,9 @@ the example pairs with Espressif's own HID demo. Real mice are named something
 else and were silently discarded. It now accepts anything advertising the HID
 service UUID or a HID-category appearance, and logs every advertisement seen,
 because "found nothing" cannot be debugged without knowing what was in the air.
+
+Third local change: a mouse advertises its HID service UUID and appearance only
+while pairing. Once bonded it reconnects with a bare advertisement carrying no
+name and no appearance, so the HID filter discarded the one device already
+known. The scan now also accepts any advertiser whose address matches a stored
+bond.

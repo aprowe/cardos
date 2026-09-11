@@ -81,9 +81,38 @@ static uint16_t s_proto_handle;   /* Protocol Mode characteristic */
 static MouseReport s_ring[RING];
 static volatile uint8_t s_head, s_tail;
 
+/* Merge consecutive movement into the pending entry rather than queueing it.
+ *
+ * A mouse reports far faster than a 240x135 panel can be repainted, so a plain
+ * queue means the cursor keeps replaying stale movement after the hand has
+ * stopped -- it feels like the movements are backing up, because they are.
+ * Summing deltas loses nothing: two moves of +3 are one move of +6.
+ *
+ * A report that changes the buttons starts a new entry, so a click is never
+ * merged into a drag or lost. */
 static void ring_push(const MouseReport *r) {
   uint8_t next = (uint8_t)((s_head + 1) % RING);
-  if (next == s_tail) return;            /* full: drop rather than block */
+
+  if (s_head != s_tail) {
+    uint8_t last = (uint8_t)((s_head + RING - 1) % RING);
+    MouseReport *m = &s_ring[last];
+    if (m->buttons == r->buttons) {
+      int dx = m->dx + r->dx, dy = m->dy + r->dy, w = m->wheel + r->wheel;
+      if (dx >= -128 && dx <= 127 && dy >= -128 && dy <= 127 &&
+          w >= -128 && w <= 127) {
+        m->dx = (int8_t)dx;
+        m->dy = (int8_t)dy;
+        m->wheel = (int8_t)w;
+        return;
+      }
+    }
+  }
+
+  if (next == s_tail) {
+    /* Full anyway: drop the oldest, not the newest. A stale delta is worth
+     * less than a fresh one. */
+    s_tail = (uint8_t)((s_tail + 1) % RING);
+  }
   s_ring[s_head] = *r;
   s_head = next;
 }

@@ -93,14 +93,21 @@ static void paint_window(WinId w, Rect clip) {
 
 /* ---------------------------------------------------------- taskbar ----- */
 
-static void paint_taskbar(void) {
+/* Clip for the taskbar currently being painted, so it can be redrawn for just
+ * the damaged sliver rather than in full. */
+static Rect s_tb_clip;
+static void tb_clip(Rect r) { draw_set_clip(rect_intersect(r, s_tb_clip)); }
+
+static void paint_taskbar(Rect clip) {
   Rect bar = R(0, DESK_H, DISPLAY_W, TASKBAR_H);
   Rect start = R(2, DESK_H + 2, 34, TASKBAR_H - 4);
   int i;
   int16_t x;
   char clock[8];
 
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  s_tb_clip = rect_intersect(clip, bar);
+  if (rect_is_empty(s_tb_clip)) return;
+  tb_clip(bar);
   draw_bevel(bar, C_FACE, C_LIGHT, C_SHADOW);
 
   draw_bevel(start, C_FACE, s_start_open ? C_SHADOW : C_LIGHT,
@@ -115,10 +122,10 @@ static void paint_taskbar(void) {
     if (b.x + b.w > DISPLAY_W - 32) break;
     draw_bevel(b, C_FACE, focused ? C_SHADOW : C_LIGHT,
                focused ? C_LIGHT : C_DARK);
-    draw_set_clip(rect_inset(b, 2));
+    tb_clip(rect_inset(b, 2));
     draw_text_ellipsis((int16_t)(b.x + 2), (int16_t)(b.y + 1), 42,
                        wm_title(s_win[i]), C_TEXT, C_FACE);
-    draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+    tb_clip(bar);
     x = (int16_t)(x + 50);
   }
 
@@ -163,6 +170,10 @@ static void paint_job(void *ctx, WinId w, Rect r) {
   if (w == WIN_NONE) {
     draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
     draw_rect(rect_intersect(r, R(0, 0, DISPLAY_W, DESK_H)), C_DESKTOP);
+    /* The taskbar is part of the background, repainted only where damaged.
+     * Repainting it on every flush was redrawing 240x13 pixels of bevels and
+     * text for a nine-pixel pointer move -- which is what flickered. */
+    if (r.y + r.h > DESK_H) paint_taskbar(r);
   } else {
     paint_window(w, r);
   }
@@ -171,13 +182,12 @@ static void paint_job(void *ctx, WinId w, Rect r) {
 void desktop_flush(void) {
   if (wm_damage_count() == 0) return;
   wm_paint(paint_job, NULL);
-  paint_taskbar();
   paint_start_menu();
   draw_pointer();      /* always last: the pointer is above everything */
 }
 
 void desktop_repaint(void) {
-  wm_damage(R(0, 0, DISPLAY_W, DESK_H));
+  wm_damage(R(0, 0, DISPLAY_W, DISPLAY_H));
   desktop_flush();
 }
 
@@ -300,12 +310,15 @@ int desktop_key(uint8_t key) {
 void desktop_tick(uint32_t ms) {
   uint32_t before = s_now_ms / 1000u;
   s_now_ms = ms;
-  if (s_now_ms / 1000u != before) paint_taskbar();   /* just the clock */
+  if (s_now_ms / 1000u == before) return;
+  wm_damage(R(DISPLAY_W - 30, DESK_H + 2, 28, TASKBAR_H - 4));
+  desktop_flush();
 }
 
 void desktop_init(void) {
   int i;
-  wm_init(DISPLAY_W, DESK_H);
+  wm_init(DISPLAY_W, DISPLAY_H);
+  mouse_init(DISPLAY_W, DISPLAY_H);
   s_nwin = 0;
   s_start_open = 0;
   s_start_sel = 0;

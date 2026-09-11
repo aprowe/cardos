@@ -333,7 +333,7 @@ void cmd_mouse(const char *arg) {
     return;
   }
 
-  con_write("put the mouse in pairing mode\n");
+  con_write("pairing mode only needed once\n");
   con_write("scanning 6s...\n");
   btmouse_start(6);
   con_printf("%s\n", btmouse_status());

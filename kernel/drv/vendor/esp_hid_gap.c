@@ -874,6 +874,22 @@ static void handle_ble_device_result(const struct ble_gap_disc_desc *disc)
         }
         if (!is_hid && fields.appearance_is_present && (appearance >> 6) == 0x0F) is_hid = 1;
 
+        /* CardOS change. A mouse advertises its HID service and appearance
+           only while it is pairing. Once bonded it reconnects with a bare
+           advertisement -- no name, no appearance, nothing to identify it by
+           -- so the filter above throws away exactly the device we already
+           know. Accept anything we hold a bond with. */
+        if (!is_hid) {
+            ble_addr_t peers[CONFIG_BT_NIMBLE_MAX_BONDS];
+            int num_peers = 0;
+            if (ble_store_util_bonded_peers(peers, &num_peers,
+                                            CONFIG_BT_NIMBLE_MAX_BONDS) == 0) {
+                for (int i = 0; i < num_peers; i++) {
+                    if (memcmp(peers[i].val, disc->addr.val, 6) == 0) { is_hid = 1; break; }
+                }
+            }
+        }
+
         /* Log everything seen, named or not: "found nothing" is impossible to
            debug without knowing what was actually in the air. */
         ESP_LOGI("hid_gap", "adv %02x:%02x:%02x:%02x:%02x:%02x rssi %d appearance 0x%04x %s%s",

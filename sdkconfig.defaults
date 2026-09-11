@@ -33,6 +33,11 @@ CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_NVS_PERSIST=y
+# Three is the default and it fills up fast: a mouse re-paired a few times
+# leaves several identities behind, and once the store is full NimBLE returns
+# BLE_HS_ESTORE_CAP and the bond is silently not saved -- so it asks to pair
+# again every time.
+CONFIG_BT_NIMBLE_MAX_BONDS=8
 # nimble_hidh.c -- the whole NimBLE HID *host* implementation -- is guarded by
 # BT_NIMBLE_HID_SERVICE. Without it esp_hidh_init links against nothing and the
 # build fails on an undefined esp_ble_hidh_init, which does not obviously point
