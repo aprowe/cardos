@@ -14,6 +14,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
+#include "esp_log.h"
 #include "esp_hid_gap.h"
 
 /* CardOS: the example defines this in its own Kconfig, which we do not have.
@@ -857,13 +858,34 @@ static void handle_ble_device_result(const struct ble_gap_disc_desc *disc)
         appearance = fields.appearance;
     }
 
-    for (int i = 0; i < fields.num_uuids16; i++) {
-        if (ble_uuid_u16(&fields.uuids16[i].u) == BLE_HID_SVC_UUID &&
-            ((adv_name_len > 0 && memcmp("ESP BLE HID2", adv_name, adv_name_len) == 0) ||
-            (adv_name_len > 0 && memcmp("ESP Mouse", adv_name, adv_name_len) == 0) ||
-            (adv_name_len > 0 && memcmp("ESP Keyboard", adv_name, adv_name_len) == 0))) {
-            add_ble_scan_result(disc->addr.val, disc->addr.type, appearance, adv_name, adv_name_len, disc->rssi);
-            break;
+    /* CardOS change. Upstream additionally required the advertised name to be
+       one of "ESP BLE HID2", "ESP Mouse" or "ESP Keyboard", because the
+       example is built to pair with Espressif's own HID device demo. A real
+       mouse is called something else, so every one of them was discarded
+       silently.
+   
+       Accept anything that advertises the HID service, or whose appearance is
+       in the HID category (0x03C0 generic, 0x03C1 keyboard, 0x03C2 mouse) --
+       some devices advertise the appearance without the service UUID. */
+    {
+        int is_hid = 0;
+        for (int i = 0; i < fields.num_uuids16; i++) {
+            if (ble_uuid_u16(&fields.uuids16[i].u) == BLE_HID_SVC_UUID) { is_hid = 1; break; }
+        }
+        if (!is_hid && fields.appearance_is_present && (appearance >> 6) == 0x0F) is_hid = 1;
+
+        /* Log everything seen, named or not: "found nothing" is impossible to
+           debug without knowing what was actually in the air. */
+        ESP_LOGI("hid_gap", "adv %02x:%02x:%02x:%02x:%02x:%02x rssi %d appearance 0x%04x %s%s",
+                 disc->addr.val[5], disc->addr.val[4], disc->addr.val[3],
+                 disc->addr.val[2], disc->addr.val[1], disc->addr.val[0],
+                 disc->rssi, appearance,
+                 adv_name_len ? (char *)adv_name : "(unnamed)",
+                 is_hid ? "  <- HID" : "");
+
+        if (is_hid) {
+            add_ble_scan_result(disc->addr.val, disc->addr.type, appearance,
+                                adv_name, adv_name_len, disc->rssi);
         }
     }
 }

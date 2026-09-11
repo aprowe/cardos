@@ -14,3 +14,10 @@ wrong. Copying it is better engineering than writing a worse version.
 Local change: `CONFIG_EXAMPLE_SSP_ENABLED` comes from the example's own
 Kconfig, which we do not have. It only guards Bluetooth Classic secure simple
 pairing, and the ESP32-S3 has no Classic radio at all, so it is defined to 0.
+
+Second local change: the NimBLE scan callback only accepted devices whose
+advertised *name* was "ESP BLE HID2", "ESP Mouse" or "ESP Keyboard" --
+the example pairs with Espressif's own HID demo. Real mice are named something
+else and were silently discarded. It now accepts anything advertising the HID
+service UUID or a HID-category appearance, and logs every advertisement seen,
+because "found nothing" cannot be debugged without knowing what was in the air.

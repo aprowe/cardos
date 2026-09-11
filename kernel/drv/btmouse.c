@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -33,6 +34,38 @@ static BtMouseState s_state;
 static char         s_detail[48];
 static uint32_t     s_heap_cost;
 static int          s_inited;
+static uint32_t     s_reports;
+
+/* The bonded peer, remembered across reboots. Once a mouse has bonded it
+ * stops advertising to be discovered -- it expects the host to come back to
+ * it -- so scanning only ever works for the very first pairing. Every
+ * reconnection afterwards has to be a direct open. */
+#define NVS_NS   "cardos"
+#define NVS_PEER "mousepeer"
+typedef struct { uint8_t bda[6]; uint8_t addr_type; uint8_t valid; } SavedPeer;
+static SavedPeer s_peer;
+
+static void peer_load(void) __attribute__((unused));
+static void peer_load(void) {
+  nvs_handle_t h;
+  size_t len = sizeof s_peer;
+  s_peer.valid = 0;
+  if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+  if (nvs_get_blob(h, NVS_PEER, &s_peer, &len) != ESP_OK || len != sizeof s_peer)
+    s_peer.valid = 0;
+  nvs_close(h);
+}
+
+static void peer_save(const uint8_t *bda, uint8_t addr_type) {
+  nvs_handle_t h;
+  memcpy(s_peer.bda, bda, 6);
+  s_peer.addr_type = addr_type;
+  s_peer.valid = 1;
+  if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_set_blob(h, NVS_PEER, &s_peer, sizeof s_peer);
+  nvs_commit(h);
+  nvs_close(h);
+}
 
 /* A tiny ring of decoded reports. The HID callback runs on the Bluetooth
  * task, so it must not touch the display or the window manager -- it drops
@@ -81,6 +114,21 @@ static void hidh_event(void *handler_args, esp_event_base_t base,
 
   case ESP_HIDH_INPUT_EVENT: {
     MouseReport r;
+    s_reports++;
+    /* Log the first few raw reports. Whether a mouse speaks boot protocol or
+     * report protocol cannot be assumed, and the difference is silent: a
+     * report-protocol mouse with 16-bit deltas decodes as nonsense rather
+     * than as nothing. */
+    if (s_reports <= 5) {
+      ESP_LOGI(TAG, "report len=%d: %02x %02x %02x %02x %02x %02x",
+               (int)p->input.length,
+               p->input.length > 0 ? p->input.data[0] : 0,
+               p->input.length > 1 ? p->input.data[1] : 0,
+               p->input.length > 2 ? p->input.data[2] : 0,
+               p->input.length > 3 ? p->input.data[3] : 0,
+               p->input.length > 4 ? p->input.data[4] : 0,
+               p->input.length > 5 ? p->input.data[5] : 0);
+    }
     /* Boot-protocol layout: buttons, then signed dx and dy, then wheel.
      * Decoding lives in the portable module so it stays host-tested; this
      * only has to hand over the bytes. */
@@ -143,6 +191,21 @@ int btmouse_start(int scan_seconds) {
      * flag is the same thing without the race. */
     ble_store_config_init();
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+
+    /* Bonding, which nothing in the IDF example sets up -- it pairs with
+     * Espressif's own HID demo, which does not insist on it. A real mouse
+     * does: the link encrypted with bonded=0 and the mouse then sent no
+     * reports at all, which looks exactly like a working connection.
+     *
+     * No input and no output on this device, so Just Works pairing; the keys
+     * are distributed and stored so the next reconnection needs no pairing
+     * mode. */
+    ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
+    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_mitm = 0;
+    ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     nimble_port_freertos_init(nimble_host_task);
 
     {
@@ -163,6 +226,17 @@ int btmouse_start(int scan_seconds) {
     s_heap_cost = (uint32_t)(heap_before - esp_get_free_heap_size());
   }
 
+  /* Always scan, even for a mouse already bonded.
+   *
+   * The first version remembered the peer address and reopened it directly,
+   * on the reasoning that a bonded device stops advertising. That is wrong
+   * for this hardware: the Pebble uses a resolvable private address that
+   * rotates on every advertisement -- observed as ...9c:a5, then a7, then a8
+   * within minutes -- so a saved address is stale immediately. Reconnecting
+   * to it blocked for thirty seconds and then failed with status 13.
+   *
+   * Scanning finds it under whatever address it is wearing today, which is
+   * what address resolution is for and what actually works. */
   s_state = BTM_SCANNING;
   snprintf(s_detail, sizeof s_detail, "scanning %ds", scan_seconds);
 
@@ -192,6 +266,7 @@ int btmouse_start(int scan_seconds) {
            best->name ? best->name : "unnamed device");
   ESP_LOGI(TAG, "opening %s", s_detail);
 
+  peer_save(best->bda, best->ble.addr_type);
   esp_hidh_dev_open(best->bda, ESP_HID_TRANSPORT_BLE, best->ble.addr_type);
   esp_hid_scan_results_free(results);
   return 0;
@@ -216,6 +291,7 @@ const char *btmouse_status(void) {
       s_state == BTM_SCANNING   ? "scanning" :
       s_state == BTM_CONNECTING ? "connecting" :
       s_state == BTM_CONNECTED  ? "connected" : "failed";
-  snprintf(buf, sizeof buf, "%s (%s)", name, s_detail);
+  snprintf(buf, sizeof buf, "%s (%s) %u reports", name, s_detail,
+           (unsigned)s_reports);
   return buf;
 }
