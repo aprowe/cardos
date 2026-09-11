@@ -7,9 +7,17 @@
 #include "kernel/app/launcher.h"
 #include "kernel/ui/desktop.h"
 #include "kernel/ui/icons_builtin.h"
+#include "kernel/ui/icons_color.h"
+
+#include <stdlib.h>
 
 #include <stdio.h>
 #include <string.h>
+
+/* One colour icon, 16x16 RGB565. Loaded on demand and kept: 512 bytes each,
+ * and only for entries that actually have a file. */
+#define CIC_PIXELS (16 * 16)
+#define CIC_HEADER 8
 
 static Icon s_icon[MAX_ICONS];
 static int  s_nicon;      /* everything found */
@@ -105,6 +113,32 @@ static void seed_capps(void) {
   if (fd >= 0) { fs_write(fd, &want, sizeof want); fs_close(fd); }
 }
 
+/* The colour icons, written out beside the apps. Same reasoning as the
+ * binaries: a file the user can only get onto the card with a card reader is a
+ * file they will not have. Overwritten whenever the size differs, which is the
+ * cheap half of the check the .capp seeding does. */
+static void seed_colour_icons(void) {
+  size_t i;
+  char path[96];
+  int fd;
+
+  if (fs_mkdir(ICON_DIR) != 0) { /* already there, or no card */ }
+
+  for (i = 0; i < CIC_BLOB_COUNT; i++) {
+    snprintf(path, sizeof path, "%s/%s", ICON_DIR, CIC_BLOBS[i].name);
+    if (file_size(path) == (int)CIC_BLOBS[i].size) continue;
+
+    fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    if (fd < 0) continue;
+    if (write_all(fd, CIC_BLOBS[i].data, CIC_BLOBS[i].size) != 0) {
+      fs_close(fd);
+      fs_remove(path);
+      continue;
+    }
+    fs_close(fd);
+  }
+}
+
 /* Seed the folder the first time, so a fresh card still has something to click
  * rather than an empty desktop with no clue what to do. Each entry is created
  * only if absent rather than only on a wholly empty folder: a card that
@@ -126,6 +160,7 @@ static void seed_dir(void) {
   }
 
   seed_capps();
+  seed_colour_icons();
 }
 
 static int ends_with(const char *name, size_t n, const char *ext) {
@@ -198,6 +233,8 @@ static void partition_cli(void) {
 }
 
 void icons_reload(void) {
+  int i;
+  for (i = 0; i < s_nicon; i++) free(s_icon[i].colour);
   s_nicon = 0;
   s_nvisible = 0;
   capprun_unload_all();
@@ -246,6 +283,48 @@ const uint8_t *icon_bitmap(int i) {
   if (strcmp(ic->name, "Settings") == 0) return ICON_SETTINGS;
   if (strcmp(ic->name, "About") == 0)    return ICON_ABOUT;
   return ICON_GENERIC;
+}
+
+/* Read NAME.cic, if there is one. The header is checked rather than trusted:
+ * this is a file on a removable card, and anything at all can be in it. */
+static uint16_t *load_cic(const char *name) {
+  char path[96];
+  uint8_t head[CIC_HEADER];
+  uint16_t *px;
+  int fd, want = CIC_PIXELS * 2, got = 0;
+
+  snprintf(path, sizeof path, "%s/%s.cic", ICON_DIR, name);
+  fd = fs_open(path, FS_O_READ);
+  if (fd < 0) return NULL;
+
+  if (fs_read(fd, head, CIC_HEADER) != CIC_HEADER ||
+      head[0] != 'C' || head[1] != 'I' || head[2] != 'C' || head[3] != '1' ||
+      head[4] != 16 || head[5] != 0 || head[6] != 16 || head[7] != 0) {
+    fs_close(fd);
+    return NULL;
+  }
+
+  px = (uint16_t *)malloc((size_t)want);
+  if (!px) { fs_close(fd); return NULL; }
+  while (got < want) {
+    int n = fs_read(fd, (uint8_t *)px + got, (size_t)(want - got));
+    if (n <= 0) break;
+    got += n;
+  }
+  fs_close(fd);
+  if (got != want) { free(px); return NULL; }
+  return px;
+}
+
+const uint16_t *icon_colour(int i) {
+  Icon *ic;
+  if (i < 0 || i >= s_nicon) return NULL;
+  ic = &s_icon[i];
+  if (ic->colour_tried) return ic->colour;
+  ic->colour_tried = 1;
+  ic->colour = load_cic(ic->kind == ICON_FIRMWARE ? "firmware" : ic->name);
+  if (!ic->colour && ic->kind != ICON_FIRMWARE) ic->colour = load_cic("generic");
+  return ic->colour;
 }
 
 int icons_boot_firmware(int i) {

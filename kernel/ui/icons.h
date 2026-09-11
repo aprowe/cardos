@@ -36,6 +36,12 @@ typedef struct {
   IconKind kind;
   int      slot;        /* app registry index, or capprun slot */
   int      cli;         /* a command: runnable, but not shown anywhere */
+
+  /* The colour icon, read from the card the first time it is asked for.
+   * colour_tried separates "no file" from "not looked yet", so a missing one
+   * is not re-read on every repaint. */
+  uint16_t *colour;
+  int       colour_tried;
 } Icon;
 
 /* Seeds the folder if it is empty and loads every .capp it finds. Safe to call
@@ -56,6 +62,13 @@ const AppDef *icon_app(int i);
 
 /* 16x16 1bpp, or NULL for an entry with no icon of its own. */
 const uint8_t *icon_bitmap(int i);
+
+/* 16x16 RGB565 from /desktop/icons/NAME.cic, or NULL if there is no such file.
+ * Preferred over the 1bpp shape when present: a colour icon is the one someone
+ * drew on purpose. */
+const uint16_t *icon_colour(int i);
+
+#define ICON_DIR ICONS_DIR "/icons"
 
 /* Chain-boot a firmware entry. Does not return on success. Returns 0 if the
  * icon is not firmware or the image was refused. */

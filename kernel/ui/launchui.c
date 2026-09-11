@@ -119,11 +119,20 @@ static void paint_bar(void) {
                wifi_is_connected() ? C_TITLE_FG : C_SHADOW, C_TITLE);
 }
 
+/* Colour if the card has one, the app's own 1bpp shape otherwise. The colour
+ * version is the one somebody drew on purpose, so it wins; the shape is the
+ * fallback that always exists because it is compiled into the program. */
 static void paint_icon(int idx, int16_t x, int16_t y, int scale, uint16_t fg) {
-  const uint8_t *bits = icon_bitmap(idx);
-  if (!bits) return;
-  draw_bitmap1_scaled(x, y, CAPP_ICON_W, CAPP_ICON_H, bits, scale,
-                      fg, C_DESKTOP);
+  const uint16_t *px = icon_colour(idx);
+  const uint8_t *bits;
+
+  if (px) {
+    draw_image_scaled(x, y, CAPP_ICON_W, CAPP_ICON_H, px, scale, 0x0000);
+    return;
+  }
+  bits = icon_bitmap(idx);
+  if (bits) draw_bitmap1_scaled(x, y, CAPP_ICON_W, CAPP_ICON_H, bits, scale,
+                                fg, C_DESKTOP);
 }
 
 static void paint_pips(int n) {

@@ -134,6 +134,14 @@ static void paint_icons(Rect clip) {
     if (ic->kind == ICON_FIRMWARE) draw_bevel(box, C_TITLE_UN, C_SHADOW, C_LIGHT);
     else                           draw_bevel(box, C_FACE, C_LIGHT, C_DARK);
 
+    {
+      const uint16_t *px = icon_colour(i);
+      if (px) {
+        draw_image_scaled(box.x, box.y, CAPP_ICON_W, CAPP_ICON_H, px, 1, 0x0000);
+        bits = NULL;
+        goto labelled;
+      }
+    }
     bits = icon_bitmap(i);
     if (bits) {
       /* The app supplied this. 16x16 is exactly the slab, so it replaces the
@@ -145,6 +153,7 @@ static void paint_icons(Rect clip) {
                 ic->kind == ICON_FIRMWARE ? C_TITLE_UN : C_FACE);
     }
 
+labelled:
     if (i == s_sel_icon) draw_frame(r, C_TITLE_FG);
     draw_text_ellipsis(r.x, (int16_t)(r.y + ICON_BOX + 2), r.w,
                        ic->name, C_TITLE_FG, C_DESKTOP);

@@ -80,6 +80,12 @@ void draw_bitmap1_scaled(int16_t x, int16_t y, int16_t w, int16_t h,
                          const uint8_t *bits, int scale,
                          uint16_t fg, uint16_t bg);
 
+/* A w x h block of RGB565, each source pixel drawn as a scale x scale square.
+ * Pixels equal to `transparent` are left alone, so an icon has no box of its
+ * own colour around it. */
+void draw_image_scaled(int16_t x, int16_t y, int16_t w, int16_t h,
+                       const uint16_t *px, int scale, uint16_t transparent);
+
 void draw_cursor(int16_t x, int16_t y);
 Rect draw_cursor_bounds(int16_t x, int16_t y);
 

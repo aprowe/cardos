@@ -206,6 +206,38 @@ void draw_bitmap1_scaled(int16_t x, int16_t y, int16_t w, int16_t h,
   }
 }
 
+void draw_image_scaled(int16_t x, int16_t y, int16_t w, int16_t h,
+                       const uint16_t *px, int scale, uint16_t transparent) {
+  Rect box, v;
+  int16_t py, run_start, sx;
+
+  if (!px || w <= 0 || h <= 0 || scale <= 0) return;
+  box.x = x; box.y = y;
+  box.w = (int16_t)(w * scale);
+  box.h = (int16_t)(h * scale);
+  v = rect_intersect(box, s_clip);
+  if (rect_is_empty(v)) return;
+
+  /* Runs of opaque pixels are blitted together and transparent ones break the
+   * run, the same way the cursor is drawn: there is no back buffer to read, so
+   * "leave this pixel alone" has to mean "do not write it". */
+  for (py = v.y; py < v.y + v.h; py++) {
+    const uint16_t *row = px + (size_t)((py - y) / scale) * (size_t)w;
+    run_start = -1;
+    for (sx = v.x; sx <= v.x + v.w; sx++) {
+      int last = (sx == v.x + v.w);
+      uint16_t c = last ? transparent : row[(sx - x) / scale];
+      if (!last && c != transparent) {
+        if (run_start < 0) run_start = sx;
+        s_row[sx - run_start] = c;
+      } else if (run_start >= 0) {
+        display_blit(run_start, py, sx - run_start, 1, s_row);
+        run_start = -1;
+      }
+    }
+  }
+}
+
 /* ------------------------------------------------------------ cursor ---- */
 
 /* Bit 0 is the leftmost pixel. The classic arrow: a filled wedge with a tail.

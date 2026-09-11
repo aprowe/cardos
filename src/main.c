@@ -100,10 +100,19 @@ static void cmd_ps(void) {
                info[i].name);
 }
 
+/* Grouped by what you are trying to do, and kept next to the dispatcher so the
+ * two are edited together -- a help text that drifts is worse than none. */
 static void cmd_help(void) {
-  con_write("ls cd pwd cat mkdir rm df\n");
-  con_write("apps boot bootinfo\n");
-  con_write("mem ps clear echo reboot help\n");
+  con_write("files    ls cd pwd mkdir rm df\n");
+  con_write("run      run NAME [args], ./prog, or just the name\n");
+  con_write("         | pipes, > and >> redirect, < feeds stdin\n");
+  con_write("shell    env set NAME=VALUE, tab completes, up recalls\n");
+  con_write("radios   wifi [scan|SSID PASS|saved|forget|off]\n");
+  con_write("         mouse, get URL\n");
+  con_write("screens  launch (carousel), desk (windows), escape returns\n");
+  con_write("boot     apps, boot NAME, boot! NAME, bootinfo\n");
+  con_write("system   mem ps taskcost flip clear reboot echo\n");
+  con_write("on card  cat grep -- run with no argument lists them\n");
 }
 
 /* A stand-in for the real shell, which needs the context switch so it can run
@@ -457,6 +466,64 @@ static void run_pipeline(const char *line) {
   sio_reset();
 }
 
+
+/* ---- command history -----------------------------------------------------
+ *
+ * A ring of the last few lines, walked with the up and down arrows. Kept small
+ * on purpose: this is a machine with 48 KB of arena and a 40-column screen,
+ * and eight lines is more than anyone scrolls back through on a keyboard this
+ * size.
+ *
+ * A line is only remembered if it differs from the one before it, because the
+ * common use of history here is running the same command twice and then
+ * wanting the one before that. */
+#define HIST_MAX 8
+
+static char s_hist[HIST_MAX][CARDOS_LINE_MAX + 1];
+static int  s_hist_n;         /* how many are filled */
+static int  s_hist_at;        /* how far back we have walked; 0 = the live line */
+static char s_hist_saved[CARDOS_LINE_MAX + 1];   /* the line being typed */
+
+static void hist_add(const char *line) {
+  int i;
+  if (!line || !*line) return;
+  if (s_hist_n > 0 && strcmp(s_hist[0], line) == 0) return;
+
+  for (i = HIST_MAX - 1; i > 0; i--) strcpy(s_hist[i], s_hist[i - 1]);
+  snprintf(s_hist[0], sizeof s_hist[0], "%s", line);
+  if (s_hist_n < HIST_MAX) s_hist_n++;
+}
+
+/* Replace what is on the line with `text`, on screen as well as in the buffer.
+ * Backspacing over the old one is what the console can actually do -- there is
+ * no way to repaint a line in place. */
+static void line_replace(const char *text) {
+  while (s_len > 0) { s_len--; con_putc(0x08); }
+  snprintf(s_line, sizeof s_line, "%s", text);
+  s_len = (int)strlen(s_line);
+  con_write(s_line);
+}
+
+static void hist_walk(int delta) {
+  int want;
+
+  if (s_hist_n == 0) return;
+  if (s_hist_at == 0 && delta > 0) {
+    /* Stepping off the live line: keep it, so coming back down restores what
+     * was half-typed rather than clearing it. */
+    s_line[s_len] = 0;
+    snprintf(s_hist_saved, sizeof s_hist_saved, "%s", s_line);
+  }
+
+  want = s_hist_at + delta;
+  if (want < 0) want = 0;
+  if (want > s_hist_n) want = s_hist_n;
+  if (want == s_hist_at) return;
+
+  s_hist_at = want;
+  line_replace(want == 0 ? s_hist_saved : s_hist[want - 1]);
+}
+
 /* Monotonic milliseconds for the scheduler. */
 static uint32_t clock_ms(void *ctx) {
   (void)ctx;
@@ -633,11 +700,18 @@ void app_main(void) {
       if (k == KEY_ENTER) {
         s_line[s_len] = 0;
         con_putc('\n');
+        hist_add(s_line);
+        s_hist_at = 0;
+        s_hist_saved[0] = 0;
         run_pipeline(s_line);
         s_len = 0;
         prompt();
       } else if (k == KEY_BACKSPACE) {
         if (s_len > 0) { s_len--; con_putc('\b'); }
+      } else if (k == KEY_UP) {
+        hist_walk(1);
+      } else if (k == KEY_DOWN) {
+        hist_walk(-1);
       } else if (k == KEY_TAB) {
         complete_line();
       } else if (k == KEY_ESC) {
