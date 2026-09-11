@@ -106,6 +106,7 @@ AppImageResult appimage_parse(AppImageRead read, void *ctx,
   if (out->hash_appended) total += 32u;
 
   if (total > file_size) return APPIMAGE_ERR_TRUNCATED;
+  if (file_size - total > APPIMAGE_MAX_TRAILER) return APPIMAGE_ERR_TRAILING;
   if (total > max_size)  return APPIMAGE_ERR_TOO_BIG;
 
   out->image_size = total;
@@ -140,6 +141,7 @@ const char *appimage_strerror(AppImageResult r) {
   case APPIMAGE_ERR_SEGMENTS:  return "corrupt image header";
   case APPIMAGE_ERR_TRUNCATED: return "image is truncated -- the copy is incomplete";
   case APPIMAGE_ERR_TOO_BIG:   return "image is too large for the guest partition";
+  case APPIMAGE_ERR_TRAILING:  return "not an app image (a full-flash dump?)";
   case APPIMAGE_ERR_READ:      return "could not read the image";
   }
   return "unknown error";

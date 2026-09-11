@@ -1,22 +1,39 @@
 # CardOS partition table for the 8 MB ESP32-S3FN8 on the Cardputer.
 #
-# CardOS lives in ota_0 and a guest firmware is staged into ota_1. Both must be
-# OTA subtypes: the one-shot boot works by marking the guest pending-verify, so
-# that a guest which never validates itself (and a foreign firmware never will)
-# is rolled back to CardOS on the next reset. Requires
-# CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y.
+# This deliberately matches partitions_cardputer.csv from the sibling
+# CardLaunch project, because the apps we want to boot were built against that
+# table and a guest reads the partition table it finds -- ours -- not the one
+# it was compiled with. Diverging here is what makes a third-party app fail at
+# startup for no visible reason.
 #
-# `storage` is mostly for guest compatibility: a guest reads the partition
-# table at 0x8000, which is ours, not the one it was built against. A guest
-# expecting a data partition we do not declare will fail at startup.
+# CardOS lives in `factory` and is never overwritten. A selected app is copied
+# into `ota_0` and booted from there, so a bad app can never take CardOS down.
+# Two independent ways home, neither needing the guest's cooperation:
 #
-# 0x20000 + 0x200000 + 0x400000 + 0x1E0000 = 0x800000 = 8 MB exactly.
-# App partitions must start on a 64 KB boundary.
+#   1. The guest is marked pending-verify and never confirms itself, so the
+#      next reset rolls back to factory.
+#   2. Erasing otadata leaves nothing valid to read, and the bootloader falls
+#      back to factory. This is tools/back-to-cardos.py, and it is the escape
+#      hatch when everything else has gone wrong.
 #
-# Name,     Type, SubType, Offset,   Size,     Flags
-nvs,        data, nvs,     0x9000,   0x6000,
-otadata,    data, ota,     0xF000,   0x2000,
-phy_init,   data, phy,     0x11000,  0x1000,
-cardos,     app,  ota_0,   0x20000,  0x200000,
-guest,      app,  ota_1,   0x220000, 0x400000,
-storage,    data, spiffs,  0x620000, 0x1E0000,
+# The first three entries sit at their conventional offsets on purpose. The
+# Arduino platform flashes boot_app0.bin at a hardcoded 0xe000 and the app at
+# 0x10000 regardless of what this file says; CardLaunch found that moving them
+# produced a bootloader reset loop, because the app landed in a data partition
+# and `factory` stayed empty. CardOS is ESP-IDF rather than Arduino and so is
+# not itself subject to that, but the guests are, and they must land where
+# their own build expects.
+#
+# The data partition is named `spiffs` because that is the label Arduino's
+# LittleFS looks for. It holds a LittleFS image regardless of the name. Rename
+# it and every Arduino guest that stores anything will fail to mount.
+#
+# phy_init sits near the end because the space at the front is spoken for.
+#
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x5000,
+otadata,    data, ota,      0xE000,   0x2000,
+factory,    app,  factory,  0x10000,  0x1C0000,
+ota_0,      app,  ota_0,    0x1D0000, 0x300000,
+phy_init,   data, phy,      0x4D0000, 0x1000,
+spiffs,     data, spiffs,   0x4D1000, 0x32F000,

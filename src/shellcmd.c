@@ -134,16 +134,14 @@ static int fs_reader(void *ctx, uint32_t offset, void *buf, size_t n) {
   return fs_read(fd, buf, n) == (int)n ? 0 : -1;
 }
 
-#define GUEST_PARTITION_BYTES (4u * 1024 * 1024)
+#define GUEST_PARTITION_BYTES (3u * 1024 * 1024)   /* ota_0 in partitions.csv */
 
-void cmd_apps(void) {
+static int list_apps_in(const char *dir) {
   FsEntry entries[32];
   int n, i, found = 0;
 
-  if (!fs_mounted()) { err("apps", "no card mounted"); return; }
-
-  n = fs_list("/cardos/apps", entries, 32);
-  if (n < 0) { err("/cardos/apps", "cannot list"); return; }
+  n = fs_list(dir, entries, 32);
+  if (n < 0) return -1;          /* the directory simply is not there */
 
   for (i = 0; i < n; i++) {
     char full[FS_PATH_MAX];
@@ -156,7 +154,7 @@ void cmd_apps(void) {
     if (len < 4 || strcmp(entries[i].name + len - 4, ".bin") != 0) continue;
     found++;
 
-    if (snprintf(full, sizeof full, "/cardos/apps/%s", entries[i].name) < 0) continue;
+    if (snprintf(full, sizeof full, "%s/%s", dir, entries[i].name) < 0) continue;
     fd = fs_open(full, FS_O_READ);
     if (fd < 0) { con_printf("%-16s unreadable\n", entries[i].name); continue; }
 
@@ -176,5 +174,16 @@ void cmd_apps(void) {
                info.has_app_desc ? info.version : "",
                (unsigned)(info.image_size / 1024));
   }
-  if (!found) con_write("no .bin files in /cardos/apps\n");
+  return found;
+}
+
+void cmd_apps(void) {
+  int a, b;
+  if (!fs_mounted()) { err("apps", "no card mounted"); return; }
+  /* CardLaunch keeps its firmware in /firmware. Look there as well as in the
+   * layout this spec fixes, rather than making the user rearrange a card full
+   * of working apps. */
+  a = list_apps_in("/cardos/apps");
+  b = list_apps_in("/firmware");
+  if (a <= 0 && b <= 0) con_write("no .bin in /cardos/apps or /firmware\n");
 }

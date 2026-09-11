@@ -25,7 +25,13 @@
 
 #define APPIMAGE_HEADER_SIZE    24u
 #define APPIMAGE_SEG_HEADER_SIZE 8u
-#define APPIMAGE_MAX_SEGMENTS   16u
+#define APPIMAGE_MAX_SEGMENTS   16
+
+/* A signed image appends a 4 KB signature block, so some trailing data is
+ * legitimate. Megabytes of it means the file is a full-flash dump, whose
+ * leading bytes are the bootloader -- which also starts 0xE9, so a magic-byte
+ * check alone will happily wave it through and brick the guest slot. */
+#define APPIMAGE_MAX_TRAILER    8192u
 
 typedef enum {
   APPIMAGE_OK = 0,
@@ -35,6 +41,7 @@ typedef enum {
   APPIMAGE_ERR_SEGMENTS,    /* absurd segment count or length */
   APPIMAGE_ERR_TRUNCATED,   /* segment table runs past the end of the file */
   APPIMAGE_ERR_TOO_BIG,     /* will not fit the guest partition */
+  APPIMAGE_ERR_TRAILING,    /* far more file than image: a full-flash dump? */
   APPIMAGE_ERR_READ         /* the reader failed */
 } AppImageResult;
 

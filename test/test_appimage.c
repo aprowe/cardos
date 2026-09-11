@@ -185,3 +185,28 @@ void test_every_result_has_a_message(void) {
     CHECK(m[0] != 0);
   }
 }
+
+/* CardLaunch's notes warn that people feed launchers full-flash dumps instead
+ * of app images. Its own guard is a first-byte 0xE9 check, which does not
+ * actually catch that: a full-flash dump begins with the *bootloader* image,
+ * and that starts 0xE9 too. What distinguishes them is that the contained
+ * image is a tiny fraction of the file. */
+void test_a_full_flash_dump_is_rejected(void) {
+  AppImageInfo info;
+  uint32_t total = build(3, APPIMAGE_CHIP_ESP32S3, 1, 1);
+  CHECK_EQ(g_img[0], APPIMAGE_MAGIC);          /* a dump looks fine here ... */
+  /* ... but the file is vastly larger than the image inside it. */
+  CHECK_EQ(appimage_parse_buffer(g_img, 64000, 4u * 1024 * 1024, &info),
+           APPIMAGE_ERR_TRAILING);
+  CHECK_EQ(appimage_parse_buffer(g_img, total, 4u * 1024 * 1024, &info),
+           APPIMAGE_OK);
+}
+
+/* A signed image carries a 4 KB signature block after the image proper, so a
+ * little trailing data has to stay acceptable. */
+void test_a_small_trailer_is_tolerated(void) {
+  AppImageInfo info;
+  uint32_t total = build(2, APPIMAGE_CHIP_ESP32S3, 1, 1);
+  CHECK_EQ(appimage_parse_buffer(g_img, total + 4096, 4u * 1024 * 1024, &info),
+           APPIMAGE_OK);
+}

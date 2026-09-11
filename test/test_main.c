@@ -23,6 +23,8 @@ void test_a_wild_segment_length_cannot_overflow_the_walk(void);
 void test_an_image_too_large_for_the_partition_is_rejected(void);
 void test_hash_appended_accounts_for_the_extra_32_bytes(void);
 void test_every_result_has_a_message(void);
+void test_a_full_flash_dump_is_rejected(void);
+void test_a_small_trailer_is_tolerated(void);
 void test_locked_pointer_is_writable_and_stable(void);
 void test_mem_zero_clears_the_block(void);
 void test_blocks_do_not_overlap(void);
@@ -128,6 +130,8 @@ int main(void) {
   RUN(test_an_image_too_large_for_the_partition_is_rejected);
   RUN(test_hash_appended_accounts_for_the_extra_32_bytes);
   RUN(test_every_result_has_a_message);
+  RUN(test_a_full_flash_dump_is_rejected);
+  RUN(test_a_small_trailer_is_tolerated);
   printf("-- mem alloc --\n");
   RUN(test_locked_pointer_is_writable_and_stable);
   RUN(test_mem_zero_clears_the_block);
