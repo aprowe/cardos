@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 9
+#define CAPP_API_VERSION 10
 
 #define CAPP_ICON_W 16
 #define CAPP_ICON_H 16
@@ -149,6 +149,10 @@ typedef struct {
   int (*http_get)(const char *url, char *buf, size_t size, int timeout_ms);
   int (*net_ready)(void);
   int (*net_connect)(int timeout_ms);
+
+  /* Why the network is or is not up, as a sentence. An app that reports
+   * "error -1" has told the user nothing they can act on. */
+  const char *(*net_status)(void);
 
   /* The general form. method is "GET", "POST", "PATCH", "PUT" or "DELETE";
    * body and content_type are NULL for a request without one; bearer is an

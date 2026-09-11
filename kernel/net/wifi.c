@@ -125,7 +125,13 @@ int wifi_start(void) {
   esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi, NULL, NULL);
   esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi, NULL, NULL);
 
-  esp_wifi_set_storage(WIFI_STORAGE_RAM);
+  /* FLASH, not RAM. The driver then keeps its own copy of the last successful
+   * join, which is what connect_driver_config falls back to -- and on a board
+   * that has run other firmware, that copy may be the only credentials there
+   * are. With RAM storage the fallback always found an empty config, so a
+   * device that had never been joined through CardOS could not get online at
+   * all and said only "no network". */
+  esp_wifi_set_storage(WIFI_STORAGE_FLASH);
   esp_wifi_set_mode(WIFI_MODE_STA);
   if (esp_wifi_start() != ESP_OK) {
     snprintf(s_detail, sizeof s_detail, "radio would not start");
@@ -233,7 +239,14 @@ int wifi_connect_saved(int timeout_ms) {
   }
 
   if (ssid[0]) return wifi_connect(ssid, pass, timeout_ms);
-  return connect_driver_config(timeout_ms);
+  if (connect_driver_config(timeout_ms) == 0) return 0;
+
+  /* Nothing saved anywhere. Say so as a sentence: "no network" on its own
+   * sends the reader looking at the router. */
+  snprintf(s_detail, sizeof s_detail, "%s",
+           "no saved network -- join one in Settings");
+  s_state = WIFI_FAILED;
+  return -1;
 }
 
 int wifi_scan(WifiAp *out, int max) {

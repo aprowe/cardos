@@ -101,6 +101,7 @@ static int api_http_get(const char *url, char *buf, size_t n, int timeout_ms) {
   return http_get(url, buf, n, timeout_ms);
 }
 static int api_net_ready(void) { return wifi_is_connected(); }
+static const char *api_net_status(void) { return wifi_status(); }
 static int api_net_connect(int timeout_ms) {
   if (wifi_is_connected()) return 0;
   return wifi_connect_saved(timeout_ms);
@@ -125,7 +126,7 @@ static const CardApi API = {
   api_memset, api_memcpy, api_memmove, api_strlen, api_fmt,
   api_ticks, api_log,
   api_out, api_out_line, api_in_line, api_has_input,
-  api_http_get, api_net_ready, api_net_connect, api_http,
+  api_http_get, api_net_ready, api_net_connect, api_net_status, api_http,
   api_google_token, api_google_status,
   api_ui,
 };

@@ -235,6 +235,19 @@ static void refresh(void) {
   int i;
 
   S.busy = 1;
+
+  /* Up front rather than on the first request. The connect takes seconds, and
+   * doing it inside a fetch means the screen says "fetching SPCX" while it is
+   * really waiting on a radio -- and reports a network error if the wait
+   * fails, which is the wrong diagnosis. */
+  if (!api->net_ready()) {
+    api->fmt(S.note, sizeof S.note, "%s", "connecting to wifi...");
+    if (api->net_connect(20000) != 0) {
+      api->fmt(S.note, sizeof S.note, "%s", api->net_status());
+      S.busy = 0;
+      return;
+    }
+  }
   for (i = 0; i < S.n; i++) {
     int r;
     api->fmt(S.note, sizeof S.note, "fetching %s (%d/%d)", S.q[i].sym, i + 1, S.n);

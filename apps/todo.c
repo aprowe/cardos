@@ -173,8 +173,21 @@ static void cache_load(void) {
 
 /* ---- Google -------------------------------------------------------------- */
 
+/* The network first, then the token. Two separate things that can be missing,
+ * and telling them apart is the difference between "turn the wifi on" and
+ * "sign in on a PC". */
 static const char *token(void) {
-  const char *t = api->google_token();
+  const char *t;
+
+  if (!api->net_ready()) {
+    say("connecting to wifi...");
+    if (api->net_connect(20000) != 0) {
+      say(api->net_status());
+      T.online = 0;
+      return 0;
+    }
+  }
+  t = api->google_token();
   if (!t) { say(api->google_status()); T.online = 0; }
   return t;
 }
