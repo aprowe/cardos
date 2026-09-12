@@ -6,6 +6,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -16,6 +17,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "esp_app_desc.h"
 
 #include "kernel/console/console.h"
 #include "kernel/drv/display.h"
@@ -32,6 +34,9 @@
 #include "kernel/sys/env.h"
 #include "kernel/sys/sio.h"
 #include "kernel/ui/help.h"
+#include "kernel/sys/input.h"
+#include "kernel/sys/voice.h"
+#include "kernel/sys/hotkeys.h"
 
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -50,13 +55,23 @@
  * than assumed. */
 /* The memory manager's arena, reserved at boot.
  *
- * Was 128 KB, which was chosen when the radios did not exist. Measured with
- * both up: WiFi costs 49792 bytes and Bluetooth 67108, and with a 128 KB
- * arena the two together left 1156 bytes free and the WiFi driver began
- * failing buffer allocations ("wifi:m f null" in a loop). 48 KB is still more
- * than anything currently allocates from it and leaves the radios room to
- * coexist. */
-#define CARDOS_HEAP_BYTES (48 * 1024)
+ * 128 KB when the radios did not exist; 48 KB once they did, because with
+ * 128 the two together left 1156 bytes free and the WiFi driver failed buffer
+ * allocations in a loop ("wifi:m f null").
+ *
+ * 16 KB now, and for a blunter reason: measured on the device with Bluetooth
+ * up, 79588 bytes of heap were free, WiFi wanted 49792 of them and a TLS
+ * handshake about 34000 more -- so Todo and Stocks could not reach the network
+ * at all while a mouse was connected. The arena was holding 48 KB for a
+ * subsystem that, grepped for, has no caller anywhere outside kernel/mem: the
+ * loader allocates app images from the IDF heap, and so does everything else.
+ * Reserving a third of the free memory for nothing was the whole shortage.
+ *
+ * It stays rather than going to zero because the swap allocator and handle
+ * table are a real part of the design and 16 KB keeps them exercisable. If
+ * something ever does allocate from here in earnest, this number is the one to
+ * raise -- and `mem` is where to see that it needs raising. */
+#define CARDOS_HEAP_BYTES (16 * 1024)
 
 static uint8_t *s_heap;
 static char     s_line[CARDOS_LINE_MAX + 1];
@@ -66,6 +81,10 @@ static int      s_len;
  * for development. */
 typedef enum { MODE_CONSOLE = 0, MODE_DESKTOP, MODE_LAUNCHER } Mode;
 static Mode     s_mode;
+
+/* Booted with escape held: no saved setting has been applied, no radio has
+ * been started, and the console has the screen. See app_main. */
+static int      s_safe_mode;
 
 static void prompt(void) {
   con_set_color(COLOR_AMBER);
@@ -114,12 +133,15 @@ static void cmd_help(void) {
   con_write("files    ls cd pwd mkdir rm df\n");
   con_write("run      run NAME [args], ./prog, or just the name\n");
   con_write("         | pipes, > and >> redirect, < feeds stdin\n");
-  con_write("shell    env set NAME=VALUE, tab completes, up recalls\n");
+  con_write("shell    env set NAME=VALUE, hotkey X NAME, tab completes\n");
   con_write("radios   wifi [scan|SSID PASS|saved|forget|off]\n");
   con_write("         mouse, get URL\n");
   con_write("screens  launch (carousel), desk (windows), escape returns\n");
   con_write("boot     apps, boot NAME, boot! NAME, bootinfo\n");
   con_write("system   mem ps taskcost flip clear reboot echo\n");
+  con_write("voice    hold the button on top, or type listen\n");
+  con_write("recovery opt-0 backlight to full, hold escape at boot for safe\n");
+  con_write("         mode, then defaults to clear saved settings\n");
   con_write("on card  cat grep -- run with no argument lists them\n");
 }
 
@@ -158,8 +180,10 @@ static void run_builtin(const char *line, char *arg) {
   }
   else if (!strcmp(line, "wifi")) cmd_wifi(arg);
   else if (!strcmp(line, "get"))  cmd_get(arg);
+  else if (!strcmp(line, "update")) cmd_update(arg);
   else if (!strcmp(line, "env"))  cmd_env();
   else if (!strcmp(line, "set"))  cmd_set(arg);
+  else if (!strcmp(line, "hotkey")) cmd_hotkey(arg);
   else if (!strcmp(line, "google")) cmd_google(arg);
   else if (!strcmp(line, "run")) {
     /* cmd_run starts it; the mode has to change here, where the loop is. */
@@ -168,6 +192,35 @@ static void run_builtin(const char *line, char *arg) {
   }
   else if (!strcmp(line, "clear"))  con_clear();
   else if (!strcmp(line, "reboot")) esp_restart();
+  else if (!strcmp(line, "defaults")) {
+    /* Everything CardOS saves lives in one NVS namespace, so forgetting all of
+     * it is one call. Deliberately not selective: the reason to be here is
+     * that some setting is making the machine unusable and you cannot
+     * necessarily see which. WiFi credentials go too -- say so rather than
+     * letting that be a surprise. */
+    nvs_handle_t h;
+    if (nvs_open("cardos", NVS_READWRITE, &h) == ESP_OK) {
+      nvs_erase_all(h);
+      nvs_commit(h);
+      nvs_close(h);
+      con_write("settings cleared: brightness, shell, PATH, bluetooth-at-boot.\n");
+      con_write("wifi credentials are kept by the driver and survive this.\n");
+      con_write("reboot to start fresh.\n");
+    } else {
+      con_write("could not open the settings store\n");
+    }
+  }
+  else if (!strcmp(line, "listen")) {
+    /* The button, without the button -- for trying voice over the serial
+     * line, where there is no button to hold. */
+    con_write("listening...\n");
+    voice_once(6000);
+    con_printf("%s\n", voice_status());
+  }
+  else if (!strcmp(line, "safe")) {
+    con_printf("safe mode: %s\n", s_safe_mode ? "yes" : "no");
+    con_write("hold the escape key while the device starts to enter it.\n");
+  }
   /* To stdout, so `echo text > file` writes a file rather than printing. */
   else if (!strcmp(line, "echo"))   sio_write_line(arg);
   else {
@@ -197,7 +250,9 @@ static void run_builtin(const char *line, char *arg) {
 static const char *const COMMANDS[] = {
   "apps", "boot", "boot!", "bootinfo", "cat", "cd", "clear", "df", "desk",
   "echo", "flip", "get", "gui", "help", "launch", "ls", "mem", "mkdir",
-  "mouse", "ps", "pwd", "reboot", "rm", "run", "taskcost", "wifi",
+  "defaults", "listen", "mouse", "ps", "pwd", "reboot", "rm", "run",
+  "safe",
+  "taskcost", "update", "wifi",
 };
 #define NCOMMANDS ((int)(sizeof COMMANDS / sizeof COMMANDS[0]))
 
@@ -556,8 +611,60 @@ static int s_opt_help;
 
 static void show_opt_help(void) {
   s_opt_help = 1;
-  help_paint("Shortcuts", "opt-1\tlauncher\nopt-2\tdesktop\nopt-3\tconsole\nopt-t\ttodo\nopt-s\tstocks\nopt-e\tedit\nopt-m\tmines\nopt-b\treconnect bluetooth\nopt-w\treconnect wifi\n",
+  help_paint("Shortcuts", "opt-1\tlauncher\nopt-2\tdesktop\nopt-3\tconsole\nopt-0\tbacklight to full\nopt-9\tbacklight down a step\nopt-t\ttodo\nopt-s\tstocks\nopt-e\tedit\nopt-m\tmines\nopt-b\treconnect bluetooth\nopt-w\treconnect wifi\n",
              "ctrl-h\tthe keys of whatever is running\nany key\tclose this\n");
+}
+
+/* ---- what voice and the shells are allowed to do to each other ----------
+ *
+ * Three small functions handed to kernel/sys, which needs them and must not
+ * include the desktop to get them. This file is the only one that knows how
+ * the three shells relate, so this is where the knowledge stays. */
+
+static void feed_key(uint8_t k);          /* defined with the loop, below */
+
+static int ops_open_app(const char *name) {
+  /* The launcher's runner, which is also what `run` uses: one way to start an
+   * app, so voice cannot start one differently from the console. */
+  if (launchui_run(name, NULL) != 0) return -1;
+  if (s_mode != MODE_LAUNCHER) { launchui_init(); s_mode = MODE_LAUNCHER; }
+  return 0;
+}
+
+static void ops_switch_shell(const char *which) {
+  if (!strcmp(which, "desktop"))       { desktop_init(); s_mode = MODE_DESKTOP; }
+  else if (!strcmp(which, "console"))  { enter_console(); }
+  else                                 { launchui_init(); s_mode = MODE_LAUNCHER; }
+}
+
+static int sink_wants_text(void) {
+  /* The console is always taking text; a shell running an app defers to the
+   * app, which is the same question `; . , /` already asks. */
+  if (s_mode == MODE_CONSOLE) return 1;
+  if (s_mode == MODE_LAUNCHER) return launchui_wants_text();
+  return desktop_wants_text();
+}
+
+/* The hotkey table lives in the same NVS namespace as the environment, as one
+ * blob: it is a setting, and `defaults` should wipe it with the others. */
+#define HOTKEY_NVS_NS  "cardosenv"
+#define HOTKEY_NVS_KEY "hotkeys"
+
+static int hotkey_nvs_load(char *buf, int size) {
+  nvs_handle_t h;
+  size_t n = (size_t)size;
+  if (nvs_open(HOTKEY_NVS_NS, NVS_READONLY, &h) != ESP_OK) return 0;
+  if (nvs_get_blob(h, HOTKEY_NVS_KEY, buf, &n) != ESP_OK) n = 0;
+  nvs_close(h);
+  return (int)n;
+}
+
+static void hotkey_nvs_save(const char *buf, int len) {
+  nvs_handle_t h;
+  if (nvs_open(HOTKEY_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_set_blob(h, HOTKEY_NVS_KEY, buf, (size_t)len);
+  nvs_commit(h);
+  nvs_close(h);
 }
 
 static int global_key(uint8_t k) {
@@ -586,6 +693,19 @@ static int global_key(uint8_t k) {
     enter_console();
     return 1;
 
+  /* Brightness, from anywhere, without needing to see the screen.
+   *
+   * A dim setting is the one setting that can make the machine unusable: it
+   * hides the menu you would use to undo it, and it survives a reboot because
+   * it is in NVS. opt-0 is therefore not a convenience -- it is the way back,
+   * and it works from any shell, over any app, with the panel dark. */
+  case KEY_OPT_DIGIT(0):
+    display_set_brightness(100);
+    return 1;
+  case KEY_OPT_DIGIT(9):
+    display_set_brightness(display_brightness() - 25);
+    return 1;
+
   /* Reconnect the radios. Both, because "get me back to where I was" is one
    * thought, and it blocks for seconds either way -- so it says what it is
    * doing on the console rather than freezing a shell silently. */
@@ -606,32 +726,103 @@ static int global_key(uint8_t k) {
     prompt();
     return 1;
 
-  /* A letter runs the app of that name. The table is here rather than in a
-   * settings file because these are the two that earn a chord; anything else
-   * is a name away in the launcher. */
-  case KEY_OPT_LETTER('t'):
-  case KEY_OPT_LETTER('s'):
-  case KEY_OPT_LETTER('e'):
-  case KEY_OPT_LETTER('m'): {
-    const char *name = (k == KEY_OPT_LETTER('t')) ? "Todo"
-                     : (k == KEY_OPT_LETTER('s')) ? "Stocks"
-                     : (k == KEY_OPT_LETTER('e')) ? "Edit" : "Mines";
-    if (shell_exec(name, NULL) == 0 && ui_shell() == UI_LAUNCHER)
-      s_mode = MODE_LAUNCHER;
-    return 1;
-  }
-
   default:
-    /* Every other opt chord is swallowed rather than passed on: a shortcut
-     * that is not bound should do nothing, not type a letter. */
+    /* Any other opt letter is a shortcut if the user bound one (`hotkey` in
+     * the console, or k in the launcher). Unbound, it is swallowed rather
+     * than passed on: a shortcut that does nothing must not type a letter
+     * into whatever has focus. */
+    if (k >= KEY_OPT_LETTER('a') && k <= KEY_OPT_LETTER('z')) {
+      const char *name = hotkey_get((char)('a' + (k - KEY_OPT_LETTER('a'))));
+      if (name && shell_exec(name, NULL) == 0 && ui_shell() == UI_LAUNCHER)
+        s_mode = MODE_LAUNCHER;
+      return 1;
+    }
     return KEY_IS_OPT(k);
   }
+}
+
+/* A build's date and time as one comparable number: the compiler's "Sep 11
+ * 2026" and "18:04:27" from its app descriptor. Seconds resolution is more
+ * than enough to tell two builds apart, and the SHA -- which is what the
+ * updater compares -- cannot say which of two is newer. */
+static int64_t build_stamp(const esp_app_desc_t *d) {
+  static const char MONTHS[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+  char mon[4] = { d->date[0], d->date[1], d->date[2], 0 };
+  const char *m = strstr(MONTHS, mon);
+  int month = m ? (int)(m - MONTHS) / 3 + 1 : 0;
+  int day = atoi(d->date + 4), year = atoi(d->date + 7);
+  int hh = atoi(d->time), mm = atoi(d->time + 3), ss = atoi(d->time + 6);
+  return ((((int64_t)year * 13 + month) * 32 + day) * 24 + hh) * 3600 +
+         mm * 60 + ss;
+}
+
+/* Running from an OTA slot: is the image in factory a later build than us? */
+static int factory_is_newer(const esp_partition_t *self) {
+  const esp_partition_t *factory = esp_partition_find_first(
+      ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+  esp_app_desc_t theirs;
+  const esp_app_desc_t *ours = esp_app_get_description();
+  (void)self;
+  if (!factory || !ours) return 0;
+  if (esp_ota_get_partition_description(factory, &theirs) != ESP_OK) return 0;
+  if (!memcmp(theirs.app_elf_sha256, ours->app_elf_sha256, 32)) return 0;
+  return build_stamp(&theirs) > build_stamp(ours);
 }
 
 /* Monotonic milliseconds for the scheduler. */
 static uint32_t clock_ms(void *ctx) {
   (void)ctx;
   return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+/* The console's own key handling, lifted out of the loop so that anything
+ * producing keys -- including a spoken sentence -- reaches the same code
+ * rather than a second copy of it that drifts. */
+static void console_key(uint8_t k) {
+  if (s_mode == MODE_CONSOLE) con_cursor(0);
+  if (k == KEY_ENTER) {
+    s_line[s_len] = 0;
+    con_putc('\n');
+    hist_add(s_line);
+    s_hist_at = 0;
+    s_hist_saved[0] = 0;
+    run_pipeline(s_line);
+    s_len = 0;
+    /* Only if the console still owns the screen. `desk` and `launch` paint a
+     * whole shell from inside run_pipeline, and printing a prompt afterwards
+     * drew a line of console over the top of it. */
+    if (s_mode == MODE_CONSOLE) prompt();
+  } else if (k == KEY_BACKSPACE) {
+    if (s_len > 0) { s_len--; con_putc('\b'); }
+  } else if (k == KEY_UP) {
+    hist_walk(1);
+  } else if (k == KEY_DOWN) {
+    hist_walk(-1);
+  } else if (k == KEY_TAB) {
+    complete_line();
+  } else if (k == KEY_ESC) {
+    s_len = 0;
+    con_putc('\n');
+    prompt();
+  } else if (k >= 0x20 && k < 0x7F && s_len < CARDOS_LINE_MAX) {
+    s_line[s_len++] = (char)k;
+    con_putc((char)k);
+  }
+}
+
+/* One key, delivered to whichever shell has the screen.
+ *
+ * Every source ends up here: the matrix, a Bluetooth keyboard, a character off
+ * the serial line, and a word that was spoken. That is what lets voice work in
+ * apps that have never heard of it -- by the time a transcript reaches an app,
+ * it is indistinguishable from typing. */
+static void feed_key(uint8_t k) {
+  if (!k) return;
+  if (global_key(k)) return;
+
+  if (s_mode == MODE_LAUNCHER)      { launchui_key(k); return; }
+  if (s_mode == MODE_DESKTOP)       { desktop_key(k); return; }
+  console_key(k);
 }
 
 void app_main(void) {
@@ -646,8 +837,17 @@ void app_main(void) {
   {
     const esp_partition_t *self = esp_ota_get_running_partition();
     if (self && self->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
-        self->subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_15)
+        self->subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_15) {
       esp_ota_mark_app_valid_cancel_rollback();
+      if (factory_is_newer(self)) {
+        /* A USB flash writes factory, but otadata still points here, so
+         * without this the build just flashed would never run. */
+        const esp_partition_t *factory = esp_partition_find_first(
+            ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+        if (factory && esp_ota_set_boot_partition(factory) == ESP_OK)
+          esp_restart();
+      }
+    }
   }
 
   if (display_init() != 0) {
@@ -703,7 +903,38 @@ void app_main(void) {
     if (err != ESP_OK) con_write("nvs unavailable: settings will not stick\n");
   }
 
+  /* Safe mode: hold the escape key while the machine starts.
+   *
+   * Every setting below this point comes out of NVS, and a setting can make
+   * the machine unusable by hiding the thing that would undo it -- a
+   * backlight at a level the panel does not show, a shell that opens an app
+   * that crashes, a radio that eats the heap something else needs. Each of
+   * those survives a reboot, because that is what persistence means, and the
+   * usual answer is a cable and a full erase.
+   *
+   * So: one key, held at power-on, and none of it is applied. The panel comes
+   * up at full brightness, no radio starts, and the console gets the screen --
+   * from which `defaults` clears the lot. Nothing is written here; a safe boot
+   * changes nothing on its own, so it can be tried without committing to
+   * losing anything. */
+  s_safe_mode = keyboard_held(KEY_ESC, 400);
+  if (s_safe_mode) {
+    display_set_brightness_now(100);
+    con_set_color(COLOR_AMBER);
+    con_write("\nSAFE MODE -- settings not applied\n");
+    con_set_color(COLOR_GREY);
+    con_write("backlight full, no radios, console shell.\n"
+              "`defaults` clears saved settings, `reboot` returns.\n\n");
+    con_set_color(COLOR_GREEN);
+  } else {
+    display_load_brightness();   /* full until now; the setting needs NVS */
+  }
+
   env_init();
+  {
+    static const HotkeyStore NVS_STORE = { hotkey_nvs_load, hotkey_nvs_save };
+    hotkeys_init(&NVS_STORE);
+  }
   sched_init(clock_ms, NULL);
   sched_create("shell");
   sched_next();                  /* mark it running, so it owns its locks */
@@ -735,7 +966,7 @@ void app_main(void) {
   /* A bonded mouse or keyboard is usually still advertising, so one short look
    * before the shell comes up saves reaching for Settings. Off unless asked
    * for: the radio costs ~67 KB for the whole uptime. */
-  if (bthid_autostart()) {
+  if (!s_safe_mode && bthid_autostart()) {
     con_write("bluetooth: looking for paired devices...\n");
     con_printf("  %d connected\n", bthid_autoconnect(1));
   }
@@ -744,7 +975,19 @@ void app_main(void) {
    * same one regardless of what you were doing is a device you have to re-enter
    * a command on every time -- and it makes the firmware round trip land where
    * you left from, which is the behaviour the rollback was built for. */
-  switch (ui_saved_shell()) {
+  {
+    static const ShellOps OPS = { ops_open_app, ops_switch_shell, feed_key };
+    static const InputSink SINK = { sink_wants_text, feed_key };
+    shell_set_ops(&OPS);
+    input_set_sink(&SINK);
+  }
+
+  /* Safe mode always lands at the console: it is the one shell that cannot be
+   * hidden by a setting, and the one with `defaults` in it. */
+  if (s_safe_mode) {
+    prompt();
+    s_mode = MODE_CONSOLE;
+  } else switch (ui_saved_shell()) {
   case UI_DESKTOP:  desktop_init(); s_mode = MODE_DESKTOP; break;
   case UI_NONE:     prompt();       s_mode = MODE_CONSOLE; break;
   default:          launchui_init(); s_mode = MODE_LAUNCHER; break;
@@ -752,6 +995,14 @@ void app_main(void) {
 
   for (;;) {
     uint8_t k = keyboard_poll();
+
+    /* The button on top, polled beside the keyboard so it works in every
+     * shell and over every app. Press and hold to talk; see kernel/sys/voice.c
+     * for why the whole cycle happens inside this call. */
+    if (voice_tick()) {
+      if (s_mode == MODE_LAUNCHER) launchui_repaint();
+      else if (s_mode == MODE_DESKTOP) desktop_repaint();
+    }
 
     /* A character arriving on the serial console counts as a keypress, so the
      * shell can be driven from a PC as well as from the keyboard. */
@@ -820,35 +1071,7 @@ void app_main(void) {
     }
 
     if (k) {
-      if (s_mode == MODE_CONSOLE) con_cursor(0);
-      if (k == KEY_ENTER) {
-        s_line[s_len] = 0;
-        con_putc('\n');
-        hist_add(s_line);
-        s_hist_at = 0;
-        s_hist_saved[0] = 0;
-        run_pipeline(s_line);
-        s_len = 0;
-        /* Only if the console still owns the screen. `desk` and `launch` paint
-         * a whole shell from inside run_pipeline, and printing a prompt
-         * afterwards drew a line of console over the top of it. */
-        if (s_mode == MODE_CONSOLE) prompt();
-      } else if (k == KEY_BACKSPACE) {
-        if (s_len > 0) { s_len--; con_putc('\b'); }
-      } else if (k == KEY_UP) {
-        hist_walk(1);
-      } else if (k == KEY_DOWN) {
-        hist_walk(-1);
-      } else if (k == KEY_TAB) {
-        complete_line();
-      } else if (k == KEY_ESC) {
-        s_len = 0;
-        con_putc('\n');
-        prompt();
-      } else if (k >= 0x20 && k < 0x7F && s_len < CARDOS_LINE_MAX) {
-        s_line[s_len++] = (char)k;
-        con_putc((char)k);
-      }
+      console_key(k);
       if (s_mode == MODE_CONSOLE) {
         last_blink = esp_timer_get_time();
         blink = 1;

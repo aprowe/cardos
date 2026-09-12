@@ -9,9 +9,11 @@
 #include "shellcmd.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/http.h"
+#include "kernel/net/update.h"
 #include "kernel/ui/icons.h"
 #include "kernel/ui/launchui.h"
 #include "kernel/sys/env.h"
+#include "kernel/sys/hotkeys.h"
 #include "kernel/sys/sio.h"
 #include "kernel/net/gauth.h"
 
@@ -151,7 +153,7 @@ static int fs_reader(void *ctx, uint32_t offset, void *buf, size_t n) {
   return fs_read(fd, buf, n) == (int)n ? 0 : -1;
 }
 
-#define GUEST_PARTITION_BYTES (3u * 1024 * 1024)   /* ota_0 in partitions.csv */
+#define GUEST_PARTITION_BYTES 0x2F0000u   /* ota_0 and ota_1 in partitions.csv */
 
 /* Static rather than local: this and the AppImageInfo below were the bulk of
  * a 2608-byte stack frame, and task stacks are 1 KB. Nothing here is
@@ -421,6 +423,56 @@ void cmd_get(const char *arg) {
   con_printf("%d bytes\n%.600s\n", n, buf);
 }
 
+/* -------------------------------------------------------------- update --- */
+
+static void update_say(void *ctx, const char *line) {
+  (void)ctx;
+  con_printf("%s\n", line);
+}
+
+/* update        -- what the PC has that is newer than this
+ * update apps   -- install the apps
+ * update os     -- install the firmware (restarts)
+ * update all    -- both, apps first so they survive if the restart does not */
+void cmd_update(const char *arg) {
+  UpdateCheck c;
+  int i, apps = 0, os = 0;
+
+  if (arg && !strcmp(arg, "apps")) apps = 1;
+  else if (arg && !strcmp(arg, "os")) os = 1;
+  else if (arg && !strcmp(arg, "all")) apps = os = 1;
+  else if (arg && *arg) { con_write("usage: update [apps|os|all]\n"); return; }
+
+  if (!fs_mounted()) { err("update", "no card mounted"); return; }
+  con_printf("asking %s\n", update_base());
+  if (update_check(&c) != 0) { err("update", update_error()); return; }
+
+  if (!c.nstale_apps && !c.firmware_stale) {
+    con_write("everything is current\n");
+    return;
+  }
+  for (i = 0; i < c.m.napps; i++)
+    if (c.stale[i]) con_printf("  app %s\n", c.m.app[i].name);
+  if (c.firmware_stale)
+    con_printf("  firmware %uK\n", (unsigned)(c.m.firmware_size / 1024));
+
+  if (!apps && !os) {
+    con_write("update apps | os | all installs\n");
+    return;
+  }
+  if (apps && c.nstale_apps) {
+    int n = update_apps(&c, update_say, NULL);
+    con_printf("%d of %d apps installed\n", n, c.nstale_apps);
+  }
+  if (os && c.firmware_stale) {
+    con_set_color(COLOR_AMBER);
+    con_write("this restarts when it is done\n");
+    con_set_color(COLOR_GREEN);
+    update_firmware(update_say, NULL);
+    err("update", update_error());           /* only reached on failure */
+  }
+}
+
 /* ----------------------------------------------------------------- run --- */
 
 static const char *run_kind(const Icon *ic) {
@@ -503,6 +555,37 @@ void cmd_set(const char *arg) {
   }
   if (env_set(name, eq + 1) != 0) { err("set", "no room for another variable"); return; }
   con_printf("%s=%s\n", name, eq + 1);
+}
+
+/* --------------------------------------------------------------- hotkey --- */
+
+void cmd_hotkey(const char *arg) {
+  char letter;
+  const char *name;
+
+  if (!arg || !*arg) {
+    char c;
+    if (hotkey_count() == 0) { con_write("no shortcuts. hotkey X NAME sets one\n"); return; }
+    for (c = 'a'; c <= 'z'; c++) {
+      const char *n = hotkey_get(c);
+      if (n) con_printf("opt-%c  %s\n", c, n);
+    }
+    return;
+  }
+
+  letter = arg[0];
+  if (arg[1] != ' ' && arg[1] != 0) { err("hotkey", "needs a single letter, then a name"); return; }
+  name = arg[1] ? arg + 2 : "";
+  while (*name == ' ') name++;
+  if (!strcmp(name, "-")) name = "";
+
+  switch (hotkey_set(letter, name)) {
+  case -1: err("hotkey", "that letter belongs to the system (b w h)"); return;
+  case -2: err("hotkey", "needs a letter a-z"); return;
+  default: break;
+  }
+  if (*name) con_printf("opt-%c opens %s\n", letter, name);
+  else con_printf("opt-%c cleared\n", letter);
 }
 
 /* ----------------------------------------------------------------- exec --- */

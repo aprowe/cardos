@@ -27,6 +27,9 @@ void cmd_wifi(const char *arg);
 /* get URL -- fetch and print, for checking that the network actually works. */
 void cmd_get(const char *arg);
 
+/* update [apps|os|all] -- what the PC has built that is newer, and install it */
+void cmd_update(const char *arg);
+
 /* run          -- what there is to run
  * run NAME     -- start it fullscreen; escape returns to the launcher */
 void cmd_run(const char *arg);
@@ -41,6 +44,11 @@ void cmd_env(void);
  * google forget             -- erase them */
 void cmd_google(const char *arg);
 void cmd_set(const char *arg);
+
+/* hotkey            -- list the Opt+letter shortcuts
+ * hotkey X NAME     -- Opt+X opens NAME
+ * hotkey X -        -- unbind X */
+void cmd_hotkey(const char *arg);
 
 /* Resolve a bare word or a path into something runnable and start it. This is
  * what an unrecognised command falls through to, so "./grep x" and "grep x"
