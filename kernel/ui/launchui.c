@@ -53,6 +53,7 @@
 #define PIP_W     3
 
 static int      s_sel;
+static int      s_folder = -1;    /* flat index of the open folder, or -1 for the top */
 static int      s_dirty;
 static uint32_t s_now_ms;
 static char     s_note[48];
@@ -62,6 +63,7 @@ static const AppDef *s_app;
 static int            s_app_dirty;
 static int            s_app_clear;    /* the screen still has the carousel on it */
 static int            s_help;         /* the key list is over everything */
+static int            s_pointer_on;   /* a mouse has moved: there is a cursor */
 static Rect           s_app_rect;
 
 static Rect R(int x, int y, int w, int h) {
@@ -72,16 +74,20 @@ static Rect R(int x, int y, int w, int h) {
 
 /* Wrapping, because a carousel that stops at the ends is a list. */
 static int wrap(int i) {
-  int n = icons_count();
+  int n = icons_in_count(s_folder);
   if (n <= 0) return 0;
   return ((i % n) + n) % n;
 }
+
+/* The entry at carousel position i, at the current level. */
+static const Icon *at(int i) { return icons_in_at(s_folder, i); }
 
 static const char *kind_word(const Icon *ic) {
   if (!ic) return "";
   switch (ic->kind) {
   case ICON_FIRMWARE: return "firmware - replaces CardOS";
   case ICON_CAPP:     return "app";
+  case ICON_FOLDER:   return "folder";
   default:            return "built in";
   }
 }
@@ -151,13 +157,18 @@ static void paint_pips(int n) {
 }
 
 static void paint_carousel(void) {
-  int n = icons_count();
+  int n = icons_in_count(s_folder);
   const Icon *ic;
 
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_rect(R(0, BAR_H, DISPLAY_W, DISPLAY_H - BAR_H), C_DESKTOP);
 
   if (n == 0) {
+    if (s_folder >= 0) {
+      draw_text_scaled(28, 46, "nothing here", 2, C_TITLE_FG, C_DESKTOP);
+      draw_text(28, 74, "escape goes back up", C_DESK_DIM, C_DESKTOP);
+      return;
+    }
     draw_text_scaled(28, 46, "no apps", 2, C_TITLE_FG, C_DESKTOP);
     draw_text(28, 74, "put .capp or .bin files", C_DESK_DIM, C_DESKTOP);
     draw_text(28, 86, "in /desktop, then press r", C_DESK_DIM, C_DESKTOP);
@@ -168,19 +179,30 @@ static void paint_carousel(void) {
    * still competes with the one in focus. */
   if (n > 1) {
     int16_t sy = (int16_t)(ICON_TOP + (BIG - SMALL) / 2);
-    paint_icon(wrap(s_sel - 1), (int16_t)(BIG_X - SIDE_GAP - SMALL), sy, 2, C_SHADOW);
-    paint_icon(wrap(s_sel + 1), (int16_t)(BIG_X + BIG + SIDE_GAP), sy, 2, C_SHADOW);
+    paint_icon(icon_index(at(wrap(s_sel - 1))), (int16_t)(BIG_X - SIDE_GAP - SMALL), sy, 2, C_SHADOW);
+    paint_icon(icon_index(at(wrap(s_sel + 1))), (int16_t)(BIG_X + BIG + SIDE_GAP), sy, 2, C_SHADOW);
   }
-  paint_icon(s_sel, BIG_X, ICON_TOP, 4, C_TITLE_FG);
+  paint_icon(icon_index(at(s_sel)), BIG_X, ICON_TOP, 4, C_TITLE_FG);
 
-  ic = icon_at(s_sel);
+  ic = at(s_sel);
   if (ic) {
     /* Centred on the glyph width rather than a guess, so a long name and a
      * short one both sit under the icon. */
     int16_t w = (int16_t)(draw_text_width(ic->name) * 2);
     int16_t nx = (int16_t)((DISPLAY_W - w) / 2);
-    const char *k = s_note[0] ? s_note : kind_word(ic);
-    int16_t kx = (int16_t)((DISPLAY_W - draw_text_width(k)) / 2);
+    char where[48];
+    const char *k;
+    int16_t kx;
+
+    /* Inside a folder the level is always on screen: "Games / app" rather
+     * than a bare "app" that looks the same at the top. */
+    if (s_note[0]) k = s_note;
+    else if (s_folder >= 0) {
+      const Icon *f = icon_at(s_folder);
+      snprintf(where, sizeof where, "%s / %s", f ? f->name : "?", kind_word(ic));
+      k = where;
+    } else k = kind_word(ic);
+    kx = (int16_t)((DISPLAY_W - draw_text_width(k)) / 2);
 
     if (nx < 2) nx = 2;
     if (kx < 2) kx = 2;
@@ -228,7 +250,7 @@ static void paint_app(void) {
 static const char *shell_keys(void) {
   return s_app
     ? "escape\tback to the launcher\nctrl-h\tclose this\n"
-    : "arrows\tmove along the row\nenter\topen\nr\treload the app list\nd\tswitch to the desktop\nescape\tthe console\nctrl-h\tclose this\n";
+    : "arrows\tmove along the row\nenter\topen\nr\treload the app list\nd\tswitch to the desktop\nescape\tup a level, or the console\nctrl-h\tclose this\n";
 }
 
 static void flush(void) {
@@ -242,6 +264,13 @@ static void flush(void) {
     if (!s_app_dirty) return;
     s_app_dirty = 0;
     paint_app();
+    /* Last, and every time: an app that animates repaints over the pointer
+     * otherwise, and a cursor that blinks out whenever the ball moves is
+     * worse than no cursor at all. */
+    if (s_pointer_on) {
+      draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+      draw_cursor((int16_t)mouse_x(), (int16_t)mouse_y());
+    }
     return;
   }
   if (!s_dirty) return;
@@ -265,11 +294,41 @@ static void leave_app(void) {
   flush();
 }
 
+static void open_folder(int flat) {
+  s_folder = flat;
+  s_sel = 0;
+  s_note[0] = 0;
+  s_dirty = 1;
+  flush();
+}
+
+/* Point the carousel at a flat entry: its folder becomes the level and its
+ * position within it the selection, so Escape from an app lands on it. */
+static void select_flat(int flat) {
+  const Icon *ic = icon_at(flat);
+  int i, n;
+  s_folder = ic ? ic->parent : -1;
+  s_sel = 0;
+  n = icons_in_count(s_folder);
+  for (i = 0; i < n; i++) if (icons_in_at(s_folder, i) == ic) { s_sel = i; break; }
+}
+
+/* Up a level, landing on the folder just left rather than on the first icon. */
+static void close_folder(void) {
+  select_flat(s_folder);
+  s_note[0] = 0;
+  s_dirty = 1;
+  flush();
+}
+
+/* `i` is a flat index: what every icons.c call takes. */
 static void launch_with(int i, const char *args) {
   const Icon *ic = icon_at(i);
   const AppDef *a;
 
   if (!ic) return;
+
+  if (ic->kind == ICON_FOLDER) { open_folder(i); return; }
 
   if (ic->kind == ICON_FIRMWARE) {
     snprintf(s_note, sizeof s_note, "booting...");
@@ -306,10 +365,11 @@ static void launch_with(int i, const char *args) {
   flush();
 }
 
-static void launch(int i) { launch_with(i, NULL); }
+/* `pos` is a carousel position at the current level. */
+static void launch(int pos) { launch_with(icon_index(at(pos)), NULL); }
 
 static void move(int delta) {
-  if (icons_count() == 0) return;
+  if (icons_in_count(s_folder) == 0) return;
   s_sel = wrap(s_sel + delta);
   s_note[0] = 0;
   s_dirty = 1;
@@ -341,6 +401,7 @@ static void need_icons(void) {
 void launchui_init(void) {
   icons_reload();
   s_sel = 0;
+  s_folder = -1;
   s_app = NULL;
   enter();
   flush();
@@ -384,12 +445,12 @@ int launchui_run(const char *name, const char *args) {
     if (ic->kind == ICON_CAPP) {
       capprun_start(ic->slot, ic->name, args);
       if (!capprun_is_app(ic->slot)) return 0;
-      s_sel = i;
+      select_flat(i);
       enter();
       host(capprun_def(ic->slot));
       return 0;
     }
-    s_sel = i;
+    select_flat(i);
     enter();
     launch_with(i, args);
     return 0;
@@ -413,7 +474,7 @@ int launchui_run_path(const char *path, const char *args) {
     if (ic && ic->kind == ICON_CAPP && strcmp(ic->path, path) == 0) {
       capprun_start(ic->slot, ic->name, args);
       if (!capprun_is_app(ic->slot)) return 0;   /* a command, already done */
-      s_sel = i;
+      select_flat(i);
       enter();
       host(capprun_def(ic->slot));
       return 0;
@@ -463,7 +524,9 @@ int launchui_key(uint8_t key) {
   }
 
   switch (key) {
-  case KEY_ESC: desktop_set_autostart(0); return 1;     /* to the console */
+  case KEY_ESC:
+    if (s_folder >= 0) { close_folder(); return 0; }
+    desktop_set_autostart(0); return 1;     /* to the console */
 
   /* Up and down move along the row too. There is nothing else to move, and a
    * key that does nothing is worse than a duplicate. */
@@ -474,12 +537,15 @@ int launchui_key(uint8_t key) {
 
   case KEY_ENTER:
   case ' ':
-    if (icons_count()) launch(s_sel);
+    if (icons_in_count(s_folder)) launch(s_sel);
     return 0;
 
   case 'r': case 'R':
     icons_reload();
-    if (s_sel >= icons_count()) s_sel = 0;
+    /* Back to the top: a reload renumbers everything, and the folder that was
+     * open may not be there any more. */
+    s_folder = -1;
+    if (s_sel >= icons_in_count(-1)) s_sel = 0;
     snprintf(s_note, sizeof s_note, "%d apps", icons_count());
     s_dirty = 1;
     flush();
@@ -495,9 +561,25 @@ int launchui_key(uint8_t key) {
   }
 }
 
+/* Is the running app taking text? The same question the arrow-key remapping
+ * asks, exposed because voice needs the same answer and two callers working it
+ * out separately would eventually disagree. */
+int launchui_wants_text(void) {
+  if (!s_app || !s_app->wants_text) return 0;
+  return s_app->wants_text(s_app->state);
+}
+
 void launchui_tick(uint32_t ms) {
   uint32_t before = s_now_ms / 1000u;
   s_now_ms = ms;
+
+  /* An app that animates gets every pass, not every second: a game at one
+   * frame a second is a slideshow. It runs before the once-a-second work
+   * below, and while it owns the screen nothing else here draws. */
+  if (s_app && s_app->tick) {
+    if (s_app->tick(s_app->state, ms)) { s_app_dirty = 1; flush(); }
+  }
+
   if (s_now_ms / 1000u == before) return;
   if (s_app) return;               /* the app owns the screen */
 
@@ -510,29 +592,55 @@ void launchui_tick(uint32_t ms) {
   paint_bar();                     /* just the clock strip */
 }
 
-/* The launcher draws no pointer. There is nothing to drag, and a cursor would
- * have to be erased by repainting whatever is under it -- which during a
- * fullscreen app only the app knows how to do. The wheel and the two sides of
- * the screen move the carousel instead, and a click on the centre opens. */
+/* Over the carousel there is no pointer: nothing to drag, and the wheel and
+ * the two sides of the screen are a better gesture than aiming at an icon.
+ * Over a running app there is one, because an app is where a mouse is useful.
+ *
+ * Erasing it is the trick. The panel cannot be read back -- three wires, no
+ * MISO -- so what was under the cursor is gone. The app knows, though: paint
+ * clipped to the square the cursor just left redraws exactly that, and the
+ * cursor goes back on top. */
 void launchui_mouse_apply(const MouseReport *r) {
-  int btn, wheel;
+  int btn, wheel, held, moved;
+  Rect before = draw_cursor_bounds((int16_t)mouse_x(), (int16_t)mouse_y());
 
   mouse_apply(r);
   btn = mouse_pressed(MOUSE_LEFT) ? CAPP_BTN_LEFT
       : mouse_pressed(MOUSE_RIGHT) ? CAPP_BTN_RIGHT : 0;
+  held = (mouse_down(MOUSE_LEFT) ? CAPP_BTN_LEFT : 0)
+       | (mouse_down(MOUSE_RIGHT) ? CAPP_BTN_RIGHT : 0);
   wheel = mouse_take_wheel();
+  moved = mouse_take_moved();
   mouse_released(MOUSE_LEFT);
   mouse_released(MOUSE_RIGHT);
-  mouse_take_moved();
 
   if (s_app) {
     int16_t lx = (int16_t)(mouse_x() - s_app_rect.x);
     int16_t ly = (int16_t)(mouse_y() - s_app_rect.y);
+    int repaint = 0;
+
+    s_pointer_on = 1;
+
     if (btn && s_app->click && rect_contains(s_app_rect, (int16_t)mouse_x(),
                                              (int16_t)mouse_y()) &&
-        s_app->click(s_app->state, lx, ly, btn)) {
+        s_app->click(s_app->state, lx, ly, btn))
+      repaint = 1;
+
+    if ((moved || wheel || held) && s_app->mouse &&
+        s_app->mouse(s_app->state, lx, ly, held, wheel))
+      repaint = 1;
+
+    if (repaint) {
       s_app_dirty = 1;
       flush();
+      draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+      draw_cursor((int16_t)mouse_x(), (int16_t)mouse_y());
+    } else if (moved) {
+      Rect after = draw_cursor_bounds((int16_t)mouse_x(), (int16_t)mouse_y());
+      draw_set_clip(rect_intersect(rect_union(before, after), s_app_rect));
+      if (s_app->paint) s_app->paint(s_app->state, s_app_rect);
+      draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+      draw_cursor((int16_t)mouse_x(), (int16_t)mouse_y());
     }
     return;
   }
@@ -544,7 +652,7 @@ void launchui_mouse_apply(const MouseReport *r) {
    * the same gesture as clicking the neighbour you can already see. */
   if (mouse_x() < BIG_X) move(-1);
   else if (mouse_x() > BIG_X + BIG) move(1);
-  else if (icons_count()) launch(s_sel);
+  else if (icons_in_count(s_folder)) launch(s_sel);
 }
 
 void launchui_mouse_done(void) { flush(); }
