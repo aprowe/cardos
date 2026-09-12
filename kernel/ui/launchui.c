@@ -27,6 +27,7 @@
 #include "kernel/net/wifi.h"
 #include "kernel/ui/help.h"
 #include "kernel/ui/icons_builtin.h"
+#include "kernel/sys/hotkeys.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -63,6 +64,7 @@ static const AppDef *s_app;
 static int            s_app_dirty;
 static int            s_app_clear;    /* the screen still has the carousel on it */
 static int            s_help;         /* the key list is over everything */
+static int            s_binding;      /* k was pressed: the next letter binds */
 static int            s_pointer_on;   /* a mouse has moved: there is a cursor */
 static Rect           s_app_rect;
 
@@ -248,9 +250,25 @@ static void paint_app(void) {
 /* The shell's own keys, appended under the app's. Two lists rather than one so
  * an app cannot accidentally claim a key the shell owns. */
 static const char *shell_keys(void) {
-  return s_app
-    ? "escape\tback to the launcher\nctrl-h\tclose this\n"
-    : "arrows\tmove along the row\nenter\topen\nr\treload the app list\nd\tswitch to the desktop\nescape\tup a level, or the console\nctrl-h\tclose this\n";
+  static char buf[512];
+  char c;
+  size_t n;
+
+  if (s_app) return "escape\tback to the launcher\nctrl-h\tclose this\n";
+
+  /* The bindings are listed here rather than on a screen of their own: the
+   * key list is where someone looks to find out what opt-p does. */
+  snprintf(buf, sizeof buf,
+           "arrows\tmove along the row\nenter\topen\nk\tbind opt-letter to this app\n"
+           "r\treload the app list\nd\tswitch to the desktop\n"
+           "escape\tup a level, or the console\nctrl-h\tclose this\n");
+  n = strlen(buf);
+  for (c = 'a'; c <= 'z' && n < sizeof buf - 40; c++) {
+    const char *name = hotkey_get(c);
+    if (!name) continue;
+    n += (size_t)snprintf(buf + n, sizeof buf - n, "opt-%c\t%s\n", c, name);
+  }
+  return buf;
 }
 
 static void flush(void) {
@@ -386,6 +404,7 @@ static void enter(void) {
   ui_set_shell(UI_LAUNCHER);
   mouse_init(DISPLAY_W, DISPLAY_H);
   s_note[0] = 0;
+  s_binding = 0;
   s_dirty = 1;
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
@@ -506,6 +525,25 @@ int launchui_key(uint8_t key) {
   }
   if (key == KEY_HELP) { s_help = 1; flush(); return 0; }
 
+  /* Bind mode: `k` on an app, then the letter. Two keys rather than a chord,
+   * because every Opt chord already means "open" -- including here. */
+  if (s_binding) {
+    const Icon *ic = at(s_sel);
+    s_binding = 0;
+    if (key >= 'A' && key <= 'Z') key = (uint8_t)(key + 32);
+    if (key >= 'a' && key <= 'z' && ic) {
+      if (hotkey_set((char)key, ic->name) == 0)
+        snprintf(s_note, sizeof s_note, "opt-%c opens %s", key, ic->name);
+      else
+        snprintf(s_note, sizeof s_note, "opt-%c belongs to the system", key);
+    } else {
+      s_note[0] = 0;
+    }
+    s_dirty = 1;
+    flush();
+    return 0;
+  }
+
   /* ; . , / are the arrow cluster here without needing Fn. The carousel takes
    * no text at all, and a running app only gets the raw keys back while it is
    * actually taking some. */
@@ -539,6 +577,19 @@ int launchui_key(uint8_t key) {
   case ' ':
     if (icons_in_count(s_folder)) launch(s_sel);
     return 0;
+
+  case 'k': case 'K': {
+    const Icon *ic = at(s_sel);
+    if (!ic || ic->kind == ICON_FOLDER || ic->kind == ICON_FIRMWARE) {
+      snprintf(s_note, sizeof s_note, "only an app can have a shortcut");
+    } else {
+      s_binding = 1;
+      snprintf(s_note, sizeof s_note, "press a letter for %s", ic->name);
+    }
+    s_dirty = 1;
+    flush();
+    return 0;
+  }
 
   case 'r': case 'R':
     icons_reload();
