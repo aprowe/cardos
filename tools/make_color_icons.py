@@ -46,6 +46,27 @@ INK = {
 }
 
 ICONS = {
+    # Two panes with a divider: the shape of the window, which is what the
+    # app is for. A folder would say "files" and there is already a Files.
+    "Explorer": [
+        "................",
+        ".KKKKKKKKKKKKKK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KKKKKKKKKKKKKK.",
+        ".KGGGKWWWWWWWWK.",
+        ".KGyGKWyyyyyWWK.",
+        ".KGGGKWWWWWWWWK.",
+        ".KGyGKWyyyyWWWK.",
+        ".KGGGKWWWWWWWWK.",
+        ".KGyGKWyyyyyyWK.",
+        ".KGGGKWWWWWWWWK.",
+        ".KGGGKWyyyWWWWK.",
+        ".KGGGKWWWWWWWWK.",
+        ".KKKKKKKKKKKKKK.",
+        ".KDDDDDDDDDDDDK.",
+        ".KKKKKKKKKKKKKK.",
+    ],
+
     # A manila folder with a tab.
     "Files": [
         "................",
