@@ -9,6 +9,7 @@
  *   NAME.app    a built-in app, by name
  *   NAME.capp   a loadable app binary, which carries its own name and icon
  *   NAME.bin    a firmware image to chain-boot, replacing CardOS
+ *   NAME/       a folder: one level of subdirectory, scanned the same way
  *
  * /firmware is scanned as well, for .bin only.
  */
@@ -28,7 +29,7 @@
 #define FIRMWARE_DIR "/firmware"
 #define MAX_ICONS 24
 
-typedef enum { ICON_BUILTIN, ICON_FIRMWARE, ICON_CAPP } IconKind;
+typedef enum { ICON_BUILTIN, ICON_FIRMWARE, ICON_CAPP, ICON_FOLDER } IconKind;
 
 typedef struct {
   char     name[20];    /* shown under the icon */
@@ -36,6 +37,7 @@ typedef struct {
   IconKind kind;
   int      slot;        /* app registry index, or capprun slot */
   int      cli;         /* a command: runnable, but not shown anywhere */
+  int      parent;      /* flat index of the folder this sits in, or -1 */
 
   /* The colour icon, read from the card the first time it is asked for.
    * colour_tried separates "no file" from "not looked yet", so a missing one
@@ -56,6 +58,16 @@ int icons_count(void);
 int icons_total(void);
 
 const Icon *icon_at(int i);
+
+/* One level of the tree. `folder` is a flat index of an ICON_FOLDER entry,
+ * or -1 for the top. Only visible entries, so a carousel can walk 0..n-1.
+ * icons_count() and icon_at() stay flat -- every level at once -- because
+ * the desktop and every by-name lookup want exactly that. */
+int         icons_in_count(int folder);
+const Icon *icons_in_at(int folder, int i);
+
+/* The flat index of an entry, for the calls that take one. -1 if not ours. */
+int icon_index(const Icon *ic);
 
 /* The app behind an icon, or NULL for firmware. */
 const AppDef *icon_app(int i);

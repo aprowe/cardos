@@ -29,6 +29,18 @@
 
 static WinId s_win[MAX_OPEN];
 static const AppDef *s_app[MAX_OPEN];   /* built-in or loaded, indistinguishable */
+
+/* Minimised windows.
+ *
+ * A minimised window has no WinId -- it is destroyed, because the window
+ * system has no notion of one that is not on screen, and giving it one would
+ * mean teaching every hit test, paint and damage calculation to skip it.
+ * What is kept is the pair that matters: which app, and the frame it had. The
+ * app object outlives its window (that is why an app's state survives being
+ * maximised too), so restoring is opening it again at the same rectangle
+ * without calling open() -- which would wipe what it was in the middle of. */
+static Rect s_min_frame[MAX_OPEN];
+static int  s_minimised[MAX_OPEN];
 static int16_t s_scroll[MAX_OPEN];      /* pixels of content hidden above */
 static int   s_nwin;
 
@@ -92,6 +104,9 @@ static Rect R(int x, int y, int w, int h) {
 
 static int win_index(WinId w) {
   int i;
+  /* WIN_NONE is what a minimised slot holds, so asking for it must not match
+   * the first one that happens to be down on the taskbar. */
+  if (w == WIN_NONE) return -1;
   for (i = 0; i < s_nwin; i++) if (s_win[i] == w) return i;
   return -1;
 }
@@ -213,7 +228,7 @@ static void paint_window(WinId w, Rect clip) {
 
   if (title.w > 12) {
     draw_text_ellipsis((int16_t)(title.x + 2), (int16_t)(title.y),
-                       (int16_t)(title.w - WM_CLOSE_W - 4), wm_title(w),
+                       (int16_t)(title.w - 3 * WM_CLOSE_W - 7), wm_title(w),
                        C_TITLE_FG, focused ? C_TITLE : C_TITLE_UN);
     /* Close box, raised, with an x. */
     close.x = (int16_t)(title.x + title.w - WM_CLOSE_W);
@@ -222,6 +237,27 @@ static void paint_window(WinId w, Rect clip) {
     close.h = (int16_t)(WM_TITLE_H - 2);
     draw_bevel(close, C_FACE, C_LIGHT, C_DARK);
     draw_text((int16_t)(close.x + 1), (int16_t)(close.y - 1), "x", C_DARK, C_FACE);
+
+    /* Maximise, to its left: a little empty frame, which is what the box does
+     * to the screen. Drawn rather than lettered because at seven pixels a
+     * glyph would be a smudge. */
+    if (title.w > 24) {
+      Rect mx = close;
+      mx.x = (int16_t)(close.x - WM_CLOSE_W - 1);
+      draw_bevel(mx, C_FACE, C_LIGHT, C_DARK);
+      draw_frame(R((int16_t)(mx.x + 1), (int16_t)(mx.y + 1),
+                   (int16_t)(mx.w - 2), (int16_t)(mx.h - 2)), C_DARK);
+      draw_rect(R((int16_t)(mx.x + 1), (int16_t)(mx.y + 1),
+                  (int16_t)(mx.w - 2), 1), C_DARK);
+    }
+    /* Minimise: a line along the bottom, the shape of a window lying down. */
+    if (title.w > 36) {
+      Rect mn = close;
+      mn.x = (int16_t)(close.x - 2 * (WM_CLOSE_W + 1));
+      draw_bevel(mn, C_FACE, C_LIGHT, C_DARK);
+      draw_rect(R((int16_t)(mn.x + 2), (int16_t)(mn.y + mn.h - 3),
+                  (int16_t)(mn.w - 4), 2), C_DARK);
+    }
   }
 
   /* Content: sunken, so it reads as a well rather than a panel. */
@@ -297,13 +333,16 @@ static void paint_taskbar(Rect clip) {
   x = 40;
   for (i = 0; i < s_nwin; i++) {
     Rect b = R(x, DESK_H + 2, 48, TASKBAR_H - 4);
-    int focused = (wm_focus() == s_win[i]);
+    int focused = (!s_minimised[i] && wm_focus() == s_win[i]);
     if (b.x + b.w > DISPLAY_W - 32) break;
     draw_bevel(b, C_FACE, focused ? C_SHADOW : C_LIGHT,
                focused ? C_LIGHT : C_DARK);
     tb_clip(rect_inset(b, 2));
+    /* A minimised window has no title bar to read a name off, so the button
+     * uses the app's own -- which is where the window's title came from. */
     draw_text_ellipsis((int16_t)(b.x + 2), (int16_t)(b.y + 1), 42,
-                       wm_title(s_win[i]), C_TEXT, C_FACE);
+                       s_minimised[i] ? s_app[i]->name : wm_title(s_win[i]),
+                       C_TEXT, C_FACE);
     tb_clip(bar);
     x = (int16_t)(x + 50);
   }
@@ -449,15 +488,25 @@ void desktop_repaint(void) {
 
 /* Leaving fullscreen throws away nothing: the window system's state was never
  * touched, so the desktop comes back exactly as it was. */
+static void open_def_ex(const AppDef *a, int fresh);
+
 static void leave_fullscreen(void) {
-  if (!s_full) return;
+  const AppDef *a = s_full;
+  if (!a) return;
   s_full = NULL;
+  /* Back into a window, not into nothing. This used to just drop the app: the
+   * screen came back to the desktop and whatever had been running was no
+   * longer anywhere, because a fullscreen app has no window to return to
+   * unless one is made. Escape means "stop filling the screen", and it keeps
+   * the app's state -- fresh = 0 -- for the same reason maximise does. */
+  open_def_ex(a, 0);
   desktop_repaint();
 }
 
 /* ------------------------------------------------------------ input ----- */
 
 static void open_def(const AppDef *a);
+static void toggle_fullscreen(void);
 static void open_def_ex(const AppDef *a, int fresh);
 
 static void launch_icon(int i) {
@@ -466,6 +515,7 @@ static void launch_icon(int i) {
 
   if (!ic) return;
   if (ic->kind == ICON_FIRMWARE) { icons_boot_firmware(i); return; }
+  if (ic->kind == ICON_FOLDER) return;    /* the desktop is flat; the launcher has folders */
 
   if (ic->kind == ICON_CAPP) {
     /* Running the program *is* opening it: capp_main builds whatever state it
@@ -564,12 +614,41 @@ static void open_def_ex(const AppDef *a, int fresh) {
   if (fresh && a->open) a->open(a->state);
   s_win[s_nwin] = w;
   s_app[s_nwin] = a;
+  s_minimised[s_nwin] = 0;
   s_scroll[s_nwin] = 0;
   s_nwin++;
   s_icon_focus = 0;            /* the new window has the keyboard */
 }
 
 static void close_focused(void);
+
+/* Put a window down on the taskbar. Its slot stays in the list -- that is what
+ * the taskbar draws from -- with the frame remembered so it comes back where
+ * it was rather than at the top of the cascade. */
+static void minimise(WinId w) {
+  int i = win_index(w);
+  if (i < 0) return;
+  s_min_frame[i] = wm_frame(w);
+  s_minimised[i] = 1;
+  s_win[i] = WIN_NONE;
+  wm_destroy(w);
+  if (wm_count() == 0) s_icon_focus = 1;
+  desktop_repaint();
+}
+
+/* And pick it back up. fresh = 0: the app has been sitting there with its
+ * state the whole time, and calling open() would throw it away. */
+static void unminimise(int i) {
+  WinId w;
+  if (i < 0 || i >= s_nwin || !s_minimised[i]) return;
+  w = wm_create(s_app[i]->name, s_min_frame[i]);
+  if (w == WIN_NONE) return;
+  s_win[i] = w;
+  s_minimised[i] = 0;
+  s_icon_focus = 0;
+  wm_raise(w);
+  desktop_repaint();
+}
 
 static void open_def(const AppDef *a) { open_def_ex(a, 1); }
 static void open_app(int k) { open_def(app_at(k)); }
@@ -615,6 +694,8 @@ static void close_focused(void) {
       s_win[j] = s_win[j + 1];
       s_app[j] = s_app[j + 1];
       s_scroll[j] = s_scroll[j + 1];
+      s_minimised[j] = s_minimised[j + 1];
+      s_min_frame[j] = s_min_frame[j + 1];
     }
     s_nwin--;
     break;
@@ -668,7 +749,9 @@ int desktop_key(uint8_t key) {
                     : (wm_focus() != WIN_NONE ? app_of(wm_focus()) : NULL);
     s_help = 1;
     help_paint(a ? a->name : "Desktop", a ? a->help : NULL,
-               "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nctrl-s\tstart menu\nctrl-f\tfullscreen / window\nctrl-w\tclose window\nescape\tthe console\nctrl-h\tclose this\n");
+               s_full
+               ? "escape\tleave fullscreen\nctrl-f\tleave fullscreen\nctrl-h\tclose this\n"
+               : "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nctrl-s\tstart menu\nctrl-f\tfullscreen / window\nctrl-w\tclose window\nescape\tthe console\nctrl-h\tclose this\n");
     return 0;
   }
 
@@ -793,9 +876,45 @@ int desktop_key(uint8_t key) {
   return 0;
 }
 
+/* Is the focused app taking text? Fullscreen app, focused window, or nothing
+ * -- the same order the keyboard already resolves. */
+int desktop_wants_text(void) {
+  const AppDef *a = s_full ? s_full
+                  : (wm_focus() != WIN_NONE ? app_of(wm_focus()) : NULL);
+  if (!a || !a->wants_text) return 0;
+  return a->wants_text(a->state);
+}
+
 void desktop_tick(uint32_t ms) {
   uint32_t before = s_now_ms / 1000u;
   s_now_ms = ms;
+
+  /* Animating apps first, and every pass rather than every second. A
+   * fullscreen app is asked directly; a windowed one is asked through the
+   * window it lives in, so its damage goes through the window system and
+   * whatever is stacked above it stays on top. */
+  if (s_full && s_full->tick) {
+    if (s_full->tick(s_full->state, ms)) {
+      draw_set_clip(s_full_rect);
+      s_full->paint(s_full->state, s_full_rect);
+      draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+    }
+  } else {
+    int i, any = 0;
+    for (i = 0; i < s_nwin; i++) {
+      const AppDef *a = s_app[i];
+      if (!a || !a->tick) continue;
+      /* A minimised app keeps running -- a game should not pause because its
+       * window is down on the taskbar -- but it has nowhere to draw, so its
+       * request for a repaint is answered by doing nothing. */
+      if (a->tick(a->state, ms) && !s_minimised[i]) {
+        wm_damage(wm_content(s_win[i]));
+        any = 1;
+      }
+    }
+    if (any) desktop_flush();
+  }
+
   if (s_now_ms / 1000u == before) return;
 
   /* Nothing of ours is on screen while an app owns it -- not the clock, and
@@ -869,7 +988,9 @@ void desktop_init(void) {
   s_full = NULL;
   s_icon_focus = 1;
   s_sel_icon = 0;
-  for (i = 0; i < MAX_OPEN; i++) { s_win[i] = WIN_NONE; s_app[i] = NULL; }
+  for (i = 0; i < MAX_OPEN; i++) {
+    s_win[i] = WIN_NONE; s_app[i] = NULL; s_minimised[i] = 0;
+  }
 
   desktop_reload_icons();
 
@@ -920,23 +1041,50 @@ void desktop_mouse_apply(const MouseReport *r) {
 
   mouse_apply(r);
 
-  /* A fullscreen app sees clicks in screen coordinates and draws its own
-   * pointer if it wants one. Ours would have to be erased by repainting the
-   * area underneath, which only the app knows how to do. */
+  /* A fullscreen app gets the pointer too. Erasing it is the part that used to
+   * stop this: the panel is three-wire with no MISO, so what was underneath
+   * cannot be read back. The app can redraw it, though -- that is what paint
+   * is -- so the old cursor square is handed back to the app as a clip, and
+   * the cursor is drawn again on top. Every app therefore has a mouse without
+   * knowing anything about one. */
   if (s_full) {
+    int held = (mouse_pressed(MOUSE_LEFT) || mouse_down(MOUSE_LEFT)
+                ? CAPP_BTN_LEFT : 0)
+             | (mouse_pressed(MOUSE_RIGHT) || mouse_down(MOUSE_RIGHT)
+                ? CAPP_BTN_RIGHT : 0);
     int btn = mouse_pressed(MOUSE_LEFT) ? MOUSE_LEFT
             : mouse_pressed(MOUSE_RIGHT) ? MOUSE_RIGHT : 0;
-    s_cursor_on = 0;
+    int wheel = mouse_take_wheel();
+    int moved = mouse_take_moved();
+    int16_t lx = (int16_t)(mouse_x() - s_full_rect.x);
+    int16_t ly = (int16_t)(mouse_y() - s_full_rect.y);
+    int repaint = 0;
+
+    s_cursor_on = 1;
+
     if (btn && s_full->click &&
         rect_contains(s_full_rect, (int16_t)mouse_x(), (int16_t)mouse_y()) &&
-        s_full->click(s_full->state, (int16_t)(mouse_x() - s_full_rect.x),
-                      (int16_t)(mouse_y() - s_full_rect.y), btn)) {
+        s_full->click(s_full->state, lx, ly, btn))
+      repaint = 1;
+
+    if ((moved || wheel || held) && s_full->mouse &&
+        s_full->mouse(s_full->state, lx, ly, held, wheel))
+      repaint = 1;
+
+    if (repaint) {
       s_full_dirty = 1;
       desktop_flush();
+    } else if (moved) {
+      /* Just the two squares the pointer left and arrived in. */
+      Rect after = cursor_rect();
+      Rect damage = rect_union(before, after);
+      draw_set_clip(rect_intersect(damage, s_full_rect));
+      if (s_full->paint) s_full->paint(s_full->state, s_full_rect);
+      draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+      draw_pointer();
     }
     mouse_released(MOUSE_LEFT);
     mouse_released(MOUSE_RIGHT);
-    mouse_take_moved();
     return;
   }
 
@@ -950,9 +1098,18 @@ void desktop_mouse_apply(const MouseReport *r) {
     if (w && idx >= 0) {
       const AppDef *a = s_app[idx];
       Rect inner = rect_inset(wm_content(s_win[idx]), 2);
+      int taken = 0;
       inner.w = (int16_t)(inner.w - SCROLL_W);
-      s_scroll[idx] = (int16_t)(s_scroll[idx] - w * 12);
-      clamp_scroll(idx, a, inner);
+      /* The app first. One that scrolls itself -- a page viewer, an editor --
+       * takes the notch and says so; anything else leaves it to the window,
+       * which is what a list too tall for its frame wants. */
+      if (a->mouse && a->mouse(a->state, (int16_t)(mouse_x() - inner.x),
+                               (int16_t)(mouse_y() - inner.y), 0, w))
+        taken = 1;
+      if (!taken) {
+        s_scroll[idx] = (int16_t)(s_scroll[idx] - w * 12);
+        clamp_scroll(idx, a, inner);
+      }
       wm_damage(wm_frame(s_win[idx]));
     }
   }
@@ -1041,7 +1198,11 @@ void desktop_mouse_apply(const MouseReport *r) {
         int i;                              /* a taskbar button raises it */
         int16_t x = 40;
         for (i = 0; i < s_nwin; i++, x = (int16_t)(x + 50)) {
-          if (mouse_x() >= x && mouse_x() < x + 48) { wm_raise(s_win[i]); break; }
+          if (mouse_x() >= x && mouse_x() < x + 48) {
+            if (s_minimised[i]) unminimise(i);
+            else wm_raise(s_win[i]);
+            break;
+          }
         }
       }
       return;
@@ -1059,6 +1220,17 @@ void desktop_mouse_apply(const MouseReport *r) {
     if (what == WM_HIT_CLOSE) {
       close_focused();
       desktop_repaint();
+      return;
+    }
+    if (what == WM_HIT_MIN) {
+      minimise(hit);
+      return;
+    }
+    if (what == WM_HIT_MAX) {
+      /* The same thing ctrl-F does, and it keeps the app's state either way:
+       * the window system's records are not thrown away by filling the
+       * screen, so coming back finds the window where it was. */
+      toggle_fullscreen();
       return;
     }
     if (what == WM_HIT_TITLE || what == WM_HIT_BORDER) {

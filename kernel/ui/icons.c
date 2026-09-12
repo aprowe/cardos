@@ -89,11 +89,15 @@ static void seed_capps(void) {
     int ok;
     snprintf(path, sizeof path, "%s/%s", ICONS_DIR, CAPP_BLOBS[i].name);
 
-    /* The stamp says which firmware wrote these, and the size says whether the
-     * write finished. Both are checked, because a matching stamp over a
-     * truncated file is exactly the state that made edit.capp stay broken at
-     * 650 bytes of 14720 across every reboot. */
-    if (have == want && file_size(path) == (int)CAPP_BLOBS[i].size) continue;
+    /* The stamp says which firmware wrote these, and it is only written once
+     * every blob has been measured back at its full size, so a matching stamp
+     * means the copies were good. A file that has since gone is rewritten; one
+     * whose size differs is left alone, because that is what a remote update
+     * looks like -- `update apps` puts a newer pinball.capp on the card than
+     * the one this firmware carries, and it must survive the next boot. (The
+     * size used to be checked too, from when the stamp was written even after
+     * a failure and edit.capp stayed truncated at 650 bytes across reboots.) */
+    if (have == want && file_size(path) >= 0) continue;
 
     fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
     if (fd < 0) { all_ok = 0; continue; }
@@ -144,7 +148,9 @@ static void seed_colour_icons(void) {
  * only if absent rather than only on a wholly empty folder: a card that
  * already holds one icon should still get the rest. */
 static void seed_dir(void) {
-  static const char *seed[] = { "Files.app", "Settings.app" };
+  /* Files.app is gone: the file manager is a .capp now, seeded like the
+   * others. Settings is still built in, so it still needs a stub. */
+  static const char *seed[] = { "Settings.app" };
   size_t i;
   char path[80];
 
@@ -168,25 +174,42 @@ static int ends_with(const char *name, size_t n, const char *ext) {
   return n > e && strcmp(name + n - e, ext) == 0;
 }
 
+/* Folders are one level deep. Their names are collected while the parent is
+ * being read and scanned afterwards, so there is never more than one
+ * directory open on the card at a time. */
+#define MAX_FOLDERS 8
+
 /* Scan one folder. `bin_only` for /firmware, which holds images and nothing
- * this launcher can run any other way. */
-static void scan(const char *dir, int bin_only) {
+ * this launcher can run any other way. `parent` is the flat index of the
+ * folder entry this is the inside of, or -1 at the top. */
+static void scan(const char *dir, int bin_only, int parent) {
   FsDir d;
   FsEntry e;
+  char folders[MAX_FOLDERS][20];
+  int nfolders = 0, i;
 
   if (fs_opendir(dir, &d) != 0) return;
 
   while (s_nicon < MAX_ICONS && fs_readdir(&d, &e) == 1) {
     size_t n = strlen(e.name);
     Icon *ic = &s_icon[s_nicon];
-    if (e.is_dir) continue;
     if (e.name[0] == '.') continue;      /* the stamp file, and anything like it */
+
+    if (e.is_dir) {
+      /* A folder at the top is an entry; one inside a folder is not, and
+       * neither is the colour-icon store. */
+      if (bin_only || parent >= 0 || strcmp(e.name, "icons") == 0) continue;
+      if (nfolders < MAX_FOLDERS && n < sizeof folders[0])
+        memcpy(folders[nfolders++], e.name, n + 1);
+      continue;
+    }
 
     /* Cleared before it is filled. The colour pointer in particular is freed
      * by the next reload, and leaving a stale one here meant the second reload
      * freed it twice -- which aborts in the allocator with a backtrace that
      * points at free() and says nothing about icons. */
     memset(ic, 0, sizeof *ic);
+    ic->parent = parent;
 
     snprintf(ic->path, sizeof ic->path, "%s/%s", dir, e.name);
 
@@ -223,19 +246,36 @@ static void scan(const char *dir, int bin_only) {
     s_nicon++;
   }
   fs_closedir(&d);
+
+  for (i = 0; i < nfolders && s_nicon < MAX_ICONS; i++) {
+    Icon *ic = &s_icon[s_nicon];
+    memset(ic, 0, sizeof *ic);
+    ic->kind = ICON_FOLDER;
+    ic->slot = -1;
+    ic->parent = -1;
+    snprintf(ic->name, sizeof ic->name, "%s", folders[i]);
+    snprintf(ic->path, sizeof ic->path, "%s/%s", dir, folders[i]);
+    s_nicon++;
+    scan(ic->path, 0, s_nicon - 1);
+  }
 }
 
 /* Stable partition: visible entries keep their order, commands move to the
  * end keeping theirs. The carousel can then walk 0..icons_count()-1 with no
- * gaps, and a lookup still sees everything. */
+ * gaps, and a lookup still sees everything. Parents are flat indices, so
+ * they are remapped through the same move. */
 static void partition_cli(void) {
   Icon tmp[MAX_ICONS];
+  int  newpos[MAX_ICONS];
   int i, n = 0;
 
-  for (i = 0; i < s_nicon; i++) if (!s_icon[i].cli) tmp[n++] = s_icon[i];
+  for (i = 0; i < s_nicon; i++) if (!s_icon[i].cli) { newpos[i] = n; tmp[n++] = s_icon[i]; }
   s_nvisible = n;
-  for (i = 0; i < s_nicon; i++) if (s_icon[i].cli) tmp[n++] = s_icon[i];
-  for (i = 0; i < s_nicon; i++) s_icon[i] = tmp[i];
+  for (i = 0; i < s_nicon; i++) if (s_icon[i].cli)  { newpos[i] = n; tmp[n++] = s_icon[i]; }
+  for (i = 0; i < s_nicon; i++) {
+    if (tmp[i].parent >= 0) tmp[i].parent = newpos[tmp[i].parent];
+    s_icon[i] = tmp[i];
+  }
 }
 
 void icons_reload(void) {
@@ -251,8 +291,8 @@ void icons_reload(void) {
   if (!fs_mounted()) return;
 
   seed_dir();
-  scan(ICONS_DIR, 0);
-  scan(FIRMWARE_DIR, 1);
+  scan(ICONS_DIR, 0, -1);
+  scan(FIRMWARE_DIR, 1, -1);
   partition_cli();
 }
 
@@ -262,6 +302,26 @@ int icons_total(void) { return s_nicon; }
 const Icon *icon_at(int i) {
   if (i < 0 || i >= s_nicon) return NULL;
   return &s_icon[i];
+}
+
+int icons_in_count(int folder) {
+  int i, n = 0;
+  for (i = 0; i < s_nvisible; i++) n += s_icon[i].parent == folder;
+  return n;
+}
+
+const Icon *icons_in_at(int folder, int i) {
+  int k;
+  for (k = 0; k < s_nvisible; k++) {
+    if (s_icon[k].parent != folder) continue;
+    if (i-- == 0) return &s_icon[k];
+  }
+  return NULL;
+}
+
+int icon_index(const Icon *ic) {
+  if (!ic || ic < s_icon || ic >= s_icon + s_nicon) return -1;
+  return (int)(ic - s_icon);
 }
 
 /* For a built-in, the definition is compiled in. For a loaded program there is
@@ -287,6 +347,7 @@ const uint8_t *icon_bitmap(int i) {
     return b ? b : ICON_GENERIC;
   }
   if (ic->kind == ICON_FIRMWARE) return ICON_FIRMWARE_;
+  if (ic->kind == ICON_FOLDER)   return ICON_FOLDER_;
 
   if (strcmp(ic->name, "Files") == 0)    return ICON_FILES;
   if (strcmp(ic->name, "Memory") == 0)   return ICON_MEMORY;
