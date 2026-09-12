@@ -14,8 +14,20 @@
 
 static const char *TAG = "launch";
 
-#define GUEST_SLOT_BYTES (3u * 1024 * 1024)   /* ota_0 in partitions.csv */
 #define COPY_CHUNK 4096
+
+/* Where the next image goes: the OTA slot we are not running from. CardOS
+ * itself runs from factory or from one of the two OTA slots, and the other
+ * one is free -- for a guest, or for a newer CardOS. Never factory: that is
+ * the USB-flashed image and the recovery target, and it stays that way. */
+static const esp_partition_t *free_slot(void) {
+  return esp_ota_get_next_update_partition(NULL);
+}
+
+static uint32_t slot_bytes(void) {
+  const esp_partition_t *p = free_slot();
+  return p ? p->size : 0;
+}
 
 /* ------------------------------------------------------- image reading -- */
 
@@ -37,7 +49,7 @@ LaunchResult launcher_check(const char *path, AppImageInfo *info,
   fd = fs_open(path, FS_O_READ);
   if (fd < 0) return LAUNCH_ERR_OPEN;
 
-  r = appimage_parse(fs_reader, &fd, st.size, GUEST_SLOT_BYTES, info);
+  r = appimage_parse(fs_reader, &fd, st.size, slot_bytes(), info);
   fs_close(fd);
 
   if (why) *why = r;
@@ -116,8 +128,7 @@ LaunchResult launcher_boot(const char *path, LaunchProgress cb, void *ctx) {
   r = launcher_check(path, &info, &why);
   if (r != LAUNCH_OK) return r;
 
-  target = esp_partition_find_first(ESP_PARTITION_TYPE_APP,
-                                    ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
+  target = free_slot();
   if (!target) return LAUNCH_ERR_NO_SLOT;
 
   fd = fs_open(path, FS_O_READ);
@@ -175,7 +186,7 @@ const char *launcher_strerror(LaunchResult r) {
   switch (r) {
   case LAUNCH_OK:          return "ok";
   case LAUNCH_ERR_IMAGE:   return "not a bootable image";
-  case LAUNCH_ERR_NO_SLOT: return "no ota_0: the partition table is wrong";
+  case LAUNCH_ERR_NO_SLOT: return "no free OTA slot: the partition table is wrong";
   case LAUNCH_ERR_OPEN:    return "cannot open";
   case LAUNCH_ERR_ERASE:   return "could not erase the guest slot";
   case LAUNCH_ERR_WRITE:   return "write failed partway";
@@ -196,8 +207,7 @@ static int part_reader(void *ctx, uint32_t offset, void *buf, size_t n) {
 
 void launcher_info(LauncherInfo *out) {
   const esp_partition_t *running = esp_ota_get_running_partition();
-  const esp_partition_t *guest = esp_partition_find_first(
-      ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
+  const esp_partition_t *guest = free_slot();
   AppImageInfo info;
 
   memset(out, 0, sizeof *out);
@@ -209,7 +219,7 @@ void launcher_info(LauncherInfo *out) {
   /* allow_trailing: an image in a partition is followed by the rest of the
    * partition, which is not a full-flash dump. */
   if (appimage_parse_ex(part_reader, (void *)guest, guest->size,
-                        GUEST_SLOT_BYTES, 1, &info) == APPIMAGE_OK) {
+                        guest->size, 1, &info) == APPIMAGE_OK) {
     out->guest_valid = 1;
     out->guest_size = info.image_size;
     strncpy(out->guest_name, info.project_name, sizeof out->guest_name - 1);

@@ -199,6 +199,71 @@ ICONS = {
         "................",
     ],
     # A clipboard with a ticked line.
+    # A globe: equator, meridian, and a pair of arcs. Latitude stripes alone
+    # read as a beach ball at this size; the converging verticals are what say
+    # sphere.
+    # A table seen from above: the ball up in the bumpers, two flippers at the
+    # bottom. The flippers are what make it read as pinball rather than as a
+    # dial -- they are worth the four pixels each.
+    # A speech bubble with a tail. Not a face and not a logo: the app is a
+    # conversation, and a bubble is the one shape that says so at 16 pixels.
+    "Claude": [
+        "................",
+        "...KKKKKKKKKK...",
+        "..KooooooooooK..",
+        ".KooooooooooooK.",
+        ".KoWWWWWWWWWWoK.",
+        ".KooooooooooooK.",
+        ".KoWWWWWWWWWWoK.",
+        ".KooooooooooooK.",
+        ".KoWWWWWWWoooooK",
+        ".KooooooooooooK.",
+        "..KooooooooooK..",
+        "...KooooooooK...",
+        "...KooK.KKKK....",
+        "..KooK..........",
+        "..KK............",
+        "................",
+    ],
+
+    "Pinball": [
+        "................",
+        "..KKKKKKKKKKKK..",
+        "..KnnnnnnnnnnK..",
+        "..KnnbnWWnbnnK..",
+        "..KnnnWWWWnnnK..",
+        "..KnbnWWWWnbnK..",
+        "..KnnnnWWnnnnK..",
+        "..KnnnnnnnnnnK..",
+        "..KnnnnnnnnnnK..",
+        "..KGnnnnnnnnGK..",
+        "..KnGGnnnnGGnK..",
+        "..KnnGGnnGGnnK..",
+        "..KnnnGGGGnnnK..",
+        "..KnnnnnnnnnnK..",
+        "..KKKKKKKKKKKK..",
+        "................",
+    ],
+
+    "Web": [
+        "................",
+        ".....KKKKKK.....",
+        "...KKWbWWbWKK...",
+        "..KKbWbWWbWbKK..",
+        "..KbWbbWWbbWbK..",
+        ".KbbWbbWWbbWbbK.",
+        ".KbbWbbWWbbWbbK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KbbWbbWWbbWbbK.",
+        ".KbbWbbWWbbWbbK.",
+        ".KbbWbbWWbbWbbK.",
+        "..KbWbbWWbbWbK..",
+        "..KKbWbWWbWbKK..",
+        "...KKWbWWbWKK...",
+        ".....KKKKKK.....",
+        "................",
+    ],
+
     "Todo": [
         "................",
         "......KKKK......",

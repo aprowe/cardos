@@ -270,6 +270,13 @@ WmHit wm_hit_test(WinId w, int16_t x, int16_t y) {
     close.w = WM_CLOSE_W;
     close.h = WM_TITLE_H;
     if (rect_contains(close, x, y)) return WM_HIT_CLOSE;
+    /* Maximise sits immediately left of close, the same size, the same
+     * gesture -- and the same order Windows put them in, which is the order
+     * a hand already knows. */
+    close.x = (int16_t)(close.x - WM_CLOSE_W - 1);
+    if (rect_contains(close, x, y)) return WM_HIT_MAX;
+    close.x = (int16_t)(close.x - WM_CLOSE_W - 1);
+    if (rect_contains(close, x, y)) return WM_HIT_MIN;
     return WM_HIT_TITLE;
   }
   return WM_HIT_BORDER;

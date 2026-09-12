@@ -5,11 +5,12 @@ The device has no HTML parser and no layout engine, and no small version of
 either exists. So the layout happens here, on a machine with a real browser,
 and the device is sent pixels.
 
-The trick that makes it look like a web page rather than a squashed one: Chrome
-is told the viewport is 240 CSS pixels wide. Sites then serve their narrowest
-mobile layout and render it at that size, so text is laid out small and *crisp*
-rather than being shrunk into mush afterwards. The screenshot is already the
-right width; nothing is downscaled.
+Chrome is told the viewport is a chosen number of CSS pixels wide (--width, or
+?w= per request) and the shot is scaled down to the panel's 240. That width is
+the whole feel of the thing: at 240 the site serves its narrowest mobile layout
+and renders text at full size -- crisp, but about four words to a screen. Wider
+renders more page per screen and scales it down, which is what makes it look
+like a miniature of the page rather than a zoomed-in corner of it.
 
 The output is a .cpx file:
 
@@ -41,9 +42,15 @@ import subprocess
 import sys
 import tempfile
 import urllib.parse
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from PIL import Image
+from PIL import Image, ImageFilter
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pixelrender import shoot_pixel
+from chat import ChatService, ROOT as ROOT_DIR
+from voice import Voice
+import updates
 
 CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -53,8 +60,15 @@ CHROME_CANDIDATES = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 ]
 
-WIDTH = 240
+WIDTH = 240            # the panel, and the output width, always
 MAX_HEIGHT = 4000
+
+# The CSS viewport Chrome is given when the request does not say. 420 renders
+# a page about 1.75x too wide and scales it down: text lands at roughly nine
+# pixels, small but readable, and a screenful is a paragraph rather than four
+# words. 240 is crisper and more zoomed in; 720 looks like a whole page and
+# reads like one across a room.
+DEFAULT_WIDTH = 420
 
 
 def find_chrome():
@@ -64,8 +78,20 @@ def find_chrome():
     raise SystemExit("no Chrome found; pass --chrome")
 
 
-def shoot(chrome, url, height, wait_ms):
-    """Full-page screenshot at a 240px viewport."""
+def shoot_pixelfont(chrome, url, height, wait_ms):
+    """The page at 240 in the device's own 6x8 font: (image, links).
+
+    No downscale anywhere in this path, which is the point. The links come
+    back because this is the only moment anything has a DOM to ask -- see
+    tools/pixelrender.py."""
+    png, links = shoot_pixel(chrome, url, WIDTH, height, wait_ms)
+    if not png:
+        return None, []
+    return Image.open(io.BytesIO(png)).convert("RGB"), links
+
+
+def shoot_raw(chrome, url, height, wait_ms, css_width):
+    """Full-page screenshot at its own size, before any resampling."""
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "shot.png")
         cmd = [
@@ -75,7 +101,7 @@ def shoot(chrome, url, height, wait_ms):
             "--no-sandbox",
             "--hide-scrollbars",
             "--force-device-scale-factor=1",
-            "--window-size=%d,%d" % (WIDTH, height),
+            "--window-size=%d,%d" % (css_width, height),
             # Fast-forwards timers and animations so the page settles instead
             # of being captured mid-fade.
             "--virtual-time-budget=%d" % wait_ms,
@@ -86,6 +112,61 @@ def shoot(chrome, url, height, wait_ms):
         if not os.path.exists(out):
             return None
         return Image.open(out).convert("RGB")
+
+
+def _gamma(im, g):
+    lut = [min(255, int(((v / 255.0) ** g) * 255 + 0.5)) for v in range(256)]
+    return im.point(lut * 3)
+
+
+def downscale(im, width=WIDTH):
+    """Resample to the panel width, in linear light, then put the bite back.
+
+    Two things matter here and both were measured rather than assumed. First,
+    averaging pixels in sRGB is wrong: the midpoint of black and white in sRGB
+    is 188, not 128, so shrinking dark text on a white page bleaches it. Going
+    to linear light first keeps the stroke weight. Second, any downscale costs
+    acutance whatever the filter, so a small unsharp mask afterwards is not
+    cheating -- it restores the edge contrast the average took out. Radius is
+    deliberately under a pixel; anything larger rings around the glyphs.
+    """
+    h = max(1, round(im.size[1] * width / im.size[0]))
+    small = _gamma(_gamma(im, 2.2).resize((width, h), Image.LANCZOS), 1 / 2.2)
+    return small.filter(ImageFilter.UnsharpMask(0.5, 130, 2))
+
+
+def shoot(chrome, url, height, wait_ms, css_width=WIDTH):
+    """A page rendered wide and brought down to the panel: (image, links).
+
+    Text goes soft -- there is no filter that makes 4-pixel letterforms sharp,
+    only ones that make them less mushy -- but the page keeps its own fonts and
+    proportions, which is the point of this mode. For text, use the 6x8
+    renderer instead.
+
+    This goes through the DevTools path rather than --screenshot for one
+    reason: links. Chrome's screenshot flag renders a picture and tells you
+    nothing about what was in it, and a browser whose links do not work is a
+    slideshow."""
+    png, links = shoot_pixel(chrome, url, css_width, height, wait_ms,
+                             restyle=False)
+    if not png:
+        return None, []
+    im = Image.open(io.BytesIO(png)).convert("RGB")
+    if css_width == WIDTH:
+        return im, links
+
+    scaled = downscale(im)
+    # The links shrink with the page. Rounding outward by a pixel keeps a
+    # one-line link tappable after a 3x reduction, where honest rounding can
+    # leave a target two pixels tall.
+    k = WIDTH / float(css_width)
+    out = []
+    for l in links:
+        out.append({"x": int(l["x"] * k), "y": int(l["y"] * k),
+                    "w": max(6, int(l["w"] * k) + 1),
+                    "h": max(6, int(l["h"] * k) + 1),
+                    "href": l["href"]})
+    return scaled, out
 
 
 def trim(im):
@@ -176,10 +257,185 @@ def to_cpx(im, links=()):
 
 class Handler(BaseHTTPRequestHandler):
     chrome = None
+    chat = None
+    voice = None
+
+    # ---- small helpers ----------------------------------------------------
+
+    def _text(self, body, code=200):
+        data = body.encode("utf-8", "replace")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _file(self, path):
+        """A whole file, with its length up front so the device's download
+        knows when it is done rather than waiting for the socket to close."""
+        with open(path, "rb") as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _authorised(self):
+        """A shared secret, if one was asked for.
+
+        Off by default because the common case is a device and a laptop on one
+        home network, and a token the device has no way to be told is a token
+        nobody uses. On when it matters -- see the warning at startup."""
+        if not self.chat or not self.chat.token:
+            return True
+        # Two spellings, because the device has only one. CardApi's http()
+        # takes a bearer token and sends "Authorization: Bearer x" -- there is
+        # no way to set an arbitrary header from an app -- while curl and a
+        # browser console reach for X-Token. Both are the same string.
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            auth = auth[7:]
+        if self.chat.token in (self.headers.get("X-Token", ""), auth):
+            return True
+        self._text("unauthorised" + "\n", 403)
+        return False
+
+    # ---- talking to Claude ------------------------------------------------
+
+    def _do_voice(self):
+        """A WAV in; the words out, or one command line.
+
+        Both halves answer on this one request rather than through the job
+        queue the chat uses. Recognition of a ten-second clip takes about two
+        seconds and a command translation about one, which is inside what the
+        device will wait for -- and unlike a chat turn, there is nothing useful
+        to show while it happens."""
+        n = int(self.headers.get("Content-Length") or 0)
+        if n <= 44:                     # a header and no audio
+            self._text("error nothing recorded\n", 400)
+            return
+        wav = self.rfile.read(n)
+
+        text, err = self.voice.transcribe(wav)
+        if err:
+            sys.stderr.write("voice: %s\n" % err)
+            self._text("error %s\n" % err)
+            return
+        sys.stderr.write("voice: heard %r\n" % text[:80])
+
+        # The wake word is checked here as well as on the device: the device
+        # decides what to do, but the translation only happens if it is asked
+        # for, and asking costs a model call.
+        low = text.lstrip().lower()
+        wake = None
+        for name in ("carlos", "karlos", "carlus", "carlo"):
+            if low.startswith(name):
+                rest = text.lstrip()[len(name):].lstrip(" ,.:!?")
+                wake = rest
+                break
+
+        if wake is None:
+            self._text("text %s\n" % text)
+            return
+        if not wake:
+            self._text("error I heard my name and nothing after it\n")
+            return
+
+        line = self.voice.command(wake, self.chat)
+        sys.stderr.write("voice: %r -> %s\n" % (wake[:60], line))
+        self._text("cmd %s\n" % line)
+
+    def do_POST(self):
+        q = urllib.parse.urlparse(self.path)
+        if q.path == "/voice":
+            if not self._authorised():
+                return
+            self._do_voice()
+            return
+        if q.path != "/chat":
+            self.send_error(404)
+            return
+        if not self._authorised():
+            return
+        n = int(self.headers.get("Content-Length") or 0)
+        text = self.rfile.read(n).decode("utf-8", "replace").strip() if n else ""
+        if not text:
+            self._text("empty" + "\n", 400)
+            return
+        jid = self.chat.start(text)
+        sys.stderr.write("chat #%d: %s" % (jid, text[:70]) + "\n")
+        self._text("id %d" % jid + "\n")
+
+    def _do_chat_get(self, args):
+        jid = int((args.get("id") or ["0"])[0])
+        state, reply = self.chat.poll(jid)
+        if state == "pending":
+            self._text("pending" + "\n")
+            return
+        # The state on its own line, so the device can tell an answer from a
+        # failure without parsing anything.
+        self._text(state + "\n" + reply)
+        sys.stderr.write("chat #%d: %s, %d chars" % (jid, state, len(reply)) + "\n")
 
     def do_GET(self):
         q = urllib.parse.urlparse(self.path)
         args = urllib.parse.parse_qs(q.query)
+
+        if q.path == "/chat":
+            if not self._authorised():
+                return
+            self._do_chat_get(args)
+            return
+
+        if q.path == "/status":
+            # Which build of this file is actually running, and what it will
+            # hand the agent. There is no way to tell a stale server from a
+            # fresh one by looking at it, and a stale one answers every
+            # question with the last bug you fixed.
+            c = self.chat
+            env = c._child_env() if c else {}
+            self._text(
+                "claude:        %s\n" % (c.claude if c else "-") +
+                "api key given: %s\n" % ("yes" if "ANTHROPIC_API_KEY" in env else "no") +
+                "session:       %s\n" % (c.session_id if c and c.session_id else "none yet") +
+                "token needed:  %s\n" % ("yes" if c and c.token else "no") +
+                "repo:          %s\n" % ROOT_DIR)
+            return
+
+        if q.path == "/chat/new":
+            if not self._authorised():
+                return
+            self.chat.reset()
+            sys.stderr.write("chat: new conversation" + "\n")
+            self._text("ok" + "\n")
+            return
+
+        # ---- updates: the firmware and the apps, as built here ------------
+        if q.path == "/update":
+            if not self._authorised():
+                return
+            self._text(updates.manifest())
+            return
+        if q.path == "/update/firmware":
+            if not self._authorised():
+                return
+            if not os.path.isfile(updates.FIRMWARE):
+                self._text("no firmware built\n", 404)
+                return
+            self._file(updates.FIRMWARE)
+            sys.stderr.write("update: sent firmware\n")
+            return
+        if q.path.startswith("/update/app/"):
+            if not self._authorised():
+                return
+            path = updates.app_path(q.path[len("/update/app/"):])
+            if not path:
+                self._text("no such app\n", 404)
+                return
+            self._file(path)
+            sys.stderr.write("update: sent %s\n" % os.path.basename(path))
+            return
 
         if q.path not in ("/render", "/"):
             self.send_error(404)
@@ -190,7 +446,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"cardos web proxy: /render?url=https://...\n")
+            self.wfile.write(
+                b"cardos server\n"
+                b"  GET  /render?url=https://...  a web page, as pixels\n"
+                b"  POST /chat                    ask Claude; returns an id\n"
+                b"  GET  /chat?id=N               the answer, once it is ready\n"
+                b"  GET  /chat/new                forget the conversation\n")
             return
         if "://" not in url:
             url = "https://" + url
@@ -198,15 +459,29 @@ class Handler(BaseHTTPRequestHandler):
         height = min(int((args.get("h") or [2000])[0]), MAX_HEIGHT)
         wait = int((args.get("wait") or [6000])[0])
 
-        sys.stderr.write("render %s\n" % url)
-        im = shoot(self.chrome, url, height, wait)
+        # px=0 asks for the other renderer: real fonts, rendered wide and
+        # scaled down. Softer text, but a page of photographs looks like
+        # itself. The device offers both under f.
+        pixel = (args.get("px") or ["1"])[0] not in ("0", "no", "off")
+        css_w = max(WIDTH, min(int((args.get("w") or [DEFAULT_WIDTH])[0]), 1280))
+        links = []
+        if pixel:
+            sys.stderr.write("render %s (6x8 font at %dpx)\n" % (url, WIDTH))
+            im, links = shoot_pixelfont(self.chrome, url, height, wait)
+        else:
+            sys.stderr.write("render %s (viewport %dpx)\n" % (url, css_w))
+            im, links = shoot(self.chrome, url, height, wait, css_w)
         if im is None:
             self.send_error(502, "render failed")
             return
         im = trim(im)
-        data = to_cpx(im)
-        sys.stderr.write("  %dx%d -> %d bytes (raw would be %d)\n"
-                         % (im.size[0], im.size[1], len(data),
+        # A link past the trimmed tail points at nothing the device can
+        # scroll to, so it is dropped rather than shipped.
+        links = [(l["x"], l["y"], l["w"], l["h"], l["href"])
+                 for l in links if l["y"] < im.size[1]]
+        data = to_cpx(im, links)
+        sys.stderr.write("  %dx%d -> %d bytes, %d links (raw would be %d)\n"
+                         % (im.size[0], im.size[1], len(data), len(links),
                             im.size[0] * im.size[1] * 2))
 
         self.send_response(200)
@@ -225,12 +500,34 @@ def main():
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--chrome", default=None)
     ap.add_argument("--test", help="render this URL to a file and exit")
+    ap.add_argument("--width", type=int, default=DEFAULT_WIDTH,
+                    help="CSS viewport width, --no-pixel only; wider is scaled to 240")
+    ap.add_argument("--no-pixel", action="store_true",
+                    help="photographic mode: real fonts, rendered wide and scaled down")
+    ap.add_argument("--claude-cli", default=None,
+                    help="path to the claude executable, if it is not on PATH")
+    ap.add_argument("--model", default=None,
+                    help="model for the chat session, e.g. claude-opus-5")
+    ap.add_argument("--whisper", default=None,
+                    help="directory holding whisper-cli and a ggml model "
+                         "(default: the sibling cardlet project's)")
+    ap.add_argument("--token", default=None,
+                    help="require this shared secret on /chat (bearer or X-Token)")
+    ap.add_argument("--api-key", action="store_true",
+                    help="let the agent use ANTHROPIC_API_KEY from the environment "
+                         "instead of the login this machine already has")
     args = ap.parse_args()
 
     Handler.chrome = args.chrome or find_chrome()
+    Handler.chat = ChatService(claude=args.claude_cli, token=args.token,
+                               model=args.model, use_api_key=args.api_key)
+    Handler.voice = Voice(whisper_dir=args.whisper)
 
     if args.test:
-        im = shoot(Handler.chrome, args.test, 2000, 6000)
+        if args.no_pixel:
+            im, links = shoot(Handler.chrome, args.test, 2000, 6000, args.width)
+        else:
+            im = shoot_pixelfont(Handler.chrome, args.test, 2000, 6000)
         if im is None:
             raise SystemExit("render failed")
         im = trim(im)
@@ -241,9 +538,25 @@ def main():
               % (im.size[0], im.size[1], len(data), im.size[0] * im.size[1] * 2))
         return
 
-    srv = HTTPServer(("0.0.0.0", args.port), Handler)
-    print("cardos web proxy on port %d, using %s" % (args.port, Handler.chrome))
+    # Threading, because a chat turn takes a minute, a render takes ten
+    # seconds, and the device polls for its answer throughout. On the
+    # single-threaded server every poll queued behind the work it was polling.
+    srv = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
+    print("cardos server on port %d" % args.port)
+    print("  chrome: %s" % Handler.chrome)
+    print("  claude: %s" % (Handler.chat.claude or "NOT FOUND -- /chat will fail"))
+    print("  voice:  %s" % ("whisper ready" if Handler.voice.ready()
+                            else "NOT FOUND -- /voice will fail"))
     print("on the device:  web http://<this machine>:%d/render?url=..." % args.port)
+    print("                claude, once its proxy is set to this machine")
+    if not args.token:
+        # Said plainly, once, where it can still be acted on.
+        print("")
+        print("  This server runs Claude Code in %s with permission" % ROOT_DIR)
+        print("  to edit it, and asks nothing of whoever connects. Anything that")
+        print("  can reach this port can change that folder. --token SECRET")
+        print("  requires a shared string, which the device reads from")
+        print("  /claude.token on its card.")
     srv.serve_forever()
 
 

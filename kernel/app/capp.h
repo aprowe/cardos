@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 11
+#define CAPP_API_VERSION 16
 
 #define CAPP_ICON_W 16
 #define CAPP_ICON_H 16
@@ -50,7 +50,39 @@
 #define CAPP_CLI        0x0001   /* a command: no icon, runs and returns */
 #define CAPP_FULLSCREEN 0x0002   /* opens filling the screen */
 
+/* What the app needs to be useful. Declaring nothing means standalone, and
+ * standalone is the default on purpose: Mines and Pinball work on a device
+ * that has never seen a network, and should keep working when the laptop is
+ * off.
+ *
+ * The OS acts on these before capp_main runs -- joining WiFi, checking the
+ * proxy answers -- so an app is not left rendering a half-state while a radio
+ * negotiates. It does not refuse to start an app whose needs are unmet: Web
+ * still has its cached page and Claude still has its log. api->caps_ok() says
+ * what was actually found, so an app can explain itself in its own words. */
+#define CAPP_NEEDS_NET   0x0004  /* the internet, over WiFi */
+#define CAPP_NEEDS_PROXY 0x0008  /* tools/webproxy.py on a PC; implies NET */
+
+/* What caps_ok() returns: the same bits, set when that need was met. */
+#define CAPP_CAP_NET     CAPP_NEEDS_NET
+#define CAPP_CAP_PROXY   CAPP_NEEDS_PROXY
+
 typedef struct { int16_t x, y, w, h; } CRect;
+
+#define CAPP_NAME_MAX 63
+
+/* One directory entry, as list_ex hands it over. Fixed-width on purpose: an
+ * app has no allocator, so the caller holds the array. */
+typedef struct {
+  char     name[CAPP_NAME_MAX + 1];
+  uint32_t size;
+  int      is_dir;
+} CappEntry;
+
+typedef struct {
+  uint32_t size;
+  int      is_dir;
+} CappStat;
 
 /* Colours are RGB565 already byte-swapped for the panel; an app should use
  * CAPP_RGB rather than composing them by hand. */
@@ -102,6 +134,36 @@ typedef struct {
   int16_t pref_w, pref_h;
 
   void *state;
+
+  /* The pointer moved, a button is down, or the wheel turned. x and y are
+   * content-relative and are valid even when no button is pressed, which is
+   * the difference between this and click(): a click is an event, and this is
+   * where the mouse *is*.
+   *
+   * buttons is a mask of CAPP_BTN_*, held rather than edge-triggered. wheel is
+   * notches since the last call, positive away from the user.
+   *
+   * Return 1 to ask for a repaint. An app that only wants clicks can leave
+   * this NULL and lose nothing; the shell keeps drawing the pointer either
+   * way, so every app has a mouse whether or not it reads one.
+   *
+   * The wheel reaches a windowed app through here only if the app takes it --
+   * returning 0 lets the window scroll instead, which is what an app with
+   * contents taller than its window wants. */
+  int (*mouse)(void *state, int16_t x, int16_t y, int buttons, int wheel);
+
+  /* Called every pass of the shell's loop -- about every 5 ms -- with the
+   * clock in milliseconds. Return 1 to ask for a repaint.
+   *
+   * This is what lets a program move without being pushed. Everything else
+   * here answers an event; a game, a clock, anything with its own time needs
+   * a moment that belongs to nobody. It is not a thread: it runs on the
+   * shell's stack, between keypresses, and a tick that takes 20 ms makes the
+   * whole machine take 20 ms. Do a frame's worth of work and return.
+   *
+   * NULL for the overwhelming majority of apps, which change only when
+   * something is pressed. */
+  int (*tick)(void *state, uint32_t now_ms);
 } CappUi;
 
 /* Everything an app is allowed to do. Grows only by appending, with
@@ -124,6 +186,26 @@ typedef struct {
   int  (*seek)(int fd, int32_t off, int whence);
   void (*close)(int fd);
   int  (*list)(const char *dir, char *out, int max_entries, int name_len);
+
+  /* What `list` cannot say: which entries are directories and how big the
+   * files are. Added when the file manager needed to draw a folder
+   * differently from a file, which is the first question anyone asks of a
+   * listing. Returns the count, or negative. */
+  int  (*list_ex)(const char *dir, CappEntry *out, int max_entries);
+  int  (*stat)(const char *path, CappStat *out);
+
+  /* Making, unmaking and moving. rename moves too -- on FAT a rename across
+   * directories is a move, and there is no copy here because a copy of a file
+   * larger than the heap is a loop the caller would have to write anyway. */
+  int  (*mkdir)(const char *path);
+  int  (*remove)(const char *path);
+  int  (*rename)(const char *from, const char *to);
+
+  /* Start another program, by the name the launcher knows it by, with one
+   * string of arguments -- `run("edit", "/notes.txt")`. Returns 0 if it
+   * started. This is how a file manager opens a file in an editor without
+   * containing an editor. */
+  int  (*run)(const char *name, const char *args);
 
   /* ---- odds and ends an app cannot get from a libc it is not linked
    * against ---- */
@@ -173,12 +255,30 @@ typedef struct {
   const char *(*google_token)(void);
   const char *(*google_status)(void);
 
+  /* Which of this app's declared needs were met when it started: a mask of
+   * CAPP_CAP_*. An app that declared nothing gets 0 and has nothing to ask
+   * about. Checked once at launch rather than continuously -- a network that
+   * drops later shows up as a failed request, which is where it belongs. */
+  int (*caps_ok)(void);
+
   /* ---- becoming a graphical app ----
    *
    * Called from capp_main. The CappUi must outlive the call -- a static, not
    * a local -- because the shell keeps calling into it long after capp_main
    * has returned. */
   void (*ui)(const CappUi *ui);
+
+  /* ---- updates from the PC. See kernel/net/update.h. ----
+   *
+   * update_check writes what is stale into `out` as a short list --
+   * "pinball, claude, firmware" -- and returns how many things that is, 0 for
+   * nothing, negative with the reason in `out` if the proxy could not be
+   * asked. update_apply installs the apps and then, if `os` is set and the
+   * firmware is stale, the firmware -- which restarts the machine and does
+   * not return. Otherwise returns how many apps it installed, with the last
+   * message in `out`. Both block for seconds; say so on screen first. */
+  int (*update_check)(char *out, size_t n);
+  int (*update_apply)(int os, char *out, size_t n);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

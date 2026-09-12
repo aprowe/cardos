@@ -526,6 +526,27 @@ static int app_click(void *st, short x, short y, int button) {
   }
 }
 
+/* The wheel scrolls the view without moving the cursor -- looking somewhere
+ * else is not the same as typing there, and a wheel that dragged the caret
+ * around would lose your place. */
+static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
+  (void)st; (void)x; (void)y; (void)buttons;
+  if (!wheel) return 0;
+
+  if (E.view == VIEW_BROWSE) {
+    E.bsel -= wheel * 2;
+    if (E.bsel < 0) E.bsel = 0;
+    if (E.bsel >= E.ndir) E.bsel = E.ndir - 1;
+    return 1;
+  }
+  if (E.view != VIEW_EDIT) return 0;
+
+  E.top -= wheel * 3;
+  if (E.top > E.nlines - 1) E.top = E.nlines - 1;
+  if (E.top < 0) E.top = 0;
+  return 1;
+}
+
 /* Only while editing. In the browser the arrows move a selection, and a
  * machine whose arrow keys are ; . , / needs those back. */
 static int app_wants_text(void *st) {
@@ -597,6 +618,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.paint = app_paint;
   UI.key = app_key;
   UI.click = app_click;
+  UI.mouse = app_mouse;
   UI.wants_text = app_wants_text;
   api->ui(&UI);
   return 0;

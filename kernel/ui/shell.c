@@ -1,6 +1,7 @@
 /* See shell.h. */
 
 #include "kernel/ui/shell.h"
+#include "kernel/console/console.h"
 #include "kernel/ui/desktop.h"
 #include "kernel/ui/launchui.h"
 
@@ -39,8 +40,33 @@ UiShell ui_shell(void) { return s_shell; }
 void ui_repaint(void) {
   if (s_shell == UI_DESKTOP) desktop_repaint();
   else if (s_shell == UI_LAUNCHER) launchui_repaint();
+  else con_repaint();          /* the console owns the screen, and can redraw */
 }
 
 void ui_scroll_into_view(int16_t y, int16_t h) {
   if (s_shell == UI_DESKTOP) desktop_scroll_into_view(y, h);
+}
+
+/* ---- what a voice command may ask of the shell ---------------------------
+ *
+ * See shell.h. Nothing here decides anything; it holds the table main.c
+ * installs and forwards. The point of the indirection is that voice.c can be
+ * read, and tested, without the desktop underneath it. */
+
+static ShellOps s_ops;
+
+void shell_set_ops(const ShellOps *ops) {
+  if (ops) s_ops = *ops;
+}
+
+int shell_open_app(const char *name) {
+  return (s_ops.open_app && name) ? s_ops.open_app(name) : -1;
+}
+
+void shell_switch(const char *which) {
+  if (s_ops.switch_shell && which) s_ops.switch_shell(which);
+}
+
+void shell_feed_key(uint8_t k) {
+  if (s_ops.feed_key) s_ops.feed_key(k);
 }

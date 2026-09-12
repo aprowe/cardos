@@ -13,6 +13,7 @@
 #define CARDOS_HTTP_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* Returns the number of bytes written (NUL-terminated), or negative:
  *   -1 no network        -2 bad URL or request refused
@@ -39,5 +40,33 @@ int http_request(const char *method, const char *url,
  * page on a board with 150 KB of heap, which is the whole reason this is
  * separate. */
 int http_download(const char *url, const char *path, int timeout_ms);
+
+/* The same with a bearer token and a progress callback: `done` bytes so far,
+ * `total` from Content-Length or 0 if the server did not say. A firmware is
+ * 1.5 MB and takes long enough that a screen showing nothing looks hung. */
+typedef void (*HttpProgress)(void *ctx, uint32_t done, uint32_t total);
+int http_download_ex(const char *url, const char *path, const char *bearer,
+                     HttpProgress progress, void *ctx, int timeout_ms);
+
+/* Why the last request failed, as a sentence -- "not enough memory: 21 KB
+ * free, TLS needs about 34" rather than -4. An app that prints a number has
+ * told the person holding the device nothing they can do something about. */
+const char *http_last_error(void);
+
+/* POST a file as the body, and put the reply in `out`.
+ *
+ * Streamed from the card rather than read into memory: a fifteen-second
+ * recording is 480 KB and the heap has 120. Returns the reply length, or
+ * negative. */
+int http_post_file(const char *url, const char *path, const char *content_type,
+                   char *out, size_t out_size, int timeout_ms);
+
+/* The same, reporting how much has gone. `progress` is called every kilobyte
+ * with bytes sent and the total -- half a megabyte over WiFi takes a few
+ * seconds, and a bar that means something beats a spinner that does not. */
+int http_post_file_progress(const char *url, const char *path,
+                            const char *content_type,
+                            char *out, size_t out_size, int timeout_ms,
+                            void (*progress)(int sent, int total));
 
 #endif /* CARDOS_HTTP_H */

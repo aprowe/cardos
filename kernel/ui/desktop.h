@@ -33,6 +33,9 @@ int  desktop_key(uint8_t key);
 /* Content painter for a window; the desktop supplies one per window. */
 void desktop_tick(uint32_t ms);
 
+/* Is the focused app taking typed text right now? */
+int  desktop_wants_text(void);
+
 /* Feed one decoded mouse report in. Handles the cursor, focus, dragging and
  * the close box. Safe to call whether or not a real mouse exists. */
 void desktop_mouse(const MouseReport *r);

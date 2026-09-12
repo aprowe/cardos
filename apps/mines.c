@@ -46,11 +46,21 @@ static struct {
   unsigned char mine[H][W];
   unsigned char shown[H][W];
   unsigned char flag[H][W];
+  unsigned char dirty[H][W];  /* cells whose picture has changed */
   int cx, cy;
   int dead, won, started;
   int flags;
   uint32_t start_ms, end_ms;
   unsigned int seed;
+
+  /* Repainting all 81 cells for one click is 81 bevels and a full board blit
+   * for a square that turned over. These say what actually changed. */
+  int full;                   /* the whole window, once */
+  int expect_paint;           /* this paint answers something we did */
+  int head_dirty;
+  int shown_time, shown_flags;
+  CRect at;                   /* where the shell last put us */
+  int have_at;
 } S;
 
 static CRect rect(int x, int y, int w, int h) {
@@ -68,6 +78,7 @@ static unsigned int rnd(void) {
 
 static void app_open(void *st) {
   (void)st;
+  S.full = 1;
   api->mem_set(S.mine, 0, sizeof S.mine);
   api->mem_set(S.shown, 0, sizeof S.shown);
   api->mem_set(S.flag, 0, sizeof S.flag);
@@ -104,11 +115,20 @@ static void lay(int sx, int sy) {
   S.start_ms = api->ticks_ms();
 }
 
+static void mark(int x, int y) {
+  if (x >= 0 && y >= 0 && x < W && y < H) S.dirty[y][x] = 1;
+}
+
+static void mark_all(void) { S.full = 1; }
+
 static void reveal(int x, int y) {
   if (x < 0 || y < 0 || x >= W || y >= H) return;
   if (S.shown[y][x] || S.flag[y][x]) return;
   S.shown[y][x] = 1;
-  if (S.mine[y][x]) { S.dead = 1; S.end_ms = api->ticks_ms(); return; }
+  mark(x, y);
+  /* Death repaints everything: every unflagged mine appears and every wrong
+   * flag gets crossed out, which is most of the board at once. */
+  if (S.mine[y][x]) { S.dead = 1; S.end_ms = api->ticks_ms(); mark_all(); return; }
   if (neighbours(x, y) == 0) {
     int dx, dy;
     for (dy = -1; dy <= 1; dy++)
@@ -122,7 +142,7 @@ static void check_won(void) {
   for (y = 0; y < H; y++)
     for (x = 0; x < W; x++)
       if (!S.shown[y][x]) hidden++;
-  if (hidden == MINES) { S.won = 1; S.end_ms = api->ticks_ms(); }
+  if (hidden == MINES) { S.won = 1; S.end_ms = api->ticks_ms(); mark_all(); }
 }
 
 static void dig(int x, int y) {
@@ -140,6 +160,8 @@ static void toggle_flag(int x, int y) {
   if (S.shown[y][x]) return;
   S.flag[y][x] ^= 1;
   S.flags += S.flag[y][x] ? 1 : -1;
+  mark(x, y);
+  S.head_dirty = 1;           /* the mine counter went with it */
 }
 
 /* ------------------------------------------------------------ drawing ---- */
@@ -237,20 +259,22 @@ static int elapsed(void) {
   return (int)((end - S.start_ms) / 1000u);
 }
 
-static void app_paint(void *st, CRect c) {
-  int x, y;
-  CRect board = rect(c.x, c.y + HEAD, BOARD_W, BOARD_H);
-  (void)st;
-
+static void paint_head(CRect c) {
   api->fill(rect(c.x, c.y, BOARD_W, HEAD), CLR_FACE);
   sunken(rect(c.x + 1, c.y + 2, 26, 12));
   draw_counter(rect(c.x + 2, c.y + 3, 24, 10), MINES - S.flags);
   sunken(rect(c.x + BOARD_W - 27, c.y + 2, 26, 12));
   draw_counter(rect(c.x + BOARD_W - 26, c.y + 3, 24, 10), elapsed());
   draw_face(face_box(c.x, c.y));
+  S.shown_time = elapsed();
+  S.shown_flags = S.flags;
+  S.head_dirty = 0;
+}
 
-  for (y = 0; y < H; y++) {
-    for (x = 0; x < W; x++) {
+static void paint_cell(CRect c, int x, int y) {
+  CRect board = rect(c.x, c.y + HEAD, BOARD_W, BOARD_H);
+  {
+    {
       CRect cell = rect(board.x + x * CELL, board.y + y * CELL, CELL, CELL);
 
       if (!S.shown[y][x]) {
@@ -289,40 +313,97 @@ static void app_paint(void *st, CRect c) {
         api->frame(cell, CLR_BLACK);
     }
   }
+  S.dirty[y][x] = 0;
+}
+
+/* Everything, or only what changed.
+ *
+ * A paint we did not ask for -- the help overlay closing, a window moving,
+ * the launcher clearing the screen -- has to be the whole thing, because only
+ * the shell knows what was scribbled over and it does not say. A paint that
+ * answers our own key or click redraws the two or three squares that actually
+ * turned over, which is why a click no longer flashes the board. */
+static void app_paint(void *st, CRect c) {
+  int x, y;
+  (void)st;
+
+  if (!S.have_at || c.x != S.at.x || c.y != S.at.y) S.full = 1;
+  S.at = c;
+  S.have_at = 1;
+  if (!S.expect_paint) S.full = 1;
+  S.expect_paint = 0;
+
+  if (S.full) {
+    S.full = 0;
+    paint_head(c);
+    for (y = 0; y < H; y++)
+      for (x = 0; x < W; x++) paint_cell(c, x, y);
+    return;
+  }
+
+  if (S.head_dirty || elapsed() != S.shown_time || S.flags != S.shown_flags)
+    paint_head(c);
+
+  for (y = 0; y < H; y++)
+    for (x = 0; x < W; x++)
+      if (S.dirty[y][x]) paint_cell(c, x, y);
+}
+
+/* Moving the cursor repaints two cells: the one it left and the one it
+ * arrived at. */
+static void move_cursor(int nx, int ny) {
+  if (nx < 0 || ny < 0 || nx >= W || ny >= H) return;
+  mark(S.cx, S.cy);
+  S.cx = nx;
+  S.cy = ny;
+  mark(S.cx, S.cy);
 }
 
 static int app_key(void *st, unsigned char k) {
   (void)st;
+  S.expect_paint = 1;
   switch (k) {
-  case CAPP_KEY_LEFT:  if (S.cx > 0) S.cx--; return 1;
-  case CAPP_KEY_RIGHT: if (S.cx < W - 1) S.cx++; return 1;
-  case CAPP_KEY_UP:    if (S.cy > 0) S.cy--; return 1;
-  case CAPP_KEY_DOWN:  if (S.cy < H - 1) S.cy++; return 1;
+  case CAPP_KEY_LEFT:  move_cursor(S.cx - 1, S.cy); return 1;
+  case CAPP_KEY_RIGHT: move_cursor(S.cx + 1, S.cy); return 1;
+  case CAPP_KEY_UP:    move_cursor(S.cx, S.cy - 1); return 1;
+  case CAPP_KEY_DOWN:  move_cursor(S.cx, S.cy + 1); return 1;
   case ' ':
   case CAPP_KEY_ENTER: dig(S.cx, S.cy); return 1;
   case 'f': case 'F':  toggle_flag(S.cx, S.cy); return 1;
   case 'n': case 'N':  app_open(0); return 1;
-  default: return 0;
+  default: S.expect_paint = 0; return 0;
   }
+}
+
+/* The clock. Without this the timer only advances when something else
+ * happens, which on a board you are staring at is never. Only the header is
+ * repainted, and only when the second actually changes. */
+static int app_tick(void *st, uint32_t now) {
+  (void)st; (void)now;
+  if (!S.started || S.dead || S.won) return 0;
+  if (elapsed() == S.shown_time) return 0;
+  S.head_dirty = 1;
+  S.expect_paint = 1;
+  return 1;
 }
 
 static int app_click(void *st, short x, short y, int button) {
   CRect f = face_box(0, 0);
   int cx, cy;
   (void)st;
+  S.expect_paint = 1;
 
   /* The face restarts, exactly as it does in the original. */
   if (y >= f.y && y < f.y + f.h && x >= f.x && x < f.x + f.w) {
     app_open(0);
     return 1;
   }
-  if (y < HEAD) return 0;
+  if (y < HEAD) { S.expect_paint = 0; return 0; }
 
   cx = x / CELL;
   cy = (y - HEAD) / CELL;
-  if (cx < 0 || cy < 0 || cx >= W || cy >= H) return 0;
-  S.cx = cx;
-  S.cy = cy;
+  if (cx < 0 || cy < 0 || cx >= W || cy >= H) { S.expect_paint = 0; return 0; }
+  move_cursor(cx, cy);
   if (button == CAPP_BTN_RIGHT) toggle_flag(cx, cy);
   else dig(cx, cy);
   return 1;
@@ -351,6 +432,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.paint = app_paint;
   UI.key = app_key;
   UI.click = app_click;
+  UI.tick = app_tick;
   UI.pref_w = BOARD_W;
   UI.pref_h = HEAD + BOARD_H;
   api->ui(&UI);

@@ -42,6 +42,8 @@ typedef enum {
   WM_HIT_CONTENT,
   WM_HIT_TITLE,      /* drag here */
   WM_HIT_CLOSE,
+  WM_HIT_MAX,        /* the box that fills the screen with this app */
+  WM_HIT_MIN,        /* the box that puts it down on the taskbar */
   WM_HIT_BORDER
 } WmHit;
 

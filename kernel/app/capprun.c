@@ -2,9 +2,14 @@
 
 #include "kernel/app/capprun.h"
 #include "kernel/app/elfload.h"
+#include "kernel/net/wifi.h"
+#include "kernel/net/http.h"
+#include "kernel/sys/env.h"
 
 #include <stdio.h>
 #include <string.h>
+
+#include "esp_log.h"
 
 typedef struct {
   LoadedApp la;
@@ -18,6 +23,12 @@ typedef struct {
 
   AppDef    def;          /* the same thing, wearing a built-in app's clothes */
 } Slot;
+
+static const char *TAG = "capp";
+
+/* Where the proxy lives when nothing says otherwise. Overridable with
+ * `set PROXY=http://host:port`, because the laptop moves. */
+#define PROXY_DEFAULT "http://192.168.1.74:8080"
 
 static Slot s_slot[CAPPRUN_MAX];
 
@@ -49,6 +60,16 @@ static int tr_click(void *state, int16_t x, int16_t y, int button) {
   return s->ui.click ? s->ui.click(s->ui.state, x, y, button) : 0;
 }
 
+static int tr_mouse(void *state, int16_t x, int16_t y, int buttons, int wheel) {
+  Slot *s = (Slot *)state;
+  return s->ui.mouse ? s->ui.mouse(s->ui.state, x, y, buttons, wheel) : 0;
+}
+
+static int tr_tick(void *state, uint32_t now_ms) {
+  Slot *s = (Slot *)state;
+  return s->ui.tick ? s->ui.tick(s->ui.state, now_ms) : 0;
+}
+
 static int16_t tr_height(void *state, int16_t w) {
   Slot *s = (Slot *)state;
   return s->ui.height ? s->ui.height(s->ui.state, w) : 0;
@@ -71,6 +92,8 @@ void capprun_install_ui(const CappUi *ui) {
   s->def.paint      = ui->paint ? tr_paint : NULL;
   s->def.key        = ui->key ? tr_key : NULL;
   s->def.click      = ui->click ? tr_click : NULL;
+  s->def.tick       = ui->tick ? tr_tick : NULL;
+  s->def.mouse      = ui->mouse ? tr_mouse : NULL;
   s->def.open       = NULL;      /* capp_main was the open */
   s->def.state      = s;
   s->def.height     = ui->height ? tr_height : NULL;
@@ -86,7 +109,12 @@ int capprun_load(const char *path) {
   Slot *s;
 
   for (i = 0; i < CAPPRUN_MAX; i++) if (!s_slot[i].used) break;
-  if (i == CAPPRUN_MAX) return -1;
+  if (i == CAPPRUN_MAX) {
+    /* Loudly, because the symptom is an app that quietly does not appear. */
+    ESP_LOGE(TAG, "no slot for %s: all %d in use, raise CAPPRUN_MAX",
+             path, CAPPRUN_MAX);
+    return -1;
+  }
   s = &s_slot[i];
 
   memset(s, 0, sizeof *s);
@@ -143,6 +171,38 @@ static int split_args(const char *name, const char *args,
   return argc;
 }
 
+/* What the last-started app got. One value, not per-slot: only one program is
+ * ever starting at a time, and it is read from inside that program's own
+ * capp_main through the API table. */
+static int s_caps_ok;
+
+/* Bring up whatever the flags ask for, and report what was achieved. */
+static int meet_needs(uint16_t flags) {
+  int got = 0;
+
+  if (!(flags & (CAPP_NEEDS_NET | CAPP_NEEDS_PROXY))) return 0;
+
+  if (wifi_is_connected() || wifi_connect_saved(20000) == 0) {
+    got |= CAPP_CAP_NET;
+  } else {
+    ESP_LOGW(TAG, "app needs the network: %s", wifi_status());
+    return 0;                       /* no net, so certainly no proxy */
+  }
+
+  if (flags & CAPP_NEEDS_PROXY) {
+    /* One short request, to the endpoint that exists to answer it. A proxy
+     * that is not running is the common case when the laptop is shut, and it
+     * is worth knowing at startup rather than halfway through a render. */
+    char buf[96];
+    char url[160];
+    const char *base = env_get("PROXY");
+    snprintf(url, sizeof url, "%s/status", base && base[0] ? base : PROXY_DEFAULT);
+    if (http_get(url, buf, sizeof buf, 4000) >= 0) got |= CAPP_CAP_PROXY;
+    else ESP_LOGW(TAG, "app needs the proxy, and %s did not answer", url);
+  }
+  return got;
+}
+
 int capprun_start(int slot, const char *name, const char *args) {
   static char argbuf[192];
   char *argv[CAPP_MAX_ARGS];
@@ -157,11 +217,21 @@ int capprun_start(int slot, const char *name, const char *args) {
   argc = split_args(name ? name : s->name, args, argbuf, sizeof argbuf,
                     argv, CAPP_MAX_ARGS);
 
+  /* Meet what the app said it needs, before it runs.
+   *
+   * Doing it here rather than inside the app's first request is what makes
+   * the twenty seconds of joining a network belong to "starting Web" instead
+   * of to "Web is broken". Failure is not fatal: caps_ok() reports what was
+   * actually found and the app decides what to say about it. */
+  s_caps_ok = meet_needs(s->la.info ? s->la.info->flags : 0);
+
   s_running = s;
   rc = s->la.main(cardos_api(), argc, argv);
   s_running = NULL;
   return rc;
 }
+
+int capprun_caps_ok(void) { return s_caps_ok; }
 
 int capprun_is_app(int slot) {
   if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return 0;

@@ -80,7 +80,13 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
  * for one HTTPS request peaks another ~30 on top. Starting it with less than
  * this leaves the driver failing buffer allocations in a loop, which looks
  * like a hang rather than like running out of memory. */
-#define WIFI_MIN_HEAP (85 * 1024)
+/* What the radio itself needs, plus a little. Measured: the driver costs 49792
+ * bytes. The old figure here was 85 KB -- the radio's cost plus room for a TLS
+ * handshake afterwards -- which meant a device with 79 KB free refused to
+ * bring WiFi up at all rather than bringing it up and letting the caller find
+ * out whether there was room to talk securely. Two questions, two answers:
+ * http.c checks the TLS headroom separately, and says so in those words. */
+#define WIFI_MIN_HEAP (56 * 1024)
 
 int wifi_start(void) {
   size_t heap_before;

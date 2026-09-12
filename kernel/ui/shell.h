@@ -30,4 +30,22 @@ void ui_repaint(void);
  * its apps. The launcher does not: everything it runs is fullscreen. */
 void ui_scroll_into_view(int16_t y, int16_t h);
 
+/* What a voice command is allowed to ask of the shell.
+ *
+ * Installed by main.c, which is the only file that knows how the three shells
+ * relate to each other. An installed table rather than direct calls because
+ * the caller is kernel/sys/voice.c, which has host-testable neighbours and no
+ * business including the desktop. */
+typedef struct {
+  int  (*open_app)(const char *name);      /* 0 if it opened */
+  void (*switch_shell)(const char *which); /* launcher | desktop | console */
+  void (*feed_key)(uint8_t k);             /* as if the key were pressed */
+} ShellOps;
+
+void shell_set_ops(const ShellOps *ops);
+
+int  shell_open_app(const char *name);
+void shell_switch(const char *which);
+void shell_feed_key(uint8_t k);
+
 #endif /* CARDOS_SHELL_H */

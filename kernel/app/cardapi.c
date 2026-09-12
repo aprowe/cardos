@@ -12,7 +12,10 @@
 #include "kernel/net/http.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/gauth.h"
+#include "kernel/net/update.h"
 #include "kernel/sys/sio.h"
+#include "kernel/app/capprun.h"
+#include "kernel/ui/launchui.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -75,6 +78,48 @@ static int api_list(const char *dir, char *out, int max_entries, int name_len) {
   return n;
 }
 
+/* The same walk as api_list, but keeping what the entry says about itself.
+ * A file manager cannot draw a listing without knowing which rows are
+ * folders. */
+static int api_list_ex(const char *dir, CappEntry *out, int max_entries) {
+  FsDir d;
+  FsEntry e;
+  int n = 0;
+  if (!out || max_entries <= 0) return -1;
+  if (fs_opendir(dir, &d) != 0) return -1;
+  while (n < max_entries && fs_readdir(&d, &e) == 1) {
+    snprintf(out[n].name, sizeof out[n].name, "%s", e.name);
+    out[n].size = e.size;
+    out[n].is_dir = e.is_dir;
+    n++;
+  }
+  fs_closedir(&d);
+  return n;
+}
+
+static int api_stat(const char *path, CappStat *out) {
+  FsStat st;
+  if (!out || fs_stat(path, &st) != 0) return -1;
+  out->size = st.size;
+  out->is_dir = st.is_dir;
+  return 0;
+}
+
+static int api_mkdir(const char *p)  { return fs_mkdir(p); }
+static int api_remove(const char *p) { return fs_remove(p); }
+static int api_rename(const char *a, const char *b) { return fs_rename(a, b); }
+
+/* One program starting another.
+ *
+ * Through the launcher's runner, which is the same door `run` at the console
+ * uses -- so a file opened from the file manager and one opened by typing
+ * arrive the same way. It does not return until that program's capp_main
+ * does, which for a graphical app is immediately: it installs its handlers
+ * and returns, and the shell takes it from there. */
+static int api_run(const char *name, const char *args) {
+  return launchui_run(name, args);
+}
+
 static void *api_memset(void *d, int c, size_t n)          { return memset(d, c, n); }
 static void *api_memcpy(void *d, const void *s, size_t n)  { return memcpy(d, s, n); }
 static void *api_memmove(void *d, const void *s, size_t n) { return memmove(d, s, n); }
@@ -101,7 +146,18 @@ static int api_http_get(const char *url, char *buf, size_t n, int timeout_ms) {
   return http_get(url, buf, n, timeout_ms);
 }
 static int api_net_ready(void) { return wifi_is_connected(); }
-static const char *api_net_status(void) { return wifi_status(); }
+/* Which of the app's declared needs were met when it started. */
+static int api_caps_ok(void) { return capprun_caps_ok(); }
+
+/* The last thing that went wrong, whichever layer it went wrong in. A request
+ * refused for want of memory is not a network fault, and an app that says
+ * "network error" when the real answer is "turn Bluetooth off" has sent its
+ * owner looking in the wrong place. */
+static const char *api_net_status(void) {
+  const char *h = http_last_error();
+  if (h && strcmp(h, "no error") != 0 && wifi_is_connected()) return h;
+  return wifi_status();
+}
 static int api_http_download(const char *url, const char *path, int t) {
   return http_download(url, path, t);
 }
@@ -122,17 +178,72 @@ static const char *api_google_status(void) { return gauth_status(); }
 
 static void api_ui(const CappUi *ui) { capprun_install_ui(ui); }
 
+/* The check's answer and the last thing the installer said, fitted to a
+ * line an app can print. The UpdateCheck is kept between the two calls so
+ * apply does not ask the proxy twice. */
+static UpdateCheck s_upd;
+static int s_upd_valid;
+
+static int api_update_check(char *out, size_t n) {
+  int i, count = 0;
+  size_t len = 0;
+  s_upd_valid = 0;
+  if (update_check(&s_upd) != 0) {
+    snprintf(out, n, "%s", update_error());
+    return -1;
+  }
+  s_upd_valid = 1;
+  out[0] = 0;
+  for (i = 0; i < s_upd.m.napps; i++) {
+    if (!s_upd.stale[i]) continue;
+    len += (size_t)snprintf(out + len, n > len ? n - len : 0, "%s%s",
+                            count ? ", " : "", s_upd.m.app[i].name);
+    count++;
+  }
+  if (s_upd.firmware_stale) {
+    snprintf(out + (len < n ? len : n - 1), n > len ? n - len : 1, "%sfirmware",
+             count ? ", " : "");
+    count++;
+  }
+  return count;
+}
+
+static void upd_say(void *ctx, const char *line) {
+  char *out = (char *)ctx;
+  snprintf(out, 80, "%s", line);
+}
+
+static int api_update_apply(int os, char *out, size_t n) {
+  int done;
+  if (!s_upd_valid && update_check(&s_upd) != 0) {
+    snprintf(out, n, "%s", update_error());
+    return -1;
+  }
+  s_upd_valid = 0;
+  out[0] = 0;
+  done = update_apps(&s_upd, upd_say, out);
+  if (os && s_upd.firmware_stale) {
+    update_firmware(upd_say, out);           /* only returns on failure */
+    snprintf(out, n, "%s", update_error());
+    return -1;
+  }
+  return done;
+}
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
   api_open, api_read, api_write, api_seek, api_close, api_list,
+  api_list_ex, api_stat, api_mkdir, api_remove, api_rename, api_run,
   api_memset, api_memcpy, api_memmove, api_strlen, api_fmt,
   api_ticks, api_log,
   api_out, api_out_line, api_in_line, api_has_input,
   api_http_get, api_net_ready, api_net_connect, api_net_status,
   api_http_download, api_http,
   api_google_token, api_google_status,
+  api_caps_ok,
   api_ui,
+  api_update_check, api_update_apply,
 };
 
 const CardApi *cardos_api(void) { return &API; }

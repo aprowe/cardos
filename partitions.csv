@@ -6,15 +6,26 @@
 # it was compiled with. Diverging here is what makes a third-party app fail at
 # startup for no visible reason.
 #
-# CardOS lives in `factory` and is never overwritten. A selected app is copied
-# into `ota_0` and booted from there, so a bad app can never take CardOS down.
+# The USB-flashed CardOS lives in `factory` and is never overwritten. Two OTA
+# slots alternate for everything else: a CardOS update fetched over WiFi, or a
+# selected guest app copied from the card. Either goes into whichever slot is
+# not running, so neither can take the running CardOS down. Two slots rather
+# than one because you cannot overwrite the partition you are running from,
+# and the OS has to be able to update itself more than once.
+#
 # Two independent ways home, neither needing the guest's cooperation:
 #
-#   1. The guest is marked pending-verify and never confirms itself, so the
-#      next reset rolls back to factory.
+#   1. The guest (or a new CardOS) is marked pending-verify. A guest never
+#      confirms itself, so the next reset rolls back to the last CardOS that
+#      did. A new CardOS confirms itself once its shell is up; one that
+#      crashes first is rolled back the same way.
 #   2. Erasing otadata leaves nothing valid to read, and the bootloader falls
 #      back to factory. This is tools/back-to-cardos.py, and it is the escape
 #      hatch when everything else has gone wrong.
+#
+# `spiffs` is small because CardOS keeps everything on the card and only
+# Arduino guests look for it; they need it to exist and mount, not to be big.
+# It was 3.3 MB before the second OTA slot took the space.
 #
 # The first three entries sit at their conventional offsets on purpose. The
 # Arduino platform flashes boot_app0.bin at a hardcoded 0xe000 and the app at
@@ -34,6 +45,7 @@
 nvs,        data, nvs,      0x9000,   0x5000,
 otadata,    data, ota,      0xE000,   0x2000,
 factory,    app,  factory,  0x10000,  0x1C0000,
-ota_0,      app,  ota_0,    0x1D0000, 0x300000,
-phy_init,   data, phy,      0x4D0000, 0x1000,
-spiffs,     data, spiffs,   0x4D1000, 0x32F000,
+ota_0,      app,  ota_0,    0x1D0000, 0x2F0000,
+ota_1,      app,  ota_1,    0x4C0000, 0x2F0000,
+phy_init,   data, phy,      0x7B0000, 0x1000,
+spiffs,     data, spiffs,   0x7B1000, 0x4F000,

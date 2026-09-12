@@ -70,6 +70,18 @@ typedef struct {
    * a loaded program gets argv through capp_main instead, which is why it has
    * no equivalent here. */
   void (*set_args)(void *state, const char *args);
+
+  /* The pointer moved, a button is held, or the wheel turned; content-relative
+   * coordinates, a held-button mask, and wheel notches. Return 1 to repaint.
+   * See CappUi.mouse -- the rules are the same, including that returning 0 for
+   * a wheel notch leaves the scrolling to the window. */
+  int (*mouse)(void *state, int16_t x, int16_t y, int buttons, int wheel);
+
+  /* Called every pass of the shell's loop with the clock in milliseconds.
+   * Return 1 if the window needs repainting. This is the only way anything on
+   * screen moves without being pushed; see CappUi.tick for the rules, which
+   * are the same ones. NULL for an app that changes only on a keypress. */
+  int (*tick)(void *state, uint32_t now_ms);
 } AppDef;
 
 /* The apps the Start menu offers. */

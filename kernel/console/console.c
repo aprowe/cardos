@@ -80,6 +80,18 @@ void con_clear(void) {
   display_fill(s_bg);
 }
 
+/* Every cell again, from the grid that was always being kept. Used to put the
+ * screen back after the voice overlay covered it -- the panel cannot read what
+ * it drew over, so whatever owns the screen has to redraw itself, and for the
+ * console that means this. */
+void con_repaint(void) {
+  int r, c;
+  display_fill(s_bg);
+  for (r = 0; r < CON_ROWS; r++)
+    for (c = 0; c < CON_COLS; c++)
+      if (s_grid[r][c] != ' ') draw_cell(c, r, s_grid[r][c], 0);
+}
+
 void con_set_serial(int on) {
   usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
 

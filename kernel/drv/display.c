@@ -13,7 +13,10 @@
 #include "kernel/drv/display.h"
 
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/spi_master.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
@@ -28,6 +31,29 @@
 
 #define LCD_HOST SPI2_HOST
 #define LCD_HZ   (40 * 1000 * 1000)
+
+/* Backlight PWM, with the numbers taken from M5GFX's own board table for the
+ * Cardputer rather than chosen: 256 Hz, nine bits, and a duty floor.
+ *
+ * The first attempt used 5 kHz and a plain percentage of full scale, and on
+ * this hardware *every* level below 100% was black -- not dim, black, which
+ * rules out a simple threshold. The backlight is not an LED on a resistor; it
+ * is a boost converter, and it does not deliver at 5 kHz. M5GFX has driven
+ * this panel for years at 256 Hz (M5GFX.cpp: _set_pwm_backlight(GPIO_NUM_38,
+ * 7, 256, false, 16)) and its setBrightness never emits a duty below an
+ * offset, because the converter needs a minimum on-time to run at all.
+ *
+ * BL_FLOOR is that offset carried across: M5GFX's formula bottoms out at
+ * 34/512 of full scale, so that is where this one starts. */
+#define BL_TIMER LEDC_TIMER_0
+#define BL_CHAN  LEDC_CHANNEL_0
+#define BL_RES   LEDC_TIMER_9_BIT
+#define BL_MAX   512
+#define BL_FREQ  256
+#define BL_FLOOR 34
+
+#define NVS_NS     "cardos"
+#define NVS_BRIGHT "bright"
 
 /* Portrait gaps for this panel; swapped below because we run landscape.
  *
@@ -57,8 +83,13 @@ static const struct { int mx, my, gx, gy; } ORIENT[DISPLAY_ORIENTS] = {
 /* Confirmed on the real panel 2026-09-10: orientation 2 came out upside down,
  * so both mirror axes invert. If the image is ever a pixel out at an edge, the
  * +1 x-gap variants are indices 4..7 -- use the `flip` command to find it
- * rather than guessing. */
-#define DISPLAY_ORIENT_DEFAULT 1
+ * rather than guessing.
+ *
+ * 2026-09-11: it was. Orientation 1 left the bottom row of the glass unwritten
+ * -- a line of whatever the controller's RAM held at power-up -- because
+ * 240 - 135 is odd and the margin on this side is 53, not 52. Orientation 5
+ * is the same mirrors with the wider gap. */
+#define DISPLAY_ORIENT_DEFAULT 5
 static int s_orient = DISPLAY_ORIENT_DEFAULT;
 
 int display_orient(void) { return s_orient; }
@@ -74,15 +105,25 @@ void display_set_orient(int n) {
 int display_init(void) {
   esp_lcd_panel_io_handle_t io = NULL;
 
-  gpio_config_t bl = {
-    .pin_bit_mask = 1ULL << PIN_BL,
-    .mode = GPIO_MODE_OUTPUT,
-    .pull_up_en = GPIO_PULLUP_DISABLE,
-    .pull_down_en = GPIO_PULLDOWN_DISABLE,
-    .intr_type = GPIO_INTR_DISABLE,
+  /* 256 Hz: what the converter behind this backlight will switch at. Above
+   * the eye's flicker threshold, and the same rate M5GFX uses on this board. */
+  ledc_timer_config_t bl_timer = {
+    .speed_mode = LEDC_LOW_SPEED_MODE,
+    .duty_resolution = BL_RES,
+    .timer_num = BL_TIMER,
+    .freq_hz = BL_FREQ,
+    .clk_cfg = LEDC_AUTO_CLK,
   };
-  if (gpio_config(&bl) != ESP_OK) return -1;
-  gpio_set_level(PIN_BL, 0);          /* dark until there is something to show */
+  ledc_channel_config_t bl_chan = {
+    .gpio_num = PIN_BL,
+    .speed_mode = LEDC_LOW_SPEED_MODE,
+    .channel = BL_CHAN,
+    .timer_sel = BL_TIMER,
+    .duty = 0,                        /* dark until there is something to show */
+    .hpoint = 0,
+  };
+  if (ledc_timer_config(&bl_timer) != ESP_OK) return -1;
+  if (ledc_channel_config(&bl_chan) != ESP_OK) return -1;
 
   spi_bus_config_t bus = {
     .sclk_io_num = PIN_SCK,
@@ -145,6 +186,66 @@ void display_fill(uint16_t color) {
   for (y = 0; y < DISPLAY_H; y++) display_blit(0, y, DISPLAY_W, 1, row);
 }
 
+/* ---- backlight ----------------------------------------------------------
+ *
+ * One level, applied whenever the backlight is on. Brightness lives in NVS
+ * like the other settings; nothing but display_set_brightness writes it. */
+
+static int s_bright = DISPLAY_BRIGHT_DEFAULT;
+static int s_bl_on;
+
+static void bl_apply(void) {
+  /* Percent to duty, over the floor rather than from zero: below BL_FLOOR the
+   * converter does not run and the panel is black however tidy the arithmetic
+   * looks. So 0% of the *setting* is the dimmest the hardware can actually
+   * hold, not the dimmest number. Off is still off -- that is what s_bl_on is
+   * for, and it is the one case that may sit under the floor. */
+  uint32_t span = BL_MAX - BL_FLOOR;
+  uint32_t duty = s_bl_on
+      ? (uint32_t)(BL_FLOOR + (span * (uint32_t)s_bright + 50) / 100) : 0;
+  if (duty > BL_MAX) duty = BL_MAX;
+  ledc_set_duty(LEDC_LOW_SPEED_MODE, BL_CHAN, duty);
+  ledc_update_duty(LEDC_LOW_SPEED_MODE, BL_CHAN);
+}
+
 void display_backlight(int on) {
-  gpio_set_level(PIN_BL, on ? 1 : 0);
+  s_bl_on = on ? 1 : 0;
+  bl_apply();
+}
+
+int display_brightness(void) { return s_bright; }
+
+/* Apply a level without saving it. Safe mode lights the panel this way: the
+ * whole point is that it changes nothing, so the setting you are about to
+ * inspect is still the one that was there. */
+void display_set_brightness_now(int pct) {
+  if (pct < DISPLAY_BRIGHT_MIN) pct = DISPLAY_BRIGHT_MIN;
+  if (pct > 100) pct = 100;
+  s_bright = pct;
+  bl_apply();
+}
+
+void display_set_brightness(int pct) {
+  nvs_handle_t h;
+  if (pct < DISPLAY_BRIGHT_MIN) pct = DISPLAY_BRIGHT_MIN;
+  if (pct > 100) pct = 100;
+  s_bright = pct;
+  bl_apply();
+  if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_set_u8(h, NVS_BRIGHT, (uint8_t)pct);
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+void display_load_brightness(void) {
+  nvs_handle_t h;
+  uint8_t v;
+  if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+  /* A stored level below the floor is not honoured: it was written by an
+   * older build whose floor was lower, and applying it here would black the
+   * panel out again on the first boot after the fix. */
+  if (nvs_get_u8(h, NVS_BRIGHT, &v) == ESP_OK && v <= 100)
+    s_bright = v < DISPLAY_BRIGHT_MIN ? DISPLAY_BRIGHT_MIN : v;
+  nvs_close(h);
+  bl_apply();
 }

@@ -45,6 +45,11 @@ int keyboard_init(void);
  * Call from the main loop; it debounces by edge, so a held key reports once. */
 uint8_t keyboard_poll(void);
 
+/* Whether a key is held at this moment, sampled for up to settle_ms. For the
+ * boot-time question "is someone holding escape", which has no edge to catch:
+ * the key went down before the matrix was powered. */
+int keyboard_held(uint8_t key, int settle_ms);
+
 int keyboard_shift_down(void);
 int keyboard_ctrl_down(void);
 int keyboard_fn_down(void);

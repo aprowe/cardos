@@ -67,6 +67,7 @@ static struct {
   int  draft_len;
 
   char reply[REPLY_MAX];
+  int shown_top, shown_rows;  /* what the last paint put on screen */
 } T;
 
 static CRect rect(int x, int y, int w, int h) {
@@ -361,6 +362,11 @@ static void paint_list(CRect c) {
 
   if (T.sel >= rows) top = T.sel - rows + 1;
 
+  /* Kept for the click handler. It has to undo exactly the arithmetic done
+   * here, and the only way to be sure it matches is for it to be this. */
+  T.shown_top = top;
+  T.shown_rows = rows;
+
   for (r = 0; r < rows; r++) {
     int i = top + r;
     short y = (short)(c.y + r * ROW_H);
@@ -477,9 +483,16 @@ static int app_key(void *st, unsigned char k) {
 }
 
 static int app_click(void *st, short x, short y, int button) {
-  int i = y / ROW_H;
+  int row = y / ROW_H;
+  int i;
   (void)st; (void)button;
   if (T.view != VIEW_LIST) return 0;
+  /* The bottom strip is the status line, not a task. */
+  if (row >= T.shown_rows) return 0;
+  /* Through the scroll offset the list was last painted with -- without this
+   * a click on a scrolled list ticks off a different task than the one under
+   * the pointer, which is a nasty way to lose a to-do. */
+  i = T.shown_top + row;
   if (i < 0 || i >= T.n) return 0;
   /* A click on the box ticks; a click on the text selects. Two targets in one
    * row, which is what the box is for. */
@@ -496,7 +509,7 @@ static int app_wants_text(void *st) {
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
-  CAPP_FULLSCREEN,
+  CAPP_NEEDS_NET,   /* a window by default; the title bar's box fills the screen */
   "Todo",
   /* 16x16: a clipboard with a tick. */
   { 0x07, 0xE0, 0x0C, 0x30, 0x1F, 0xF8, 0x30, 0x0C,

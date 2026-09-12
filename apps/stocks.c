@@ -468,7 +468,7 @@ static int app_click(void *st, short x, short y, int button) {
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
-  CAPP_FULLSCREEN,
+  CAPP_FULLSCREEN | CAPP_NEEDS_NET,
   "Stocks",
   /* 16x16: a rising line over an axis. */
   { 0x00, 0x00, 0x40, 0x00, 0x40, 0x3E, 0x40, 0x0E,

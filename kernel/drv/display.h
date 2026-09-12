@@ -51,4 +51,25 @@ void display_blit(int x, int y, int w, int h, const uint16_t *pixels);
 void display_fill(uint16_t color);
 void display_backlight(int on);
 
+/* Backlight level in percent, PWM'd. Persisted in NVS by set; load reads it
+ * back and applies it, so call it once NVS is up. Below the minimum the panel
+ * is off to the eye, which is what display_backlight(0) is for. */
+/* The dimmest level the setting can reach.
+ *
+ * The history is worth keeping, because the first two explanations were both
+ * wrong. 25 blacked the screen, so the floor went to 50 -- and then 50 and 75
+ * blacked it too, which is not what a threshold looks like. The fault was the
+ * PWM itself, not the level: 5 kHz is faster than the converter behind this
+ * backlight can switch. At 256 Hz with a duty floor (see display.c) the whole
+ * range works, so the setting's floor is only about legibility now.
+ *
+ * opt-0 and safe mode remain the way back regardless. Anything that can make
+ * the screen unreadable needs an escape that does not require reading it. */
+#define DISPLAY_BRIGHT_MIN     25
+#define DISPLAY_BRIGHT_DEFAULT 100
+int  display_brightness(void);
+void display_set_brightness(int pct);
+void display_set_brightness_now(int pct);   /* applied, not saved */
+void display_load_brightness(void);
+
 #endif /* CARDOS_DISPLAY_H */

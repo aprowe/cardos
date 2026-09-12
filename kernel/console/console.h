@@ -16,6 +16,11 @@ void con_write(const char *s);
 void con_printf(const char *fmt, ...);
 void con_clear(void);
 
+/* Draw the whole grid again. For putting the screen back after something
+ * drew over it -- the voice overlay, and anything else that covers the
+ * console without knowing what was underneath. */
+void con_repaint(void);
+
 /* Draw the cursor block, or erase it. The main loop blinks it. */
 void con_cursor(int visible);
 

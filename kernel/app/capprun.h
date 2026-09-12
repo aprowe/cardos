@@ -14,10 +14,16 @@
 #include "kernel/ui/app.h"
 #include "kernel/app/capp.h"
 
-/* Eight, because /desktop holds five programs and four was chosen when it held
- * three. A slot costs a name and some pointers until something is loaded into
- * it; the memory that matters is the per-program allocation. */
-#define CAPPRUN_MAX 8
+/* Sixteen. Four when /desktop held three programs, eight when it held five,
+ * and then Pinball arrived as the ninth and simply was not there: the scan
+ * asked for a slot, got -1, and skipped the app without a word. Nothing was
+ * broken and nothing was reported -- the icon was just missing, which is the
+ * worst way for a limit to make itself known.
+ *
+ * A slot costs a name, a help string and some pointers -- about 250 bytes --
+ * whether or not anything is in it. The memory that matters is the per-program
+ * allocation, and that is only paid by programs that exist. */
+#define CAPPRUN_MAX 16
 
 /* Load and read the descriptor. Nothing runs. Returns a slot index, or -1. */
 int capprun_load(const char *path);
@@ -38,6 +44,9 @@ const char    *capprun_name(int slot);
 const uint8_t *capprun_icon(int slot);    /* 16x16 1bpp, CAPP_ICON_BYTES */
 int            capprun_is_cli(int slot);
 int            capprun_fullscreen(int slot);
+
+/* Which of the running app's declared needs were met. See CAPP_NEEDS_*. */
+int            capprun_caps_ok(void);
 
 /* Valid only after a run that installed an interface. */
 const AppDef *capprun_def(int slot);

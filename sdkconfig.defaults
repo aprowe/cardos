@@ -73,3 +73,19 @@ CONFIG_ESP_SYSTEM_MEMPROT_FEATURE=n
 # roots are cross-signed (GTS Root R1 under GlobalSign), and the certificate
 # bundle refuses a cross-signed chain unless told to follow it.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
+
+# TLS memory, with both radios up.
+#
+# Measured: WiFi costs about 53 KB and NimBLE with two HID links most of the
+# rest, which left a handshake trying to allocate a 16 KB record buffer, a
+# 4 KB write buffer and a peer certificate out of what remained -- and failing
+# with nothing more useful to say than "network error".
+#
+# Dynamic buffers make mbedTLS allocate the record buffers around each record
+# rather than holding both for the life of the connection, and drop the peer
+# certificate and the parsed config once the handshake is done. The cost is a
+# little more malloc traffic per request, which for a device that makes one
+# request every few minutes is nothing.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_PEER_CERT=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y

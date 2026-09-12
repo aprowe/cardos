@@ -135,6 +135,22 @@ static void act_forget(SettingsState *st) {
   snprintf(st->note, sizeof st->note, "network forgotten, radios off");
 }
 
+/* Four levels, not a slider: on a 240-pixel screen the difference between
+ * 60 and 70 percent is not one anyone will pick, and a row that cycles on
+ * enter is how every other setting here works. Left and right step it too,
+ * because a level is the one thing in this list that has a direction. */
+#define BRIGHT_STEP 25
+
+static void bright_step(SettingsState *st, int dir) {
+  int pct = display_brightness() + dir * BRIGHT_STEP;
+  if (pct > 100) pct = DISPLAY_BRIGHT_MIN;
+  if (pct < DISPLAY_BRIGHT_MIN) pct = 100;
+  display_set_brightness(pct);
+  snprintf(st->note, sizeof st->note, "%d%%, saved", display_brightness());
+}
+
+static void act_bright(SettingsState *st) { bright_step(st, +1); }
+
 static void act_reboot(SettingsState *st) {
   (void)st;
   esp_restart();
@@ -158,6 +174,7 @@ static void v_saved(char *b, size_t n) {
 static void v_btboot(char *b, size_t n) {
   snprintf(b, n, "%s", bthid_autostart() ? "on" : "off");
 }
+static void v_bright(char *b, size_t n) { snprintf(b, n, "%d%%", display_brightness()); }
 
 /* One line rather than four. Free heap is the number that decides whether the
  * next radio will start; the rest is what the mem command is for. */
@@ -178,6 +195,7 @@ static const Row ROWS[] = {
   { "Mouse",     v_mouse,  act_pair       },
   { "Keyboard",  v_kbd,    act_pair_kbd   },
   { "BT at boot", v_btboot, act_bt_boot   },
+  { "Brightness", v_bright, act_bright    },
   { "Reconnect", NULL,     act_reconnect  },
   { "Bluetooth off", NULL, act_radio_off  },
   { "Forget all", NULL,    act_forget     },
@@ -294,6 +312,11 @@ static int key_rows(SettingsState *st, uint8_t k) {
   case ' ':
     if (ROWS[st->sel].action) ROWS[st->sel].action(st);
     return 1;
+  case KEY_LEFT:
+  case KEY_RIGHT:
+    if (ROWS[st->sel].action != act_bright) return 0;
+    bright_step(st, k == KEY_RIGHT ? +1 : -1);
+    return 1;
   default: return 0;
   }
 }
@@ -391,9 +414,12 @@ static void settings_open(void *state) {
 
 const AppDef *settings_app(void) {
   static const AppDef def = {
-    "Settings", settings_paint, settings_key, settings_click,
-    settings_open, &s_state, settings_height, 0, 0, settings_wants_text,
-    "arrows\tmove the selection\nenter\trun the selected row\nbackspace\tback out of a list\n", NULL
+    .name = "Settings", .paint = settings_paint, .key = settings_key,
+    .click = settings_click, .open = settings_open, .state = &s_state,
+    .height = settings_height, .wants_text = settings_wants_text,
+    .help = "arrows\tmove the selection\nenter\trun the selected row\n"
+            "left/right\tstep the brightness\n"
+            "backspace\tback out of a list\n"
   };
   return &def;
 }

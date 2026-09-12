@@ -32,6 +32,9 @@ void launchui_repaint(void);
  * is what Escape does everywhere else in this shell. */
 int launchui_run(const char *name, const char *args);
 
+/* Is the app that is running taking typed text right now? */
+int launchui_wants_text(void);
+
 /* Run the .capp at this exact path, loading it if it is not already. What
  * "./grep" and a PATH lookup both end at. Returns 0 if it started. */
 int launchui_run_path(const char *path, const char *args);

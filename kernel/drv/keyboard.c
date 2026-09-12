@@ -112,6 +112,40 @@ static void scan(uint8_t now[4][14]) {
   }
 }
 
+/* Is this key held down *right now*?
+ *
+ * Not an edge like keyboard_poll -- a level, sampled for a while. Safe mode
+ * asks this at boot, where there is no key event to catch: the key was already
+ * down before the machine started, so the rising edge happened while the
+ * matrix was unpowered and nobody was looking.
+ *
+ * `settle_ms` is scanned rather than slept through, because a key pressed as
+ * the board comes up may not read as down on the very first scan. Only the
+ * unshifted map is consulted; a modifier cannot be the safe-mode key. */
+int keyboard_held(uint8_t key, int settle_ms) {
+  uint8_t now[4][14];
+  int waited = 0;
+
+  for (;;) {
+    int x, y;
+    scan(now);
+    for (y = 0; y < 4; y++) {
+      for (x = 0; x < 14; x++) {
+        char c = KEYMAP[y][x];
+        if (!now[y][x]) continue;
+        if (c == '`') c = (char)KEY_ESC;
+        if ((uint8_t)c == key) return 1;
+      }
+    }
+    if (waited >= settle_ms) return 0;
+    /* A busy wait rather than a task delay: this runs before the shell exists
+     * and there is nothing else to yield to, and 20 ms of spin at boot is
+     * invisible next to the display bring-up above it. */
+    esp_rom_delay_us(20000);
+    waited += 20;
+  }
+}
+
 uint8_t keyboard_poll(void) {
   uint8_t now[4][14];
   uint8_t out = 0;

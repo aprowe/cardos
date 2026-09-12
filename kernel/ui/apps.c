@@ -38,67 +38,14 @@ static void about_paint(void *state, Rect c) {
   line(c, 3, "no PSRAM, no MMU");
 }
 
-/* ------------------------------------------------------------- Files ---- */
-
-/* The listing is cached rather than read in paint. Reading the card inside a
- * paint callback meant every cursor movement across this window did SD SPI
- * I/O -- tens of milliseconds each -- which is what made the mouse lag. A
- * paint callback has to be cheap, because damage is what calls it. */
-#define FILES_MAX 24
-#define FILES_NAME 26
-typedef struct {
-  int  top;
-  int  count;
-  char dir[64];
-  char name[FILES_MAX][FILES_NAME];
-} FilesState;
-static FilesState s_files;
-
-static void files_reload(FilesState *st) {
-  FsDir d;
-  FsEntry e;
-  st->count = 0;
-  if (!st->dir[0]) snprintf(st->dir, sizeof st->dir, "%s", "/");
-  if (fs_opendir(st->dir, &d) != 0) return;
-  while (st->count < FILES_MAX && fs_readdir(&d, &e) == 1) {
-    snprintf(st->name[st->count], FILES_NAME, "%.24s%s", e.name,
-             e.is_dir ? "/" : "");
-    st->count++;
-  }
-  fs_closedir(&d);
-}
-
-static void files_paint(void *state, Rect c) {
-  FilesState *st = (FilesState *)state;
-  int rows = c.h / LINE_H, i;
-
-  draw_rect(c, C_WHITE);
-  if (st->count == 0) { line(c, 0, "no card"); return; }
-  for (i = 0; i < rows && st->top + i < st->count; i++)
-    line(c, i, st->name[st->top + i]);
-}
-
-static int files_key(void *state, uint8_t k) {
-  FilesState *st = (FilesState *)state;
-  if ((k == 'j' || k == 0x81) && st->top + 1 < st->count) { st->top++; return 1; }
-  if ((k == 'k' || k == 0x80) && st->top > 0) { st->top--; return 1; }
-  if (k == 'r' || k == 'R') { files_reload(st); return 1; }
-  return 0;
-}
-
-static void files_open(void *state) {
-  FilesState *st = (FilesState *)state;
-  st->top = 0;
-  files_reload(st);
-}
-
-/* "run files /desktop" -- the one argument a file browser could want. */
-static void files_set_args(void *state, const char *args) {
-  FilesState *st = (FilesState *)state;
-  snprintf(st->dir, sizeof st->dir, "%s", args);
-  st->top = 0;
-  files_reload(st);
-}
+/* The file browser used to be here: a cached listing, arrow keys, and nothing
+ * else. It is apps/files.c now -- a .capp with two input modes, folders,
+ * renaming and moving -- for the same reason Edit and Mines left: an app that
+ * can be loaded should be, and two apps called Files is one too many.
+ *
+ * What stays built in is what cannot sensibly be loadable: a heap view and an
+ * about box, both of which report on the kernel that would be loading them.
+ */
 
 /* ------------------------------------------------------------ Memory ---- */
 
@@ -123,17 +70,14 @@ static void mem_paint(void *state, Rect c) {
 
 /* ---------------------------------------------------------- registry ---- */
 
-/* Edit and Mines used to live here too. They are loadable .capp binaries now,
- * and carrying a second copy compiled in would mean two versions of the same
- * app drifting apart -- so the built-ins are the ones that cannot sensibly be
- * loadable: a file browser, a heap view, and an about box. */
+/* Edit, Mines and now Files used to live here. They are loadable .capp
+ * binaries, and carrying a second copy compiled in would mean two versions of
+ * the same app drifting apart -- so what stays built in is what cannot
+ * sensibly be loaded: a heap view and an about box, both of which report on
+ * the kernel that would be doing the loading. */
 static const AppDef APPS[] = {
-  { "Files",  files_paint, files_key, NULL, files_open, &s_files, NULL, 0, 0,
-    NULL, "arrows\tscroll the listing\nr\tre-read the card\n", files_set_args },
-  { "Memory", mem_paint,   NULL,      NULL, NULL,       NULL,     NULL, 0, 0,
-    NULL, NULL, NULL },
-  { "About",  about_paint, NULL,      NULL, NULL,       NULL,     NULL, 0, 0,
-    NULL, NULL, NULL },
+  { .name = "Memory", .paint = mem_paint },
+  { .name = "About",  .paint = about_paint },
 };
 
 /* Settings lives in its own file -- it reaches across the radio, the panel and
