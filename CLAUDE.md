@@ -16,6 +16,10 @@ The kernel core works on hardware. Three shells over it, all switchable:
 
 - **launcher** (`launch`) -- fullscreen icon grid, apps run fullscreen, Escape
   leaves. Boots into this, because it is the one that is actually useful.
+  Subdirectories of `/desktop` are folders (one level); Enter goes in, Escape
+  comes out. `k` then a letter binds `Opt+letter` to the highlighted app;
+  `hotkey` in the console does the same, and the table is in NVS
+  (`kernel/sys/hotkeys.c`, host-tested).
 - **desktop** (`desk`) -- windows, taskbar, Start menu, pointer. Proof the
   window system works more than a daily driver.
 - **console** -- the development shell. `help` lists it.
@@ -33,20 +37,87 @@ form, and tab completes commands and paths. PATH and a few other variables live
 in NVS -- see `env` and `set`. The launcher's app list is searched last, after
 PATH, so `edit` works even when nothing on PATH is called that.
 
+**Claude runs on the device**, in the only sense it can: `apps/claude.c` is a
+terminal, and `tools/webproxy.py` — one process, one port, the same one that
+renders web pages — hands what you type to Claude Code running **in this
+repository, with permission to edit it**. Asking the device to change an app
+changes the source on the PC. Three short calls rather than one long one
+(`POST /chat` → id, `GET /chat?id=N` → pending or the answer, `GET /chat/new`),
+because the shell is a single cooperative loop and a two-minute request is a
+frozen machine; the device polls from its tick handler and stays alive
+throughout. Conversation state is one resumed Claude Code session.
+
+The obvious warning applies and the server prints it: anything that can reach
+that port can edit this folder. `--token SECRET` requires a shared string,
+which the device reads from `/claude.token` on its card and sends as a bearer
+token. `python tools/test_chat.py` exercises the protocol against a stubbed
+agent.
+
 There is a web browser, of a sort. The device has no HTML parser and no layout
-engine; `tools/webproxy.py` renders a page with headless Chrome at a **240px
-viewport** -- so sites serve their narrowest mobile layout and render text at
-that size rather than being shrunk into mush -- and ships RLE'd RGB565 rows.
-The device decodes one row at a time and blits it, holding 480 bytes rather
-than a page. See `apps/web.c`.
+engine; `tools/webproxy.py` drives headless Chrome over the DevTools protocol at
+a **240px viewport**, re-typesets the page in **CardOS's own 6x8 font** (built
+into a TTF by `tools/pixelfont.py` from the same table the console draws from,
+so text lands on the pixel grid with nothing to antialias), and ships RLE'd
+RGB565 rows. Rendering wide and scaling down was tried first and is still there
+behind `?px=0`; it turns body text into grey mush, which is the whole reason for
+the font. The device decodes one row at a time and blits it, holding 480 bytes
+rather than a page. See `apps/web.c`.
 
 Also working: BLE mouse and keyboard (two links at once), WiFi with an HTTPS
 client apps can call, SD card, and chain-booting third-party firmware with a
 one-shot rollback home.
 
-**Measured memory, with both radios up: 83 KB of heap free.** See
-`tools/mapsize.py` and the `mem` command. Both numbers moved a lot during
-bring-up -- do not trust any figure here that you have not re-measured.
+**The device updates itself from the PC.** `update` in the console asks
+`webproxy.py` for its manifest (`/update`: the firmware's ELF SHA and an FNV
+hash per `.capp`), says what differs, and `update apps|os|all` installs it.
+The Claude terminal checks after every answer and offers `/update`. Apps land
+in `/desktop`; the firmware goes to the card and then through the same
+`launcher.c` path guests use, into whichever OTA slot is not running.
+`factory` is USB-only and is where a bad update rolls back to; if a USB flash
+puts a newer build in `factory`, boot notices and switches to it. Design in
+`docs/superpowers/specs/2026-09-11-remote-update-design.md`. The partition
+table changed for this (two OTA slots, `spiffs` down to 316 KB), so the
+first flash after it needs the whole table: `python -m platformio run -t
+upload` does that, but old NVS contents (WiFi credentials, PATH) are gone.
+
+**Voice, and where text comes from.** Hold the button on the top edge (G0) and
+talk: the mic records to `/cache/voice.wav` (16 kHz mono, PDM on DAT 46 / CLK
+43 — what whisper wants, so nothing resamples), posts it to the proxy, and
+whisper.cpp turns it into words. If the words start with **"Carlos"** they are
+a command: a second, stateless Claude session with a fixed prompt turns English
+into one line of a seven-verb vocabulary (`open`, `shell`, `bright`, `wifi`,
+`say`, `key`, `none`), which `kernel/sys/rpc.c` parses and validates before the
+device does anything. An LLM choosing between seven verbs is useful; an LLM
+handing a device a string to run is not, and that list is the difference.
+
+Otherwise the words are typed. `kernel/sys/input.c` delivers them **as
+keystrokes** down the path keys already take, so every app that handles typing
+handles voice without containing the word: the matrix keyboard, a Bluetooth
+keyboard and a spoken sentence are indistinguishable by the time an app sees
+them. `wants_text()` — which already decided whether `; . , /` are arrows — is
+what says whether anything is listening. `listen` in the console does the same
+thing without the button. Design in
+`docs/specs/2026-09-12-voice-and-capabilities.md`.
+
+**Apps declare what they need**: `CAPP_NEEDS_NET`, `CAPP_NEEDS_PROXY`, or
+nothing (Mines and Pinball work on a device that has never seen a network).
+The OS joins WiFi and checks the proxy answers *before* `capp_main` runs, so
+twenty seconds of joining belongs to "starting Web" rather than to "Web is
+broken". It never refuses to start an app; `api->caps_ok()` says what was
+found and the app explains itself in its own words.
+
+Apps get four callbacks, not two: `paint`, `key`, `click`, plus `tick` (every
+pass of the shell's loop, ~5 ms, return 1 to repaint — this is the only way
+anything moves on its own) and `mouse` (position, held buttons, wheel; the
+pointer is drawn over fullscreen apps by repainting the square it left). API
+version 14 (13 plus `update_check`/`update_apply`).
+
+**Measured memory, with both radios up: 120 KB of heap free**, low water 95 KB.
+It was 79 KB until the memory manager's arena came down from 48 KB to 16 —
+grep says nothing outside `kernel/mem` ever allocated from it, and holding a
+third of the free heap for that was why WiFi and TLS could not both fit while
+Bluetooth was connected. See `tools/mapsize.py` and the `mem` command. Every
+number here moved during bring-up — do not trust one you have not re-measured.
 
 ## Hardware facts — measured on the actual device, not from a datasheet
 
