@@ -80,6 +80,18 @@ static int str_eq(const char *a, const char *b) {
   return *a == *b;
 }
 
+static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+
+/* Case-insensitive, because a camera writes PHOTO.JPG and a person writing
+ * this table thinks in lower case. */
+static int ext_is(const char *ext, const char *want) {
+  for (;;) {
+    if (lower(*ext) != *want) return 0;
+    if (!*want) return 1;
+    ext++; want++;
+  }
+}
+
 static void say(const char *s) { api->fmt(F.status, sizeof F.status, "%s", s); }
 
 /* Join a directory and a name into a path, without the double slash that a
@@ -106,10 +118,10 @@ static const char *opener(const char *name) {
   while (ext > name && *ext != '.') ext--;
   if (ext == name) return "edit";               /* no extension: text */
 
-  if (str_eq(ext, ".capp")) return NULL;        /* run it, not open it */
-  if (str_eq(ext, ".jpg") || str_eq(ext, ".jpeg") ||
-      str_eq(ext, ".png") || str_eq(ext, ".bmp")) return "photo";
-  if (str_eq(ext, ".cpx")) return "web";
+  if (ext_is(ext, ".capp")) return NULL;        /* run it, not open it */
+  if (ext_is(ext, ".jpg") || ext_is(ext, ".jpeg") ||
+      ext_is(ext, ".png") || ext_is(ext, ".bmp")) return "photo";
+  if (ext_is(ext, ".cpx")) return "web";
   return "edit";                                /* txt, c, h, md, cfg, ini */
 }
 
@@ -251,6 +263,40 @@ static void delete_selected(void) {
   reload();
 }
 
+/* ---- what changed ---------------------------------------------------------
+ *
+ * Moving the selection changes two rows out of thirteen. Saying so is the
+ * difference between a keypress costing two rows and costing the window; the
+ * shell clips the next paint to whatever is marked here. Marking nothing --
+ * which is what everything else in this app does -- means the whole window,
+ * exactly as before. */
+
+static int list_top(void) {
+  return F.at.y + BAR_H + (F.mode == MODE_MOUSE ? TOOL_H : 0);
+}
+
+static void damage_row(int idx) {
+  if (!F.have_at || idx < F.top || idx >= F.top + F.rows) return;
+  api->damage(rect(F.at.x, list_top() + (idx - F.top) * ROW_H, F.at.w, ROW_H));
+}
+
+/* The status strip, which is also the prompt. */
+static void damage_status(void) {
+  if (!F.have_at) return;
+  api->damage(rect(F.at.x, F.at.y + F.at.h - STATUS_H, F.at.w, STATUS_H));
+}
+
+/* Moving the selection: the row it left and the row it arrived at. */
+static void select_row(int idx) {
+  if (idx < 0 || idx >= F.n || idx == F.sel) return;
+  damage_row(F.sel);
+  F.sel = idx;
+  damage_row(F.sel);
+  /* Scrolling changes every row, so if the new selection is off-screen the
+   * marks above are not enough -- say nothing and take the full repaint. */
+  if (F.sel < F.top || F.sel >= F.top + F.rows) api->damage(F.at);
+}
+
 /* ---- painting -------------------------------------------------------------- */
 
 static void button(CRect r, const char *label, int on) {
@@ -348,13 +394,14 @@ static void app_paint(void *st, CRect c) {
 static int key_prompt(unsigned char k) {
   if (k == CAPP_KEY_ENTER) { finish_ask(); return 1; }
   if (k == CAPP_KEY_BACK) {
-    if (F.buf_len) F.buf[--F.buf_len] = 0;
+    if (F.buf_len) { F.buf[--F.buf_len] = 0; damage_status(); }
     else F.ask = ASK_NONE;
     return 1;
   }
   if (k >= ' ' && k < 0x7F && F.buf_len < CAPP_NAME_MAX) {
     F.buf[F.buf_len++] = (char)k;
     F.buf[F.buf_len] = 0;
+    damage_status();
     return 1;
   }
   return 1;
@@ -372,8 +419,8 @@ static int app_key(void *st, unsigned char k) {
   if (F.ask != ASK_NONE) return key_prompt(k);
 
   switch (k) {
-  case CAPP_KEY_UP:    if (F.sel > 0) F.sel--; return 1;
-  case CAPP_KEY_DOWN:  if (F.sel + 1 < F.n) F.sel++; return 1;
+  case CAPP_KEY_UP:    select_row(F.sel - 1); return 1;
+  case CAPP_KEY_DOWN:  select_row(F.sel + 1); return 1;
   case CAPP_KEY_LEFT:  go_up(); return 1;
   case CAPP_KEY_RIGHT:
   case CAPP_KEY_ENTER: enter_selected(); return 1;
@@ -441,7 +488,7 @@ static int app_click(void *st, short x, short y, int button) {
      * timing, which on a device with one pointer and no drag is the same
      * gesture and easier to hit. The right button opens straight away. */
     if (idx == F.sel || button == CAPP_BTN_RIGHT) enter_selected();
-    else F.sel = idx;
+    else select_row(idx);
   }
   return 1;
 }
@@ -450,9 +497,12 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
   (void)st; (void)x; (void)y; (void)buttons;
   if (F.mode != MODE_MOUSE) { F.mode = MODE_MOUSE; if (!wheel) return 1; }
   if (!wheel) return 0;
-  F.sel -= wheel;
-  if (F.sel < 0) F.sel = 0;
-  if (F.sel >= F.n) F.sel = F.n ? F.n - 1 : 0;
+  {
+    int want = F.sel - wheel;
+    if (want < 0) want = 0;
+    if (want >= F.n) want = F.n ? F.n - 1 : 0;
+    select_row(want);
+  }
   return 1;
 }
 

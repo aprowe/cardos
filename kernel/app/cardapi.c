@@ -178,6 +178,19 @@ static const char *api_google_status(void) { return gauth_status(); }
 
 static void api_ui(const CappUi *ui) { capprun_install_ui(ui); }
 
+static void api_damage(CRect r) { capprun_damage(r); }
+
+/* The clip, in the coordinates an app draws in -- which are the screen's, since
+ * paint hands it absolute rectangles. An app compares this with the rect it was
+ * given: smaller means its own damage came back, equal means the shell is
+ * repainting it for reasons of its own and everything has to be drawn. */
+static CRect api_paint_area(void) {
+  Rect c = draw_clip();
+  CRect o;
+  o.x = c.x; o.y = c.y; o.w = c.w; o.h = c.h;
+  return o;
+}
+
 /* The check's answer and the last thing the installer said, fitted to a
  * line an app can print. The UpdateCheck is kept between the two calls so
  * apply does not ask the proxy twice. */
@@ -242,6 +255,7 @@ static const CardApi API = {
   api_http_download, api_http,
   api_google_token, api_google_status,
   api_caps_ok,
+  api_damage, api_paint_area,
   api_ui,
   api_update_check, api_update_apply,
 };

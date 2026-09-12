@@ -227,6 +227,10 @@ static Rect app_rect(const AppDef *a) {
 }
 
 static void paint_app(void) {
+  /* Read before the clearing below resets it: a frame that clears the screen
+   * has to be a whole repaint, whatever the app thinks changed. */
+  int cleared = s_app_clear;
+
   /* The carousel is still on the panel when an app opens, and an app that does
    * not cover every pixel would otherwise be drawn on top of it. Clearing is
    * done once on entry rather than every frame: doing it per frame would make
@@ -241,8 +245,25 @@ static void paint_app(void) {
   }
 
   /* Clipped to its own rectangle, so an app that draws past its declared size
-   * cannot scribble over the surround it does not own. */
-  draw_set_clip(s_app_rect);
+   * cannot scribble over the surround it does not own -- and narrowed further
+   * to whatever the app says actually changed.
+   *
+   * This is what stops a keypress redrawing a whole screen. Until an app
+   * marks damage it gets its full rectangle, exactly as before, so nothing
+   * written before this notices; an app that marks a row gets a row, and the
+   * drawing it does outside that row costs a clip test each rather than a
+   * blit. A full clear is still available to the shell -- s_app_clear -- for
+   * the cases where the app genuinely cannot know what is underneath. */
+  {
+    Rect area = s_app_rect;
+    Rect want;
+    if (!cleared && s_app->take_damage &&
+        s_app->take_damage(s_app->state, &want)) {
+      Rect vis = rect_intersect(want, s_app_rect);
+      if (!rect_is_empty(vis)) area = vis;
+    }
+    draw_set_clip(area);
+  }
   if (s_app->paint) s_app->paint(s_app->state, s_app_rect);
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
 }

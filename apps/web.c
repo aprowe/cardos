@@ -427,7 +427,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api->mem_set(&W, 0, sizeof W);
   W.fd = -1;
   /* Overridable by argument so the proxy can move without a rebuild. */
-  api->fmt(W.proxy, sizeof W.proxy, "%s", "http://192.168.1.74:8080");
+  api->fmt(W.proxy, sizeof W.proxy, "%s", CAPP_PROXY_DEFAULT);
 
   {
     int i = 1;

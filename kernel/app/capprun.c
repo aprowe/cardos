@@ -15,6 +15,13 @@ typedef struct {
   LoadedApp la;
   int       used;
 
+  /* What the app said changed since its last paint, in the coordinates its
+   * last paint was given. Unioned as it is declared; consumed by the shell,
+   * which clips the next paint to it. Invalid means "everything", which is
+   * both the default and what an app that never calls damage() always gets. */
+  Rect      damage;
+  int       has_damage;
+
   char      name[16];     /* copied out: CappInfo.name need not be terminated */
   char      help[160];
 
@@ -26,9 +33,6 @@ typedef struct {
 
 static const char *TAG = "capp";
 
-/* Where the proxy lives when nothing says otherwise. Overridable with
- * `set PROXY=http://host:port`, because the laptop moves. */
-#define PROXY_DEFAULT "http://192.168.1.74:8080"
 
 static Slot s_slot[CAPPRUN_MAX];
 
@@ -36,6 +40,12 @@ static Slot s_slot[CAPPRUN_MAX];
  * calling, and cannot: it is called from inside the program, which has no idea
  * it lives in a slot. */
 static Slot *s_running;
+
+/* Which slot's callback is executing right now, for the same reason: damage()
+ * is called from inside a handler and the program cannot name itself. Set
+ * around every trampoline below, cleared after -- a damage() from anywhere
+ * else has no owner and is dropped rather than credited to whoever ran last. */
+static Slot *s_active;
 
 static CRect to_crect(Rect r) {
   CRect o;
@@ -47,27 +57,48 @@ static CRect to_crect(Rect r) {
  * Generated thunks per slot would be the alternative, and there is no need. */
 static void tr_paint(void *state, Rect c) {
   Slot *s = (Slot *)state;
+  s_active = s;
+  /* Painting settles the account: whatever was damaged is being repaired
+   * now, and anything the app marks from here on belongs to the next frame. */
+  s->has_damage = 0;
   if (s->ui.paint) s->ui.paint(s->ui.state, to_crect(c));
+  s_active = NULL;
 }
 
 static int tr_key(void *state, uint8_t k) {
   Slot *s = (Slot *)state;
-  return s->ui.key ? s->ui.key(s->ui.state, k) : 0;
+  int r;
+  s_active = s;
+  r = s->ui.key ? s->ui.key(s->ui.state, k) : 0;
+  s_active = NULL;
+  return r;
 }
 
 static int tr_click(void *state, int16_t x, int16_t y, int button) {
   Slot *s = (Slot *)state;
-  return s->ui.click ? s->ui.click(s->ui.state, x, y, button) : 0;
+  int r;
+  s_active = s;
+  r = s->ui.click ? s->ui.click(s->ui.state, x, y, button) : 0;
+  s_active = NULL;
+  return r;
 }
 
 static int tr_mouse(void *state, int16_t x, int16_t y, int buttons, int wheel) {
   Slot *s = (Slot *)state;
-  return s->ui.mouse ? s->ui.mouse(s->ui.state, x, y, buttons, wheel) : 0;
+  int r;
+  s_active = s;
+  r = s->ui.mouse ? s->ui.mouse(s->ui.state, x, y, buttons, wheel) : 0;
+  s_active = NULL;
+  return r;
 }
 
 static int tr_tick(void *state, uint32_t now_ms) {
   Slot *s = (Slot *)state;
-  return s->ui.tick ? s->ui.tick(s->ui.state, now_ms) : 0;
+  int r;
+  s_active = s;
+  r = s->ui.tick ? s->ui.tick(s->ui.state, now_ms) : 0;
+  s_active = NULL;
+  return r;
 }
 
 static int16_t tr_height(void *state, int16_t w) {
@@ -78,6 +109,27 @@ static int16_t tr_height(void *state, int16_t w) {
 static int tr_wants_text(void *state) {
   Slot *s = (Slot *)state;
   return s->ui.wants_text ? s->ui.wants_text(s->ui.state) : 0;
+}
+
+/* An app marking what it changed. Unioned, because two marks between paints
+ * are one repair. */
+void capprun_damage(CRect r) {
+  Slot *s = s_active;
+  Rect n;
+
+  if (!s || r.w <= 0 || r.h <= 0) return;
+  n.x = r.x; n.y = r.y; n.w = r.w; n.h = r.h;
+
+  if (!s->has_damage) { s->damage = n; s->has_damage = 1; return; }
+  s->damage = rect_union(s->damage, n);
+}
+
+/* What the shell should clip the next paint to, or 0 for "all of it". */
+static int tr_take_damage(void *state, Rect *out) {
+  Slot *s = (Slot *)state;
+  if (!s->has_damage) return 0;
+  *out = s->damage;
+  return 1;
 }
 
 /* Called by the program, through the API table, from inside capp_main. */
@@ -94,6 +146,7 @@ void capprun_install_ui(const CappUi *ui) {
   s->def.click      = ui->click ? tr_click : NULL;
   s->def.tick       = ui->tick ? tr_tick : NULL;
   s->def.mouse      = ui->mouse ? tr_mouse : NULL;
+  s->def.take_damage = tr_take_damage;
   s->def.open       = NULL;      /* capp_main was the open */
   s->def.state      = s;
   s->def.height     = ui->height ? tr_height : NULL;
@@ -196,7 +249,7 @@ static int meet_needs(uint16_t flags) {
     char buf[96];
     char url[160];
     const char *base = env_get("PROXY");
-    snprintf(url, sizeof url, "%s/status", base && base[0] ? base : PROXY_DEFAULT);
+    snprintf(url, sizeof url, "%s/status", base && base[0] ? base : CAPP_PROXY_DEFAULT);
     if (http_get(url, buf, sizeof buf, 4000) >= 0) got |= CAPP_CAP_PROXY;
     else ESP_LOGW(TAG, "app needs the proxy, and %s did not answer", url);
   }

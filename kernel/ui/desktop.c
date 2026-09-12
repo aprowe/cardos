@@ -443,8 +443,10 @@ static void paint_job(void *ctx, WinId w, Rect r) {
  * to merge and no window to clip against -- the render loop is one call into
  * the app's paint with the screen as its rectangle. */
 static void paint_fullscreen(void) {
+  int cleared;
   if (!s_full_dirty) return;
   s_full_dirty = 0;
+  cleared = s_full_clear;
 
   /* The desktop is still on the panel when an app takes it over, and an app
    * that does not cover every pixel would otherwise be drawn on top of it.
@@ -458,7 +460,17 @@ static void paint_fullscreen(void) {
       draw_frame(rect_inset(s_full_rect, -1), C_SHADOW);
   }
 
-  draw_set_clip(s_full_rect);
+  /* Narrowed to what the app says changed, when it says. The same mechanism
+   * the launcher uses; see AppDef.take_damage. */
+  {
+    Rect area = s_full_rect, want;
+    if (!cleared && s_full->take_damage &&
+        s_full->take_damage(s_full->state, &want)) {
+      Rect vis = rect_intersect(want, s_full_rect);
+      if (!rect_is_empty(vis)) area = vis;
+    }
+    draw_set_clip(area);
+  }
   if (s_full->paint) s_full->paint(s_full->state, s_full_rect);
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
 }
@@ -908,7 +920,14 @@ void desktop_tick(uint32_t ms) {
        * window is down on the taskbar -- but it has nowhere to draw, so its
        * request for a repaint is answered by doing nothing. */
       if (a->tick(a->state, ms) && !s_minimised[i]) {
-        wm_damage(wm_content(s_win[i]));
+        Rect want;
+        /* The app's own rectangle if it named one -- through the compositor,
+         * so whatever is stacked above it still covers it. A tick that moves
+         * a ball should not repaint the window it is in. */
+        if (a->take_damage && a->take_damage(a->state, &want))
+          wm_damage(rect_intersect(want, wm_content(s_win[i])));
+        else
+          wm_damage(wm_content(s_win[i]));
         any = 1;
       }
     }

@@ -14,6 +14,15 @@
 
 static const char *TAG = "http";
 
+/* One kilobyte of scratch, shared by the upload and the download.
+ *
+ * Static rather than on the stack because task stacks here are 1 KB, and one
+ * copy rather than two because both users are blocking calls on the same task
+ * -- a download cannot be halfway through while an upload runs. Two of these
+ * was two kilobytes of permanently spent RAM on a machine with a hundred and
+ * twenty free. */
+static uint8_t s_chunk[1024];
+
 /* What a TLS handshake needs on top of whatever the caller is holding: the
  * record buffers, the peer certificate while it is being verified, and the
  * socket. Measured by watching the free heap either side of a request, not
@@ -141,7 +150,6 @@ int http_post_file_progress(const char *url, const char *path,
                             void (*progress)(int sent, int total)) {
   esp_http_client_config_t cfg;
   esp_http_client_handle_t cli;
-  static uint8_t chunk[1024];
   int fd, size, sent = 0, got = 0, status;
 
   if (!url || !path || !out || out_size < 2) return -2;
@@ -177,9 +185,9 @@ int http_post_file_progress(const char *url, const char *path,
     return -3;
   }
   while (sent < size) {
-    int n = fs_read(fd, chunk, sizeof chunk);
+    int n = fs_read(fd, s_chunk, sizeof s_chunk);
     if (n <= 0) break;
-    if (esp_http_client_write(cli, (const char *)chunk, n) != n) break;
+    if (esp_http_client_write(cli, (const char *)s_chunk, n) != n) break;
     sent += n;
     if (progress) progress(sent, size);
   }
@@ -224,7 +232,6 @@ int http_download_ex(const char *url, const char *path, const char *bearer,
                      HttpProgress progress, void *ctx, int timeout_ms) {
   esp_http_client_config_t cfg;
   esp_http_client_handle_t cli;
-  static char chunk[1024];        /* static: task stacks here are 1 KB */
   int status, fd, total = 0, rc = -3;
   int64_t expected;
 
@@ -265,14 +272,14 @@ int http_download_ex(const char *url, const char *path, const char *bearer,
   if (fd < 0) { rc = -2; goto done; }
 
   for (;;) {
-    int n = esp_http_client_read(cli, chunk, sizeof chunk);
+    int n = esp_http_client_read(cli, (char *)s_chunk, sizeof s_chunk);
     int put = 0;
     if (n <= 0) break;
     /* Written in full or not at all: fs_write returns -1 on a short write and
      * leaves the partial bytes behind, which is how a truncated file gets
      * written and believed. */
     while (put < n) {
-      int w = fs_write(fd, chunk + put, (size_t)(n - put));
+      int w = fs_write(fd, s_chunk + put, (size_t)(n - put));
       if (w <= 0) { fs_close(fd); rc = -3; goto done; }
       put += w;
     }

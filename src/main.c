@@ -214,7 +214,7 @@ static void run_builtin(const char *line, char *arg) {
     /* The button, without the button -- for trying voice over the serial
      * line, where there is no button to hold. */
     con_write("listening...\n");
-    voice_once(6000);
+    voice_once(6000, 0);   /* no button held: run the clock out */
     con_printf("%s\n", voice_status());
   }
   else if (!strcmp(line, "safe")) {

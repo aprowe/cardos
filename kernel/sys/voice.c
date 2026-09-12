@@ -1,5 +1,6 @@
 /* Push to talk, and what the words turn into. See voice.h. */
 
+#include "kernel/app/capp.h"   /* CAPP_PROXY_DEFAULT */
 #include "kernel/sys/voice.h"
 
 #include "kernel/sys/input.h"
@@ -26,7 +27,6 @@
 #define PIN_GO 0
 
 #define WAV_PATH   "/cache/voice.wav"
-#define PROXY_DEFAULT "http://192.168.1.74:8080"
 
 static const char *TAG = "voice";
 
@@ -79,7 +79,7 @@ static int stop_cb(void) { return !button_raw(); }
 
 static const char *base_url(void) {
   const char *p = env_get("PROXY");
-  return (p && p[0]) ? p : PROXY_DEFAULT;
+  return (p && p[0]) ? p : CAPP_PROXY_DEFAULT;
 }
 
 /* ---- what to do with what was heard --------------------------------------- */
@@ -193,7 +193,7 @@ static void send_and_act(void) {
   }
 }
 
-void voice_once(int max_ms) {
+void voice_once(int max_ms, int hold) {
   int bytes;
 
   if (!wifi_is_connected()) {
@@ -209,8 +209,9 @@ void voice_once(int max_ms) {
 
   s_recording = 1;
   s_level = 0;
-  say("listening");
-  bytes = mic_record_wav(WAV_PATH, max_ms, stop_cb, level_cb);
+  say(hold ? "listening" : "listening (timed)");
+  bytes = mic_record_wav(WAV_PATH, max_ms, hold ? stop_cb : (int (*)(void))0,
+                         level_cb);
   s_recording = 0;
 
   if (bytes < 0) {
@@ -258,6 +259,6 @@ int voice_tick(void) {
    * two. That is deliberate: while someone is talking to the machine, there
    * is nothing else for it to be doing, and the alternative is a state
    * machine spread across three subsystems for no gain. */
-  voice_once(MIC_MAX_MS);
+  voice_once(MIC_MAX_MS, 1);
   return 1;
 }

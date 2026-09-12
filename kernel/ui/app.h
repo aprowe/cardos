@@ -82,6 +82,15 @@ typedef struct {
    * screen moves without being pushed; see CappUi.tick for the rules, which
    * are the same ones. NULL for an app that changes only on a keypress. */
   int (*tick)(void *state, uint32_t now_ms);
+
+  /* What this app says changed since its last paint, in content coordinates.
+   * Returns 1 with a rectangle, or 0 meaning "repaint all of it" -- which is
+   * what an app that never marks anything always returns, so this costs the
+   * apps written before it nothing.
+   *
+   * The shell consumes it when deciding what to clip; painting clears it,
+   * because the accumulator belongs to the frame being drawn. */
+  int (*take_damage)(void *state, Rect *out);
 } AppDef;
 
 /* The apps the Start menu offers. */

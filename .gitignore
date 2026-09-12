@@ -12,3 +12,15 @@ kernel/app/capp_blobs.h
 
 # A rendered page, produced by tools/webproxy.py --test. Test output, not source.
 page.cpx
+
+# Python bytecode from the tools.
+__pycache__/
+
+# The 6x8 font as a TTF, built by tools/pixelfont.py from kernel/console/
+# font6x8.h whenever that header is newer. Generated, and regenerating it is
+# a second -- committing it would be a second copy of the font to drift.
+tools/cardos6x8.ttf
+
+# Speech the tests synthesise, and the recording the device sends. Both are
+# throwaway audio that happens to land where the tool was run.
+*.wav

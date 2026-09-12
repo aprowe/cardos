@@ -505,7 +505,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api = a;
   api->mem_set(&C, 0, sizeof C);
 
-  api->fmt(C.base, sizeof C.base, "%s", "http://192.168.1.74:8080");
+  api->fmt(C.base, sizeof C.base, "%s", CAPP_PROXY_DEFAULT);
   if (argc > 1 && argv[1][0]) api->fmt(C.base, sizeof C.base, "%s", argv[1]);
   read_token();
 

@@ -21,10 +21,18 @@
  * Returns 1 if something happened worth repainting for. */
 int voice_tick(void);
 
-/* Record, transcribe and act, without the button -- for `listen` on the
- * console and for anything that wants to trigger it deliberately. Blocks for
- * the length of the recording plus the round trip. */
-void voice_once(int max_ms);
+/* Record, transcribe and act. Blocks for the length of the recording plus the
+ * round trip.
+ *
+ * `hold` says whether the button is the thing that started this. With it, the
+ * recording ends when the button comes up. Without it -- `listen` on the
+ * console, where there is no button being held -- it runs for max_ms.
+ *
+ * That distinction is not decoration: the first version polled the button
+ * either way, so `listen` stopped on its first 32 ms block and reported "too
+ * short" every time. The one path that exists for testing without a button
+ * was the one path a button was required for. */
+void voice_once(int max_ms, int hold);
 
 /* What the last attempt did, as a sentence: heard, typed, ran, or why not. */
 const char *voice_status(void);

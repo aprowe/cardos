@@ -48,6 +48,10 @@ int            capprun_fullscreen(int slot);
 /* Which of the running app's declared needs were met. See CAPP_NEEDS_*. */
 int            capprun_caps_ok(void);
 
+/* An app marking what it changed, from inside one of its own callbacks.
+ * Outside one there is no app to credit it to, and it is dropped. */
+void           capprun_damage(CRect r);
+
 /* Valid only after a run that installed an interface. */
 const AppDef *capprun_def(int slot);
 

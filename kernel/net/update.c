@@ -1,5 +1,6 @@
 /* Pulling new builds from the PC. See update.h. */
 
+#include "kernel/app/capp.h"   /* CAPP_PROXY_DEFAULT */
 #include "kernel/net/update.h"
 #include "kernel/net/http.h"
 #include "kernel/net/wifi.h"
@@ -16,7 +17,7 @@
 
 static const char *TAG = "update";
 
-#define DEFAULT_BASE  "http://192.168.1.74:8080"
+#define DEFAULT_BASE  CAPP_PROXY_DEFAULT
 #define FIRMWARE_PATH "/update/firmware.bin"
 #define MANIFEST_MAX  2048                   /* 24 apps at ~40 bytes a line */
 

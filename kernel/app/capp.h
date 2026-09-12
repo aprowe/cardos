@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 16
+#define CAPP_API_VERSION 17
 
 #define CAPP_ICON_W 16
 #define CAPP_ICON_H 16
@@ -66,6 +66,19 @@
 /* What caps_ok() returns: the same bits, set when that need was met. */
 #define CAPP_CAP_NET     CAPP_NEEDS_NET
 #define CAPP_CAP_PROXY   CAPP_NEEDS_PROXY
+
+/* Where the PC helper lives when nothing says otherwise.
+ *
+ * In the contract header because both sides need it: the kernel reads it when
+ * an app declares CAPP_NEEDS_PROXY and when the updater looks for a manifest,
+ * and Web and Claude compile it in as their own default. It was written out
+ * five separate times, and the failure mode of that is a laptop whose address
+ * changed and two of five places still pointing at the old one.
+ *
+ * The kernel prefers `env PROXY` over this. An app cannot read the environment
+ * -- there is no API for it -- so an app that wants to move has its own way
+ * of being told: `/url` in Claude, an argument to Web. */
+#define CAPP_PROXY_DEFAULT "http://192.168.1.74:8080"
 
 typedef struct { int16_t x, y, w, h; } CRect;
 
@@ -260,6 +273,35 @@ typedef struct {
    * about. Checked once at launch rather than continuously -- a network that
    * drops later shows up as a failed request, which is where it belongs. */
   int (*caps_ok)(void);
+
+  /* ---- saying what changed ------------------------------------------
+   *
+   * The shell repaints an app by calling paint with a clip. Until now that
+   * clip was always the app's whole rectangle, so every keypress redrew
+   * everything -- and three apps grew their own dirty-tracking to avoid it,
+   * each with a slightly different `expect_paint` heuristic for telling
+   * "my own repaint" from "the shell repainting me".
+   *
+   * damage() replaces all of that. An app marks the rectangles it actually
+   * changed; the shell unions them and clips the next paint to that. An app
+   * that marks nothing gets its whole rectangle, exactly as before, so this
+   * costs existing apps nothing.
+   *
+   * Coordinates are the same ones paint is given -- content-relative, in the
+   * rect handed to the last paint. Mark before returning 1 from a handler:
+   * the shell reads the accumulated damage when it decides what to clip. */
+  void (*damage)(CRect r);
+
+  /* What this paint is actually being asked to repair, in the same
+   * coordinates. An app that draws expensive things -- a photograph, a page
+   * of text -- can skip whatever falls outside it.
+   *
+   * Comparing this with the rect paint was given also answers the question
+   * the `expect_paint` hacks existed for: if it covers everything, this is a
+   * repaint the app did not ask for (a help overlay closing, a window moving)
+   * and everything has to be drawn. If it is smaller, it is the app's own
+   * damage coming back. */
+  CRect (*paint_area)(void);
 
   /* ---- becoming a graphical app ----
    *

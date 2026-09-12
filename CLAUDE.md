@@ -24,8 +24,10 @@ The kernel core works on hardware. Three shells over it, all switchable:
   window system works more than a daily driver.
 - **console** -- the development shell. `help` lists it.
 
-Apps come in two kinds. Built-ins (Files, Memory, About, Settings) are compiled
-in. Loadable apps are `.capp` files: ELF, linked complete, relocated at load.
+Apps come in two kinds. Built-ins are now only **Memory, About and Settings** —
+what cannot sensibly be loaded, being reports on the kernel that would load
+them. Everything else, Files included, is a `.capp`: ELF, linked complete,
+relocated at load.
 They live in `/desktop` on the card, carry their own name and 16x16 icon, and
 are embedded in the firmware so first boot writes them out. See
 `kernel/app/elfload.h` for why the loader is short, and `apps/capp.ld` for the
@@ -106,11 +108,46 @@ twenty seconds of joining belongs to "starting Web" rather than to "Web is
 broken". It never refuses to start an app; `api->caps_ok()` says what was
 found and the app explains itself in its own words.
 
-Apps get four callbacks, not two: `paint`, `key`, `click`, plus `tick` (every
-pass of the shell's loop, ~5 ms, return 1 to repaint — this is the only way
-anything moves on its own) and `mouse` (position, held buttons, wheel; the
-pointer is drawn over fullscreen apps by repainting the square it left). API
-version 14 (13 plus `update_check`/`update_apply`).
+Apps get five callbacks, not two: `paint`, `key`, `click`, plus `tick` (every
+pass of the shell's loop, ~5 ms, return 1 to repaint — the only way anything
+moves on its own) and `mouse` (position, held buttons, wheel; the pointer is
+drawn over fullscreen apps by repainting the square it left).
+
+**Redundant redrawing is an OS problem, not an app problem.** The shell used
+to hand every app its whole rectangle as the clip on every event, so a
+keypress redrew a screen — and three apps grew their own `expect_paint`
+dirty-tracking to dodge it, each slightly different. `api->damage(rect)` marks
+what actually changed; `capprun.c` unions the marks per app and both shells
+clip the next paint to them (a windowed app's damage goes through `wm_damage`,
+so anything stacked above still wins). `api->paint_area()` returns the clip, so
+an app can skip expensive work outside it — and comparing it with the rect
+paint was handed answers what `expect_paint` was guessing at. **An app that
+marks nothing gets its whole rectangle exactly as before**, so this cost the
+existing apps nothing; `apps/files.c` shows the pattern, and Mines, Claude and
+Pinball can drop their hand-rolled versions whenever someone is in there.
+
+**API version 17.** It moved six times in one day — 11 to 17 — and each move
+means every `.capp` must be rebuilt, because the loader refuses a binary built
+against a different table. `python tools/build_apps.py` before every firmware
+build; the symptom of forgetting is "built for a different API version" at
+boot. What arrived: `tick` and `mouse` (12, 13), `update_check`/`update_apply`
+(14), `caps_ok` (15), the file operations `list_ex`, `stat`, `mkdir`,
+`remove`, `rename` and `run` that the file manager needed (16), and
+`damage`/`paint_area` (17).
+
+**`CAPP_PROXY_DEFAULT` in `capp.h` is the one place the PC's address is
+written.** Kernel and apps both include that header; the kernel prefers
+`env PROXY` over it. It used to be spelled out in five files, which is a bug
+waiting for the laptop's address to change.
+
+**Flash is the constraint now, not RAM: 90% of the 1.75 MB `factory`
+partition**, ~175 KB spare. Half the image is radio and TLS (net80211 158 KB,
+mbedTLS + PSA crypto 228 KB, Bluetooth 177 KB, lwIP 103 KB), which is not
+shrinkable by writing tighter kernel code — CardOS's own code is about 178 KB.
+The lever that is available: **204 KB of embedded `.capp` blobs**, which are
+copies of files that also live on the card and can be fetched with `update
+apps`. Keeping two or three seeded and dropping the rest returns ~150 KB. Run
+`python tools/mapsize.py` before deciding anything about size.
 
 **Measured memory, with both radios up: 120 KB of heap free**, low water 95 KB.
 It was 79 KB until the memory manager's arena came down from 48 KB to 16 —
