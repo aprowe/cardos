@@ -42,7 +42,19 @@
 #define CLR_SEL     CAPP_RGB(52, 80, 116)
 #define CLR_DIM     CAPP_RGB(130, 140, 158)
 
-typedef enum { VIEW_BROWSE = 0, VIEW_EDIT, VIEW_NAME } View;
+/* Preview: a page, not a terminal. Lighter ground and darker ink, because
+ * prose is read rather than scanned, and every markdown renderer anyone has
+ * seen looks like paper. */
+#define CLR_PG      CAPP_RGB(238, 238, 232)
+#define CLR_PG_TX   CAPP_RGB(32, 34, 40)
+#define CLR_PG_H    CAPP_RGB(16, 40, 96)
+#define CLR_PG_DIM  CAPP_RGB(110, 116, 128)
+#define CLR_PG_RULE CAPP_RGB(180, 182, 176)
+#define CLR_PG_CODE CAPP_RGB(216, 218, 210)
+#define CLR_PG_LINK CAPP_RGB(24, 82, 170)
+#define CLR_PG_QUOT CAPP_RGB(150, 154, 160)
+
+typedef enum { VIEW_BROWSE = 0, VIEW_EDIT, VIEW_NAME, VIEW_PREVIEW } View;
 
 /* What the filename prompt is for. One view serves both, because "what shall
  * it be called" is the same question either way -- only what happens after the
@@ -70,6 +82,10 @@ static struct {
   int   truncated;
   char  path[96];
   char  status[40];
+
+  /* markdown preview */
+  int   ptop;                 /* first rendered row on screen */
+  int   prows;                /* how many rows the document rendered to */
 
   /* the filename prompt */
   NameFor name_for;
@@ -341,6 +357,269 @@ static void paint_browse(CRect c) {
             CLR_BAR_FG, CLR_BAR);
 }
 
+/* ------------------------------------------------------- markdown ---- */
+
+/* A preview, not a parser.
+ *
+ * Markdown is a large specification and almost none of it earns its place on
+ * a 240-pixel screen. What is here is what people actually write in notes:
+ * headings, lists, quotes, code, rules, and bold or `code` inside a line.
+ * Anything unrecognised is drawn as the text it is, which is markdown's whole
+ * premise and a good fallback.
+ *
+ * It renders from the edit buffer rather than the file, so a preview shows
+ * what you have typed and not what you last saved.
+ *
+ * There is no font but the 6x8 one and no way to scale it -- the API draws
+ * text one way. Weight is therefore faked by drawing a glyph twice, one pixel
+ * apart, which at this size reads convincingly as bold; headings get that
+ * plus colour plus a rule under the big ones. Italics have no honest
+ * equivalent, so emphasis is shown in colour instead of being invented.
+ */
+
+#define PG_LEFT   4          /* the page margin */
+#define PG_ROW    9
+
+/* One rendered row: the shape a line takes on the page. Built as the document
+ * is walked so scrolling does not re-parse, and so the scrollbar knows how
+ * long the document is before it has drawn it. */
+typedef enum {
+  MD_TEXT = 0, MD_H1, MD_H2, MD_H3, MD_BULLET, MD_NUMBER,
+  MD_QUOTE, MD_CODE, MD_RULE, MD_BLANK
+} MdKind;
+
+static void md_text(int x, int y, const char *s, uint16_t fg, uint16_t bg,
+                    int bold) {
+  api->text((short)x, (short)y, s, fg, bg);
+  /* The second pass is the whole of "bold" at six pixels: one to the right,
+   * transparent background so it thickens rather than smears. */
+  if (bold) api->text((short)(x + 1), (short)y, s, fg, bg);
+}
+
+/* Strip the markers a line begins with, and say what it was. */
+static MdKind md_kind(const char *in, const char **body, int *indent) {
+  const char *p = in;
+  int spaces = 0;
+
+  while (*p == ' ') { p++; spaces++; }
+  *indent = spaces / 2;
+  *body = p;
+
+  if (!*p) return MD_BLANK;
+
+  if (p[0] == '#' && p[1] == '#' && p[2] == '#' && p[3] == ' ') { *body = p + 4; return MD_H3; }
+  if (p[0] == '#' && p[1] == '#' && p[2] == ' ')                { *body = p + 3; return MD_H2; }
+  if (p[0] == '#' && p[1] == ' ')                               { *body = p + 2; return MD_H1; }
+
+  /* Three or more of - _ * alone on a line. */
+  if (p[0] == '-' || p[0] == '_' || p[0] == '*') {
+    const char *q = p;
+    int n = 0;
+    while (*q == *p) { q++; n++; }
+    while (*q == ' ') q++;
+    if (n >= 3 && !*q) return MD_RULE;
+  }
+
+  if ((p[0] == '-' || p[0] == '*' || p[0] == '+') && p[1] == ' ') {
+    *body = p + 2;
+    return MD_BULLET;
+  }
+  if (p[0] >= '0' && p[0] <= '9') {
+    const char *q = p;
+    while (*q >= '0' && *q <= '9') q++;
+    if ((q[0] == '.' || q[0] == ')') && q[1] == ' ') { *body = p; return MD_NUMBER; }
+  }
+  if (p[0] == '>' ) { *body = (p[1] == ' ') ? p + 2 : p + 1; return MD_QUOTE; }
+
+  return MD_TEXT;
+}
+
+/* Draw one run of text with the inline markers taken out: **bold**, *emph*,
+ * `code`, and [label](url) reduced to its label.
+ *
+ * One pass, no nesting. Nested emphasis inside a note on a pocket computer is
+ * a problem nobody has. */
+static void md_inline(int x, int y, int maxw, const char *s, uint16_t fg,
+                      uint16_t bg) {
+  char word[64];
+  int n = 0, bold = 0, code = 0;
+  int cx = x;
+
+  while (*s) {
+    /* Flush what we have when a marker turns up, because the run either side
+     * is drawn differently. */
+    int flush = 0, next_bold = bold, next_code = code, skip = 0;
+
+    if (s[0] == '*' && s[1] == '*') { flush = 1; next_bold = !bold; skip = 2; }
+    else if (s[0] == '*' || s[0] == '_') { flush = 1; skip = 1; }
+    else if (s[0] == '`') { flush = 1; next_code = !code; skip = 1; }
+    else if (s[0] == '[') {
+      /* [label](url): the label is what a reader wants; the URL will not fit
+       * and could not be followed from here anyway. */
+      const char *close = s + 1;
+      while (*close && *close != ']') close++;
+      if (*close == ']' && close[1] == '(') {
+        const char *end = close + 2;
+        while (*end && *end != ')') end++;
+        if (*end == ')') {
+          char label[48];
+          int li = 0;
+          const char *q = s + 1;
+          while (q < close && li < (int)sizeof label - 1) label[li++] = *q++;
+          label[li] = 0;
+          if (n) { word[n] = 0; md_text(cx, y, word, fg, bg, bold);
+                   cx += n * CHARW; n = 0; }
+          md_text(cx, y, label, CLR_PG_LINK, bg, 0);
+          cx += li * CHARW;
+          s = end + 1;
+          continue;
+        }
+      }
+    }
+
+    if (flush) {
+      if (n) {
+        word[n] = 0;
+        md_text(cx, y, word, code ? CLR_PG_H : fg, code ? CLR_PG_CODE : bg, bold);
+        cx += n * CHARW;
+        n = 0;
+      }
+      bold = next_bold;
+      code = next_code;
+      s += skip;
+      continue;
+    }
+
+    if (cx + (n + 1) * CHARW > x + maxw) break;      /* the wrap did its job */
+    if (n < (int)sizeof word - 1) word[n++] = *s;
+    s++;
+  }
+  if (n) {
+    word[n] = 0;
+    md_text(cx, y, word, code ? CLR_PG_H : fg, code ? CLR_PG_CODE : bg, bold);
+  }
+}
+
+/* Walk the buffer, drawing rows from `from` for `rows` of them, and return
+ * how many rows the whole document takes. Called twice: once to count (with
+ * rows == 0), once to draw. Counting by walking is cheap here -- ninety-six
+ * lines -- and it keeps one description of the layout rather than two. */
+static int md_render(CRect c, int from, int rows) {
+  int i, row = 0;
+  int wrapcols = (c.w - PG_LEFT * 2) / CHARW;
+  int fenced = 0;
+
+  for (i = 0; i < E.nlines; i++) {
+    const char *body;
+    int indent = 0;
+    MdKind k;
+    int x, avail, y;
+    uint16_t fg = CLR_PG_TX, bg = CLR_PG;
+    int bold = 0;
+
+    /* A fenced block is verbatim: no headings, no bullets, no emphasis. */
+    if (E.line[i][0] == '`' && E.line[i][1] == '`' && E.line[i][2] == '`') {
+      fenced = !fenced;
+      continue;
+    }
+    k = fenced ? MD_CODE : md_kind(E.line[i], &body, &indent);
+    if (fenced) body = E.line[i];
+
+    /* Where this row lands, and whether it is on screen at all. */
+    y = c.y + (row - from) * PG_ROW;
+    row++;
+    if (rows == 0 || row - 1 < from || row - 1 >= from + rows) {
+      /* Not drawn, but long lines still take more than one row. */
+      if (k != MD_RULE && k != MD_BLANK) {
+        int len = (int)api->str_len(body);
+        int per = wrapcols - indent * 2 - (k == MD_BULLET || k == MD_NUMBER ? 2 : 0);
+        while (per > 0 && len > per) { len -= per; row++; }
+      }
+      continue;
+    }
+
+    x = c.x + PG_LEFT + indent * 2 * CHARW;
+    avail = c.w - (x - c.x) - PG_LEFT;
+
+    switch (k) {
+    case MD_BLANK:
+      break;
+
+    case MD_RULE:
+      api->fill(rect(c.x + PG_LEFT, y + 4, c.w - PG_LEFT * 2, 1), CLR_PG_RULE);
+      break;
+
+    case MD_H1:
+    case MD_H2:
+      fg = CLR_PG_H;
+      bold = 1;
+      break;
+    case MD_H3:
+      fg = CLR_PG_H;
+      break;
+
+    case MD_QUOTE:
+      /* The bar down the left is the whole visual idea of a quotation. */
+      api->fill(rect(x, y, 2, PG_ROW), CLR_PG_QUOT);
+      x += 6;
+      avail -= 6;
+      fg = CLR_PG_DIM;
+      break;
+
+    case MD_CODE:
+      api->fill(rect(c.x + PG_LEFT, y, c.w - PG_LEFT * 2, PG_ROW), CLR_PG_CODE);
+      bg = CLR_PG_CODE;
+      break;
+
+    case MD_BULLET:
+      /* A square, because the font has no bullet and a hyphen reads as a
+       * hyphen. */
+      api->fill(rect(x + 1, y + 3, 3, 3), CLR_PG_TX);
+      x += 8;
+      avail -= 8;
+      break;
+
+    case MD_NUMBER:
+    default:
+      break;
+    }
+
+    if (k == MD_BLANK || k == MD_RULE) continue;
+
+    if (k == MD_CODE) {
+      /* Verbatim: markers are content inside a fence. */
+      md_text(x, y, body, CLR_PG_TX, CLR_PG_CODE, 0);
+    } else if (bold || k == MD_H1 || k == MD_H2 || k == MD_H3) {
+      md_text(x, y, body, fg, bg, bold);
+      if (k == MD_H1)
+        api->fill(rect(c.x + PG_LEFT, y + PG_ROW - 1, c.w - PG_LEFT * 2, 1),
+                  CLR_PG_RULE);
+    } else {
+      md_inline(x, y, avail, body, fg, bg);
+    }
+  }
+  return row;
+}
+
+static void paint_preview(CRect c) {
+  int rows = (c.h - ROWH) / PG_ROW;
+  char bar[48];
+
+  api->fill(rect(c.x, c.y, c.w, c.h - ROWH), CLR_PG);
+  E.prows = md_render(rect(c.x, c.y + 2, c.w, c.h - ROWH - 2), E.ptop, rows);
+
+  /* Clamp here rather than in the key handler: the length is only known once
+   * it has been laid out, and laying it out is what this just did. */
+  if (E.ptop > E.prows - rows) E.ptop = E.prows - rows;
+  if (E.ptop < 0) E.ptop = 0;
+
+  api->fill(rect(c.x, c.y + c.h - ROWH, c.w, ROWH), CLR_BAR);
+  api->fmt(bar, sizeof bar, "preview  %s  ctrl-p edits",
+           E.path[0] ? E.path : "(unsaved)");
+  api->text((short)(c.x + 2), (short)(c.y + c.h - ROWH + 1), bar,
+            CLR_BAR_FG, CLR_BAR);
+}
+
 static void paint_edit(CRect c) {
   int rows = (c.h - ROWH) / ROWH;
   int cols = (c.w - GUTTER) / CHARW;
@@ -420,6 +699,7 @@ static void app_paint(void *st, CRect c) {
   (void)st;
   if (E.view == VIEW_BROWSE) paint_browse(c);
   else if (E.view == VIEW_NAME) paint_name(c);
+  else if (E.view == VIEW_PREVIEW) paint_preview(c);
   else paint_edit(c);
 }
 
@@ -472,10 +752,37 @@ static int key_edit(unsigned char k) {
     return 1;
   case 0x01: E.cx = 0; return 1;                  /* ctrl-a */
   case 0x05: E.cx = E.len[E.cy]; return 1;        /* ctrl-e */
+  case 0x10:                                      /* ctrl-p, preview */
+    E.view = VIEW_PREVIEW;
+    E.ptop = 0;
+    return 1;
 
   default:
     if (k >= 32 && k < 127) { insert_char((char)k); return 1; }
     return 0;
+  }
+}
+
+/* The preview reads; it does not edit. Anything that would change the text
+ * puts you back in the editor first, rather than being quietly ignored. */
+static int key_preview(unsigned char k) {
+  switch (k) {
+  case 0x10:                                      /* ctrl-p toggles back */
+  case CAPP_KEY_ENTER:
+    E.view = VIEW_EDIT;
+    return 1;
+  case CAPP_KEY_UP:    E.ptop -= 1; return 1;
+  case CAPP_KEY_DOWN:  E.ptop += 1; return 1;
+  case CAPP_KEY_LEFT:  E.ptop -= 12; return 1;
+  case CAPP_KEY_RIGHT:
+  case ' ':            E.ptop += 12; return 1;
+  case 'g':            E.ptop = 0; return 1;
+  case 0x0F:                                      /* ctrl-o, the file list */
+    E.view = VIEW_BROWSE;
+    rescan();
+    return 1;
+  case 0x13: save(); return 1;                    /* ctrl-s still saves */
+  default: return 0;
   }
 }
 
@@ -500,6 +807,7 @@ static int app_key(void *st, unsigned char k) {
   (void)st;
   if (E.view == VIEW_BROWSE) return key_browse(k);
   if (E.view == VIEW_NAME) return key_name(k);
+  if (E.view == VIEW_PREVIEW) return key_preview(k);
   return key_edit(k);
 }
 
@@ -539,6 +847,7 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
     if (E.bsel >= E.ndir) E.bsel = E.ndir - 1;
     return 1;
   }
+  if (E.view == VIEW_PREVIEW) { E.ptop -= wheel * 3; return 1; }
   if (E.view != VIEW_EDIT) return 0;
 
   E.top -= wheel * 3;
@@ -551,7 +860,9 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
  * machine whose arrow keys are ; . , / needs those back. */
 static int app_wants_text(void *st) {
   (void)st;
-  return E.view != VIEW_BROWSE;
+  /* Not while previewing: nothing there takes typing, and saying otherwise
+   * would cost the arrow keys, which are how you scroll it. */
+  return E.view == VIEW_EDIT || E.view == VIEW_NAME;
 }
 
 static void app_open(void *st) {
@@ -576,7 +887,7 @@ const CappInfo capp_info = {
     0x10, 0x12, 0x10, 0x1F, 0x13, 0xC1, 0x10, 0x01,
     0x13, 0xE1, 0x10, 0x01, 0x13, 0xC1, 0x10, 0x01,
     0x11, 0xE1, 0x10, 0x01, 0x1F, 0xFF, 0x00, 0x00 },
-  "arrows\tmove\nenter\topen, or split the line\nbackspace\tup a folder, or delete\nn\tnew file\nctrl-n\tnew file\nctrl-s\tsave\nctrl-r\tsave as\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n",
+  "arrows\tmove\nenter\topen, or split the line\nbackspace\tup a folder, or delete\nn\tnew file\nctrl-n\tnew file\nctrl-s\tsave\nctrl-r\tsave as\nctrl-p\tmarkdown preview\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n",
 };
 
 /* Static, not a local: the shell keeps calling into this long after
