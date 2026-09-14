@@ -33,5 +33,6 @@ void con_set_color(uint16_t fg);
  * nothing when nothing is listening. */
 void con_set_serial(int on);
 int  con_serial_key(void);   /* next character from stdin, or 0 */
+int  con_serial_pending(void); /* is there one, without taking it */
 
 #endif /* CARDOS_CONSOLE_H */

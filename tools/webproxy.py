@@ -49,8 +49,11 @@ from PIL import Image, ImageFilter
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pixelrender import shoot_pixel
 from chat import ChatService, ROOT as ROOT_DIR
+
+SHOTS_DIR = os.path.join(ROOT_DIR, "docs", "shots")
 from voice import Voice
 from screen import Screen
+import shots
 import updates
 
 CHROME_CANDIDATES = [
@@ -304,6 +307,25 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- talking to Claude ------------------------------------------------
 
+    def _do_shot(self, args):
+        """A raw screen in, PNGs out: docs/shots/NAME.png and NAME@3x.png.
+
+        Kept small on purpose. The device did the hard part -- watching its
+        own blits -- and all the PC adds is a codec and a folder; see
+        tools/shots.py for both halves."""
+        name = (args.get("name") or ["shot"])[0]
+        name = "".join(c for c in name if c.isalnum() or c in "-_") or "shot"
+        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(n) if n else b""
+        try:
+            img = shots.decode_rgb565(raw)
+        except ValueError as e:
+            self._text("error %s\n" % e, 400)
+            return
+        out = shots.save(img, name, SHOTS_DIR)
+        sys.stderr.write("shot: %s\n" % out)
+        self._text("ok %s\n" % out)
+
     def _do_voice(self):
         """A WAV in; the words out, or one command line.
 
@@ -353,6 +375,11 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authorised():
                 return
             self._do_voice()
+            return
+        if q.path == "/shot":
+            if not self._authorised():
+                return
+            self._do_shot(urllib.parse.parse_qs(q.query))
             return
         if q.path != "/chat":
             self.send_error(404)

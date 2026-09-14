@@ -18,6 +18,7 @@
 #include "kernel/app/capprun.h"
 #include "kernel/ui/launchui.h"
 #include "kernel/drv/keyboard.h"
+#include "kernel/console/console.h"
 #include "kernel/sys/clock.h"
 
 #include <stdarg.h>
@@ -193,7 +194,12 @@ static int api_http_stream(const char *url,
   return http_stream(url, (HttpSink)on_data, ctx, timeout_ms);
 }
 
-static int api_key_pending(void) { return keyboard_any_down(); }
+/* The matrix, or a byte waiting on the serial line: an app blocked in a
+ * stream asks this to know whether to stop, and a PC driving the device
+ * over serial (tools/shots.py) has to be able to say so too. */
+static int api_key_pending(void) {
+  return keyboard_any_down() || con_serial_pending();
+}
 
 /* The clip, in the coordinates an app draws in -- which are the screen's, since
  * paint hands it absolute rectangles. An app compares this with the rect it was

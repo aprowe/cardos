@@ -21,6 +21,10 @@
 #include "driver/usb_serial_jtag_vfs.h" 
 
 static char     s_grid[CON_ROWS][CON_COLS];
+/* The colour each cell was written in. Without it a scroll or a repaint
+ * redrew sixteen rows in whatever colour was current, and a screenshot of
+ * the console was a screenshot of one colour. 1280 bytes. */
+static uint16_t s_fgs[CON_ROWS][CON_COLS];
 static int      s_cx, s_cy;
 static uint16_t s_fg = COLOR_GREEN;      /* a terminal, obviously */
 static uint16_t s_bg = COLOR_BLACK;
@@ -33,6 +37,7 @@ static uint16_t s_cell[FONT_W * FONT_H];
 static void draw_cell(int col, int row, char ch, int invert) {
   int x, y;
   const uint8_t *glyph = NULL;
+  uint16_t fg = s_fgs[row][col];
 
   if ((unsigned char)ch >= FONT_FIRST && (unsigned char)ch <= FONT_LAST)
     glyph = font6x8[(unsigned char)ch - FONT_FIRST];
@@ -42,7 +47,7 @@ static void draw_cell(int col, int row, char ch, int invert) {
     for (y = 0; y < FONT_H; y++) {
       int on = (bits >> y) & 1;
       if (invert) on = !on;
-      s_cell[y * FONT_W + x] = on ? s_fg : s_bg;
+      s_cell[y * FONT_W + x] = on ? fg : s_bg;
     }
   }
   display_blit(col * FONT_W, row * FONT_H, FONT_W, FONT_H, s_cell);
@@ -56,8 +61,11 @@ static void repaint_all(void) {
 }
 
 static void scroll(void) {
+  int c;
   memmove(&s_grid[0][0], &s_grid[1][0], (CON_ROWS - 1) * CON_COLS);
   memset(&s_grid[CON_ROWS - 1][0], ' ', CON_COLS);
+  memmove(&s_fgs[0][0], &s_fgs[1][0], (CON_ROWS - 1) * CON_COLS * sizeof s_fgs[0][0]);
+  for (c = 0; c < CON_COLS; c++) s_fgs[CON_ROWS - 1][c] = s_fg;
   s_cy = CON_ROWS - 1;
   repaint_all();
 }
@@ -75,7 +83,10 @@ int con_init(void) {
 }
 
 void con_clear(void) {
+  int r, c;
   memset(s_grid, ' ', sizeof s_grid);
+  for (r = 0; r < CON_ROWS; r++)
+    for (c = 0; c < CON_COLS; c++) s_fgs[r][c] = s_fg;
   s_cx = s_cy = 0;
   display_fill(s_bg);
 }
@@ -108,11 +119,22 @@ void con_set_serial(int on) {
   s_serial = 1;
 }
 
+/* One byte read ahead by con_serial_pending, handed out by the next
+ * con_serial_key. The driver cannot peek, and a key an app was only asking
+ * about must not be lost. */
+static int s_serial_held;
+
 int con_serial_key(void) {
   uint8_t c;
   if (!s_serial) return 0;
+  if (s_serial_held) { int k = s_serial_held; s_serial_held = 0; return k; }
   if (usb_serial_jtag_read_bytes(&c, 1, 0) != 1) return 0;
   return (int)c;
+}
+
+int con_serial_pending(void) {
+  if (!s_serial_held) s_serial_held = con_serial_key();
+  return s_serial_held != 0;
 }
 
 void con_putc(char c) {
@@ -145,6 +167,7 @@ void con_putc(char c) {
   if ((unsigned char)c < 0x20) return;      /* ignore other control codes */
 
   s_grid[s_cy][s_cx] = c;
+  s_fgs[s_cy][s_cx] = s_fg;
   draw_cell(s_cx, s_cy, c, 0);
   advance();
 }
@@ -165,6 +188,8 @@ void con_printf(const char *fmt, ...) {
 void con_cursor(int visible) {
   if (visible == s_cursor_on) return;
   s_cursor_on = visible;
+  /* The cell under the cursor is drawn in the colour being typed in. */
+  s_fgs[s_cy][s_cx] = s_fg;
   draw_cell(s_cx, s_cy, s_grid[s_cy][s_cx], visible);
 }
 

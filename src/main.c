@@ -41,6 +41,7 @@
 #include "kernel/sys/bg.h"
 #include "kernel/sys/clock.h"
 #include "kernel/sys/busy.h"
+#include "kernel/sys/shot.h"
 #include "kernel/net/httpq.h"
 #include "kernel/sys/power.h"
 #include "kernel/drv/battery.h"
@@ -149,6 +150,7 @@ static void cmd_help(void) {
   con_write("system   mem ps taskcost flip clear reboot echo\n");
   con_write("         time (ntp; no rtc on this board), battery\n");
   con_write("voice    hold the button on top, or type listen\n");
+  con_write("shot     screenshot to /shots and the proxy (shot NAME)\n");
   con_write("recovery opt-0 backlight to full, hold escape at boot for safe\n");
   con_write("         mode, then defaults to clear saved settings\n");
   con_write("on card  cat grep -- run with no argument lists them\n");
@@ -212,6 +214,11 @@ static void run_builtin(const char *line, char *arg) {
   else if (!strcmp(line, "wifi")) cmd_wifi(arg);
   else if (!strcmp(line, "get"))  cmd_get(arg);
   else if (!strcmp(line, "update")) cmd_update(arg);
+  else if (!strcmp(line, "shot")) {
+    if (shot_take(arg, con_repaint) == 0)
+      con_printf("%s%s%s\n", shot_last_path(), *shot_error() ? ": " : "", shot_error());
+    else con_printf("shot: %s\n", shot_error());
+  }
   else if (!strcmp(line, "env"))  cmd_env();
   else if (!strcmp(line, "set"))  cmd_set(arg);
   else if (!strcmp(line, "hotkey")) cmd_hotkey(arg);
@@ -300,7 +307,7 @@ static const char *const COMMANDS[] = {
   "battery", "defaults", "listen", "mouse", "ps", "pwd", "reboot", "rm",
   "run", "time",
   "safe",
-  "taskcost", "update", "wifi",
+  "shot", "taskcost", "update", "wifi",
 };
 #define NCOMMANDS ((int)(sizeof COMMANDS / sizeof COMMANDS[0]))
 
@@ -830,6 +837,21 @@ static void repaint_shells(void) {
   else if (s_mode == MODE_LAUNCHER) launchui_repaint();
 }
 
+/* Everything, the console included -- what a screenshot needs painted. */
+static void repaint_all(void) {
+  if (s_mode == MODE_CONSOLE) con_repaint();
+  else repaint_shells();
+}
+
+/* A screenshot asked for over the serial line, from tools/shots.py. Named by
+ * count, because the byte that asks carries no name; the PC renames it. */
+static void serial_shot(void) {
+  static int n;
+  char name[24];
+  snprintf(name, sizeof name, "serial%d", ++n);
+  shot_take(name, repaint_all);
+}
+
 static uint32_t clock_ms(void *ctx) {
   (void)ctx;
   return (uint32_t)(esp_timer_get_time() / 1000);
@@ -1090,6 +1112,9 @@ void app_main(void) {
 
     if (!k) {
       int sc = con_serial_key();
+      /* Not a key: 0xFF is outside the alphabet, and it means "screenshot".
+       * Taken here, before any app sees it, so a shot can be of anything. */
+      if (sc == 0xFF) { serial_shot(); sc = 0; }
       if (sc == '\r' || sc == '\n') k = KEY_ENTER;
       else if (sc == 0x7F || sc == 0x08) k = KEY_BACKSPACE;
       else if (sc == 0x1B) k = KEY_ESC;

@@ -40,6 +40,11 @@ static SemaphoreHandle_t s_blit_done;
  * turned out to be. */
 static SemaphoreHandle_t s_panel_lock;
 
+/* Whoever wants a copy of every blit. See display_set_tap. */
+static DisplayTap s_tap;
+
+void display_set_tap(DisplayTap tap) { s_tap = tap; }
+
 static bool IRAM_ATTR blit_done(esp_lcd_panel_io_handle_t io,
                                 esp_lcd_panel_io_event_data_t *ev, void *ctx) {
   BaseType_t woke = pdFALSE;
@@ -236,6 +241,10 @@ void display_blit(int x, int y, int w, int h, const uint16_t *pixels) {
     if (s_blit_done) xSemaphoreTake(s_blit_done, pdMS_TO_TICKS(1000));
   }
   if (s_panel_lock) xSemaphoreGive(s_panel_lock);
+  /* After the panel has the pixels and the lock is gone: the tap writes to
+   * the card, which is slow and on another bus, and nothing should wait on
+   * the panel for that. */
+  if (s_tap) s_tap(x, y, w, h, pixels);
 }
 
 void display_fill(uint16_t color) {

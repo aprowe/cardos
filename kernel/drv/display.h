@@ -48,6 +48,14 @@ int  display_orient(void);
 /* Push a rectangle of RGB565 pixels. Blocking. */
 void display_blit(int x, int y, int w, int h, const uint16_t *pixels);
 
+/* A copy of every blit, for a screenshot. There is no framebuffer to read
+ * and the panel is write-only, so the only way to know what is on the screen
+ * is to watch it being sent: set a tap, repaint everything, clear the tap.
+ * Called on the drawing task after the pixels are on the panel; NULL to
+ * stop. One at a time. */
+typedef void (*DisplayTap)(int x, int y, int w, int h, const uint16_t *pixels);
+void display_set_tap(DisplayTap tap);
+
 void display_fill(uint16_t color);
 void display_backlight(int on);
 

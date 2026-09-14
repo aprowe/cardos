@@ -30,6 +30,7 @@ idf_component_register(
     "../kernel/sys/voice.c"
     "../kernel/sys/bg.c"
     "../kernel/sys/busy.c"
+    "../kernel/sys/shot.c"
     "../kernel/net/httpq.c"
     "../kernel/drv/battery.c"
     "../kernel/sys/power.c"
