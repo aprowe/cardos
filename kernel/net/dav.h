@@ -64,4 +64,35 @@ void dav_http_date(uint32_t epoch, char *out, size_t out_size);
 /* "1994-11-06T08:49:37Z" -- for creationdate. */
 void dav_iso_date(uint32_t epoch, char *out, size_t out_size);
 
+#define DAV_ALLOW "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, PROPFIND, PROPPATCH, MOVE, COPY, LOCK, UNLOCK"
+
+const char *dav_status_text(int status);            /* "Not Found" */
+const char *dav_content_type(const char *path);     /* by extension; "application/octet-stream" */
+
+/* A complete status line + headers + blank line. content_length < 0 means
+ * chunked. `extra` is zero or more complete "Name: value\r\n" lines. Returns
+ * bytes written, or -1 if it did not fit. */
+int dav_response_head(int status, int32_t content_length, const char *content_type,
+                      const char *extra, int keep_alive, char *out, size_t out_size);
+
+typedef struct {
+  const char *path;       /* full CardOS path of the entry */
+  uint32_t    size;
+  int         is_dir;
+  uint32_t    mtime;
+} DavEntry;
+
+extern const char DAV_MULTISTATUS_HEAD[];
+extern const char DAV_MULTISTATUS_TAIL[];
+
+/* One <D:response> for an entry. Returns bytes written, or -1. */
+int dav_propfind_entry(const DavEntry *e, char *out, size_t out_size);
+
+/* The 207 body for PROPPATCH: says every property was set. */
+int dav_proppatch_body(const char *path, char *out, size_t out_size);
+
+/* The 200 body for LOCK, and the token it names for the Lock-Token header. */
+#define DAV_LOCK_TOKEN "opaquelocktoken:cardos-0000-0000-0001"
+int dav_lock_body(const char *path, char *out, size_t out_size);
+
 #endif /* CARDOS_DAV_H */

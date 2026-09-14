@@ -245,3 +245,167 @@ void dav_iso_date(uint32_t epoch, char *out, size_t out_size) {
   snprintf(out, out_size, "%04d-%02d-%02dT%02u:%02u:%02uZ", y, m, d,
            (unsigned)(secs / 3600), (unsigned)(secs / 60 % 60), (unsigned)(secs % 60));
 }
+
+const char *dav_status_text(int status) {
+  switch (status) {
+  case 100: return "Continue";
+  case 200: return "OK";
+  case 201: return "Created";
+  case 204: return "No Content";
+  case 207: return "Multi-Status";
+  case 400: return "Bad Request";
+  case 403: return "Forbidden";
+  case 404: return "Not Found";
+  case 405: return "Method Not Allowed";
+  case 409: return "Conflict";
+  case 411: return "Length Required";
+  case 412: return "Precondition Failed";
+  case 414: return "URI Too Long";
+  case 415: return "Unsupported Media Type";
+  case 431: return "Request Header Fields Too Large";
+  case 500: return "Internal Server Error";
+  case 507: return "Insufficient Storage";
+  default:  return "Unknown";
+  }
+}
+
+const char *dav_content_type(const char *path) {
+  static const struct { const char *ext, *type; } T[] = {
+    { "txt", "text/plain" }, { "md", "text/plain" }, { "c", "text/plain" },
+    { "h", "text/plain" }, { "py", "text/plain" }, { "csv", "text/plain" },
+    { "html", "text/html" }, { "htm", "text/html" }, { "json", "application/json" },
+    { "png", "image/png" }, { "jpg", "image/jpeg" }, { "jpeg", "image/jpeg" },
+    { "gif", "image/gif" }, { "bmp", "image/bmp" }, { "wav", "audio/wav" },
+    { "pdf", "application/pdf" },
+  };
+  const char *dot = strrchr(path, '.'), *slash = strrchr(path, '/');
+  size_t i;
+  if (!dot || (slash && slash > dot)) return "application/octet-stream";
+  dot++;
+  for (i = 0; i < sizeof T / sizeof T[0]; i++)
+    if (strlen(T[i].ext) == strlen(dot) && ieq(dot, T[i].ext, strlen(dot)))
+      return T[i].type;
+  return "application/octet-stream";
+}
+
+int dav_response_head(int status, int32_t content_length, const char *content_type,
+                      const char *extra, int keep_alive, char *out, size_t out_size) {
+  int n = snprintf(out, out_size,
+    "HTTP/1.1 %d %s\r\nServer: CardOS\r\nConnection: %s\r\n",
+    status, dav_status_text(status), keep_alive ? "keep-alive" : "close");
+  if (n < 0 || (size_t)n >= out_size) return -1;
+  if (content_length >= 0)
+    n += snprintf(out + n, out_size - (size_t)n, "Content-Length: %ld\r\n", (long)content_length);
+  else
+    n += snprintf(out + n, out_size - (size_t)n, "Transfer-Encoding: chunked\r\n");
+  if ((size_t)n >= out_size) return -1;
+  if (content_type)
+    n += snprintf(out + n, out_size - (size_t)n, "Content-Type: %s\r\n", content_type);
+  if ((size_t)n >= out_size) return -1;
+  if (extra)
+    n += snprintf(out + n, out_size - (size_t)n, "%s", extra);
+  if ((size_t)n >= out_size) return -1;
+  n += snprintf(out + n, out_size - (size_t)n, "\r\n");
+  if ((size_t)n >= out_size) return -1;
+  return n;
+}
+
+/* ---- XML ------------------------------------------------------------ */
+
+const char DAV_MULTISTATUS_HEAD[] =
+  "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<D:multistatus xmlns:D=\"DAV:\">";
+const char DAV_MULTISTATUS_TAIL[] = "</D:multistatus>";
+
+/* Append to a bounded buffer. Every writer below goes through this so a
+ * response that would not fit fails as a whole rather than truncating. */
+typedef struct { char *buf; size_t cap, len; int overflow; } Out;
+
+static void put(Out *o, const char *s) {
+  size_t n = strlen(s);
+  if (o->overflow || o->len + n + 1 > o->cap) { o->overflow = 1; return; }
+  memcpy(o->buf + o->len, s, n + 1);
+  o->len += n;
+}
+
+static void put_xml(Out *o, const char *s) {
+  char one[2] = { 0, 0 };
+  for (; *s; s++) {
+    if (*s == '&') put(o, "&amp;");
+    else if (*s == '<') put(o, "&lt;");
+    else if (*s == '>') put(o, "&gt;");
+    else { one[0] = *s; put(o, one); }
+  }
+}
+
+static void put_href(Out *o, const char *path, int is_dir) {
+  char href[FS_PATH_MAX * 3];
+  if (dav_encode_path(path, is_dir, href, sizeof href) < 0) { o->overflow = 1; return; }
+  put(o, "<D:href>");
+  put_xml(o, href);
+  put(o, "</D:href>");
+}
+
+static int finish(Out *o) { return o->overflow ? -1 : (int)o->len; }
+
+int dav_propfind_entry(const DavEntry *e, char *out, size_t out_size) {
+  Out o = { out, out_size, 0, 0 };
+  char tmp[64];
+
+  put(&o, "<D:response>");
+  put_href(&o, e->path, e->is_dir);
+  put(&o, "<D:propstat><D:prop>");
+  if (e->is_dir) {
+    put(&o, "<D:resourcetype><D:collection/></D:resourcetype>");
+  } else {
+    put(&o, "<D:resourcetype/>");
+    snprintf(tmp, sizeof tmp, "<D:getcontentlength>%lu</D:getcontentlength>",
+             (unsigned long)e->size);
+    put(&o, tmp);
+  }
+  put(&o, "<D:getlastmodified>");
+  dav_http_date(e->mtime, tmp, sizeof tmp);
+  put(&o, tmp);
+  put(&o, "</D:getlastmodified><D:creationdate>");
+  dav_iso_date(e->mtime, tmp, sizeof tmp);
+  put(&o, tmp);
+  put(&o, "</D:creationdate><D:displayname>");
+  put_xml(&o, path_basename(e->path));
+  put(&o, "</D:displayname>");
+  if (!e->is_dir) {
+    put(&o, "<D:getcontenttype>");
+    put(&o, dav_content_type(e->path));
+    put(&o, "</D:getcontenttype>");
+  }
+  snprintf(tmp, sizeof tmp, "<D:getetag>\"%lx-%lx\"</D:getetag>",
+           (unsigned long)e->size, (unsigned long)e->mtime);
+  put(&o, tmp);
+  put(&o, "</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>");
+  put(&o, "</D:response>");
+  return finish(&o);
+}
+
+int dav_proppatch_body(const char *path, char *out, size_t out_size) {
+  Out o = { out, out_size, 0, 0 };
+  put(&o, DAV_MULTISTATUS_HEAD);
+  put(&o, "<D:response>");
+  put_href(&o, path, 0);
+  put(&o, "<D:propstat><D:prop/><D:status>HTTP/1.1 200 OK</D:status></D:propstat>"
+          "</D:response>");
+  put(&o, DAV_MULTISTATUS_TAIL);
+  return finish(&o);
+}
+
+int dav_lock_body(const char *path, char *out, size_t out_size) {
+  Out o = { out, out_size, 0, 0 };
+  put(&o, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+          "<D:prop xmlns:D=\"DAV:\"><D:lockdiscovery><D:activelock>"
+          "<D:locktype><D:write/></D:locktype>"
+          "<D:lockscope><D:exclusive/></D:lockscope>"
+          "<D:depth>infinity</D:depth>"
+          "<D:timeout>Second-3600</D:timeout>"
+          "<D:locktoken><D:href>" DAV_LOCK_TOKEN "</D:href></D:locktoken>"
+          "<D:lockroot>");
+  put_href(&o, path, 0);
+  put(&o, "</D:lockroot></D:activelock></D:lockdiscovery></D:prop>");
+  return finish(&o);
+}

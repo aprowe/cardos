@@ -192,3 +192,115 @@ void test_dav_formats_the_epoch_and_a_leap_day(void) {
   dav_http_date(1789603199u, out, sizeof out);    /* 2026-09-16 23:59:59 */
   CHECK(strcmp(out, "Wed, 16 Sep 2026 23:59:59 GMT") == 0);
 }
+
+void test_dav_response_head_has_the_headers_windows_needs(void) {
+  char out[512];
+  int n = dav_response_head(200, 0, NULL,
+    "DAV: 1,2\r\nMS-Author-Via: DAV\r\nAllow: " DAV_ALLOW "\r\n", 1, out, sizeof out);
+  CHECK(n > 0);
+  CHECK(strncmp(out, "HTTP/1.1 200 OK\r\n", 17) == 0);
+  CHECK(strstr(out, "Content-Length: 0\r\n") != NULL);
+  CHECK(strstr(out, "DAV: 1,2\r\n") != NULL);
+  CHECK(strstr(out, "MS-Author-Via: DAV\r\n") != NULL);
+  CHECK(strstr(out, "Connection: keep-alive\r\n") != NULL);
+  CHECK(strstr(out, "Server: CardOS\r\n") != NULL);
+  CHECK(strcmp(out + n - 4, "\r\n\r\n") == 0);
+
+  n = dav_response_head(207, -1, "text/xml; charset=\"utf-8\"", NULL, 0, out, sizeof out);
+  CHECK(n > 0);
+  CHECK(strncmp(out, "HTTP/1.1 207 Multi-Status\r\n", 27) == 0);
+  CHECK(strstr(out, "Transfer-Encoding: chunked\r\n") != NULL);
+  CHECK(strstr(out, "Content-Length:") == NULL);
+  CHECK(strstr(out, "Connection: close\r\n") != NULL);
+  CHECK(strstr(out, "Content-Type: text/xml; charset=\"utf-8\"\r\n") != NULL);
+
+  CHECK_EQ(dav_response_head(200, 0, NULL, NULL, 1, out, 20), -1);
+}
+
+void test_dav_knows_its_status_texts(void) {
+  CHECK(strcmp(dav_status_text(100), "Continue") == 0);
+  CHECK(strcmp(dav_status_text(201), "Created") == 0);
+  CHECK(strcmp(dav_status_text(204), "No Content") == 0);
+  CHECK(strcmp(dav_status_text(207), "Multi-Status") == 0);
+  CHECK(strcmp(dav_status_text(403), "Forbidden") == 0);
+  CHECK(strcmp(dav_status_text(404), "Not Found") == 0);
+  CHECK(strcmp(dav_status_text(405), "Method Not Allowed") == 0);
+  CHECK(strcmp(dav_status_text(409), "Conflict") == 0);
+  CHECK(strcmp(dav_status_text(411), "Length Required") == 0);
+  CHECK(strcmp(dav_status_text(412), "Precondition Failed") == 0);
+  CHECK(strcmp(dav_status_text(414), "URI Too Long") == 0);
+  CHECK(strcmp(dav_status_text(415), "Unsupported Media Type") == 0);
+  CHECK(strcmp(dav_status_text(431), "Request Header Fields Too Large") == 0);
+  CHECK(strcmp(dav_status_text(507), "Insufficient Storage") == 0);
+  CHECK(strcmp(dav_status_text(599), "Unknown") == 0);
+}
+
+void test_dav_guesses_content_types(void) {
+  CHECK(strcmp(dav_content_type("/a.txt"), "text/plain") == 0);
+  CHECK(strcmp(dav_content_type("/a.md"), "text/plain") == 0);
+  CHECK(strcmp(dav_content_type("/a.html"), "text/html") == 0);
+  CHECK(strcmp(dav_content_type("/a.png"), "image/png") == 0);
+  CHECK(strcmp(dav_content_type("/a.wav"), "audio/wav") == 0);
+  CHECK(strcmp(dav_content_type("/a.capp"), "application/octet-stream") == 0);
+  CHECK(strcmp(dav_content_type("/noext"), "application/octet-stream") == 0);
+  CHECK(strcmp(dav_content_type("/a.TXT"), "text/plain") == 0);
+}
+
+void test_dav_propfind_entry_for_a_file(void) {
+  DavEntry e = { "/desktop/a b.txt", 1234, 0, 784111777u };
+  char out[1024];
+  int n = dav_propfind_entry(&e, out, sizeof out);
+  CHECK(n > 0);
+  CHECK(strcmp(out,
+    "<D:response>"
+    "<D:href>/desktop/a%20b.txt</D:href>"
+    "<D:propstat><D:prop>"
+    "<D:resourcetype/>"
+    "<D:getcontentlength>1234</D:getcontentlength>"
+    "<D:getlastmodified>Sun, 06 Nov 1994 08:49:37 GMT</D:getlastmodified>"
+    "<D:creationdate>1994-11-06T08:49:37Z</D:creationdate>"
+    "<D:displayname>a b.txt</D:displayname>"
+    "<D:getcontenttype>text/plain</D:getcontenttype>"
+    "<D:getetag>\"4d2-2ebc98a1\"</D:getetag>"
+    "</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>"
+    "</D:response>") == 0);
+}
+
+void test_dav_propfind_entry_for_a_folder_and_the_root(void) {
+  DavEntry d = { "/desktop", 0, 1, 0 };
+  DavEntry r = { "/", 0, 1, 0 };
+  char out[1024];
+  CHECK(dav_propfind_entry(&d, out, sizeof out) > 0);
+  CHECK(strstr(out, "<D:href>/desktop/</D:href>") != NULL);
+  CHECK(strstr(out, "<D:resourcetype><D:collection/></D:resourcetype>") != NULL);
+  CHECK(strstr(out, "<D:displayname>desktop</D:displayname>") != NULL);
+  CHECK(strstr(out, "getcontentlength") == NULL);
+  CHECK(strstr(out, "getcontenttype") == NULL);
+  CHECK(dav_propfind_entry(&r, out, sizeof out) > 0);
+  CHECK(strstr(out, "<D:href>/</D:href>") != NULL);
+  CHECK(strstr(out, "<D:displayname></D:displayname>") != NULL);
+  CHECK_EQ(dav_propfind_entry(&d, out, 64), -1);
+}
+
+void test_dav_escapes_xml_in_names(void) {
+  DavEntry e = { "/a&b<c>.txt", 1, 0, 0 };
+  char out[1024];
+  CHECK(dav_propfind_entry(&e, out, sizeof out) > 0);
+  CHECK(strstr(out, "<D:displayname>a&amp;b&lt;c&gt;.txt</D:displayname>") != NULL);
+  CHECK(strstr(out, "<D:href>/a%26b%3Cc%3E.txt</D:href>") != NULL);
+}
+
+void test_dav_multistatus_wrapper_and_the_yes_bodies(void) {
+  char out[1024];
+  CHECK(strstr(DAV_MULTISTATUS_HEAD, "<D:multistatus xmlns:D=\"DAV:\">") != NULL);
+  CHECK(strcmp(DAV_MULTISTATUS_TAIL, "</D:multistatus>") == 0);
+
+  CHECK(dav_proppatch_body("/x y", out, sizeof out) > 0);
+  CHECK(strstr(out, "<D:href>/x%20y</D:href>") != NULL);
+  CHECK(strstr(out, "<D:status>HTTP/1.1 200 OK</D:status>") != NULL);
+
+  CHECK(dav_lock_body("/x", out, sizeof out) > 0);
+  CHECK(strstr(out, "<D:locktoken><D:href>" DAV_LOCK_TOKEN "</D:href></D:locktoken>") != NULL);
+  CHECK(strstr(out, "<D:lockscope><D:exclusive/></D:lockscope>") != NULL);
+  CHECK(strstr(out, "<D:href>/x</D:href>") != NULL);
+}
