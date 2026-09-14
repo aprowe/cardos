@@ -13,6 +13,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "kernel/fs/path.h"
+
 #define FS_O_READ   0x01
 #define FS_O_WRITE  0x02
 #define FS_O_CREATE 0x04
@@ -29,12 +31,14 @@
 typedef struct {
   uint32_t size;
   int      is_dir;
+  uint32_t mtime;      /* seconds since the epoch, 0 if the card does not say */
 } FsStat;
 
 typedef struct {
   char     name[FS_NAME_MAX + 1];
   uint32_t size;
   int      is_dir;
+  uint32_t mtime;
 } FsEntry;
 
 /* Mount the SD card. Returns 0 on success. A missing or unformatted card is a
@@ -62,7 +66,13 @@ int  fs_stat(const char *path, FsStat *out);
  * against task stacks the spec sets at 1 KB. Iterating costs one entry. It
  * also removes the arbitrary cap -- fs_list silently truncated a directory
  * with more files than the caller guessed. */
-typedef struct { void *impl; } FsDir;
+/* The directory being read, and where it is, so that two tasks can each be
+ * in the middle of a listing. Was a static, which meant one listing at a
+ * time for the whole machine. */
+typedef struct {
+  void *impl;
+  char  prefix[FS_PATH_MAX + 8];
+} FsDir;
 
 int  fs_opendir(const char *path, FsDir *d);
 int  fs_readdir(FsDir *d, FsEntry *out);   /* 1 = entry, 0 = end, -1 = error */
