@@ -174,3 +174,21 @@ void test_dav_encodes_an_href(void) {
   CHECK(strcmp(out, "/caf%C3%A9%26%3C%3E") == 0);
   CHECK_EQ(dav_encode_path("/desktop/a b", 0, out, 12), -1);
 }
+
+void test_dav_formats_the_rfc_example_date(void) {
+  char out[40];
+  dav_http_date(784111777u, out, sizeof out);     /* the RFC 7231 example */
+  CHECK(strcmp(out, "Sun, 06 Nov 1994 08:49:37 GMT") == 0);
+  dav_iso_date(784111777u, out, sizeof out);
+  CHECK(strcmp(out, "1994-11-06T08:49:37Z") == 0);
+}
+
+void test_dav_formats_the_epoch_and_a_leap_day(void) {
+  char out[40];
+  dav_http_date(0, out, sizeof out);
+  CHECK(strcmp(out, "Thu, 01 Jan 1970 00:00:00 GMT") == 0);
+  dav_http_date(1709164800u, out, sizeof out);    /* 2024-02-29 00:00:00 */
+  CHECK(strcmp(out, "Thu, 29 Feb 2024 00:00:00 GMT") == 0);
+  dav_http_date(1789603199u, out, sizeof out);    /* 2026-09-16 23:59:59 */
+  CHECK(strcmp(out, "Wed, 16 Sep 2026 23:59:59 GMT") == 0);
+}

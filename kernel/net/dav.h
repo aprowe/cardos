@@ -59,4 +59,9 @@ int dav_decode_path(const char *in, size_t n, char *out, size_t out_size);
  * bytes written, or -1 if it did not fit. */
 int dav_encode_path(const char *path, int is_dir, char *out, size_t out_size);
 
+/* "Sun, 06 Nov 1994 08:49:37 GMT" -- for getlastmodified and Last-Modified. */
+void dav_http_date(uint32_t epoch, char *out, size_t out_size);
+/* "1994-11-06T08:49:37Z" -- for creationdate. */
+void dav_iso_date(uint32_t epoch, char *out, size_t out_size);
+
 #endif /* CARDOS_DAV_H */

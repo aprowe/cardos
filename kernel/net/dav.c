@@ -209,3 +209,39 @@ int dav_encode_path(const char *path, int is_dir, char *out, size_t out_size) {
   out[o] = '\0';
   return (int)o;
 }
+
+/* Civil date from days since 1970-01-01 (Howard Hinnant's algorithm), so
+ * there is no dependence on libc's gmtime -- the device's newlib is built
+ * with a zone, and the host's is not. */
+static void civil(uint32_t days, int *y, int *m, int *d) {
+  int64_t z = (int64_t)days + 719468;
+  int64_t era = z / 146097;
+  int64_t doe = z - era * 146097;
+  int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  int64_t mp = (5 * doy + 2) / 153;
+  *d = (int)(doy - (153 * mp + 2) / 5 + 1);
+  *m = (int)(mp < 10 ? mp + 3 : mp - 9);
+  *y = (int)(yoe + era * 400 + (*m <= 2));
+}
+
+static const char *const DAYS[] = { "Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed" };
+static const char *const MONS[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+
+void dav_http_date(uint32_t epoch, char *out, size_t out_size) {
+  uint32_t days = epoch / 86400u, secs = epoch % 86400u;
+  int y, m, d;
+  civil(days, &y, &m, &d);
+  snprintf(out, out_size, "%s, %02d %s %04d %02u:%02u:%02u GMT",
+           DAYS[days % 7], d, MONS[m - 1], y,
+           (unsigned)(secs / 3600), (unsigned)(secs / 60 % 60), (unsigned)(secs % 60));
+}
+
+void dav_iso_date(uint32_t epoch, char *out, size_t out_size) {
+  uint32_t days = epoch / 86400u, secs = epoch % 86400u;
+  int y, m, d;
+  civil(days, &y, &m, &d);
+  snprintf(out, out_size, "%04d-%02d-%02dT%02u:%02u:%02uZ", y, m, d,
+           (unsigned)(secs / 3600), (unsigned)(secs / 60 % 60), (unsigned)(secs % 60));
+}

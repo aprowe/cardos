@@ -114,6 +114,8 @@ void test_dav_refuses_every_shape_of_traversal(void);
 void test_dav_a_single_dot_segment_is_harmless(void);
 void test_dav_a_path_that_does_not_fit_is_414_not_truncated(void);
 void test_dav_encodes_an_href(void);
+void test_dav_formats_the_rfc_example_date(void);
+void test_dav_formats_the_epoch_and_a_leap_day(void);
 void test_hotkeys_first_boot_seeds_the_old_table(void);
 void test_hotkeys_set_get_clear_and_save(void);
 void test_hotkeys_survive_a_reload(void);
@@ -450,6 +452,8 @@ int main(void) {
   RUN(test_dav_a_single_dot_segment_is_harmless);
   RUN(test_dav_a_path_that_does_not_fit_is_414_not_truncated);
   RUN(test_dav_encodes_an_href);
+  RUN(test_dav_formats_the_rfc_example_date);
+  RUN(test_dav_formats_the_epoch_and_a_leap_day);
   printf("-- hotkeys --\n");
   RUN(test_hotkeys_first_boot_seeds_the_old_table);
   RUN(test_hotkeys_set_get_clear_and_save);
