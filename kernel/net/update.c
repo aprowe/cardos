@@ -57,8 +57,16 @@ static const char *bearer(void) {
 }
 
 /* FNV-1a over a file on the card, 1 KB at a time. -1 if it cannot be read. */
+/* Four kilobytes a read, not one.
+ *
+ * Every check hashes every .capp on the card, and the apps have grown: 204 KB
+ * across twelve of them became 345 KB across fifteen, with one at 65 KB. At a
+ * kilobyte a read that is 345 SPI round trips to the card before the first
+ * byte is downloaded, and it is what made `update` feel like it had hung. The
+ * buffer is static and shared with nothing, so the cost is 3 KB of .bss
+ * against roughly a quarter of the transactions. */
 static int hash_file(const char *path, uint32_t *out) {
-  static uint8_t buf[1024];
+  static uint8_t buf[4096];
   uint32_t h = MANIFEST_FNV_INIT;
   int fd = fs_open(path, FS_O_READ), n;
   if (fd < 0) return -1;
@@ -79,23 +87,28 @@ static void say(UpdateLog log, void *ctx, const char *line) {
 
 /* Where NAME.capp lives on the card, folders included; the top level if it
  * is not there at all. Matched on the file name, not the app's own name,
- * because that is what the manifest is keyed by. */
+ * because that is what the manifest is keyed by.
+ *
+ * Asked of the card, not of the icon table. The table only holds apps the
+ * loader accepted, and the one time `update` matters most -- a card full of
+ * apps built for a newer API than the firmware running -- it accepts none of
+ * them. Every app then came back "stale", and installing would have put a
+ * second copy of each at the top level beside the one in its folder. */
 static void capp_path(const char *name, char *out, size_t size) {
-  char want[40];
-  size_t wl;
-  int i;
+  FsDir d;
+  FsEntry e;
+  FsStat st;
 
-  snprintf(want, sizeof want, "/%s.capp", name);
-  wl = strlen(want);
-  for (i = 0; i < icons_total(); i++) {
-    const Icon *ic = icon_at(i);
-    size_t pl;
-    if (!ic || ic->kind != ICON_CAPP) continue;
-    pl = strlen(ic->path);
-    if (pl >= wl && strcmp(ic->path + pl - wl, want) == 0) {
-      snprintf(out, size, "%s", ic->path);
-      return;
+  snprintf(out, size, "%s/%s.capp", ICONS_DIR, name);
+  if (fs_stat(out, &st) == 0 && !st.is_dir) return;
+
+  if (fs_opendir(ICONS_DIR, &d) == 0) {
+    while (fs_readdir(&d, &e) == 1) {
+      if (!e.is_dir || e.name[0] == '.') continue;
+      snprintf(out, size, "%s/%s/%s.capp", ICONS_DIR, e.name, name);
+      if (fs_stat(out, &st) == 0 && !st.is_dir) { fs_closedir(&d); return; }
     }
+    fs_closedir(&d);
   }
   snprintf(out, size, "%s/%s.capp", ICONS_DIR, name);
 }
@@ -132,9 +145,6 @@ int update_check(UpdateCheck *out) {
   self = esp_app_get_description();
   memset(&local, 0, sizeof local);
   local.own_sha = self ? self->app_elf_sha256 : NULL;
-  /* The icon table is what knows which folder an app is in. Loaded here if
-   * the launcher has not yet, as launchui's own need_icons does. */
-  if (icons_total() == 0) icons_reload();
   for (i = 0; i < out->m.napps; i++) {
     char path[80];
     capp_path(out->m.app[i].name, path, sizeof path);

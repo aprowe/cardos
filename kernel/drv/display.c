@@ -22,12 +22,31 @@
 #include "esp_lcd_panel_vendor.h"
 #include "esp_log.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 #define PIN_BL   38
 #define PIN_RST  33
 #define PIN_DC   34
 #define PIN_MOSI 35
 #define PIN_SCK  36
 #define PIN_CS   37
+
+/* Given from the SPI ISR when a queued colour transfer has finished, which is
+ * what makes display_blit synchronous. See display_blit for why it must be. */
+static SemaphoreHandle_t s_blit_done;
+
+/* One task on the panel at a time. See display_blit for who the second one
+ * turned out to be. */
+static SemaphoreHandle_t s_panel_lock;
+
+static bool IRAM_ATTR blit_done(esp_lcd_panel_io_handle_t io,
+                                esp_lcd_panel_io_event_data_t *ev, void *ctx) {
+  BaseType_t woke = pdFALSE;
+  (void)io; (void)ev; (void)ctx;
+  if (s_blit_done) xSemaphoreGiveFromISR(s_blit_done, &woke);
+  return woke == pdTRUE;
+}
 
 #define LCD_HOST SPI2_HOST
 #define LCD_HZ   (40 * 1000 * 1000)
@@ -138,6 +157,13 @@ int display_init(void) {
     return -1;
   }
 
+  s_blit_done = xSemaphoreCreateBinary();
+  s_panel_lock = xSemaphoreCreateMutex();
+  if (!s_blit_done || !s_panel_lock) {
+    ESP_LOGE(TAG, "panel semaphores failed");
+    return -1;
+  }
+
   esp_lcd_panel_io_spi_config_t io_cfg = {
     .dc_gpio_num = PIN_DC,
     .cs_gpio_num = PIN_CS,
@@ -146,6 +172,7 @@ int display_init(void) {
     .lcd_param_bits = 8,
     .spi_mode = 0,
     .trans_queue_depth = 10,
+    .on_color_trans_done = blit_done,
   };
   if (esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_cfg, &io) != ESP_OK) {
     ESP_LOGE(TAG, "panel_io_spi failed");
@@ -172,9 +199,43 @@ int display_init(void) {
   return 0;
 }
 
+/* Blit, and do not return until the panel has actually taken the pixels.
+ *
+ * esp_lcd_panel_draw_bitmap does NOT copy: it queues an SPI transaction with
+ * spi_device_queue_trans and returns while DMA is still reading the caller's
+ * buffer. The driver only waits for that transfer at the *start* of the next
+ * draw_bitmap -- which is one call too late for anyone who reuses a staging
+ * buffer, because the overwrite has already happened by then.
+ *
+ * Every caller here reuses one: draw.c composes each run of text and each
+ * band of a fill into the same array. That was invisible while a blit was a
+ * single row of a solid fill -- overwriting those bytes with the same colour
+ * changes nothing -- and became visible as soon as consecutive blits carried
+ * different content: a fill queued, then overwritten mid-flight by the next
+ * line of text, paints a rectangle of the wrong thing.
+ *
+ * So the transfer is made synchronous. The batching in draw.c is still worth
+ * what it was worth: it removed transactions and their per-transaction
+ * CASET/RASET/RAMWR overhead, not the time on the wire.
+ *
+ * And it is serialised, because esp_lcd's SPI panel is not. Two tasks in
+ * draw_bitmap at once is an assert in spi_master ("cannot release a lock that
+ * hasn't been acquired") and a reboot, and there are two tasks that draw:
+ * the shell, and the busy indicator (kernel/sys/busy.c) that animates while
+ * the shell is inside a network call. That was meant to be safe because a
+ * blocked shell does not draw -- but `update os` logs its progress to the
+ * console every ten percent, from inside the call, and the badge's next
+ * frame landed on top of it at 10%. This is the only place every pixel
+ * passes through, so this is where the rule is kept rather than by every
+ * caller remembering it. */
 void display_blit(int x, int y, int w, int h, const uint16_t *pixels) {
   if (!s_panel || w <= 0 || h <= 0) return;
-  esp_lcd_panel_draw_bitmap(s_panel, x, y, x + w, y + h, pixels);
+  if (s_panel_lock) xSemaphoreTake(s_panel_lock, portMAX_DELAY);
+  if (esp_lcd_panel_draw_bitmap(s_panel, x, y, x + w, y + h, pixels) == ESP_OK) {
+    /* Only if something was queued: nothing else will ever give it. */
+    if (s_blit_done) xSemaphoreTake(s_blit_done, pdMS_TO_TICKS(1000));
+  }
+  if (s_panel_lock) xSemaphoreGive(s_panel_lock);
 }
 
 void display_fill(uint16_t color) {
