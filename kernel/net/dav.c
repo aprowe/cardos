@@ -100,8 +100,13 @@ int dav_parse(const char *hdr, size_t n, DavRequest *req) {
     if ((v = header(p, len, "Content-Length", &vlen)) != NULL) {
       uint32_t cl = 0;
       size_t k;
-      for (k = 0; k < vlen && v[k] >= '0' && v[k] <= '9'; k++)
-        cl = cl * 10 + (uint32_t)(v[k] - '0');
+      for (k = 0; k < vlen && v[k] >= '0' && v[k] <= '9'; k++) {
+        uint32_t d = (uint32_t)(v[k] - '0');
+        if (cl > (UINT32_MAX - d) / 10) { req->bad = 400; return -1; }
+        cl = cl * 10 + d;
+      }
+      /* Not a digit at all, or not every byte was one: not a number. */
+      if (k == 0 || k != vlen) { req->bad = 400; return -1; }
       req->content_length = cl;
       req->has_content_length = 1;
     } else if ((v = header(p, len, "Connection", &vlen)) != NULL) {

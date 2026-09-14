@@ -85,3 +85,22 @@ void test_dav_infinity_and_chunked_are_recorded_not_refused(void) {
   CHECK_EQ(q.depth, DAV_DEPTH_INFINITY);
   CHECK_EQ(q.chunked, 1);
 }
+
+/* A Content-Length that would overflow uint32_t, or is not a number at all,
+ * is malformed -- not silently wrapped or ignored. The value that exactly
+ * fills uint32_t is still good. */
+void test_dav_a_content_length_that_overflows_is_400(void) {
+  const char *r = "PUT /x HTTP/1.1\r\nContent-Length: 999999999999\r\n\r\n";
+  DavRequest q;
+  CHECK_EQ(dav_parse(r, strlen(r), &q), -1);
+  CHECK_EQ(q.bad, 400);
+
+  r = "PUT /x HTTP/1.1\r\nContent-Length: abc\r\n\r\n";
+  CHECK_EQ(dav_parse(r, strlen(r), &q), -1);
+  CHECK_EQ(q.bad, 400);
+
+  r = "PUT /x HTTP/1.1\r\nContent-Length: 4294967295\r\n\r\n";
+  CHECK_EQ(dav_parse(r, strlen(r), &q), 0);
+  CHECK_EQ(q.has_content_length, 1);
+  CHECK_EQ(q.content_length, 4294967295u);
+}

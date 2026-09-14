@@ -107,6 +107,7 @@ void test_dav_reads_the_headers_it_cares_about(void);
 void test_dav_knows_every_method_and_the_rest_is_unknown(void);
 void test_dav_rejects_a_malformed_request_line(void);
 void test_dav_infinity_and_chunked_are_recorded_not_refused(void);
+void test_dav_a_content_length_that_overflows_is_400(void);
 void test_hotkeys_first_boot_seeds_the_old_table(void);
 void test_hotkeys_set_get_clear_and_save(void);
 void test_hotkeys_survive_a_reload(void);
@@ -436,6 +437,7 @@ int main(void) {
   RUN(test_dav_knows_every_method_and_the_rest_is_unknown);
   RUN(test_dav_rejects_a_malformed_request_line);
   RUN(test_dav_infinity_and_chunked_are_recorded_not_refused);
+  RUN(test_dav_a_content_length_that_overflows_is_400);
   printf("-- hotkeys --\n");
   RUN(test_hotkeys_first_boot_seeds_the_old_table);
   RUN(test_hotkeys_set_get_clear_and_save);
