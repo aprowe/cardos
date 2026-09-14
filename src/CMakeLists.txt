@@ -31,6 +31,8 @@ idf_component_register(
     "../kernel/sys/bg.c"
     "../kernel/sys/busy.c"
     "../kernel/net/httpq.c"
+    "../kernel/net/dav.c"
+    "../kernel/net/share.c"
     "../kernel/drv/battery.c"
     "../kernel/sys/power.c"
     "../kernel/sys/clock.c"

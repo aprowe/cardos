@@ -4,6 +4,7 @@
 #include "kernel/app/elfload.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/http.h"
+#include "kernel/net/share.h"
 #include "kernel/sys/env.h"
 
 #include <stdio.h>
@@ -291,6 +292,7 @@ static void release_slot(Slot *s) {
   capp_unload(&s->la);
   s->loaded = 0;
   s->has_ui = 0;
+  share_app_closed();
 }
 
 /* A shell saying it has finished with an app -- the window closed, or escape
