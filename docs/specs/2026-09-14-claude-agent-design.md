@@ -27,25 +27,34 @@ The second is the design problem. The first is a rename.
 | Model | `claude-opus-5`, `output_config.effort: "low"`, adaptive thinking left on | A pocket chat wants the answer quickly; low effort on Opus 5 is more than a 40-column screen can use, and it consolidates tool calls. Thinking is not disabled: on Opus 5 that makes the model write tool calls into visible text. |
 | Streaming | No | SSE parsing buys nothing on a 16-line screen, and the busy badge already says a request is in flight. |
 | Key | `/claude.key` on the card, read at first use | Same place and shape as `/claude.token`. Never in NVS, never in the firmware, never sent anywhere but `api.anthropic.com`. |
-| History | The last ~6 KB of turns, in the kernel, oldest dropped whole | Every request resends the conversation; the reply buffer and the TLS session set the ceiling. Measured on the device before the number is trusted. |
-| Reply size | `max_tokens` 1024, an 8 KB reply buffer | Sixteen lines of forty columns. A system prompt asks for short plain text with no markdown, because nothing here can draw it. |
+| Where the conversation lives | On the card: `/cache/claude/history.json` is the `messages` array's contents, verbatim | Every request resends the conversation, and RAM is the one thing this board has none of. The card is the framebuffer for screenshots; it is the context window here. |
+| How a request is sent | Built as a file — a constant head, the history file, a constant tail — and posted from the file | `http_post_file` streams from the card already. Nothing larger than a 512-byte window is ever in RAM for the body. |
+| How a reply arrives | Streamed to `/cache/claude/reply.json`, then scanned from the file | `http_download_ex` already does this for pages and firmware. The reply is read through the same window, and the assistant `content` array is copied from it into the history file byte for byte. |
+| History cap | 16 KB, oldest turn dropped whole | A policy about latency and cost now, not a RAM limit: 16 KB of input is a few seconds of upload on this radio and a few cents. Raise it when it hurts. |
+| Reply size | `max_tokens` 1024 | Sixteen lines of forty columns. A system prompt asks for short plain text with no markdown, because nothing here can draw it. |
 | Headers | `http_request`'s `bearer` parameter becomes `auth`: with a `:` in it, sent verbatim as header lines; without, a bearer token | One string, no new parameters, and `httpq` and `api->http_start` pass it through unchanged. API version 22 → 23. |
 | Where the answer shows | In the Claude app if it is on screen; otherwise as the voice overlay's result line, briefly | The agent finishes while Todo is showing. The user asked for something and should see that it happened without going back to find out. |
 
 ## The memory problem, stated for this feature
 
 With both radios up there are ~120 KB of heap and a TLS session takes ~40 KB
-of it while a request runs. During one request the agent holds:
+of it while a request runs. The agent adds almost nothing to that, because
+the conversation never comes into RAM whole:
 
-| | |
-|---|---|
-| history | ≤ 6 KB |
-| request body, built from history + tools + prompt | ≤ 10 KB |
-| reply, owned by `httpq` until collected | 8 KB |
+| | where | RAM |
+|---|---|---|
+| history | `/cache/claude/history.json` | — |
+| request body | `/cache/claude/request.json`, written by concatenation, posted from the file | one 512-byte window |
+| reply | `/cache/claude/reply.json`, streamed in, scanned in place | one 512-byte window |
+| the tool definitions and system prompt | a constant string in flash | — |
+| the transcript the app paints | the last ~2 KB of what was said, in the kernel | 2 KB |
 
-About 24 KB, once, never two at a time — `httpq` already refuses a second
-request. The tool definitions are a constant string in flash. Every figure in
-this table is a guess until `mem` says otherwise; the plan measures it.
+`httpq` gains a second mode for this — body from a file, reply to a file —
+beside the string mode every other app uses. One request at a time, as now.
+The cost moved to the card: a turn writes and reads a few tens of kilobytes,
+which is tens of milliseconds, against a request that takes seconds.
+`mem` during a request is still the measurement that decides whether any of
+this is true.
 
 ## The tools
 
@@ -94,19 +103,22 @@ added to the vocabulary so voice gets `action` too.
   "messages": [ …history… ] }
 ```
 
-History is kept as the **raw JSON of each message's `content`**, not as
-text. An assistant turn that called a tool has `tool_use` blocks whose `id`,
-`name` and `input` must go back verbatim, and thinking blocks whose signature
-must go back unchanged on the same model. Keeping the model's own bytes is
-the only representation that cannot get this wrong. Each entry is
-`role` + content-JSON; the user's typed text is wrapped as a text block; a
-tool result is a `tool_result` block naming the `tool_use_id`.
+The history file *is* the inside of the `messages` array: complete message
+objects, comma-separated, the model's own bytes. An assistant turn that
+called a tool has `tool_use` blocks whose `id`, `name` and `input` must go
+back verbatim, and thinking blocks whose signature must go back unchanged on
+the same model. Copying the reply's `content` array out of the reply file
+and into the history file is the only representation that cannot get this
+wrong. The user's typed text is appended as a text block; a tool result as a
+`tool_result` block naming the `tool_use_id`. Dropping the oldest turn is
+copying the file from its second message onward — a turn is dropped whole,
+and never a `tool_use` without the `tool_result` that answers it.
 
-The reply is scanned, not parsed: `"stop_reason"`, then each block's
-`"type"`, and for `text` the string (unescaped), for `tool_use` the `id`,
-`name` and the one string or number argument. The same style Todo and
-Calendar use on Google's JSON, for the same reason. An `error.message` is
-shown as the answer.
+The reply is scanned through a window, not parsed: `"stop_reason"`, then
+each block's `"type"`, and for `text` the string (unescaped, into the
+transcript), for `tool_use` the `id`, `name` and the one string or number
+argument. The same style Todo and Calendar use on Google's JSON, for the
+same reason. An `error.message` is shown as the answer.
 
 ## The loop
 
@@ -141,11 +153,14 @@ the proxy's token, and `webproxy.py` and `update.c` read it too.
 
 Host tests (`test/test_agent.c`), portable C with no device dependencies:
 
-- building the request body from history: escaping, wrapping, dropping the
-  oldest turn whole when over budget, never splitting a tool_use from its
-  tool_result
-- scanning a reply: text blocks, tool_use blocks with string and number
-  inputs, `error.message`, `stop_reason`
+- the history file: appending a user turn, a tool result, and a reply's
+  `content` array copied through a window; dropping the oldest turn whole
+  when over the cap, never splitting a tool_use from its tool_result
+- scanning a reply through a window: text blocks, tool_use blocks with
+  string and number inputs, `error.message`, `stop_reason` — including
+  strings that straddle a window boundary
+- the file operations behind a `FileOps` table so the tests run on host
+  files and the device runs on the card
 - converting a tool call to an `RpcCmd` and rejecting unknown tools
 - `rpc_parse` of the new `action` verb
 
