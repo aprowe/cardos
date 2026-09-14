@@ -48,4 +48,15 @@ int dav_parse(const char *hdr, size_t n, DavRequest *req);
 
 const char *dav_method_name(DavMethod m);
 
+/* Percent-decode in[0..n) -- a request target or a Destination, which may be
+ * a full http://host/... URL -- into a normalised CardOS path. 0 on success;
+ * -1 if it is not a path the card can hold (relative, traversal, a backslash,
+ * a control character, a query string, a NUL); -2 if it does not fit. */
+int dav_decode_path(const char *in, size_t n, char *out, size_t out_size);
+
+/* The reverse, for an href: percent-encode everything but unreserved
+ * characters and '/'. A directory gets a trailing '/' when is_dir. Returns
+ * bytes written, or -1 if it did not fit. */
+int dav_encode_path(const char *path, int is_dir, char *out, size_t out_size);
+
 #endif /* CARDOS_DAV_H */

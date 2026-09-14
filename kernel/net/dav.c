@@ -53,9 +53,6 @@ static const char *header(const char *line, size_t n, const char *name,
   return v;
 }
 
-/* dav_decode_path is defined in the next task. */
-int dav_decode_path(const char *in, size_t n, char *out, size_t out_size);
-
 int dav_parse(const char *hdr, size_t n, DavRequest *req) {
   const char *p = hdr, *end = hdr + n, *sp1, *sp2, *eol;
   size_t vlen;
@@ -130,19 +127,85 @@ int dav_parse(const char *hdr, size_t n, DavRequest *req) {
   return 0;
 }
 
-/* TEMPORARY: replaced in Task 3. */
+static int hexval(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
 int dav_decode_path(const char *in, size_t n, char *out, size_t out_size) {
-  const char *s = in;
+  char raw[FS_PATH_MAX];
   size_t i, o = 0;
-  if (n > 7 && memcmp(s, "http://", 7) == 0) {
-    const char *slash = memchr(s + 7, '/', n - 7);
+
+  /* A Destination may be absolute: skip scheme and host. */
+  if (n > 7 && memcmp(in, "http://", 7) == 0) {
+    const char *slash = memchr(in + 7, '/', n - 7);
     if (!slash) return -1;
-    n -= (size_t)(slash - s); s = slash;
+    n -= (size_t)(slash - in);
+    in = slash;
   }
-  for (i = 0; i < n && o + 1 < out_size; i++) {
-    if (s[i] == '%' && i + 2 < n && s[i + 1] == '2' && s[i + 2] == '0') { out[o++] = ' '; i += 2; }
-    else out[o++] = s[i];
+  if (n == 0 || in[0] != '/') return -1;
+
+  for (i = 0; i < n; i++) {
+    char c = in[i];
+    if (c == '%') {
+      int hi, lo;
+      if (i + 2 >= n) return -1;
+      hi = hexval(in[i + 1]);
+      lo = hexval(in[i + 2]);
+      if (hi < 0 || lo < 0) return -1;
+      c = (char)(hi * 16 + lo);
+      i += 2;
+    } else if (c == '?' || c == '#') {
+      return -1;                       /* a file has no query string */
+    }
+    if (c == '\0' || c == '\\' || (unsigned char)c < 0x20 || c == 0x7f) return -1;
+    if (o + 1 >= sizeof raw) return -2;
+    raw[o++] = c;
   }
-  out[o] = 0;
+  raw[o] = '\0';
+
+  /* Traversal: refuse rather than resolve. path_normalize would clamp ".."
+   * at the root, and a client that sends ".." is not one to be helpful to. */
+  {
+    const char *s = raw;
+    while (*s) {
+      const char *seg = s, *e = strchr(s, '/');
+      size_t len = e ? (size_t)(e - seg) : strlen(seg);
+      if (len == 2 && seg[0] == '.' && seg[1] == '.') return -1;
+      s = e ? e + 1 : seg + len;
+    }
+  }
+  if (path_normalize(raw, out, out_size) != 0) return -2;
   return 0;
+}
+
+static int unreserved(unsigned char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~';
+}
+
+int dav_encode_path(const char *path, int is_dir, char *out, size_t out_size) {
+  static const char HEX[] = "0123456789ABCDEF";
+  size_t o = 0;
+  const unsigned char *p = (const unsigned char *)path;
+
+  for (; *p; p++) {
+    if (*p == '/' || unreserved(*p)) {
+      if (o + 1 >= out_size) return -1;
+      out[o++] = (char)*p;
+    } else {
+      if (o + 3 >= out_size) return -1;
+      out[o++] = '%';
+      out[o++] = HEX[*p >> 4];
+      out[o++] = HEX[*p & 15];
+    }
+  }
+  if (is_dir && !(o == 1 && out[0] == '/')) {
+    if (o + 1 >= out_size) return -1;
+    out[o++] = '/';
+  }
+  out[o] = '\0';
+  return (int)o;
 }

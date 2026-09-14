@@ -104,3 +104,73 @@ void test_dav_a_content_length_that_overflows_is_400(void) {
   CHECK_EQ(q.has_content_length, 1);
   CHECK_EQ(q.content_length, 4294967295u);
 }
+
+static int dec(const char *in, char *out, size_t n) {
+  return dav_decode_path(in, strlen(in), out, n);
+}
+
+void test_dav_decodes_percent_escapes_and_normalises(void) {
+  char out[FS_PATH_MAX];
+  CHECK_EQ(dec("/desktop/a%20b.txt", out, sizeof out), 0);
+  CHECK(strcmp(out, "/desktop/a b.txt") == 0);
+  CHECK_EQ(dec("/desktop/", out, sizeof out), 0);
+  CHECK(strcmp(out, "/desktop") == 0);
+  CHECK_EQ(dec("//desktop///x", out, sizeof out), 0);
+  CHECK(strcmp(out, "/desktop/x") == 0);
+  CHECK_EQ(dec("/", out, sizeof out), 0);
+  CHECK(strcmp(out, "/") == 0);
+  CHECK_EQ(dec("/caf%C3%A9", out, sizeof out), 0);
+  CHECK(strcmp(out, "/caf\xC3\xA9") == 0);
+}
+
+void test_dav_strips_the_host_from_a_full_url(void) {
+  char out[FS_PATH_MAX];
+  CHECK_EQ(dec("http://192.168.1.23/desktop/x", out, sizeof out), 0);
+  CHECK(strcmp(out, "/desktop/x") == 0);
+  CHECK_EQ(dec("http://cardos:80/", out, sizeof out), 0);
+  CHECK(strcmp(out, "/") == 0);
+}
+
+void test_dav_refuses_every_shape_of_traversal(void) {
+  char out[FS_PATH_MAX];
+  CHECK_EQ(dec("/../x", out, sizeof out), -1);
+  CHECK_EQ(dec("/desktop/../../x", out, sizeof out), -1);
+  CHECK_EQ(dec("/%2e%2e/x", out, sizeof out), -1);
+  CHECK_EQ(dec("/%2E%2E/x", out, sizeof out), -1);
+  CHECK_EQ(dec("/desktop/..%2fx", out, sizeof out), -1);
+  CHECK_EQ(dec("/desktop\\x", out, sizeof out), -1);
+  CHECK_EQ(dec("/desktop%5cx", out, sizeof out), -1);
+  CHECK_EQ(dec("/x%00y", out, sizeof out), -1);
+  CHECK_EQ(dec("/x?y=1", out, sizeof out), -1);
+  CHECK_EQ(dec("desktop/x", out, sizeof out), -1);
+  CHECK_EQ(dec("", out, sizeof out), -1);
+  CHECK_EQ(dec("/x%zz", out, sizeof out), -1);
+  CHECK_EQ(dec("/x\x01", out, sizeof out), -1);
+}
+
+void test_dav_a_single_dot_segment_is_harmless(void) {
+  char out[FS_PATH_MAX];
+  CHECK_EQ(dec("/desktop/./x", out, sizeof out), 0);
+  CHECK(strcmp(out, "/desktop/x") == 0);
+}
+
+void test_dav_a_path_that_does_not_fit_is_414_not_truncated(void) {
+  char in[300], out[FS_PATH_MAX];
+  memset(in, 'a', sizeof in);
+  in[0] = '/';
+  in[sizeof in - 1] = 0;
+  CHECK_EQ(dav_decode_path(in, strlen(in), out, sizeof out), -2);
+}
+
+void test_dav_encodes_an_href(void) {
+  char out[256];
+  CHECK(dav_encode_path("/desktop/a b.txt", 0, out, sizeof out) > 0);
+  CHECK(strcmp(out, "/desktop/a%20b.txt") == 0);
+  CHECK(dav_encode_path("/desktop", 1, out, sizeof out) > 0);
+  CHECK(strcmp(out, "/desktop/") == 0);
+  CHECK(dav_encode_path("/", 1, out, sizeof out) > 0);
+  CHECK(strcmp(out, "/") == 0);
+  CHECK(dav_encode_path("/caf\xC3\xA9&<>", 0, out, sizeof out) > 0);
+  CHECK(strcmp(out, "/caf%C3%A9%26%3C%3E") == 0);
+  CHECK_EQ(dav_encode_path("/desktop/a b", 0, out, 12), -1);
+}
