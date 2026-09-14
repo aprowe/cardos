@@ -11,7 +11,8 @@
  *   NAME.bin    a firmware image to chain-boot, replacing CardOS
  *   NAME/       a folder: one level of subdirectory, scanned the same way
  *
- * /firmware is scanned as well, for .bin only.
+ * /firmware is scanned as well, for .bin only, and appears as a folder called
+ * Firmware rather than as loose entries on the desktop.
  */
 #ifndef CARDOS_ICONS_H
 #define CARDOS_ICONS_H
@@ -25,9 +26,22 @@
 /* Firmware images are scanned from here too. They were already living in
  * /firmware before CardOS existed -- put there by the tools that built them --
  * and asking the user to copy them into /desktop to see them would be asking
- * them to keep two copies of a 1.4 MB file in step. */
+ * them to keep two copies of a 1.4 MB file in step. They are shown inside a
+ * Firmware folder, so the desktop is apps and the one thing that is not an
+ * app takes a deliberate step to reach. */
 #define FIRMWARE_DIR "/firmware"
-#define MAX_ICONS 24
+
+/* Where the IDE keeps assembly source, and where its example is seeded. */
+#define ASM_DIR "/asm"
+/* Everything the scan can hold: top-level entries, folders, and what is
+ * inside them, all in one flat table.
+ *
+ * This was 24, and the app set grew past it -- four top-level entries, three
+ * folders holding thirteen apps between them, and a Firmware folder with four
+ * images is 25. The scan simply stopped when it ran out, so the last folder
+ * looked empty and nobody was told. Sized with room now rather than exactly,
+ * because the failure is silent. */
+#define MAX_ICONS 48
 
 typedef enum { ICON_BUILTIN, ICON_FIRMWARE, ICON_CAPP, ICON_FOLDER } IconKind;
 

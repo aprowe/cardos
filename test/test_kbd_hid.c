@@ -1,5 +1,6 @@
 #include "tinytest.h"
 #include "kernel/input/kbd_hid.h"
+#include "kernel/drv/keyboard.h"
 #include <string.h>
 
 /* A boot keyboard report says which keys are *held*, not which were pressed.
@@ -125,14 +126,35 @@ void test_ctrl_makes_the_same_control_characters_as_the_builtin_keyboard(void) {
   CHECK_EQ(kbd_hid_translate(0x13, KBD_MOD_LCTRL), 0x10);   /* ctrl-p */
 }
 
-/* ctrl-h and Backspace both want 0x08. Backspace keeps it, because it is a key
- * rather than a chord, and ctrl-h becomes the help code -- the same one the
- * built-in keyboard produces, or help would open from one keyboard and delete
- * a character from the other. */
-void test_ctrl_h_is_help_and_backspace_keeps_its_byte(void) {
-  CHECK_EQ(kbd_hid_translate(0x0B, KBD_MOD_LCTRL), KBD_KEY_HELP);   /* ctrl-h */
-  CHECK_EQ(kbd_hid_translate(0x2A, 0), 0x08);                       /* backspace */
-  CHECK_EQ(kbd_hid_translate(0x0B, 0), 'h');                        /* plain h */
+/* ctrl-h used to be special-cased into the help code, because ctrl-h and
+ * Backspace are both 0x08 and only one of them could have it. Under the
+ * modifier convention the tie stops existing: help is a window operation and
+ * lives on fn, so ctrl-h is the app's like every other ctrl chord. */
+void test_ctrl_h_is_the_apps_and_backspace_keeps_its_byte(void) {
+  CHECK_EQ(kbd_hid_translate(0x0B, KBD_MOD_LCTRL), 0x08);   /* ctrl-h, the app's */
+  CHECK_EQ(kbd_hid_translate(0x2A, 0), 0x08);               /* backspace */
+  CHECK_EQ(kbd_hid_translate(0x0B, 0), 'h');                /* plain h */
+}
+
+/* The GUI key stands in for Fn, which a Bluetooth keyboard does not have and
+ * whose Alt is already Opt. Window operations, with codes of their own so an
+ * app taking text cannot swallow the chord that closes it. */
+void test_the_gui_key_makes_the_window_chords(void) {
+  CHECK_EQ(kbd_hid_translate(0x1A, KBD_MOD_LGUI), KBD_KEY_FN_LETTER('w'));
+  CHECK_EQ(kbd_hid_translate(0x09, KBD_MOD_LGUI), KBD_KEY_FN_LETTER('f'));
+  CHECK_EQ(kbd_hid_translate(0x16, KBD_MOD_RGUI), KBD_KEY_FN_LETTER('s'));
+  CHECK_EQ(kbd_hid_translate(0x0B, KBD_MOD_LGUI), KBD_KEY_FN_LETTER('h'));
+  /* And they are outside the opt range, or the global handler would swallow
+   * every one of them before a shell saw it. */
+  CHECK(KBD_KEY_FN_LETTER('a') > KBD_KEY_OPT_LETTER('z'));
+}
+
+/* The same chord from the built-in keyboard and from Bluetooth must be the
+ * same byte, or a window closes from one keyboard and not the other. */
+void test_the_two_keyboards_agree_about_fn(void) {
+  CHECK_EQ(KBD_KEY_FN_LETTER('w'), KEY_FN_LETTER('w'));
+  CHECK_EQ(KBD_KEY_OPT_LETTER('t'), KEY_OPT_LETTER('t'));
+  CHECK_EQ(KBD_KEY_HELP, KEY_HELP);
 }
 
 /* Alt stands in for Opt, and its chords get codes of their own so an app

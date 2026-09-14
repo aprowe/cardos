@@ -10,16 +10,23 @@
 #include "kernel/ui/draw.h"
 #include "kernel/fs/fs.h"
 #include "kernel/net/http.h"
+#include "kernel/net/httpq.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/gauth.h"
 #include "kernel/net/update.h"
 #include "kernel/sys/sio.h"
 #include "kernel/app/capprun.h"
 #include "kernel/ui/launchui.h"
+#include "kernel/drv/keyboard.h"
+#include "kernel/sys/clock.h"
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+
+#include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -180,6 +187,14 @@ static void api_ui(const CappUi *ui) { capprun_install_ui(ui); }
 
 static void api_damage(CRect r) { capprun_damage(r); }
 
+static int api_http_stream(const char *url,
+                           int (*on_data)(void *ctx, const uint8_t *d, int n),
+                           void *ctx, int timeout_ms) {
+  return http_stream(url, (HttpSink)on_data, ctx, timeout_ms);
+}
+
+static int api_key_pending(void) { return keyboard_any_down(); }
+
 /* The clip, in the coordinates an app draws in -- which are the screen's, since
  * paint hands it absolute rectangles. An app compares this with the rect it was
  * given: smaller means its own damage came back, equal means the shell is
@@ -243,6 +258,57 @@ static int api_update_apply(int os, char *out, size_t n) {
   return done;
 }
 
+/* Local time, broken down for an app that has no libc to do it with. The zone
+ * rules are the kernel's -- clock.c has already applied env TZ -- so this is
+ * localtime_r and a copy, and the honest answer when the clock is unset. */
+static void api_now(CappTime *t) {
+  time_t now;
+  struct tm tm;
+  if (!t) return;
+  memset(t, 0, sizeof *t);
+  if (!clock_have_time()) return;
+  now = (time_t)clock_epoch();
+  if (!now) return;
+  localtime_r(&now, &tm);
+  t->year  = (uint16_t)(tm.tm_year + 1900);
+  t->month = (uint8_t)(tm.tm_mon + 1);
+  t->day   = (uint8_t)tm.tm_mday;
+  t->hour  = (uint8_t)tm.tm_hour;
+  t->min   = (uint8_t)tm.tm_min;
+  t->sec   = (uint8_t)tm.tm_sec;
+  t->wday  = (uint8_t)tm.tm_wday;
+  /* 2 when the network set it, 1 when it was restored from the last save and
+   * is therefore behind by however long the device was off. An app that only
+   * asks `if (t.synced)` still gets the right answer; one that cares about
+   * the minute rather than the day can tell the two apart. */
+  t->synced = (uint8_t)(clock_synced() ? 2 : 1);
+}
+
+static uint32_t api_epoch(void) { return clock_epoch(); }
+
+/* Executable RAM, and the writable view of it. The same pair elfload.c uses
+ * to place a .capp; see the note in capp.h for why an app cannot simply write
+ * into memory it intends to run. */
+static void *api_exec_alloc(size_t n) {
+  return heap_caps_malloc(n, MALLOC_CAP_EXEC);
+}
+
+static void *api_exec_writable(void *exec) {
+  if (exec && esp_ptr_in_diram_iram(exec))
+    return (void *)esp_ptr_diram_iram_to_dram(exec);
+  return exec;
+}
+
+static void api_exec_free(void *exec) { heap_caps_free(exec); }
+
+static int api_http_start(const char *method, const char *url, const char *body,
+                          const char *content_type, const char *bearer,
+                          int timeout_ms) {
+  return httpq_start(method, url, body, content_type, bearer, timeout_ms);
+}
+
+static int api_http_poll(char *out, size_t n) { return httpq_poll(out, n); }
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -255,9 +321,13 @@ static const CardApi API = {
   api_http_download, api_http,
   api_google_token, api_google_status,
   api_caps_ok,
+  api_http_stream, api_key_pending,
   api_damage, api_paint_area,
   api_ui,
   api_update_check, api_update_apply,
+  api_now, api_epoch,
+  api_exec_alloc, api_exec_writable, api_exec_free,
+  api_http_start, api_http_poll,
 };
 
 const CardApi *cardos_api(void) { return &API; }

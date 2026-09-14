@@ -33,6 +33,14 @@ int http_request(const char *method, const char *url,
                  const char *bearer,
                  char *out, size_t out_size, int timeout_ms);
 
+/* The same, without arming the busy indicator. For kernel/net/httpq.c, whose
+ * caller is not blocked and draws its own: the badge is painted by a task of
+ * its own and is only safe while nothing else is drawing. */
+int http_request_quiet(const char *method, const char *url,
+                       const char *body, const char *content_type,
+                       const char *bearer,
+                       char *out, size_t out_size, int timeout_ms);
+
 /* Straight to a file, in chunks, for a body too large to hold. Returns the
  * number of bytes written, or the same negative codes as above.
  *
@@ -47,6 +55,17 @@ int http_download(const char *url, const char *path, int timeout_ms);
 typedef void (*HttpProgress)(void *ctx, uint32_t done, uint32_t total);
 int http_download_ex(const char *url, const char *path, const char *bearer,
                      HttpProgress progress, void *ctx, int timeout_ms);
+
+/* A response read as it arrives, for a body that does not end.
+ *
+ * `on_data` is called with each chunk as it comes off the socket; returning
+ * non-zero stops the transfer, which is how a viewer quits. Nothing is
+ * buffered beyond one chunk, so a stream can be longer than the heap -- which
+ * for a screen share is the point: the frames never stop.
+ *
+ * Returns bytes received, or negative. */
+typedef int (*HttpSink)(void *ctx, const uint8_t *data, int n);
+int http_stream(const char *url, HttpSink on_data, void *ctx, int timeout_ms);
 
 /* Why the last request failed, as a sentence -- "not enough memory: 21 KB
  * free, TLS needs about 34" rather than -4. An app that prints a number has

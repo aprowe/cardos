@@ -41,11 +41,26 @@
 #
 # phy_init sits near the end because the space at the front is spoken for.
 #
+# Sizes, revised 2026-09-12 after factory hit 93%. Measured rather than
+# guessed: CardOS is 1.62 MB, the largest guest anyone boots is cardlet at
+# 1.35 MB, and the two OTA slots were holding 2.94 MB each for that. Nearly
+# 6 MB was reserved for images of at most 1.7 MB while the partition that was
+# actually full got 1.75.
+#
+#   factory  2.75 MB   1.62 used, and it is the one that grows
+#   ota_0    2.25 MB   a guest, or CardOS updating itself
+#   ota_1    2.25 MB   the other half of the A/B pair
+#   spiffs    700 KB   Arduino guests' LittleFS; it was 316 KB
+#
+# nvs stays at 0x9000: moving it would throw away WiFi credentials, hotkeys
+# and the Google token for no gain. The OTA slots moving does invalidate a
+# staged guest, which the next boot re-copies from the card.
+#
 # Name,     Type, SubType,  Offset,   Size,     Flags
 nvs,        data, nvs,      0x9000,   0x5000,
 otadata,    data, ota,      0xE000,   0x2000,
-factory,    app,  factory,  0x10000,  0x1C0000,
-ota_0,      app,  ota_0,    0x1D0000, 0x2F0000,
-ota_1,      app,  ota_1,    0x4C0000, 0x2F0000,
-phy_init,   data, phy,      0x7B0000, 0x1000,
-spiffs,     data, spiffs,   0x7B1000, 0x4F000,
+factory,    app,  factory,  0x10000,  0x2C0000,
+ota_0,      app,  ota_0,    0x2D0000, 0x240000,
+ota_1,      app,  ota_1,    0x510000, 0x240000,
+phy_init,   data, phy,      0x750000, 0x1000,
+spiffs,     data, spiffs,   0x751000, 0xAF000,

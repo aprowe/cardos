@@ -479,7 +479,12 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
     if (l) {
       l->conn = BLE_HS_CONN_HANDLE_NONE;
       l->state = BTH_FAILED;
-      snprintf(l->detail, sizeof l->detail, "disconnected");
+      /* The reason code is the difference between "it walked away" (0x08,
+       * timeout) and "the encryption was refused" (0x05 / 0x3d), which are
+       * opposite problems. Keeping it in the status line means it survives
+       * long enough to be read. */
+      snprintf(l->detail, sizeof l->detail, "disconnected (reason %d)",
+               event->disconnect.reason);
       /* Keys held when the link dropped are not held any more, and a repeat
        * left running would type forever. */
       if (l->kind == BTHID_KEYBOARD) kbd_hid_init(&s_kbd);
@@ -674,6 +679,50 @@ static int settle(Link *l, int ms) {
   return l->used && l->state == BTH_CONNECTED;
 }
 
+/* Every BLE device the scan can see, reported verbatim.
+ *
+ * For the case that guessing does not solve: a mouse that has been power
+ * cycled comes back with a fresh resolvable private address, and when it does
+ * not reconnect there are two quite different reasons -- it is not
+ * advertising at all, or it is advertising and the connection or the
+ * encryption is what fails. Those need opposite fixes, and this is how to
+ * tell them apart. */
+void bthid_scan_dump(int scan_seconds, void (*say)(const char *line)) {
+  esp_hid_scan_result_t *results = NULL, *r;
+  size_t count = 0;
+  char line[96];
+  int n = 0;
+
+  if (!say) return;
+  if (radio_up() != 0) { say("bluetooth is off"); return; }
+
+  say("scanning...");
+  if (esp_hid_scan((uint32_t)scan_seconds, &count, &results) != ESP_OK) {
+    say("scan failed");
+    return;
+  }
+
+  for (r = results; r; r = r->next) {
+    const char *kind = "?";
+    if (r->transport == ESP_HID_TRANSPORT_BLE) {
+      if (r->ble.appearance == ESP_HID_APPEARANCE_KEYBOARD) kind = "keyboard";
+      else if (r->ble.appearance == ESP_HID_APPEARANCE_MOUSE) kind = "mouse";
+      else kind = "hid";
+    }
+    snprintf(line, sizeof line,
+             "%02x:%02x:%02x:%02x:%02x:%02x type %d rssi %d %s %s",
+             r->bda[0], r->bda[1], r->bda[2], r->bda[3], r->bda[4], r->bda[5],
+             r->transport == ESP_HID_TRANSPORT_BLE ? r->ble.addr_type : -1,
+             r->rssi, kind, r->name ? r->name : "(no name)");
+    say(line);
+    n++;
+  }
+  if (!n) say("nothing advertising");
+  snprintf(line, sizeof line, "%d device(s)", n);
+  say(line);
+  esp_hid_scan_results_free(results);
+}
+
 int bthid_autoconnect(int scan_seconds) {
   esp_hid_scan_result_t *results = NULL, *r;
   size_t count = 0;
@@ -758,6 +807,13 @@ void bthid_stop_all(void) {
   bthid_stop(BTHID_MOUSE);
   bthid_stop(BTHID_KEYBOARD);
 }
+
+/* Is the radio running at all? Distinct from "nothing is connected": with the
+ * radio down there is nothing to retry, and with it up there always is. The
+ * reconnect loop needs to tell those apart -- it used to test for BTH_FAILED,
+ * which is a state a link only reaches once it has been claimed, so a scan
+ * that found nothing left it at BTH_OFF and the retry never fired again. */
+int bthid_radio_on(void) { return s_inited; }
 
 BtHidState bthid_state(BtHidKind kind) {
   Link *l = link_for_kind(kind);

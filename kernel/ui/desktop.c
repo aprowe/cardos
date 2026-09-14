@@ -8,7 +8,9 @@
 #include "kernel/ui/app.h"
 #include "kernel/app/launcher.h"
 #include "kernel/app/capprun.h"
+#include "kernel/sys/bg.h"
 #include "kernel/ui/icons.h"
+#include "kernel/ui/pins.h"
 #include "kernel/ui/shell.h"
 #include "kernel/ui/help.h"
 #include "kernel/drv/bthid.h"
@@ -80,6 +82,44 @@ static int  s_sel_icon = 0;
 static int  s_last_icon = -1;
 static uint32_t s_last_click_ms;
 
+/* What the desktop is showing, as indices into the icon table.
+ *
+ * Two things filter it. The pinned set says which apps live here at all --
+ * the Start menu is everything, the desktop is what you put on it -- and the
+ * open folder says which level you are looking at. Everything below works in
+ * SLOTS, positions on screen, and goes through desk_index to reach the real
+ * icon; mixing the two up puts the right picture in the wrong square. */
+static int s_desk[MAX_ICONS];
+static int s_ndesk;
+static int s_folder = -1;           /* the icon index of the open folder, or -1 */
+
+static int desk_count(void) { return s_ndesk; }
+static int desk_index(int slot) {
+  return (slot >= 0 && slot < s_ndesk) ? s_desk[slot] : -1;
+}
+static const Icon *desk_icon(int slot) {
+  int i = desk_index(slot);
+  return i >= 0 ? icon_at(i) : NULL;
+}
+
+static void rebuild_desk(void) {
+  int i, n = icons_total();
+  s_ndesk = 0;
+  for (i = 0; i < n && s_ndesk < MAX_ICONS; i++) {
+    const Icon *ic = icon_at(i);
+    if (!ic) continue;
+    if (s_folder >= 0) {
+      /* Inside a folder: its children, all of them. Pinning is about the
+       * desktop's top level, not about what a folder contains. */
+      if (ic->parent != s_folder) continue;
+    } else {
+      if (ic->parent >= 0) continue;             /* lives in a folder */
+      if (ic->kind != ICON_FOLDER && !pins_has(ic->name)) continue;
+    }
+    s_desk[s_ndesk++] = i;
+  }
+}
+
 static Rect icon_rect(int i) {
   int per_row = DISPLAY_W / ICON_W;
   int col = i % per_row, row = i / per_row;
@@ -90,6 +130,9 @@ static Rect icon_rect(int i) {
   r.h = ICON_H - 6;
   return r;
 }
+
+/* Defined below, with the rest of the Start menu. */
+static void rebuild_menu(void);
 
 static int      s_kbd_btn;
 static int      s_start_open;
@@ -132,17 +175,20 @@ static void clamp_scroll(int idx, const AppDef *a, Rect inner) {
 
 void desktop_reload_icons(void) {
   icons_reload();
+  s_folder = -1;                 /* the indices it referred to are gone */
+  rebuild_desk();
+  rebuild_menu();
   /* Something stays selected while there is anything to select. Clearing it
    * meant the first arrow press after a reload was spent putting the selection
    * back rather than moving it -- invisible unless you count keystrokes, and
    * wrong every time. */
-  s_sel_icon = icons_count() ? 0 : -1;
+  s_sel_icon = desk_count() ? 0 : -1;
 }
 
 static void paint_icons(Rect clip) {
-  int i, n = icons_count();
+  int i, n = desk_count();
   for (i = 0; i < n; i++) {
-    const Icon *ic = icon_at(i);
+    const Icon *ic = desk_icon(i);
     Rect r = icon_rect(i), box;
     const uint8_t *bits;
     if (r.y + r.h > DESK_H) break;
@@ -159,14 +205,14 @@ static void paint_icons(Rect clip) {
     else                           draw_bevel(box, C_FACE, C_LIGHT, C_DARK);
 
     {
-      const uint16_t *px = icon_colour(i);
+      const uint16_t *px = icon_colour(desk_index(i));
       if (px) {
         draw_image_scaled(box.x, box.y, CAPP_ICON_W, CAPP_ICON_H, px, 1, 0x0000);
         bits = NULL;
         goto labelled;
       }
     }
-    bits = icon_bitmap(i);
+    bits = icon_bitmap(desk_index(i));
     if (bits) {
       /* The app supplied this. 16x16 is exactly the slab, so it replaces the
        * face rather than sitting inside it. */
@@ -189,7 +235,7 @@ labelled:
  * that changed -- a full repaint for a selection frame is what made the Start
  * menu flicker, and the same would happen here. */
 static void select_icon(int delta) {
-  int n = icons_count();
+  int n = desk_count();
   int was = s_sel_icon;
 
   if (n == 0) return;
@@ -365,12 +411,57 @@ static Rect s_menu_rect;
 static int  s_menu_dirty;
 static int  s_menu_hit;      /* something repainted underneath it this pass */
 
-static int menu_items(void) { return app_count() + 1; }   /* apps, then Console */
+/* The Start menu is EVERY app, which is the other half of pinning: the
+ * desktop holds what you put on it, and this is where the rest still lives.
+ * It used to list only the built-ins -- three of them -- so a .capp could be
+ * reached from the desktop only if it happened to have an icon on it.
+ *
+ * Built through the icon table rather than beside it, because that table
+ * already knows about both kinds and about folders, and a second enumeration
+ * would be a second thing to keep in step. */
+#define MENU_ROWS 9              /* what fits above the taskbar */
+
+static int s_menu[MAX_ICONS];
+static int s_nmenu;
+static int s_menu_top;
+
+static void rebuild_menu(void) {
+  int i, n = icons_total();
+  s_nmenu = 0;
+  for (i = 0; i < n && s_nmenu < MAX_ICONS; i++) {
+    const Icon *ic = icon_at(i);
+    if (!ic) continue;
+    if (ic->kind != ICON_CAPP && ic->kind != ICON_BUILTIN) continue;
+    if (ic->cli) continue;                 /* a command, not something to open */
+    s_menu[s_nmenu++] = i;
+  }
+}
+
+static int menu_items(void) { return s_nmenu + 1; }       /* apps, then Console */
+
+static int menu_shown(void) {
+  int n = menu_items();
+  return n > MENU_ROWS ? MENU_ROWS : n;
+}
+
+static const char *menu_label(int item) {
+  const Icon *ic;
+  if (item >= s_nmenu) return "Console";
+  ic = icon_at(s_menu[item]);
+  return ic ? ic->name : "?";
+}
 
 static Rect menu_rect(void) {
-  int items = menu_items();
-  int h = items * 11 + 6;
-  return R(2, DESK_H - h, 84, h);
+  int h = menu_shown() * 11 + 6;
+  return R(2, DESK_H - h, 92, h);
+}
+
+/* Keep the selection visible. */
+static void menu_scroll_to_sel(void) {
+  if (s_start_sel < s_menu_top) s_menu_top = s_start_sel;
+  if (s_start_sel >= s_menu_top + menu_shown())
+    s_menu_top = s_start_sel - menu_shown() + 1;
+  if (s_menu_top < 0) s_menu_top = 0;
 }
 
 static void menu_touch(void) {
@@ -395,14 +486,97 @@ static void paint_start_menu(void) {
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_bevel(m, C_FACE, C_LIGHT, C_DARK);
 
-  for (i = 0; i < items; i++) {
+  (void)items;
+  for (i = 0; i < menu_shown(); i++) {
+    int it = s_menu_top + i;
     Rect item = R(m.x + 3, m.y + 3 + i * 11, m.w - 6, 10);
-    int sel = (i == s_start_sel);
-    const char *label = (i < app_count()) ? app_at(i)->name : "Console";
+    int sel = (it == s_start_sel);
+    if (it >= menu_items()) break;
     draw_rect(item, sel ? C_TITLE : C_FACE);
-    draw_text((int16_t)(item.x + 2), (int16_t)(item.y + 1), label,
+    draw_text((int16_t)(item.x + 2), (int16_t)(item.y + 1), menu_label(it),
               sel ? C_TITLE_FG : C_TEXT, sel ? C_TITLE : C_FACE);
   }
+  /* A mark on each edge that has more behind it, because a list that scrolls
+   * with no sign it does is a list that looks short. */
+  if (s_menu_top > 0)
+    draw_text((int16_t)(m.x + m.w - 8), (int16_t)(m.y + 2), "^", C_TEXT, C_FACE);
+  if (s_menu_top + menu_shown() < menu_items())
+    draw_text((int16_t)(m.x + m.w - 8), (int16_t)(m.y + m.h - 10), "v",
+              C_TEXT, C_FACE);
+}
+
+/* ---- the context menu ----------------------------------------------------
+ *
+ * Right-click, on a desktop icon or on a Start menu row. Two items at most,
+ * because there are only two things worth saying here and a longer menu on a
+ * 240x135 screen is a menu you scroll.
+ *
+ * The desktop offers "Remove from desktop" and the Start menu "Pin to
+ * desktop", which are the two halves of the same list -- see kernel/ui/pins.h
+ * for why an empty list and no list at all mean different things. */
+#define CTX_W 84
+#define CTX_ROW 11
+
+static int   s_ctx_open;
+static int   s_ctx_icon;           /* the icon index it is about */
+static int   s_ctx_pin;            /* 1 = offer Pin, 0 = offer Remove */
+static Rect  s_ctx_rect;
+
+static Rect ctx_rect(int16_t x, int16_t y) {
+  Rect r;
+  r.w = CTX_W;
+  r.h = CTX_ROW + 4;
+  r.x = x;
+  r.y = y;
+  /* Kept on screen: a menu opened near the right edge would otherwise be
+   * drawn half off it and be unclickable. */
+  if (r.x + r.w > DISPLAY_W) r.x = (int16_t)(DISPLAY_W - r.w);
+  if (r.y + r.h > DESK_H) r.y = (int16_t)(DESK_H - r.h);
+  if (r.x < 0) r.x = 0;
+  if (r.y < 0) r.y = 0;
+  return r;
+}
+
+static void ctx_close(void) {
+  if (!s_ctx_open) return;
+  s_ctx_open = 0;
+  desktop_repaint();
+}
+
+static void paint_ctx(void) {
+  Rect m = s_ctx_rect, item;
+  if (!s_ctx_open) return;
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  draw_bevel(m, C_FACE, C_LIGHT, C_DARK);
+  item = R(m.x + 2, m.y + 2, m.w - 4, CTX_ROW);
+  draw_text((int16_t)(item.x + 2), (int16_t)(item.y + 2),
+            s_ctx_pin ? "Pin to desktop" : "Remove from desk", C_TEXT, C_FACE);
+}
+
+/* The user is about to unpin something, and until now there has been no list
+ * -- "everything" was implied. Write every app down first, or removing one
+ * would leave a list of none and empty the desktop. */
+static void pins_materialise(void) {
+  int i;
+  if (pins_active()) return;
+  for (i = 0; i < icons_total(); i++) {
+    const Icon *ic = icon_at(i);
+    if (!ic || ic->parent >= 0) continue;
+    if (ic->kind != ICON_CAPP && ic->kind != ICON_BUILTIN) continue;
+    pins_add(ic->name);
+  }
+}
+
+static void ctx_choose(void) {
+  const Icon *ic = icon_at(s_ctx_icon);
+  s_ctx_open = 0;
+  if (ic) {
+    if (s_ctx_pin) pins_add(ic->name);
+    else { pins_materialise(); pins_remove(ic->name); }
+    rebuild_desk();
+    if (s_sel_icon >= desk_count()) s_sel_icon = desk_count() ? desk_count() - 1 : -1;
+  }
+  desktop_repaint();
 }
 
 /* Which item the pointer is over, or -1. */
@@ -411,7 +585,9 @@ static int menu_item_at(int16_t x, int16_t y) {
   int i;
   if (!rect_contains(m, x, y)) return -1;
   i = (y - (m.y + 3)) / 11;
-  if (i < 0 || i >= menu_items()) return -1;
+  if (i < 0 || i >= menu_shown()) return -1;
+  i += s_menu_top;
+  if (i >= menu_items()) return -1;
   return i;
 }
 
@@ -476,7 +652,15 @@ static void paint_fullscreen(void) {
 }
 
 void desktop_flush(void) {
-  if (s_full) { paint_fullscreen(); return; }
+  if (s_full) {
+    paint_fullscreen();
+    /* The pointer too. This used to return here, so any repaint a fullscreen
+     * app asked for painted over the cursor and nothing put it back until the
+     * mouse moved again -- the pointer vanished whenever an app redrew
+     * itself, which is exactly when you are looking at it. */
+    draw_pointer();                  /* it checks s_cursor_on itself */
+    return;
+  }
   if (wm_damage_count() == 0 && !s_menu_dirty) return;
 
   s_menu_hit = 0;
@@ -489,6 +673,7 @@ void desktop_flush(void) {
   if (s_start_open && (s_menu_dirty || s_menu_hit)) paint_start_menu();
   s_menu_dirty = 0;
 
+  paint_ctx();         /* above the windows, below only the pointer */
   draw_pointer();      /* always last: the pointer is above everything */
 }
 
@@ -521,13 +706,26 @@ static void open_def(const AppDef *a);
 static void toggle_fullscreen(void);
 static void open_def_ex(const AppDef *a, int fresh);
 
-static void launch_icon(int i) {
-  const Icon *ic = icon_at(i);
+/* By icon index, so both the desktop and the Start menu reach it -- the one
+ * works in slots and the other in menu rows, and neither should have its own
+ * copy of what opening a thing means. */
+static void launch_icon_index(int idx) {
+  const Icon *ic = icon_at(idx);
   const AppDef *a = NULL;
 
   if (!ic) return;
-  if (ic->kind == ICON_FIRMWARE) { icons_boot_firmware(i); return; }
-  if (ic->kind == ICON_FOLDER) return;    /* the desktop is flat; the launcher has folders */
+  if (ic->kind == ICON_FIRMWARE) { icons_boot_firmware(idx); return; }
+
+  /* A folder is somewhere to go, not a dead square. The desktop used to
+   * ignore these entirely -- "the desktop is flat; the launcher has folders"
+   * -- which made every folder on it an icon that did nothing when clicked. */
+  if (ic->kind == ICON_FOLDER) {
+    s_folder = idx;
+    rebuild_desk();
+    s_sel_icon = desk_count() ? 0 : -1;
+    desktop_repaint();
+    return;
+  }
 
   if (ic->kind == ICON_CAPP) {
     /* Running the program *is* opening it: capp_main builds whatever state it
@@ -542,7 +740,7 @@ static void launch_icon(int i) {
     if (!capprun_is_app(ic->slot)) return;    /* a command, already finished */
     a = capprun_def(ic->slot);
   } else {
-    a = icon_app(i);
+    a = icon_app(idx);
     if (a && a->open) a->open(a->state);
   }
   if (!a) return;
@@ -566,15 +764,21 @@ static void launch_icon(int i) {
   desktop_repaint();
 }
 
+static void launch_icon(int slot) { launch_icon_index(desk_index(slot)); }
+
+static void launch_menu_item(int item) {
+  if (item >= 0 && item < s_nmenu) launch_icon_index(s_menu[item]);
+}
+
 static void launch_selected(void) {
-  if (s_sel_icon >= 0 && s_sel_icon < icons_count()) launch_icon(s_sel_icon);
+  if (s_sel_icon >= 0 && s_sel_icon < desk_count()) launch_icon(s_sel_icon);
 }
 
 void desktop_icon_click(int16_t x, int16_t y) {
   uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
   int i, hit = -1;
 
-  for (i = 0; i < icons_count(); i++)
+  for (i = 0; i < desk_count(); i++)
     if (rect_contains(icon_rect(i), x, y)) { hit = i; break; }
 
   if (hit < 0) {
@@ -633,6 +837,7 @@ static void open_def_ex(const AppDef *a, int fresh) {
 }
 
 static void close_focused(void);
+static void close_focused_ex(int release);
 
 /* Put a window down on the taskbar. Its slot stays in the list -- that is what
  * the taskbar draws from -- with the frame remembered so it comes back where
@@ -663,6 +868,10 @@ static void unminimise(int i) {
 }
 
 static void open_def(const AppDef *a) { open_def_ex(a, 1); }
+/* Unused since the Start menu started listing every app by icon rather than
+ * the built-ins by index. Kept because it is the shortest statement of what
+ * opening a built-in means, and costs nothing. */
+static void open_app(int k) __attribute__((unused));
 static void open_app(int k) { open_def(app_at(k)); }
 
 /* Whether an app fills the screen is the user's call, not the app's. The
@@ -684,7 +893,9 @@ static void toggle_fullscreen(void) {
     int16_t w = DISPLAY_W, h = DISPLAY_H;
     if (f == WIN_NONE) return;
     a = app_of(f);
-    close_focused();
+    /* Not released: the app is not closing, it is changing how it is shown,
+     * and this function goes on using `a` for the rest of its body. */
+    close_focused_ex(0);
     if (a->pref_w > 0 && a->pref_w < w) w = a->pref_w;
     if (a->pref_h > 0 && a->pref_h < h) h = a->pref_h;
     s_full = a;
@@ -695,10 +906,22 @@ static void toggle_fullscreen(void) {
   }
 }
 
-static void close_focused(void) {
+static void close_focused(void) { close_focused_ex(1); }
+
+/* `release` says whether the APP is finished with, or only this window.
+ *
+ * They used to be the same thing, and were not worth telling apart while
+ * every loaded app stayed loaded. Lazy loading made releasing a slot mean
+ * capp_unload -- the code and data are freed -- so a caller that keeps using
+ * the AppDef afterwards is reading freed memory. Going fullscreen is exactly
+ * that caller: it takes the window down and puts the same app back up, and
+ * releasing it in between crashed the machine. */
+static void close_focused_ex(int release) {
   WinId f = wm_focus();
   int i, j;
   if (f == WIN_NONE) return;
+  /* Before the bookkeeping below forgets which app this was. */
+  if (release) capprun_release(app_of(f));
   wm_destroy(f);
   for (i = 0; i < s_nwin; i++) {
     if (s_win[i] != f) continue;
@@ -782,7 +1005,8 @@ int desktop_key(uint8_t key) {
    * key it does not get, because something has to bring the desktop back. */
   if (s_full) {
     if (key == KEY_ESC) { leave_fullscreen(); return 0; }
-    if (key == 0x06) { toggle_fullscreen(); return 0; }      /* ctrl-F */
+    if (key == KEY_FN_LETTER('f')) { toggle_fullscreen(); return 0; }
+    if (key == KEY_FN_LETTER('w')) { leave_fullscreen(); return 0; }
     if (s_full->key && s_full->key(s_full->state, key)) {
       s_full_dirty = 1;
       desktop_flush();
@@ -792,15 +1016,21 @@ int desktop_key(uint8_t key) {
 
   if (s_start_open) {
     switch (key) {
-    case KEY_UP:   s_start_sel = (s_start_sel + menu_items() - 1) % menu_items(); break;
-    case KEY_DOWN: s_start_sel = (s_start_sel + 1) % menu_items(); break;
+    case KEY_UP:
+      s_start_sel = (s_start_sel + menu_items() - 1) % menu_items();
+      menu_scroll_to_sel();
+      break;
+    case KEY_DOWN:
+      s_start_sel = (s_start_sel + 1) % menu_items();
+      menu_scroll_to_sel();
+      break;
     case KEY_ENTER:
       menu_close();
-      if (s_start_sel >= app_count()) {
+      if (s_start_sel >= s_nmenu) {
         desktop_set_autostart(0);   /* leaving on purpose: stay at the console */
         return 1;
       }
-      open_app(s_start_sel);
+      launch_menu_item(s_start_sel);
       desktop_flush();
       return 0;
     case KEY_ESC: menu_close(); desktop_flush(); return 0;
@@ -811,9 +1041,31 @@ int desktop_key(uint8_t key) {
     return 0;
   }
 
+  /* Out of a folder, before escape gets a look: inside one, backspace is a
+   * step up rather than nothing at all. Escape still leaves the desktop
+   * entirely, which is the one thing it must always do. */
+  if (key == KEY_BACKSPACE && s_folder >= 0 && !s_start_open && s_icon_focus) {
+    s_folder = -1;
+    rebuild_desk();
+    s_sel_icon = desk_count() ? 0 : -1;
+    desktop_repaint();
+    return 0;
+  }
+
   /* Escape always works, whatever has focus: it is the one way back to the
    * console and must never be something an app can swallow. */
-  if (key == KEY_ESC) { desktop_set_autostart(0); return 1; }
+  /* Escape dismisses whatever is innermost, and stops there.
+   *
+   * It used to leave the desktop for the console from anywhere, which made it
+   * the one key you could not press while exploring: it did not close the
+   * thing in front of you, it threw the whole shell away. Now it works
+   * outwards -- context menu, then folder, then the focused window -- and
+   * when there is nothing left to dismiss it does nothing at all. Leaving the
+   * desktop on purpose is opt-3, which is the same way you got here. */
+  /* The context menu is the shell's own overlay and is above any app, so it
+   * gets escape before anyone else. The rest of the escape chain waits until
+   * the focused app has had its chance -- see below. */
+  if (key == KEY_ESC && s_ctx_open) { ctx_close(); return 0; }
 
   /* The keyboard-driven pointer is an explicit mode, so while it is on the
    * arrows belong to it rather than to the focused app. */
@@ -870,12 +1122,39 @@ int desktop_key(uint8_t key) {
     }
   }
 
+  /* Escape, once the focused app has declined it.
+   *
+   * It used to leave the desktop for the console from anywhere, which made it
+   * the one key you could not press while exploring: it did not close the
+   * thing in front of you, it threw the whole shell away. Now it works
+   * outwards -- the app first, then the open folder, then the focused window
+   * -- and when there is nothing left to dismiss it does nothing at all.
+   * Leaving the desktop on purpose is opt-3, the same way you got here. */
+  if (key == KEY_ESC) {
+    if (s_folder >= 0) {
+      s_folder = -1;
+      rebuild_desk();
+      s_sel_icon = desk_count() ? 0 : -1;
+      desktop_repaint();
+      return 0;
+    }
+    if (wm_focus() != WIN_NONE) { close_focused(); desktop_repaint(); return 0; }
+    return 0;
+  }
+
+  /* The window modifier. These were ctrl-P, ctrl-S, ctrl-W and ctrl-F, which
+   * the desktop took out from under every app -- so ctrl-S opened the Start
+   * menu rather than saving. Ctrl belongs to whatever has focus now; the
+   * frame around it answers to fn. See kernel/drv/keyboard.h. */
   switch (key) {
-  case 0x10: desktop_set_kbd_mouse(!s_kbd_mouse); return 0;                  /* ctrl-P */
-  case 0x13: s_start_open = 1; s_start_sel = 0; menu_touch();                 /* ctrl-S */
-             desktop_flush(); return 0;
-  case 0x17: close_focused(); desktop_repaint(); return 0;                   /* ctrl-W */
-  case 0x06: toggle_fullscreen(); return 0;                                  /* ctrl-F */
+  case KEY_FN_LETTER('p'): desktop_set_kbd_mouse(!s_kbd_mouse); return 0;
+  case KEY_FN_LETTER('s'): s_start_open = 1; s_start_sel = 0; menu_touch();
+                           desktop_flush(); return 0;
+  case KEY_FN_LETTER('w'): close_focused(); desktop_repaint(); return 0;
+  case KEY_FN_LETTER('f'): toggle_fullscreen(); return 0;
+  case KEY_FN_LETTER('m'):
+    if (wm_focus() != WIN_NONE) { minimise(wm_focus()); desktop_repaint(); }
+    return 0;
   case '	':      cycle_focus();   desktop_flush(); return 0;
   case KEY_LEFT:  nudge(-6, 0);    desktop_flush(); return 0;
   case KEY_RIGHT: nudge(6, 0);     desktop_flush(); return 0;
@@ -943,8 +1222,16 @@ void desktop_tick(uint32_t ms) {
   /* A mouse that wanders out of range or sleeps drops the link. Look for it
    * again rather than sitting there with a dead pointer -- but not every
    * second, because each attempt is a six-second scan. */
-  if (bthid_state(BTHID_MOUSE) == BTH_FAILED && (s_now_ms / 1000u) % 15 == 0)
-    bthid_start(4, BTHID_MOUSE);
+  /* Asked for, not done here. This used to call bthid_start(4, ...) inline --
+   * a four-second blocking scan, on the tick that draws the screen, every
+   * fifteen seconds for as long as a paired mouse stayed out of range. The
+   * job runs on the background task now and the shell never waits for it.
+   * Only while idle: a scan competing with someone typing is the same fault
+   * in a quieter coat. */
+  if (bthid_radio_on() && bthid_state(BTHID_MOUSE) != BTH_CONNECTED &&
+      bthid_state(BTHID_MOUSE) != BTH_CONNECTING && (s_now_ms / 1000u) % 15 == 0 &&
+      bg_idle_ms() > 2000)
+    bg_submit(BG_BT_RECONNECT);
   wm_damage(R(DISPLAY_W - 30, DESK_H + 2, 28, TASKBAR_H - 4));
   desktop_flush();
 }
@@ -1007,6 +1294,9 @@ void desktop_init(void) {
   s_full = NULL;
   s_icon_focus = 1;
   s_sel_icon = 0;
+  s_folder = -1;
+  rebuild_desk();
+  rebuild_menu();
   for (i = 0; i < MAX_OPEN; i++) {
     s_win[i] = WIN_NONE; s_app[i] = NULL; s_minimised[i] = 0;
   }
@@ -1055,10 +1345,11 @@ void desktop_mouse_done(void) {
 
 void desktop_mouse_apply(const MouseReport *r) {
   Rect before = cursor_rect();
-  int pressed, released;
+  int pressed, released, moved;
   WinId hit;
 
   mouse_apply(r);
+  bg_note_activity();
 
   /* A fullscreen app gets the pointer too. Erasing it is the part that used to
    * stop this: the panel is three-wire with no MISO, so what was underneath
@@ -1067,12 +1358,16 @@ void desktop_mouse_apply(const MouseReport *r) {
    * the cursor is drawn again on top. Every app therefore has a mouse without
    * knowing anything about one. */
   if (s_full) {
-    int held = (mouse_pressed(MOUSE_LEFT) || mouse_down(MOUSE_LEFT)
-                ? CAPP_BTN_LEFT : 0)
-             | (mouse_pressed(MOUSE_RIGHT) || mouse_down(MOUSE_RIGHT)
-                ? CAPP_BTN_RIGHT : 0);
-    int btn = mouse_pressed(MOUSE_LEFT) ? MOUSE_LEFT
-            : mouse_pressed(MOUSE_RIGHT) ? MOUSE_RIGHT : 0;
+    /* Read each edge ONCE. mouse_pressed is a take -- it returns 1 exactly
+     * once per press -- so the old code, which asked for it while building
+     * `held` and then again for `btn`, consumed the press in the first test
+     * and left the second reading 0. The effect was that a fullscreen app in
+     * the desktop never received a click at all. */
+    int pl = mouse_pressed(MOUSE_LEFT);
+    int pr = mouse_pressed(MOUSE_RIGHT);
+    int held = ((pl || mouse_down(MOUSE_LEFT)) ? CAPP_BTN_LEFT : 0)
+             | ((pr || mouse_down(MOUSE_RIGHT)) ? CAPP_BTN_RIGHT : 0);
+    int btn = pl ? MOUSE_LEFT : pr ? MOUSE_RIGHT : 0;
     int wheel = mouse_take_wheel();
     int moved = mouse_take_moved();
     int16_t lx = (int16_t)(mouse_x() - s_full_rect.x);
@@ -1109,6 +1404,37 @@ void desktop_mouse_apply(const MouseReport *r) {
 
   s_cursor_on = 1;
 
+  /* Taken once, here, because two things need it: the app under the pointer,
+   * and the two squares of cursor damage further down. It used to be consumed
+   * only for the damage. */
+  moved = mouse_take_moved();
+
+  /* The pointer, to the window it is over.
+   *
+   * This used to happen only when the wheel turned, so a windowed app was
+   * told about the mouse exclusively on a scroll -- it never learned the
+   * pointer had moved, or that there was a pointer at all. Anything that
+   * shows a hover state, or a toolbar that appears when a mouse turns up,
+   * was therefore dead in a window and worked fullscreen and in the launcher,
+   * both of which do dispatch on movement. */
+  if (moved || mouse_down(MOUSE_LEFT) || mouse_down(MOUSE_RIGHT)) {
+    WinId hw = wm_at((int16_t)mouse_x(), (int16_t)mouse_y());
+    if (hw != WIN_NONE &&
+        wm_hit_test(hw, (int16_t)mouse_x(), (int16_t)mouse_y()) == WM_HIT_CONTENT) {
+      const AppDef *ha = app_of(hw);
+      int hi = win_index(hw);
+      Rect hc = rect_inset(wm_content(hw), 2);
+      int held = (mouse_down(MOUSE_LEFT) ? CAPP_BTN_LEFT : 0)
+               | (mouse_down(MOUSE_RIGHT) ? CAPP_BTN_RIGHT : 0);
+      int16_t hy = (int16_t)(mouse_y() - hc.y);
+      int16_t natural = ha ? content_height(ha, hc) : 0;
+      if (natural > hc.h && hi >= 0) hy = (int16_t)(hy + s_scroll[hi]);
+      if (ha && ha->mouse &&
+          ha->mouse(ha->state, (int16_t)(mouse_x() - hc.x), hy, held, 0))
+        wm_damage(wm_frame(hw));
+    }
+  }
+
   /* The wheel scrolls whatever has focus, which is the only thing it could
    * usefully mean on a machine with one pointer. */
   {
@@ -1144,6 +1470,41 @@ void desktop_mouse_apply(const MouseReport *r) {
    * context menu to own it -- so it goes straight to whatever is under the
    * pointer and skips focus, dragging and the chrome entirely. */
   if (mouse_pressed(MOUSE_RIGHT)) {
+    int16_t rx = (int16_t)mouse_x(), ry = (int16_t)mouse_y();
+
+    /* On a Start menu row: offer to pin it. */
+    if (s_start_open) {
+      int item = menu_item_at(rx, ry);
+      if (item >= 0 && item < s_nmenu) {
+        s_ctx_icon = s_menu[item];
+        s_ctx_pin = 1;
+        s_ctx_rect = ctx_rect(rx, ry);
+        s_ctx_open = 1;
+        menu_close();
+        desktop_repaint();
+        mouse_released(MOUSE_RIGHT);
+        return;
+      }
+    }
+
+    /* On a desktop icon, with no window over it: offer to take it off. */
+    if (wm_at(rx, ry) == WIN_NONE && ry < DESK_H) {
+      int i;
+      for (i = 0; i < desk_count(); i++) {
+        const Icon *ic = desk_icon(i);
+        if (!rect_contains(icon_rect(i), rx, ry)) continue;
+        if (!ic || ic->kind == ICON_FOLDER) break;   /* folders are not pinned */
+        s_ctx_icon = desk_index(i);
+        s_ctx_pin = 0;
+        s_ctx_rect = ctx_rect(rx, ry);
+        s_ctx_open = 1;
+        desktop_repaint();
+        mouse_released(MOUSE_RIGHT);
+        return;
+      }
+    }
+
+    {
     WinId rw = wm_at((int16_t)mouse_x(), (int16_t)mouse_y());
     if (rw != WIN_NONE &&
         wm_hit_test(rw, (int16_t)mouse_x(), (int16_t)mouse_y()) == WM_HIT_CONTENT) {
@@ -1157,13 +1518,14 @@ void desktop_mouse_apply(const MouseReport *r) {
           a->click(a->state, (int16_t)(mouse_x() - c.x), ly, MOUSE_RIGHT))
         wm_damage(wm_frame(rw));
     }
+    }
   }
   mouse_released(MOUSE_RIGHT);
 
   /* The panel cannot be read back -- three-wire, no MISO -- so there is no
    * saving the pixels under the pointer. Moving it is two damage rectangles,
    * which is what the compositor is already for. */
-  if (mouse_take_moved()) {
+  if (moved) {
     wm_damage(before);
     wm_damage(cursor_rect());
   }
@@ -1189,14 +1551,23 @@ void desktop_mouse_apply(const MouseReport *r) {
 
   if (!pressed) return;
 
+  /* The context menu is above even the Start menu. */
+  if (s_ctx_open) {
+    if (rect_contains(s_ctx_rect, (int16_t)mouse_x(), (int16_t)mouse_y()))
+      ctx_choose();
+    else
+      ctx_close();
+    return;
+  }
+
   /* An open menu is above every window, so it gets the click first. */
   if (s_start_open) {
     int item = menu_item_at((int16_t)mouse_x(), (int16_t)mouse_y());
     if (item >= 0) {
       s_start_sel = item;
       menu_close();
-      if (item >= app_count()) { s_leave_for_console = 1; return; }
-      open_app(item);
+      if (item >= s_nmenu) { s_leave_for_console = 1; return; }
+      launch_menu_item(item);
       return;
     }
   }

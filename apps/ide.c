@@ -1,23 +1,27 @@
-/* A small code editor, as a loadable CardOS app.
+/* IDE -- write assembly on the machine, and run it on the machine.
  *
- * Dark, because that is what an editor looks like and because a 240x135 panel
- * held close is easier on the eyes dark than a sheet of white. Line numbers in
- * a gutter, the current line marked, a status bar that says what file and
- * whether it is saved.
+ * The editor is apps/edit.c's, kept as it was: the same buffer, cursor, file
+ * browser and save path, because a second editor would be a second set of
+ * bugs. Its markdown renderer is not here -- it is 220 lines that an assembly
+ * file has no use for.
  *
- * Two views: a file browser and the editor. It opens in the browser, because an
- * editor with no file is an editor with nothing to do -- and because the
- * previous version was handed a path by the launcher and opened its own
- * binary, which is how you learn that "open a file" and "here is your icon's
- * path" are different questions.
+ * What is here instead is the other half of the loop. ctrl-b assembles the
+ * buffer and interprets it; ctrl-l compiles it to real Xtensa and jumps to
+ * it; ctrl-x does both and compares, which is the only place the compiler
+ * can actually be checked, because the host that runs the test suite is x86
+ * and cannot execute what the compiler emits.
  *
- * The buffer is a flat array of fixed-width lines rather than a gap buffer: a
- * file this thing is for is a few kilobytes, and a flat array is the version
- * that is obviously correct at a glance.
+ * Errors put the cursor on the offending line. An assembler that reports
+ * "syntax error" without saying where is worse than no assembler at all.
+ *
+ * The machine, the assembler and the code generator are in apps/asmvm.h,
+ * with no UI in them, so they run under the host tests. Only the screen is
+ * here. See docs/superpowers/specs/2026-09-13-asm-vm-and-native-compiler-design.md.
  */
-
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
+#include "apps/asmvm.h"
+
 
 #define MAXLINES  96
 #define MAXCOL    64
@@ -55,7 +59,7 @@
 #define CLR_PG_LINK CAPP_RGB(24, 82, 170)
 #define CLR_PG_QUOT CAPP_RGB(150, 154, 160)
 
-typedef enum { VIEW_BROWSE = 0, VIEW_EDIT, VIEW_NAME, VIEW_PREVIEW } View;
+typedef enum { VIEW_BROWSE = 0, VIEW_EDIT, VIEW_NAME } View;
 
 /* What the filename prompt is for. One view serves both, because "what shall
  * it be called" is the same question either way -- only what happens after the
@@ -84,9 +88,6 @@ static struct {
   char  path[96];
   char  status[40];
 
-  /* markdown preview */
-  int   ptop;                 /* first rendered row on screen */
-  int   prows;                /* how many rows the document rendered to */
 
   /* the filename prompt */
   NameFor name_for;
@@ -378,251 +379,236 @@ static void paint_browse(CRect c) {
  * equivalent, so emphasis is shown in colour instead of being invented.
  */
 
-#define PG_LEFT   4          /* the page margin */
-#define PG_ROW    9
+/* ------------------------------------------------------- running it ---- */
 
-/* One rendered row: the shape a line takes on the page. Built as the document
- * is walked so scrolling does not re-parse, and so the scrollbar knows how
- * long the document is before it has drawn it. */
-typedef enum {
-  MD_TEXT = 0, MD_H1, MD_H2, MD_H3, MD_BULLET, MD_NUMBER,
-  MD_QUOTE, MD_CODE, MD_RULE, MD_BLANK
-} MdKind;
+#define CON_LINES 6
+#define CON_COLS  38
+#define EXEC_MAX  4096          /* generated code; a long program is ~2 KB */
 
-static void md_text(int x, int y, const char *s, uint16_t fg, uint16_t bg,
-                    int bold) {
-  api->text((short)x, (short)y, s, fg, bg);
-  /* The second pass is the whole of "bold" at six pixels: one to the right,
-   * transparent background so it thickens rather than smears. */
-  if (bold) api->text((short)(x + 1), (short)y, s, fg, bg);
+static struct {
+  int   console;                /* the pane is showing */
+  char  out[CON_LINES][CON_COLS + 1];
+  int   nout;
+  int   native;                 /* the last run was compiled */
+  AsmProgram prog;
+  AsmState   st;
+} G;
+
+static int console_h(void) { return G.console ? CON_LINES * 8 + 2 : 0; }
+
+/* The console scrolls rather than wraps: six lines is not enough to justify
+ * reflowing, and a truncated line is easier to read than a lost one. */
+static void con_line(const char *s) {
+  int i;
+  if (G.nout >= CON_LINES) {
+    for (i = 1; i < CON_LINES; i++)
+      api->mem_cpy(G.out[i - 1], G.out[i], sizeof G.out[0]);
+    G.nout = CON_LINES - 1;
+  }
+  api->fmt(G.out[G.nout], sizeof G.out[0], "%s", s);
+  G.nout++;
+  G.console = 1;
 }
 
-/* Strip the markers a line begins with, and say what it was. */
-static MdKind md_kind(const char *in, const char **body, int *indent) {
-  const char *p = in;
-  int spaces = 0;
-
-  while (*p == ' ') { p++; spaces++; }
-  *indent = spaces / 2;
-  *body = p;
-
-  if (!*p) return MD_BLANK;
-
-  if (p[0] == '#' && p[1] == '#' && p[2] == '#' && p[3] == ' ') { *body = p + 4; return MD_H3; }
-  if (p[0] == '#' && p[1] == '#' && p[2] == ' ')                { *body = p + 3; return MD_H2; }
-  if (p[0] == '#' && p[1] == ' ')                               { *body = p + 2; return MD_H1; }
-
-  /* Three or more of - _ * alone on a line. */
-  if (p[0] == '-' || p[0] == '_' || p[0] == '*') {
-    const char *q = p;
-    int n = 0;
-    while (*q == *p) { q++; n++; }
-    while (*q == ' ') q++;
-    if (n >= 3 && !*q) return MD_RULE;
+/* Characters arrive one at a time from SYS_PUTC, so they accumulate on the
+ * last line rather than each becoming one. */
+static void con_char(char c) {
+  int n;
+  if (c == '\n') { con_line(""); return; }
+  if (!G.nout) con_line("");
+  n = (int)api->str_len(G.out[G.nout - 1]);
+  if (n + 1 < CON_COLS) {
+    G.out[G.nout - 1][n] = c;
+    G.out[G.nout - 1][n + 1] = 0;
   }
-
-  if ((p[0] == '-' || p[0] == '*' || p[0] == '+') && p[1] == ' ') {
-    *body = p + 2;
-    return MD_BULLET;
-  }
-  if (p[0] >= '0' && p[0] <= '9') {
-    const char *q = p;
-    while (*q >= '0' && *q <= '9') q++;
-    if ((q[0] == '.' || q[0] == ')') && q[1] == ' ') { *body = p; return MD_NUMBER; }
-  }
-  if (p[0] == '>' ) { *body = (p[1] == ' ') ? p + 2 : p + 1; return MD_QUOTE; }
-
-  return MD_TEXT;
+  G.console = 1;
 }
 
-/* Draw one run of text with the inline markers taken out: **bold**, *emph*,
- * `code`, and [label](url) reduced to its label.
+static void con_clear(void) {
+  api->mem_set(G.out, 0, sizeof G.out);
+  G.nout = 0;
+}
+
+/* The one place both back ends meet. The interpreter calls this directly and
+ * compiled code calls it through a pointer in its literal pool, so a program
+ * cannot behave differently depending on how it was run. */
+static void ide_sys(void *ctx, int call, AsmState *st) {
+  char buf[16];
+  (void)ctx;
+  switch (call) {
+  case SYS_PUTC:  con_char((char)st->r[0]); break;
+  case SYS_PUTI:  api->fmt(buf, sizeof buf, "%d", (int)st->r[0]);
+                  { int i; for (i = 0; buf[i]; i++) con_char(buf[i]); }
+                  break;
+  case SYS_TICKS: st->r[0] = (int32_t)api->ticks_ms(); break;
+  case SYS_KEY:   st->r[0] = api->key_pending(); break;
+  default: break;
+  }
+}
+
+/* The buffer as one string, which is what the assembler wants. Built on the
+ * stack rather than kept, because it is only alive for the length of an
+ * assemble. */
+static void gather(char *out, int max) {
+  int i, n = 0;
+  for (i = 0; i < E.nlines && n < max - 2; i++) {
+    int len = E.len[i];
+    if (n + len + 1 >= max) len = max - n - 2;
+    if (len > 0) { api->mem_cpy(out + n, E.line[i], (size_t)len); n += len; }
+    out[n++] = '\n';
+  }
+  out[n] = 0;
+}
+
+/* An assembly error goes to the line it is on, because that is the whole
+ * difference between an error message and a scavenger hunt. */
+static int assemble_buffer(void) {
+  static char src[MAXLINES * (MAXCOL + 1)];
+  gather(src, (int)sizeof src);
+  if (asm_assemble(&G.prog, src)) return 1;
+  if (G.prog.err_line >= 1 && G.prog.err_line <= E.nlines) {
+    E.cy = G.prog.err_line - 1;
+    E.cx = 0;
+  }
+  api->fmt(E.status, sizeof E.status, "line %d: %s", G.prog.err_line, G.prog.err);
+  con_line(E.status);
+  return 0;
+}
+
+static const char *stop_name(AsmStop s) {
+  switch (s) {
+  case RUN_HALT:   return "halted";
+  case RUN_FAULT:  return "faulted";
+  case RUN_STEPS:  return "ran too long";
+  case RUN_NOCODE: return "nothing to run";
+  default:         return "stopped";
+  }
+}
+
+static void report(AsmStop stop, uint32_t ms) {
+  char buf[CON_COLS + 1];
+  if (stop == RUN_FAULT)
+    api->fmt(buf, sizeof buf, "%s at %lu", stop_name(stop),
+             (unsigned long)G.st.fault_addr);
+  else
+    api->fmt(buf, sizeof buf, "%s, r0=%d in %lums", stop_name(stop),
+             (int)G.st.r[0], (unsigned long)ms);
+  con_line(buf);
+  api->fmt(E.status, sizeof E.status, "%s", buf);
+}
+
+/* Compile into executable RAM and jump to it.
  *
- * One pass, no nesting. Nested emphasis inside a note on a pocket computer is
- * a problem nobody has. */
-static void md_inline(int x, int y, int maxw, const char *s, uint16_t fg,
-                      uint16_t bg) {
-  char word[64];
-  int n = 0, bold = 0, code = 0;
-  int cx = x;
+ * Two pointers to the same memory: `exec` is the one to call, `writable` the
+ * byte-addressable alias to build in. Writing through `exec` faults -- that
+ * window only permits aligned 32-bit access. See CardApi.exec_alloc. */
+static AsmStop run_native(uint32_t *ms) {
+  void *exec = api->exec_alloc(EXEC_MAX);
+  uint8_t *w;
+  AsmEmit e;
+  uint32_t t0;
+  int (*entry)(AsmState *);
 
-  while (*s) {
-    /* Flush what we have when a marker turns up, because the run either side
-     * is drawn differently. */
-    int flush = 0, next_bold = bold, next_code = code, skip = 0;
+  if (!exec) { con_line("no executable RAM"); return RUN_NOCODE; }
+  w = (uint8_t *)api->exec_writable(exec);
 
-    if (s[0] == '*' && s[1] == '*') { flush = 1; next_bold = !bold; skip = 2; }
-    else if (s[0] == '*' || s[0] == '_') { flush = 1; skip = 1; }
-    else if (s[0] == '`') { flush = 1; next_code = !code; skip = 1; }
-    else if (s[0] == '[') {
-      /* [label](url): the label is what a reader wants; the URL will not fit
-       * and could not be followed from here anyway. */
-      const char *close = s + 1;
-      while (*close && *close != ']') close++;
-      if (*close == ']' && close[1] == '(') {
-        const char *end = close + 2;
-        while (*end && *end != ')') end++;
-        if (*end == ')') {
-          char label[48];
-          int li = 0;
-          const char *q = s + 1;
-          while (q < close && li < (int)sizeof label - 1) label[li++] = *q++;
-          label[li] = 0;
-          if (n) { word[n] = 0; md_text(cx, y, word, fg, bg, bold);
-                   cx += n * CHARW; n = 0; }
-          md_text(cx, y, label, CLR_PG_LINK, bg, 0);
-          cx += li * CHARW;
-          s = end + 1;
-          continue;
-        }
-      }
-    }
-
-    if (flush) {
-      if (n) {
-        word[n] = 0;
-        md_text(cx, y, word, code ? CLR_PG_H : fg, code ? CLR_PG_CODE : bg, bold);
-        cx += n * CHARW;
-        n = 0;
-      }
-      bold = next_bold;
-      code = next_code;
-      s += skip;
-      continue;
-    }
-
-    if (cx + (n + 1) * CHARW > x + maxw) break;      /* the wrap did its job */
-    if (n < (int)sizeof word - 1) word[n++] = *s;
-    s++;
+  api->mem_set(&e, 0, sizeof e);
+  e.buf = w;
+  e.cap = EXEC_MAX;
+  if (!asm_compile(&G.prog, &e, (uint32_t)(size_t)ide_sys)) {
+    api->exec_free(exec);
+    con_line("the program is too big to compile");
+    return RUN_NOCODE;
   }
-  if (n) {
-    word[n] = 0;
-    md_text(cx, y, word, code ? CLR_PG_H : fg, code ? CLR_PG_CODE : bg, bold);
-  }
+
+  /* Entry is the first instruction after the literal pool, through the
+   * executable window rather than the writable one. */
+  entry = (int (*)(AsmState *))(void *)((uint8_t *)exec + e.code0);
+  t0 = api->ticks_ms();
+  entry(&G.st);
+  *ms = api->ticks_ms() - t0;
+  api->exec_free(exec);
+  return RUN_HALT;
 }
 
-/* Walk the buffer, drawing rows from `from` for `rows` of them, and return
- * how many rows the whole document takes. Called twice: once to count (with
- * rows == 0), once to draw. Counting by walking is cheap here -- ninety-six
- * lines -- and it keeps one description of the layout rather than two. */
-static int md_render(CRect c, int from, int rows) {
-  int i, row = 0;
-  int wrapcols = (c.w - PG_LEFT * 2) / CHARW;
-  int fenced = 0;
+static void build_and_run(int native) {
+  uint32_t ms = 0, t0;
+  AsmStop stop;
 
-  for (i = 0; i < E.nlines; i++) {
-    const char *body;
-    int indent = 0;
-    MdKind k;
-    int x, avail, y;
-    uint16_t fg = CLR_PG_TX, bg = CLR_PG;
-    int bold = 0;
+  con_clear();
+  if (!assemble_buffer()) return;
 
-    /* A fenced block is verbatim: no headings, no bullets, no emphasis. */
-    if (E.line[i][0] == '`' && E.line[i][1] == '`' && E.line[i][2] == '`') {
-      fenced = !fenced;
-      continue;
-    }
-    k = fenced ? MD_CODE : md_kind(E.line[i], &body, &indent);
-    if (fenced) body = E.line[i];
+  api->mem_set(&G.st, 0, sizeof G.st);
+  G.native = native;
 
-    /* Where this row lands, and whether it is on screen at all. */
-    y = c.y + (row - from) * PG_ROW;
-    row++;
-    if (rows == 0 || row - 1 < from || row - 1 >= from + rows) {
-      /* Not drawn, but long lines still take more than one row. */
-      if (k != MD_RULE && k != MD_BLANK) {
-        int len = (int)api->str_len(body);
-        int per = wrapcols - indent * 2 - (k == MD_BULLET || k == MD_NUMBER ? 2 : 0);
-        while (per > 0 && len > per) { len -= per; row++; }
-      }
-      continue;
-    }
-
-    x = c.x + PG_LEFT + indent * 2 * CHARW;
-    avail = c.w - (x - c.x) - PG_LEFT;
-
-    switch (k) {
-    case MD_BLANK:
-      break;
-
-    case MD_RULE:
-      api->fill(rect(c.x + PG_LEFT, y + 4, c.w - PG_LEFT * 2, 1), CLR_PG_RULE);
-      break;
-
-    case MD_H1:
-    case MD_H2:
-      fg = CLR_PG_H;
-      bold = 1;
-      break;
-    case MD_H3:
-      fg = CLR_PG_H;
-      break;
-
-    case MD_QUOTE:
-      /* The bar down the left is the whole visual idea of a quotation. */
-      api->fill(rect(x, y, 2, PG_ROW), CLR_PG_QUOT);
-      x += 6;
-      avail -= 6;
-      fg = CLR_PG_DIM;
-      break;
-
-    case MD_CODE:
-      api->fill(rect(c.x + PG_LEFT, y, c.w - PG_LEFT * 2, PG_ROW), CLR_PG_CODE);
-      bg = CLR_PG_CODE;
-      break;
-
-    case MD_BULLET:
-      /* A square, because the font has no bullet and a hyphen reads as a
-       * hyphen. */
-      api->fill(rect(x + 1, y + 3, 3, 3), CLR_PG_TX);
-      x += 8;
-      avail -= 8;
-      break;
-
-    case MD_NUMBER:
-    default:
-      break;
-    }
-
-    if (k == MD_BLANK || k == MD_RULE) continue;
-
-    if (k == MD_CODE) {
-      /* Verbatim: markers are content inside a fence. */
-      md_text(x, y, body, CLR_PG_TX, CLR_PG_CODE, 0);
-    } else if (bold || k == MD_H1 || k == MD_H2 || k == MD_H3) {
-      md_text(x, y, body, fg, bg, bold);
-      if (k == MD_H1)
-        api->fill(rect(c.x + PG_LEFT, y + PG_ROW - 1, c.w - PG_LEFT * 2, 1),
-                  CLR_PG_RULE);
-    } else {
-      md_inline(x, y, avail, body, fg, bg);
-    }
+  if (native) {
+    con_line("compiled");
+    stop = run_native(&ms);
+  } else {
+    t0 = api->ticks_ms();
+    stop = asm_run(&G.prog, &G.st, ASM_STEPS, ide_sys, 0);
+    ms = api->ticks_ms() - t0;
   }
-  return row;
+  report(stop, ms);
 }
 
-static void paint_preview(CRect c) {
-  int rows = (c.h - ROWH) / PG_ROW;
-  char bar[48];
+/* Run both and compare.
+ *
+ * The host tests can check every instruction template against the bytes the
+ * real assembler produces, but they cannot execute the result -- the machine
+ * that runs them is x86. This is the only place the compiler is actually
+ * tested against the interpreter, so it lives in the app rather than in the
+ * suite. */
+static void verify_both(void) {
+  AsmState want;
+  uint32_t ms = 0;
+  int i, bad = -1;
+  char buf[CON_COLS + 1];
 
-  api->fill(rect(c.x, c.y, c.w, c.h - ROWH), CLR_PG);
-  E.prows = md_render(rect(c.x, c.y + 2, c.w, c.h - ROWH - 2), E.ptop, rows);
+  con_clear();
+  if (!assemble_buffer()) return;
 
-  /* Clamp here rather than in the key handler: the length is only known once
-   * it has been laid out, and laying it out is what this just did. */
-  if (E.ptop > E.prows - rows) E.ptop = E.prows - rows;
-  if (E.ptop < 0) E.ptop = 0;
+  api->mem_set(&G.st, 0, sizeof G.st);
+  asm_run(&G.prog, &G.st, ASM_STEPS, ide_sys, 0);
+  api->mem_cpy(&want, &G.st, sizeof want);
 
-  api->fill(rect(c.x, c.y + c.h - ROWH, c.w, ROWH), CLR_BAR);
-  api->fmt(bar, sizeof bar, "preview  %s  ctrl-p edits",
-           E.path[0] ? E.path : "(unsaved)");
-  api->text((short)(c.x + 2), (short)(c.y + c.h - ROWH + 1), bar,
-            CLR_BAR_FG, CLR_BAR);
+  api->mem_set(&G.st, 0, sizeof G.st);
+  if (run_native(&ms) == RUN_NOCODE) return;
+
+  for (i = 0; i < ASM_REGS; i++)
+    if (G.st.r[i] != want.r[i]) { bad = i; break; }
+
+  if (bad >= 0) {
+    api->fmt(buf, sizeof buf, "r%d: vm %d, native %d",
+             bad, (int)want.r[bad], (int)G.st.r[bad]);
+    con_line("MISMATCH");
+    con_line(buf);
+  } else {
+    int mem_bad = 0;
+    for (i = 0; i < ASM_DATA; i++)
+      if (G.st.mem[i] != want.mem[i]) { mem_bad = 1; break; }
+    api->fmt(buf, sizeof buf, mem_bad ? "registers agree, memory does not"
+                                      : "both agree, %lums native",
+             (unsigned long)ms);
+    con_line(buf);
+  }
+  api->fmt(E.status, sizeof E.status, "%s", G.out[G.nout - 1]);
+}
+
+static void paint_console(CRect c) {
+  int h = console_h(), i;
+  short y0;
+  if (!h) return;
+  y0 = (short)(c.y + c.h - ROWH - h);
+  api->fill(rect(c.x, y0, c.w, h), CLR_GUTTER);
+  api->fill(rect(c.x, y0, c.w, 1), CLR_SEL);
+  for (i = 0; i < G.nout && i < CON_LINES; i++)
+    api->text((short)(c.x + 2), (short)(y0 + 2 + i * 8), G.out[i],
+              CLR_TEXT, CLR_GUTTER);
 }
 
 static void paint_edit(CRect c) {
-  int rows = (c.h - ROWH) / ROWH;
+  int rows = (c.h - ROWH - console_h()) / ROWH;
   int cols = (c.w - GUTTER) / CHARW;
   char buf[MAXCOL + 8];
   int r;
@@ -668,6 +654,7 @@ static void paint_edit(CRect c) {
   /* Status bar: the two things you look down for are which file and whether it
    * is saved. The dot is the unsaved marker, coloured rather than lettered so
    * it reads without being parsed. */
+  paint_console(c);
   api->fill(rect(c.x, c.y + c.h - ROWH, c.w, ROWH), CLR_BAR);
   if (E.dirty) api->fill(rect(c.x + 2, c.y + c.h - ROWH + 3, 3, 3), CLR_DIRTY);
   api->fmt(buf, sizeof buf, "%s  %d:%d  %s", E.path, E.cy + 1, E.cx + 1, E.status);
@@ -698,16 +685,20 @@ static void paint_name(CRect c) {
 
 /* What this editor can be asked to do. Keys map onto these and so do menu
  * items; see apps/toolbar.h for why a menu item is never a keystroke. */
-enum { ACT_NEW = 1, ACT_SAVE, ACT_SAVEAS, ACT_OPEN, ACT_PREVIEW };
+enum { ACT_NEW = 1, ACT_SAVE, ACT_SAVEAS, ACT_OPEN, ACT_VM, ACT_NATIVE,
+       ACT_VERIFY, ACT_CONSOLE };
 
 static const CappAction EDIT_ACTIONS[] = {
-  { "new",     "New",     "File", 0x0E, ACT_NEW },      /* ctrl-n */
-  { "save",    "Save",    "File", 0x13, ACT_SAVE },     /* ctrl-s */
-  { "saveas",  "Save as", "File", 0x12, ACT_SAVEAS },   /* ctrl-r */
-  { "close",   "Close",   "File", 0x0F, ACT_OPEN },     /* ctrl-o */
-  { "preview", "Preview", "View", 0x10, ACT_PREVIEW },  /* ctrl-p */
+  { "new",     "New",         "File", 0x0E, ACT_NEW },     /* ctrl-n */
+  { "save",    "Save",        "File", 0x13, ACT_SAVE },    /* ctrl-s */
+  { "saveas",  "Save as",     "File", 0x12, ACT_SAVEAS },  /* ctrl-r */
+  { "close",   "Close",       "File", 0x0F, ACT_OPEN },    /* ctrl-o */
+  { "run.vm",  "On the VM",   "Run",  0x02, ACT_VM },      /* ctrl-b */
+  { "run.native", "Compile+run", "Run", 0x0C, ACT_NATIVE },/* ctrl-l */
+  { "verify",  "Verify both", "Run",  0x18, ACT_VERIFY },  /* ctrl-x */
+  { "console", "Console",     "View", 0x10, ACT_CONSOLE }, /* ctrl-p */
 };
-static const TbIcon EDIT_ICONS[] = { { "S", ACT_SAVE } };
+static const TbIcon EDIT_ICONS[] = { { "R", ACT_VM } };
 
 #define NEDIT ((int)(sizeof EDIT_ACTIONS / sizeof EDIT_ACTIONS[0]))
 
@@ -715,9 +706,12 @@ static int do_action(int a) {
   switch (a) {
   case ACT_NEW:     begin_name(NAME_NEW, ""); return 1;
   case ACT_SAVE:    save(); return 1;
-  case ACT_SAVEAS:  begin_name(NAME_SAVE_AS, E.path[0] ? E.path : "untitled.txt"); return 1;
+  case ACT_SAVEAS:  begin_name(NAME_SAVE_AS, E.path[0] ? E.path : "untitled.s"); return 1;
   case ACT_OPEN:    E.view = VIEW_BROWSE; rescan(); return 1;
-  case ACT_PREVIEW: E.view = VIEW_PREVIEW; E.ptop = 0; return 1;
+  case ACT_VM:      build_and_run(0); return 1;
+  case ACT_NATIVE:  build_and_run(1); return 1;
+  case ACT_VERIFY:  verify_both(); return 1;
+  case ACT_CONSOLE: G.console = !G.console; return 1;
   default: return 0;
   }
 }
@@ -728,7 +722,6 @@ static void app_paint(void *st, CRect c) {
    * whole screens of their own and have nothing to put on it. */
   if (E.view == VIEW_BROWSE) { paint_browse(c); return; }
   if (E.view == VIEW_NAME) { paint_name(c); return; }
-  if (E.view == VIEW_PREVIEW) { paint_preview(c); return; }
   {
     CRect full = c;
     /* Only the dropdown moved: draw it and nothing else, or the content
@@ -788,29 +781,6 @@ static int key_edit(unsigned char k) {
   }
 }
 
-/* The preview reads; it does not edit. Anything that would change the text
- * puts you back in the editor first, rather than being quietly ignored. */
-static int key_preview(unsigned char k) {
-  switch (k) {
-  case 0x10:                                      /* ctrl-p toggles back */
-  case CAPP_KEY_ENTER:
-    E.view = VIEW_EDIT;
-    return 1;
-  case CAPP_KEY_UP:    E.ptop -= 1; return 1;
-  case CAPP_KEY_DOWN:  E.ptop += 1; return 1;
-  case CAPP_KEY_LEFT:  E.ptop -= 12; return 1;
-  case CAPP_KEY_RIGHT:
-  case ' ':            E.ptop += 12; return 1;
-  case 'g':            E.ptop = 0; return 1;
-  case 0x0F:                                      /* ctrl-o, the file list */
-    E.view = VIEW_BROWSE;
-    rescan();
-    return 1;
-  case 0x13: save(); return 1;                    /* ctrl-s still saves */
-  default: return 0;
-  }
-}
-
 static int key_name(unsigned char k) {
   if (k == CAPP_KEY_ENTER) { finish_name(); return 1; }
   if (k == CAPP_KEY_BACK) {
@@ -839,7 +809,6 @@ static int app_key(void *st, unsigned char k) {
   (void)st;
   if (E.view == VIEW_BROWSE) return key_browse(k);
   if (E.view == VIEW_NAME) return key_name(k);
-  if (E.view == VIEW_PREVIEW) return key_preview(k);
   return key_edit(k);
 }
 
@@ -891,7 +860,6 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
     if (E.bsel >= E.ndir) E.bsel = E.ndir - 1;
     return 1;
   }
-  if (E.view == VIEW_PREVIEW) { E.ptop -= wheel * 3; return 1; }
   if (E.view != VIEW_EDIT) return 0;
 
   E.top -= wheel * 3;
@@ -904,8 +872,6 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
  * machine whose arrow keys are ; . , / needs those back. */
 static int app_wants_text(void *st) {
   (void)st;
-  /* Not while previewing: nothing there takes typing, and saying otherwise
-   * would cost the arrow keys, which are how you scroll it. */
   return E.view == VIEW_EDIT || E.view == VIEW_NAME;
 }
 
@@ -925,13 +891,13 @@ static void app_set_args(void *st, const char *path) {
 const CappInfo capp_info = {
   CAPP_API_VERSION,
   CAPP_FULLSCREEN,
-  "Edit",
-  /* 16x16: a document with a folded corner and ruled lines. */
-  { 0x00, 0x00, 0x1F, 0xF0, 0x10, 0x18, 0x10, 0x14,
-    0x10, 0x12, 0x10, 0x1F, 0x13, 0xC1, 0x10, 0x01,
-    0x13, 0xE1, 0x10, 0x01, 0x13, 0xC1, 0x10, 0x01,
-    0x11, 0xE1, 0x10, 0x01, 0x1F, 0xFF, 0x00, 0x00 },
-  "arrows\tmove\nenter\topen, or split the line\nbackspace\tup a folder, or delete\nn\tnew file\nctrl-n\tnew file\nctrl-s\tsave\nctrl-r\tsave as\nctrl-p\tmarkdown preview\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n",
+  "IDE",
+  /* 16x16: a terminal with a prompt and a caret. */
+  { 0x00, 0x00, 0x7F, 0xFE, 0x40, 0x02, 0x40, 0x02,
+    0x48, 0x02, 0x44, 0x02, 0x42, 0x02, 0x44, 0x02,
+    0x48, 0x02, 0x40, 0x02, 0x43, 0x82, 0x40, 0x02,
+    0x40, 0x02, 0x7F, 0xFE, 0x00, 0x00, 0x00, 0x00 },
+  "ctrl-b\trun on the VM\nctrl-l\tcompile to Xtensa and run\nctrl-x\trun both and compare\nctrl-p\tshow or hide the console\nctrl-s\tsave\nctrl-n\tnew file\nctrl-r\tsave as\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n",
 };
 
 /* Static, not a local: the shell keeps calling into this long after

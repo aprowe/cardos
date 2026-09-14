@@ -50,6 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pixelrender import shoot_pixel
 from chat import ChatService, ROOT as ROOT_DIR
 from voice import Voice
+from screen import Screen
 import updates
 
 CHROME_CANDIDATES = [
@@ -367,6 +368,32 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("chat #%d: %s" % (jid, text[:70]) + "\n")
         self._text("id %d" % jid + "\n")
 
+    def _do_screen(self, args):
+        """The desktop, streamed until the device stops reading.
+
+        No Content-Length: this response has no end, and the socket closing is
+        how it finishes. Written straight to wfile so nothing buffers a frame
+        here either -- the encoder yields, this sends, and back pressure from
+        a device that cannot keep up arrives as a slow write, which paces the
+        capture for free."""
+        mode = (args.get("mode") or ["follow"])[0]
+        fps = int((args.get("fps") or ["12"])[0])
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        sys.stderr.write("screen: streaming, mode=%s fps=%d" % (mode, fps) + "\n")
+
+        sent = 0
+        try:
+            for chunk in Screen(mode=mode, fps=fps).frames():
+                self.wfile.write(chunk)
+                sent += len(chunk)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass          # the viewer quit, which is the normal ending
+        sys.stderr.write("screen: stopped after %d bytes" % sent + "\n")
+
     def _do_chat_get(self, args):
         jid = int((args.get("id") or ["0"])[0])
         state, reply = self.chat.poll(jid)
@@ -381,6 +408,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         q = urllib.parse.urlparse(self.path)
         args = urllib.parse.parse_qs(q.query)
+
+        if q.path == "/screen":
+            if not self._authorised():
+                return
+            self._do_screen(args)
+            return
 
         if q.path == "/chat":
             if not self._authorised():

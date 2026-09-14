@@ -3,7 +3,8 @@ project(cardos C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 if (MSVC)
-  add_compile_options(/W4 /wd4127 /D_CRT_SECURE_NO_WARNINGS
+  # C4310: CAPP_RGB truncates on purpose -- the truncation IS the byte swap.
+  add_compile_options(/W4 /wd4127 /wd4310 /D_CRT_SECURE_NO_WARNINGS
     /we4013)  # implicit function declaration -> error, as gcc does on device
 else()
   add_compile_options(-Wall -Wextra)

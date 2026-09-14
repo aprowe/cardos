@@ -10,6 +10,24 @@ static Rect s_clip = { 0, 0, DISPLAY_W, DISPLAY_H };
 /* One scanline. 480 bytes, versus 65 KB for a full-screen buffer. */
 static uint16_t s_row[DISPLAY_W];
 
+/* Staging for anything sent as more than one row: a run of text, and the
+ * bands of a fill. Shared between the two deliberately -- display_blit does
+ * not return until the panel has the pixels, so there is never more than one
+ * of them in flight. (It did once, and a fill overwriting a line of text
+ * mid-DMA is what forced display_blit to be synchronous; see display.c.)
+ *
+ * One line of text, composed before any of it is sent.
+ *
+ * Every draw_bitmap is a window-set -- CASET, RASET, RAMWR -- and then the
+ * pixels. Drawing a glyph a row at a time meant four transactions carrying
+ * twelve bytes, eight times per character: a forty-character line cost about
+ * 1,280 transactions to move 1,920 bytes, and the ceremony dwarfed the
+ * payload. Composed here and sent once, the same line is one transaction.
+ *
+ * 3,840 bytes of .bss, which on a machine with 120 KB free is a good trade
+ * for the thing the screen spends most of its time doing. */
+static uint16_t s_text[DISPLAY_W * FONT_H];
+
 void draw_set_clip(Rect r) {
   s_clip = rect_clip(r, DISPLAY_W, DISPLAY_H);
 }
@@ -22,6 +40,25 @@ void draw_rect(Rect r, uint16_t color) {
   int i;
 
   if (rect_is_empty(v)) return;
+
+  /* Send it in bands rather than scanlines when it fits: a 240x135 clear was
+   * 135 window-sets, and is now 17. Anything wider than the staging buffer
+   * falls back to a row at a time, which is what it always did. */
+  if (v.w <= DISPLAY_W) {
+    int band = (int)(sizeof s_text / sizeof s_text[0]) / v.w;   /* rows at a time */
+    if (band > 1) {
+      int16_t done = 0;
+      for (i = 0; i < band * v.w; i++) s_text[i] = color;
+      while (done < v.h) {
+        int16_t n = (int16_t)(v.h - done);
+        if (n > band) n = (int16_t)band;
+        display_blit(v.x, (int16_t)(v.y + done), v.w, n, s_text);
+        done = (int16_t)(done + n);
+      }
+      return;
+    }
+  }
+
   for (i = 0; i < v.w; i++) s_row[i] = color;
   for (y = v.y; y < v.y + v.h; y++) display_blit(v.x, y, v.w, 1, s_row);
 }
@@ -82,12 +119,51 @@ static void draw_glyph(int16_t x, int16_t y, char ch, uint16_t fg, uint16_t bg) 
   }
 }
 
+/* A run of text, composed into one buffer and sent in one transaction.
+ *
+ * The clipping is done here rather than per glyph, so the buffer holds only
+ * the visible part and the blit is exactly the damaged region. Falls back to
+ * the per-glyph path for anything that will not fit -- which at this screen
+ * size means nothing, but the fallback costs four lines and removes a
+ * silent-corruption failure mode. */
 void draw_text(int16_t x, int16_t y, const char *s, uint16_t fg, uint16_t bg) {
-  while (*s) {
-    draw_glyph(x, y, *s++, fg, bg);
-    x = (int16_t)(x + FONT_W);
-    if (x >= s_clip.x + s_clip.w) return;    /* nothing further can be seen */
+  Rect cell, v;
+  int16_t len = 0, px, py;
+  const char *p;
+
+  for (p = s; *p; p++) len++;
+  if (len <= 0) return;
+
+  cell.x = x;
+  cell.y = y;
+  cell.w = (int16_t)(len * FONT_W);
+  cell.h = FONT_H;
+  v = rect_intersect(cell, s_clip);
+  if (rect_is_empty(v)) return;
+
+  if (v.w > DISPLAY_W) {
+    while (*s) {
+      draw_glyph(x, y, *s++, fg, bg);
+      x = (int16_t)(x + FONT_W);
+      if (x >= s_clip.x + s_clip.w) return;
+    }
+    return;
   }
+
+  for (py = 0; py < v.h; py++) {
+    int row_bit = (v.y + py) - y;
+    for (px = 0; px < v.w; px++) {
+      int col_in_run = (v.x + px) - x;
+      int ch = col_in_run / FONT_W;
+      int col = col_in_run % FONT_W;
+      unsigned char c = (unsigned char)s[ch];
+      const uint8_t *glyph = (c >= FONT_FIRST && c <= FONT_LAST)
+                           ? font6x8[c - FONT_FIRST] : NULL;
+      uint8_t bits = glyph ? glyph[col] : 0;
+      s_text[py * v.w + px] = ((bits >> row_bit) & 1) ? fg : bg;
+    }
+  }
+  display_blit(v.x, v.y, v.w, v.h, s_text);
 }
 
 /* A glyph at an integer scale. Clipped per pixel like the unscaled one, so a

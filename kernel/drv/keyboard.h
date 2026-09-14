@@ -16,10 +16,13 @@
 #define KEY_BACKSPACE 0x08
 #define KEY_TAB       0x09
 
-/* ctrl-h, which ASCII says is 0x08 -- the same byte the Backspace key sends.
- * Only one of them can keep it, and Backspace is a key while ctrl-h is a
- * chord, so the chord is the one that moves. Nothing here wanted the ASCII
- * meaning of ctrl-h; every caller that wants a backspace has a key for it. */
+/* The help panel. Fn-h produces it.
+ *
+ * It was ctrl-h, which ASCII says is 0x08 -- the same byte Backspace sends --
+ * and this code existed to break the tie. Under the modifier convention the
+ * collision simply stops existing: ctrl belongs to the app, so ctrl-h is
+ * whatever the app wants it to be, and help moved to the modifier that owns
+ * the window. The code is kept because every shell already handles it. */
 #define KEY_HELP      0x86
 
 /* Opt is the global-shortcut modifier.
@@ -32,7 +35,25 @@
  * 0xA0..0xA9 are opt with a digit, 0xC0..0xD9 opt with a letter. */
 #define KEY_OPT_DIGIT(d)  ((uint8_t)(0xA0 + (d)))
 #define KEY_OPT_LETTER(c) ((uint8_t)(0xC0 + ((c) - 'a')))
-#define KEY_IS_OPT(k)     ((k) >= 0xA0)
+#define KEY_IS_OPT(k)     ((k) >= 0xA0 && (k) <= 0xD9)
+
+/* THE MODIFIER CONVENTION. Three modifiers, three scopes, read outwards:
+ *
+ *   ctrl  the app      save, run, sync -- whatever has focus owns every one
+ *   fn    the window   close, fullscreen, minimise, the Start menu, help
+ *   opt   the OS       switch shell, brightness, radios, user hotkeys
+ *
+ * Before this, the shells took ctrl-S, ctrl-P, ctrl-W and ctrl-F out from
+ * under every app -- so in a desktop window ctrl-S opened the Start menu
+ * instead of saving, and ctrl-P toggled a pointer instead of previewing. A
+ * key now means one thing, and an app may take every ctrl chord it likes.
+ *
+ * Fn chords get codes of their own for the same reason opt's do: they have to
+ * survive being typed inside a text field, where an app is swallowing letters.
+ * 0xE0..0xF9 is fn with a letter. Fn with ; , . / stays the arrow cluster --
+ * nobody thinks of an arrow as a chord. */
+#define KEY_FN_LETTER(c)  ((uint8_t)(0xE0 + ((c) - 'a')))
+#define KEY_IS_FN(k)      ((k) >= 0xE0)
 
 #define KEY_UP        0x80   /* the ; , . / keys double as arrows under Fn */
 #define KEY_DOWN      0x81
@@ -49,6 +70,10 @@ uint8_t keyboard_poll(void);
  * boot-time question "is someone holding escape", which has no edge to catch:
  * the key went down before the matrix was powered. */
 int keyboard_held(uint8_t key, int settle_ms);
+
+/* Any key down right now, consuming nothing. For code inside a long
+ * operation that wants to know it should stop. */
+int keyboard_any_down(void);
 
 int keyboard_shift_down(void);
 int keyboard_ctrl_down(void);

@@ -14,6 +14,7 @@
 #include "kernel/ui/desktop.h"
 #include "kernel/ui/shell.h"
 #include "kernel/drv/bthid.h"
+#include "kernel/sys/bg.h"
 #include "kernel/drv/keyboard.h"
 #include "kernel/drv/display.h"
 #include "kernel/app/capprun.h"
@@ -24,14 +25,40 @@
 #include <stdio.h>
 #include <string.h>
 
-#define ROW_H   9
-#define VALUE_X 78
+/* Taller rows than the old nine-pixel bands, and a heading above each group.
+ * Eleven settings in one undifferentiated list is a list you read twice to
+ * find anything; four short groups is one you scan. */
+#define ROW_H   12
+#define HEAD_H  11
+#define PAD_X   4
+
+#define S_BG     RGB565(22, 24, 30)
+#define S_ROW    RGB565(31, 34, 42)
+#define S_SEL    RGB565(42, 62, 94)
+#define S_ACCENT RGB565(96, 156, 244)
+#define S_TEXT   RGB565(224, 230, 240)
+#define S_DIM    RGB565(128, 138, 154)
+#define S_HEAD   RGB565(142, 162, 200)
+#define S_ON     RGB565(112, 208, 140)
+#define S_OFF    RGB565(110, 120, 134)
+#define S_BAR    RGB565(38, 62, 98)
 
 typedef enum { VIEW_ROWS = 0, VIEW_SCAN, VIEW_PASS } View;
 
 typedef struct {
   View view;
   int  sel;
+
+  /* Its own viewport, for the shells that do not provide one.
+   *
+   * ui_scroll_into_view only does anything on the desktop, where a window
+   * scrolls its content. In the launcher an app is the whole screen and there
+   * is nothing outside it to scroll -- so this list, which grew past 135
+   * pixels when it gained section headings, simply could not reach its last
+   * rows. `top` is the pixel offset, used only when the shell is not going to
+   * do it; letting both scroll would double every movement. */
+  int  top;
+  int  view_h;         /* what the last paint was given */
   char note[44];       /* what just happened, or what is about to */
 
   WifiAp aps[WIFI_MAX_SCAN];
@@ -61,22 +88,16 @@ void settings_paint_now(void) { ui_repaint(); }
  * silence: "wrong password" and "network not found" are different problems
  * and the radio can tell them apart. */
 
+/* Asked for, not done here -- the scan is six seconds and this is the drawing
+ * loop. The answer arrives as a note from the background task. */
 static void act_pair(SettingsState *st) {
+  bg_submit(BG_BT_PAIR_MOUSE);
   snprintf(st->note, sizeof st->note, "scanning, keep the mouse awake");
-  settings_paint_now();
-  if (bthid_start(6, BTHID_MOUSE) == 0)
-    snprintf(st->note, sizeof st->note, "paired: %s", bthid_status(BTHID_MOUSE));
-  else
-    snprintf(st->note, sizeof st->note, "no mouse found");
 }
 
 static void act_pair_kbd(SettingsState *st) {
+  bg_submit(BG_BT_PAIR_KBD);
   snprintf(st->note, sizeof st->note, "put the keyboard in pairing mode");
-  settings_paint_now();
-  if (bthid_start(8, BTHID_KEYBOARD) == 0)
-    snprintf(st->note, sizeof st->note, "paired: %s", bthid_status(BTHID_KEYBOARD));
-  else
-    snprintf(st->note, sizeof st->note, "no keyboard found");
 }
 
 static void act_radio_off(SettingsState *st) {
@@ -95,13 +116,8 @@ static void act_bt_boot(SettingsState *st) {
  * was paired, which between them is everything that drops when the machine is
  * put down for a while. */
 static void act_reconnect(SettingsState *st) {
-  int n;
+  bg_submit(BG_RECONNECT_ALL);
   snprintf(st->note, sizeof st->note, "reconnecting...");
-  settings_paint_now();
-  if (!wifi_is_connected()) wifi_connect_saved(15000);
-  n = bthid_autoconnect(3);
-  snprintf(st->note, sizeof st->note, "%s, %d bluetooth",
-           wifi_is_connected() ? "wifi up" : "no wifi", n);
 }
 
 static void act_wifi_scan(SettingsState *st) {
@@ -159,9 +175,11 @@ static void act_reboot(SettingsState *st) {
 /* ---- the rows ----------------------------------------------------------- */
 
 typedef struct {
+  const char *section;     /* a heading above this row, or NULL to continue */
   const char *label;
   void (*value)(char *buf, size_t n);
   void (*action)(SettingsState *st);
+  int  toggle;             /* the value is on/off and reads as a pill */
 } Row;
 
 static void v_mouse(char *b, size_t n) { snprintf(b, n, "%s", bthid_status(BTHID_MOUSE)); }
@@ -190,55 +208,145 @@ static void v_ram(char *b, size_t n) {
  * one a debugging aid. Both survive as console commands -- flip, and ctrl-P on
  * the desktop. */
 static const Row ROWS[] = {
-  { "WiFi",      v_wifi,   act_wifi_scan  },
-  { "Network",   v_saved,  act_wifi_saved },
-  { "Mouse",     v_mouse,  act_pair       },
-  { "Keyboard",  v_kbd,    act_pair_kbd   },
-  { "BT at boot", v_btboot, act_bt_boot   },
-  { "Brightness", v_bright, act_bright    },
-  { "Reconnect", NULL,     act_reconnect  },
-  { "Bluetooth off", NULL, act_radio_off  },
-  { "Forget all", NULL,    act_forget     },
-  { "RAM",       v_ram,    NULL           },
-  { "Restart",   NULL,     act_reboot     },
+  { "Network",   "WiFi",         v_wifi,   act_wifi_scan,  0 },
+  { NULL,        "Saved",        v_saved,  act_wifi_saved, 0 },
+
+  { "Bluetooth", "Mouse",        v_mouse,  act_pair,       0 },
+  { NULL,        "Keyboard",     v_kbd,    act_pair_kbd,   0 },
+  { NULL,        "On at boot",   v_btboot, act_bt_boot,    1 },
+  { NULL,        "Reconnect",    NULL,     act_reconnect,  0 },
+  { NULL,        "Radio off",    NULL,     act_radio_off,  0 },
+
+  { "Display",   "Brightness",   v_bright, act_bright,     0 },
+
+  { "System",    "Memory",       v_ram,    NULL,           0 },
+  { NULL,        "Forget all",   NULL,     act_forget,     0 },
+  { NULL,        "Restart",      NULL,     act_reboot,     0 },
 };
 
 #define NROWS ((int)(sizeof ROWS / sizeof ROWS[0]))
 
+/* ---- layout --------------------------------------------------------------
+ *
+ * Headings make a row's position no longer i * ROW_H, and three places need
+ * the answer -- the paint, the click and the scroll. One function, so they
+ * cannot disagree. */
+static int16_t row_y(int i) {
+  int16_t y = 0;
+  int k;
+  for (k = 0; k < i && k < NROWS; k++) {
+    if (ROWS[k].section) y = (int16_t)(y + HEAD_H);
+    y = (int16_t)(y + ROW_H);
+  }
+  if (i < NROWS && ROWS[i].section) y = (int16_t)(y + HEAD_H);
+  return y;
+}
+
+static int16_t rows_height(void) {
+  return (int16_t)(row_y(NROWS - 1) + ROW_H);
+}
+
+/* The row a y offset lands on, or the nearest one. */
+static int row_at(int16_t y) {
+  int i;
+  for (i = 0; i < NROWS; i++)
+    if (y >= row_y(i) && y < row_y(i) + ROW_H) return i;
+  return -1;
+}
+
 /* ---- painting ----------------------------------------------------------- */
 
-static void band(Rect c, int16_t y, int sel, const char *left, const char *right) {
-  uint16_t fg = sel ? C_TITLE_FG : C_TEXT;
-  uint16_t bg = sel ? C_TITLE : C_WHITE;
-  draw_rect(R(c.x, y, c.w, ROW_H), bg);
-  draw_text(c.x, y, left, fg, bg);
-  if (right && right[0])
-    draw_text_ellipsis((int16_t)(c.x + VALUE_X), y, (int16_t)(c.w - VALUE_X),
-                       right, fg, bg);
+/* A row: label on the left, value on the right, and an accent bar down the
+ * edge of the selected one rather than a solid block of colour across it --
+ * the block is what made the old list look like a spreadsheet. */
+static void band(Rect c, int16_t y, int sel, const char *left, const char *right,
+                 int toggle) {
+  uint16_t bg = sel ? S_SEL : S_ROW;
+  int16_t w;
+
+  draw_rect(R(c.x, y, c.w, ROW_H - 1), bg);
+  if (sel) draw_rect(R(c.x, y, 2, ROW_H - 1), S_ACCENT);
+  draw_text((int16_t)(c.x + PAD_X + 2), (int16_t)(y + 2), left, S_TEXT, bg);
+
+  if (!right || !right[0]) return;
+  w = (int16_t)(draw_text_width(right) + 4);
+  if (w > c.w / 2) w = (int16_t)(c.w / 2);
+  if (toggle) {
+    /* On and off are worth seeing without reading, so they get a colour. */
+    int on = (right[0] == 'o' && right[1] == 'n');
+    draw_rect(R(c.x + c.w - w - PAD_X, y + 2, w, ROW_H - 5), on ? S_ON : S_OFF);
+    draw_text((int16_t)(c.x + c.w - w - PAD_X + 2), (int16_t)(y + 2), right,
+              S_ROW, on ? S_ON : S_OFF);
+  } else {
+    draw_text_ellipsis((int16_t)(c.x + c.w - w - PAD_X), (int16_t)(y + 2), w,
+                       right, S_DIM, bg);
+  }
+}
+
+/* Does this app have to scroll itself? Only where the shell will not. */
+static int scrolls_itself(void) { return ui_shell() != UI_DESKTOP; }
+
+static void clamp_top(SettingsState *st) {
+  int16_t max = (int16_t)(rows_height() + ROW_H + 6 - st->view_h);
+  if (!scrolls_itself() || max < 0) max = 0;
+  if (st->top > max) st->top = max;
+  if (st->top < 0) st->top = 0;
+}
+
+/* Keep the selected row on screen, whichever mechanism is doing the work. */
+static void show_sel(SettingsState *st) {
+  if (!scrolls_itself()) { ui_scroll_into_view(row_y(st->sel), ROW_H); return; }
+  if (row_y(st->sel) < st->top) st->top = row_y(st->sel);
+  if (row_y(st->sel) + ROW_H > st->top + st->view_h)
+    st->top = row_y(st->sel) + ROW_H - st->view_h;
+  clamp_top(st);
 }
 
 static void paint_rows(SettingsState *st, Rect c) {
   int i;
+  int16_t off;
+
+  st->view_h = c.h;
+  clamp_top(st);
+  off = (int16_t)(scrolls_itself() ? st->top : 0);
+
+  draw_rect(R(c.x, c.y, c.w, c.h), S_BG);
+
   for (i = 0; i < NROWS; i++) {
     char val[32];
+    int16_t y = (int16_t)(c.y + row_y(i) - off);
+
+    if (y + ROW_H < c.y || y > c.y + c.h) continue;   /* off the viewport */
+
+    if (ROWS[i].section)
+      draw_text((int16_t)(c.x + PAD_X), (int16_t)(y - HEAD_H + 2),
+                ROWS[i].section, S_HEAD, S_BG);
+
     val[0] = 0;
     if (ROWS[i].value) ROWS[i].value(val, sizeof val);
-    else if (ROWS[i].action) snprintf(val, sizeof val, "%s", "...");
-    band(c, (int16_t)(c.y + i * ROW_H), i == st->sel, ROWS[i].label, val);
+    else if (ROWS[i].action) snprintf(val, sizeof val, "%s", ">");
+    band(c, y, i == st->sel, ROWS[i].label, val, ROWS[i].toggle);
   }
-  draw_text_ellipsis(c.x, (int16_t)(c.y + NROWS * ROW_H + 1), c.w, st->note,
-                     C_SHADOW, C_WHITE);
+
+  if (st->note[0]) {
+    int16_t y = (int16_t)(c.y + rows_height() + 3 - off);
+    draw_rect(R(c.x, y, c.w, ROW_H - 1), S_BAR);
+    draw_text_ellipsis((int16_t)(c.x + PAD_X), (int16_t)(y + 2), c.w, st->note,
+                       S_TEXT, S_BAR);
+  }
 }
 
 static void paint_scan(SettingsState *st, Rect c) {
   int i;
-  draw_text(c.x, c.y, "pick a network   ` back", C_SHADOW, C_WHITE);
+  draw_rect(R(c.x, c.y, c.w, c.h), S_BG);
+  draw_text((int16_t)(c.x + PAD_X), (int16_t)(c.y + 2),
+            "pick a network    ` back", S_HEAD, S_BG);
   for (i = 0; i < st->nap; i++) {
     char rssi[16];
     snprintf(rssi, sizeof rssi, "%d%s", st->aps[i].rssi,
              st->aps[i].open ? " open" : "");
     band(c, (int16_t)(c.y + (i + 1) * ROW_H), i == st->ap_sel,
-         st->aps[i].ssid, rssi);
+         st->aps[i].ssid, rssi, 0);
   }
 }
 
@@ -246,8 +354,11 @@ static void paint_pass(SettingsState *st, Rect c) {
   char shown[WIFI_PASS_MAX + 2];
   int i;
 
-  draw_text(c.x, c.y, st->aps[st->ap_sel].ssid, C_TEXT, C_WHITE);
-  draw_text(c.x, (int16_t)(c.y + ROW_H), "password, then enter", C_SHADOW, C_WHITE);
+  draw_rect(R(c.x, c.y, c.w, c.h), S_BG);
+  draw_text((int16_t)(c.x + PAD_X), (int16_t)(c.y + 2),
+            st->aps[st->ap_sel].ssid, S_TEXT, S_BG);
+  draw_text((int16_t)(c.x + PAD_X), (int16_t)(c.y + ROW_H + 2),
+            "password, then enter", S_DIM, S_BG);
 
   /* Shown as dots with the last character in clear: on a keyboard this small,
    * typing a passphrase blind is how you end up believing the password is
@@ -257,11 +368,12 @@ static void paint_pass(SettingsState *st, Rect c) {
   shown[st->pass_len] = '_';
   shown[st->pass_len + 1] = 0;
 
-  draw_bevel(R(c.x, c.y + 2 * ROW_H + 2, c.w, ROW_H + 2), C_WHITE, C_SHADOW, C_LIGHT);
-  draw_text_ellipsis((int16_t)(c.x + 2), (int16_t)(c.y + 2 * ROW_H + 4),
-                     (int16_t)(c.w - 4), shown, C_TEXT, C_WHITE);
-  draw_text_ellipsis(c.x, (int16_t)(c.y + 4 * ROW_H), c.w, st->note,
-                     C_SHADOW, C_WHITE);
+  draw_rect(R(c.x + PAD_X, c.y + 2 * ROW_H + 2, c.w - PAD_X * 2, ROW_H + 2), S_ROW);
+  draw_rect(R(c.x + PAD_X, c.y + 2 * ROW_H + 2, 2, ROW_H + 2), S_ACCENT);
+  draw_text_ellipsis((int16_t)(c.x + PAD_X + 5), (int16_t)(c.y + 2 * ROW_H + 5),
+                     (int16_t)(c.w - PAD_X * 2 - 6), shown, S_TEXT, S_ROW);
+  draw_text_ellipsis((int16_t)(c.x + PAD_X), (int16_t)(c.y + 4 * ROW_H), c.w,
+                     st->note, S_DIM, S_BG);
 }
 
 static void settings_paint(void *state, Rect c) {
@@ -283,7 +395,7 @@ static int16_t settings_height(void *state, int16_t width) {
   switch (st->view) {
   case VIEW_SCAN: return (int16_t)((st->nap + 1) * ROW_H + 2);
   case VIEW_PASS: return (int16_t)(5 * ROW_H);
-  default:        return (int16_t)(NROWS * ROW_H + 10);
+  default:        return (int16_t)(rows_height() + ROW_H + 6);
   }
 }
 
@@ -302,11 +414,11 @@ static int key_rows(SettingsState *st, uint8_t k) {
   switch (k) {
   case KEY_UP:
     st->sel = (st->sel + NROWS - 1) % NROWS;
-    ui_scroll_into_view((int16_t)(st->sel * ROW_H), ROW_H);
+    show_sel(st);
     return 1;
   case KEY_DOWN:
     st->sel = (st->sel + 1) % NROWS;
-    ui_scroll_into_view((int16_t)(st->sel * ROW_H), ROW_H);
+    show_sel(st);
     return 1;
   case KEY_ENTER:
   case ' ':
@@ -377,6 +489,19 @@ static int settings_wants_text(void *state) {
   return ((SettingsState *)state)->view == VIEW_PASS;
 }
 
+/* The wheel, where this app is doing its own scrolling. On the desktop the
+ * window owns the wheel and this declines it, which is what returning 0
+ * means there. */
+static int settings_mouse(void *state, int16_t x, int16_t y, int buttons,
+                          int wheel) {
+  SettingsState *st = (SettingsState *)state;
+  (void)x; (void)y; (void)buttons;
+  if (!wheel || !scrolls_itself() || st->view != VIEW_ROWS) return 0;
+  st->top -= wheel * ROW_H * 2;
+  clamp_top(st);
+  return 1;
+}
+
 static int settings_click(void *state, int16_t x, int16_t y, int button) {
   SettingsState *st = (SettingsState *)state;
   (void)x; (void)button;
@@ -392,7 +517,8 @@ static int settings_click(void *state, int16_t x, int16_t y, int button) {
   if (st->view == VIEW_PASS) return 0;
 
   {
-    int i = y / ROW_H;
+    int i = row_at((int16_t)(y + (scrolls_itself() ? st->top : 0)));
+    if (i < 0) return 0;
     if (i >= NROWS) return 0;
     /* A click selects; a click on the already-selected row runs it. Two
      * meanings for one gesture, but it is how a list like this gets used with
@@ -416,6 +542,7 @@ const AppDef *settings_app(void) {
   static const AppDef def = {
     .name = "Settings", .paint = settings_paint, .key = settings_key,
     .click = settings_click, .open = settings_open, .state = &s_state,
+    .mouse = settings_mouse,
     .height = settings_height, .wants_text = settings_wants_text,
     .help = "arrows\tmove the selection\nenter\trun the selected row\n"
             "left/right\tstep the brightness\n"

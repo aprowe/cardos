@@ -17,6 +17,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/toolbar.h"
 
 #define MAX_ITEMS  40
 #define TITLE_MAX  38
@@ -43,6 +44,19 @@
 
 typedef enum { VIEW_LIST = 0, VIEW_ADD } View;
 
+/* The sync runs on the OS's request task and is collected from tick, so the
+ * screen never stops. See CardApi.http_start. */
+enum { SYNC_IDLE = 0, SYNC_LIST, SYNC_PUSH, SYNC_PULL };
+
+/* Ten minutes: often enough that a list edited elsewhere turns up on its own,
+ * rare enough not to be what flattens the battery. */
+#define AUTO_EVERY_MS (10u * 60u * 1000u)
+
+/* When a sync could not even be attempted -- no radio yet, no token yet --
+ * try again soon rather than in ten minutes. Opening the app during the few
+ * seconds it takes WiFi to come up is the common case, not the rare one. */
+#define RETRY_MS      (15u * 1000u)
+
 typedef struct {
   char id[ID_MAX];          /* empty means it has never reached Google */
   char title[TITLE_MAX + 1];
@@ -62,6 +76,11 @@ static struct {
   char list_id[ID_MAX];
   char status[52];
   int  online;
+
+  int      stage;                   /* SYNC_* */
+  int      pushing;                 /* the item being sent */
+  uint32_t next_auto;
+  int      tried_once;
 
   char draft[TITLE_MAX + 1];
   int  draft_len;
@@ -176,43 +195,6 @@ static void cache_load(void) {
 
 /* ---- Google -------------------------------------------------------------- */
 
-/* The network first, then the token. Two separate things that can be missing,
- * and telling them apart is the difference between "turn the wifi on" and
- * "sign in on a PC". */
-static const char *token(void) {
-  const char *t;
-
-  if (!api->net_ready()) {
-    say("connecting to wifi...");
-    if (api->net_connect(20000) != 0) {
-      say(api->net_status());
-      T.online = 0;
-      return 0;
-    }
-  }
-  t = api->google_token();
-  if (!t) { say(api->google_status()); T.online = 0; }
-  return t;
-}
-
-static int find_list(const char *tok) {
-  char url[128];
-  int n;
-
-  if (T.list_id[0]) return 1;
-  api->fmt(url, sizeof url, "%s", LIST_URL);
-  n = api->http("GET", url, 0, 0, tok, T.reply, sizeof T.reply, 15000);
-  if (n < 0) { say("cannot reach Google"); return 0; }
-
-  /* The first list is the default one, which is what "my tasks" means to
-   * anyone who has not made more of them. */
-  if (!json_str_at(T.reply, "id", T.list_id, ID_MAX)) {
-    say("no task lists on this account");
-    return 0;
-  }
-  return 1;
-}
-
 /* Removing a row from the array. Used once the delete has reached Google, and
  * straight away for something that never got there. */
 static void drop(int i) {
@@ -244,79 +226,178 @@ static void delete_selected(void) {
   say("deleted -- s syncs");
 }
 
-/* Push anything changed here, then pull the list back. Push first on purpose:
- * a pull that ran first would overwrite a local tick with the server's older
- * answer, which is the one way an offline edit can be silently lost. */
-static void sync_now(void) {
-  const char *tok = token();
-  char url[256], body[TITLE_MAX + 64];
-  int i, n;
+/* ---- syncing, without stopping the world ---------------------------------
+ *
+ * Four states: find the list, push each local change, pull the list back,
+ * idle. Push before pull on purpose -- a pull that ran first would overwrite
+ * a local tick with the server's older answer, which is the one way an
+ * offline edit can be silently lost.
+ *
+ * Each step starts a request and returns. sync_tick collects it on a later
+ * pass, so the shell keeps drawing and reading keys throughout, and draws its
+ * own spinner while anything is in the air.
+ */
 
-  if (!tok) return;
-  say("syncing...");
-  if (!find_list(tok)) return;
+static int next_dirty(void) {
+  int i;
+  for (i = 0; i < T.n; i++) if (T.item[i].dirty) return i;
+  return -1;
+}
 
-  for (i = 0; i < T.n; i++) {
-    Item *it = &T.item[i];
-    if (!it->dirty) continue;
+static int start_list(const char *tok) {
+  return api->http_start("GET", LIST_URL, 0, 0, tok, 15000);
+}
 
-    if (it->deleted) {
-      api->fmt(url, sizeof url, TASK_URL, T.list_id, it->id);
-      n = api->http("DELETE", url, 0, 0, tok, T.reply, sizeof T.reply, 15000);
-      /* 404 means it is already gone, which is the outcome asked for. */
-      if (n >= 0 || n == -404) { drop(i); i--; continue; }
-    } else if (!it->id[0]) {
-      api->fmt(url, sizeof url, ADD_URL, T.list_id);
-      api->fmt(body, sizeof body, "{\"title\":\"%s\"}", it->title);
-      n = api->http("POST", url, body, "application/json", tok,
-                    T.reply, sizeof T.reply, 15000);
-      if (n >= 0) {
-        json_str_at(T.reply, "id", it->id, ID_MAX);
-        it->dirty = 0;
-      }
-    } else {
-      api->fmt(url, sizeof url, TASK_URL, T.list_id, it->id);
-      api->fmt(body, sizeof body, "{\"status\":\"%s\"}",
-               it->done ? "completed" : "needsAction");
-      n = api->http("PATCH", url, body, "application/json", tok,
-                    T.reply, sizeof T.reply, 15000);
-      if (n >= 0) it->dirty = 0;
-    }
-    if (n < 0) { say("push failed, keeping it local"); cache_save(); return; }
-  }
-
+static int start_pull(const char *tok) {
+  char url[256];
   api->fmt(url, sizeof url, TASKS_URL, T.list_id);
-  n = api->http("GET", url, 0, 0, tok, T.reply, sizeof T.reply, 20000);
-  if (n < 0) { say("pull failed, showing the cache"); return; }
+  return api->http_start("GET", url, 0, 0, tok, 20000);
+}
 
-  {
-    const char *p = T.reply;
-    char status[16];
-    int count = 0;
+static int start_push(const char *tok, int i) {
+  Item *it = &T.item[i];
+  char url[256], body[TITLE_MAX + 64];
 
-    while (count < MAX_ITEMS) {
-      Item *it = &T.item[count];
-      const char *after_id = json_str_at(p, "id", it->id, ID_MAX);
-      if (!after_id) break;
-      if (!json_str_at(after_id, "title", it->title, TITLE_MAX + 1)) break;
-
-      /* Google sends "status" after "title" for each task, so reading forward
-       * from the title keeps the three fields on the same item. */
-      status[0] = 0;
-      json_str_at(after_id, "status", status, sizeof status);
-      it->done = (status[0] == 'c');
-      it->dirty = 0;
-
-      p = after_id;
-      if (it->title[0]) count++;
-    }
-    T.n = count;
+  if (it->deleted && it->id[0]) {
+    api->fmt(url, sizeof url, TASK_URL, T.list_id, it->id);
+    return api->http_start("DELETE", url, 0, 0, tok, 15000);
   }
+  if (!it->id[0]) {
+    api->fmt(url, sizeof url, ADD_URL, T.list_id);
+    api->fmt(body, sizeof body, "{\"title\":\"%s\"}", it->title);
+    return api->http_start("POST", url, body, "application/json", tok, 15000);
+  }
+  api->fmt(url, sizeof url, TASK_URL, T.list_id, it->id);
+  api->fmt(body, sizeof body, "{\"status\":\"%s\"}",
+           it->done ? "completed" : "needsAction");
+  return api->http_start("PATCH", url, body, "application/json", tok, 15000);
+}
 
+static void absorb_tasks(void) {
+  const char *p = T.reply;
+  char status[16];
+  int count = 0;
+
+  while (count < MAX_ITEMS) {
+    Item *it = &T.item[count];
+    const char *after_id = json_str_at(p, "id", it->id, ID_MAX);
+    if (!after_id) break;
+    if (!json_str_at(after_id, "title", it->title, TITLE_MAX + 1)) break;
+
+    /* Google sends "status" after "title" for each task, so reading forward
+     * from the title keeps the three fields on the same item. */
+    status[0] = 0;
+    json_str_at(after_id, "status", status, sizeof status);
+    it->done = (status[0] == 'c');
+    it->dirty = 0;
+    it->deleted = 0;
+
+    p = after_id;
+    if (it->title[0]) count++;
+  }
+  T.n = count;
   if (T.sel >= T.n) T.sel = T.n ? T.n - 1 : 0;
   T.online = 1;
   api->fmt(T.status, sizeof T.status, "%d task%s", T.n, T.n == 1 ? "" : "s");
   cache_save();
+}
+
+static void sync_begin(void) {
+  const char *tok;
+
+  if (T.stage != SYNC_IDLE) return;
+  T.next_auto = api->ticks_ms() + AUTO_EVERY_MS;
+  T.tried_once = 1;
+
+  /* A sync that could not start is not a sync that succeeded. Both paths
+   * below leave the next attempt ten minutes away otherwise, so opening the
+   * app one second before the radio came up meant it said "offline" and then
+   * sat there saying it for ten minutes with WiFi plainly connected. */
+
+  if (!api->net_ready()) {
+    /* No blocking twenty-second join from here: the OS brings the radio up
+     * for its own clock sync, and the next round will find it. */
+    T.online = 0;
+    say("offline -- showing the cache");
+    T.next_auto = api->ticks_ms() + RETRY_MS;
+    return;
+  }
+  tok = api->google_token();
+  if (!tok || !tok[0]) { T.online = 0; say(api->google_status()); T.next_auto = api->ticks_ms() + RETRY_MS; return; }
+
+  if (!T.list_id[0]) {
+    if (start_list(tok) != 0) return;
+    T.stage = SYNC_LIST;
+  } else {
+    int i = next_dirty();
+    if (i >= 0) {
+      if (start_push(tok, i) != 0) return;
+      T.pushing = i;
+      T.stage = SYNC_PUSH;
+    } else {
+      if (start_pull(tok) != 0) return;
+      T.stage = SYNC_PULL;
+    }
+  }
+  say("syncing...");
+}
+
+static void sync_tick(void) {
+  const char *tok;
+  int n, i;
+
+  if (T.stage == SYNC_IDLE) return;
+  n = api->http_poll(T.reply, sizeof T.reply);
+  if (n == CAPP_HTTP_PENDING) return;
+
+  tok = api->google_token();
+
+  if (T.stage == SYNC_LIST) {
+    if (n < 0 || !json_str_at(T.reply, "id", T.list_id, ID_MAX)) {
+      T.online = 0;
+      say(n < 0 ? "cannot reach Google" : "no task lists on this account");
+      T.stage = SYNC_IDLE;
+      return;
+    }
+    i = next_dirty();
+    if (i >= 0 && tok && start_push(tok, i) == 0) {
+      T.pushing = i; T.stage = SYNC_PUSH; return;
+    }
+    if (tok && start_pull(tok) == 0) { T.stage = SYNC_PULL; return; }
+    T.stage = SYNC_IDLE;
+    return;
+  }
+
+  if (T.stage == SYNC_PUSH) {
+    /* 404 on a delete means it is already gone, which is the outcome asked
+     * for. Anything else that failed stays dirty and is retried next time. */
+    if (n >= 0 || n == -404) {
+      if (T.pushing >= 0 && T.pushing < T.n) {
+        Item *it = &T.item[T.pushing];
+        if (it->deleted) drop(T.pushing);
+        else {
+          if (!it->id[0]) json_str_at(T.reply, "id", it->id, ID_MAX);
+          it->dirty = 0;
+        }
+      }
+      cache_save();
+    } else {
+      T.online = 0;
+      say("push failed, keeping it local");
+      T.stage = SYNC_IDLE;
+      return;
+    }
+    i = next_dirty();
+    if (i >= 0 && tok && start_push(tok, i) == 0) { T.pushing = i; return; }
+    if (tok && start_pull(tok) == 0) { T.stage = SYNC_PULL; return; }
+    T.stage = SYNC_IDLE;
+    return;
+  }
+
+  /* SYNC_PULL */
+  if (n < 0) { T.online = 0; say("pull failed, showing the cache"); }
+  else absorb_tasks();
+  T.stage = SYNC_IDLE;
 }
 
 /* ---- local edits --------------------------------------------------------- */
@@ -426,45 +507,121 @@ static void paint_add(CRect c) {
             "enter adds   backspace cancels", CLR_DONE, CLR_BG);
 }
 
+/* Everything this app can be asked to do, stated once.
+ *
+ * The ctrl chords, the menu bar, the help panel and the names a script or a
+ * model would use all come out of this table -- see CappUi.actions. Before
+ * it, the same facts were written three times and nothing checked they
+ * agreed.
+ *
+ * Ctrl belongs entirely to the app now (kernel/drv/keyboard.h), so these
+ * chords are safe to claim: the desktop used to take ctrl-S for its Start
+ * menu, which is why an editor's save did nothing in a window. */
+enum { ACT_ADD = 1, ACT_TICK, ACT_DELETE, ACT_SYNC, ACT_SAVE, ACT_CANCEL };
+
+static const CappAction LIST_ACTIONS[] = {
+  { "add",    "Add",      "Task", 0x01, ACT_ADD },     /* ctrl-a */
+  { "tick",   "Tick",     "Task", 0x14, ACT_TICK },    /* ctrl-t */
+  { "delete", "Delete",   "Task", 0x04, ACT_DELETE },  /* ctrl-d */
+  { "sync",   "Sync now", "List", 0x13, ACT_SYNC },    /* ctrl-s */
+};
+
+/* While typing, the only two things that apply. */
+static const CappAction ADD_ACTIONS[] = {
+  { "save",   "Save",   "Edit", 0, ACT_SAVE },
+  { "cancel", "Cancel", "Edit", 0, ACT_CANCEL },
+};
+
+static const TbIcon LIST_ICONS[] = { { "+", ACT_ADD } };
+
+#define NLIST ((int)(sizeof LIST_ACTIONS / sizeof LIST_ACTIONS[0]))
+#define NADD  ((int)(sizeof ADD_ACTIONS / sizeof ADD_ACTIONS[0]))
+
+static void use_list_menus(void) { toolbar_set(LIST_ACTIONS, NLIST, LIST_ICONS, 1); }
+static void use_add_menus(void)  { toolbar_set(ADD_ACTIONS, NADD, 0, 0); }
+
+static int do_action(int a);
+
 static void app_paint(void *st, CRect c) {
   char bar[64];
   (void)st;
 
-  if (T.view == VIEW_ADD) { paint_add(c); return; }
-  paint_list(c);
+  {
+    CRect full = c;
+    /* Only the dropdown moved: draw it and nothing else. Repainting the
+     * content underneath first is what made the menu flicker. */
+    if (toolbar_only_menu()) { toolbar_paint_menu(full); return; }
+    /* Only the bar changed -- the busy dots ticking over. Leave the content. */
+    if (toolbar_only_bar()) { toolbar_paint_bar(full); return; }
+    toolbar_paint_bar(full);
+    c = toolbar_rest(full);
 
-  api->fill(rect(c.x, c.y + c.h - ROW_H, c.w, ROW_H), CLR_BAR);
-  api->fmt(bar, sizeof bar, "%s%s", T.online ? "" : "offline  ", T.status);
-  api->text((short)(c.x + 3), (short)(c.y + c.h - ROW_H + 2), bar,
-            T.online ? CLR_BARFG : CLR_WARN, CLR_BAR);
+    if (T.view == VIEW_ADD) paint_add(c);
+    else {
+      paint_list(c);
+
+      api->fill(rect(c.x, c.y + c.h - ROW_H, c.w, ROW_H), CLR_BAR);
+      api->fmt(bar, sizeof bar, "%s%s", T.online ? "" : "offline  ", T.status);
+      api->text((short)(c.x + 3), (short)(c.y + c.h - ROW_H + 2), bar,
+                T.online ? CLR_BARFG : CLR_WARN, CLR_BAR);
+    }
+    /* Last: a dropdown is drawn over the content it covers. */
+    toolbar_paint_menu(full);
+  }
 }
 
 /* ---- input --------------------------------------------------------------- */
 
+static int app_key(void *st, unsigned char k);
+
+/* The one place that knows what anything does. */
+static int do_action(int a) {
+  switch (a) {
+  case ACT_ADD:
+    T.draft[0] = 0;
+    T.draft_len = 0;
+    T.view = VIEW_ADD;
+    use_add_menus();
+    return 1;
+  case ACT_TICK:   toggle(); return 1;
+  case ACT_DELETE: delete_selected(); return 1;
+  case ACT_SYNC:   sync_begin(); return 1;
+  case ACT_SAVE:
+    add_draft();                       /* returns to the list itself */
+    use_list_menus();
+    return 1;
+  case ACT_CANCEL:
+    T.view = VIEW_LIST;
+    use_list_menus();
+    return 1;
+  default: return 0;
+  }
+}
+
+/* Only what is not in the action table: movement, and the bare letters this
+ * list has always answered to. The ctrl chords never reach here -- the shell
+ * matches them against the table first. */
 static int key_list(unsigned char k) {
   switch (k) {
   case CAPP_KEY_UP:   if (T.sel > 0) T.sel--; return 1;
   case CAPP_KEY_DOWN: if (T.sel + 1 < T.n) T.sel++; return 1;
   case CAPP_KEY_ENTER:
-  case ' ':           toggle(); return 1;
-  case 'a': case 'A':
-    T.draft[0] = 0;
-    T.draft_len = 0;
-    T.view = VIEW_ADD;
-    return 1;
-  case 's': case 'S': sync_now(); return 1;
+  case ' ':           return do_action(ACT_TICK);
+  case 'a': case 'A': return do_action(ACT_ADD);
+  case 's': case 'S': return do_action(ACT_SYNC);
   case 'd': case 'D':
-  case 0x7F:          delete_selected(); return 1;
+  case 0x7F:          return do_action(ACT_DELETE);
   default: return 0;
   }
 }
 
+/* Typing. Letters are letters here -- that is the whole reason actions and
+ * keys are separate. */
 static int key_add(unsigned char k) {
-  if (k == CAPP_KEY_ENTER) { add_draft(); return 1; }
+  if (k == CAPP_KEY_ENTER) return do_action(ACT_SAVE);
   if (k == CAPP_KEY_BACK) {
-    if (T.draft_len > 0) T.draft[--T.draft_len] = 0;
-    else T.view = VIEW_LIST;
-    return 1;
+    if (T.draft_len > 0) { T.draft[--T.draft_len] = 0; return 1; }
+    return do_action(ACT_CANCEL);
   }
   /* No quote or backslash: the title goes into a JSON body, and escaping two
    * characters properly is more code than refusing them is worth here. */
@@ -482,10 +639,28 @@ static int app_key(void *st, unsigned char k) {
   return T.view == VIEW_ADD ? key_add(k) : key_list(k);
 }
 
+/* What the shell calls for a chord out of the table, and what the menu bar
+ * and any script reach through. */
+static int app_action(void *st, int a) {
+  (void)st;
+  return do_action(a);
+}
+
 static int app_click(void *st, short x, short y, int button) {
-  int row = y / ROW_H;
+  int row;
   int i;
   (void)st; (void)button;
+
+  /* The strip first. A hit is an action, so this works identically whether
+   * the app is showing a list or a text field. */
+  {
+    int a = toolbar_click(x, y);
+    if (a == TB_CONSUMED) return 1;             /* opened or closed a menu */
+    if (a != TB_NONE) return do_action(a);
+  }
+  y = (short)(y - toolbar_h());
+  row = y / ROW_H;
+
   if (T.view != VIEW_LIST) return 0;
   /* The bottom strip is the status line, not a task. */
   if (row >= T.shown_rows) return 0;
@@ -500,6 +675,36 @@ static int app_click(void *st, short x, short y, int button) {
   T.sel = i;
   if (x < 14) toggle();
   return 1;
+}
+
+/* The strip appears the moment a mouse does, which is also the moment the
+ * layout shifts down -- hence the repaint. */
+/* Collects an in-flight request and starts one when it is due. The first is
+ * on open, because the reason to open a list is to see what is on it. */
+static int app_tick(void *st, uint32_t now_ms) {
+  int was = T.stage, n = T.n;
+  (void)st;
+
+  sync_tick();
+  toolbar_busy(T.stage != SYNC_IDLE);
+  /* Just the bar, so the dots can move without redrawing the window. */
+  if (T.stage != SYNC_IDLE) toolbar_damage_bar();
+  toolbar_busy(T.stage != SYNC_IDLE);
+  if (T.stage == SYNC_IDLE &&
+      (!T.tried_once || (int32_t)(now_ms - T.next_auto) >= 0))
+    sync_begin();
+
+  /* Repaint while waiting, so the bar's dots animate. Otherwise only when
+   * something actually changed. */
+  return was != T.stage || n != T.n || T.stage != SYNC_IDLE;
+}
+
+static int app_mouse(void *st, int16_t x, int16_t y, int buttons, int wheel) {
+  int changed;
+  (void)st; (void)buttons; (void)wheel;
+  changed = toolbar_saw_mouse();
+  if (toolbar_hover(x, y)) changed = 1;
+  return changed;
 }
 
 static int app_wants_text(void *st) {
@@ -534,9 +739,16 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   cache_load();
   api->fmt(T.status, sizeof T.status, "%d cached -- s syncs", T.n);
 
+  toolbar_init(api, LIST_ACTIONS, NLIST, LIST_ICONS, 1);
+
   UI.paint = app_paint;
   UI.key = app_key;
   UI.click = app_click;
+  UI.mouse = app_mouse;
+  UI.tick = app_tick;
+  UI.actions = LIST_ACTIONS;
+  UI.nactions = NLIST;
+  UI.action = app_action;
   UI.wants_text = app_wants_text;
   api->ui(&UI);
   return 0;

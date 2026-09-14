@@ -25,10 +25,17 @@ typedef struct {
 static Var s_var[ENV_MAX];
 static int s_n;
 
-/* /desktop first because that is where the apps actually are; /bin because
- * that is where anyone would put one next, and a PATH entry that does not
- * exist costs one failed open. */
-static const char *DEFAULT_PATH = "/desktop:/bin";
+/* /desktop first because that is where the apps actually are, then the folders
+ * they are grouped into, then /bin because that is where anyone would put one
+ * next. A PATH entry that does not exist costs one failed open.
+ *
+ * The graphical apps live in folders and the CLI ones do not, which is why
+ * /desktop still comes first: `grep` and `cat` are found without walking any
+ * of the rest. Nothing here is load-bearing -- the launcher's own list is
+ * searched after PATH, so an app resolves by name even on a card whose saved
+ * PATH predates the folders. */
+static const char *DEFAULT_PATH =
+    "/desktop:/desktop/Tools:/desktop/Net:/desktop/Games:/bin";
 
 static int find(const char *name) {
   int i;

@@ -52,10 +52,22 @@ int            capprun_caps_ok(void);
  * Outside one there is no app to credit it to, and it is dropped. */
 void           capprun_damage(CRect r);
 
+/* A shell saying it has finished with an app: the window closed, or escape
+ * left it. The image goes back to the executable pool until someone starts it
+ * again, which is the whole point of loading it late. Safe to call with a
+ * built-in's AppDef, or twice; both do nothing. */
+void           capprun_release(const AppDef *a);
+
 /* Valid only after a run that installed an interface. */
 const AppDef *capprun_def(int slot);
 
 /* Executable RAM still free, for the Settings app to report. */
 uint32_t capprun_exec_free(void);
+
+/* The running app's action table, and a way to run one by its stable name.
+ * See CappUi.actions: one declaration feeds the chords, the menus, the help
+ * panel and anything that drives the machine without a finger. */
+const CappAction *capprun_actions(const AppDef *a, int *n);
+int capprun_action_invoke(const AppDef *a, const char *id);
 
 #endif /* CARDOS_CAPPRUN_H */

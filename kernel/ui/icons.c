@@ -73,6 +73,35 @@ static int file_size(const char *path) {
   return n;
 }
 
+/* Make room for a blob whose name carries a folder ("Games/mines.capp"), and
+ * bring any copy left at the top level in with it.
+ *
+ * The apps were all seeded flat before they were grouped, so a card that has
+ * been booted on an older firmware still holds /desktop/mines.capp. Left
+ * there it is a second, identical icon -- the launcher scans the top level
+ * and one level down, and would find both.
+ *
+ * Moved rather than deleted, when there is nowhere to move it to: `update
+ * apps` may have put a newer build on the card than the one this firmware
+ * carries, and that is exactly the copy worth keeping. If both exist the flat
+ * one is the leftover, and goes. */
+static void settle_folder(const char *rel) {
+  const char *slash = strrchr(rel, '/');
+  char dir[80], flat[80], full[80];
+
+  if (!slash) return;                       /* top level: nothing to do */
+
+  snprintf(dir, sizeof dir, "%s/%.*s", ICONS_DIR, (int)(slash - rel), rel);
+  if (fs_mkdir(dir) != 0) { /* already there, or no card */ }
+
+  snprintf(flat, sizeof flat, "%s/%s", ICONS_DIR, slash + 1);
+  if (file_size(flat) < 0) return;
+
+  snprintf(full, sizeof full, "%s/%s", ICONS_DIR, rel);
+  if (file_size(full) >= 0) fs_remove(flat);
+  else if (fs_rename(flat, full) != 0) fs_remove(flat);
+}
+
 static void seed_capps(void) {
   uint32_t want = blob_stamp(), have = 0;
   size_t i;
@@ -87,6 +116,10 @@ static void seed_capps(void) {
 
   for (i = 0; i < CAPP_BLOB_COUNT; i++) {
     int ok;
+    /* Before the stamp is consulted: a card seeded by an older firmware has a
+     * matching stamp and the file in the wrong place, and the early `continue`
+     * below would leave it there. */
+    settle_folder(CAPP_BLOBS[i].name);
     snprintf(path, sizeof path, "%s/%s", ICONS_DIR, CAPP_BLOBS[i].name);
 
     /* The stamp says which firmware wrote these, and it is only written once
@@ -143,6 +176,40 @@ static void seed_colour_icons(void) {
   }
 }
 
+/* One example program for the IDE, so it opens on something that runs.
+ *
+ * Same reasoning as the .capp blobs above: a file that can only arrive by
+ * card reader is a file the user does not have, and an assembler with an
+ * empty buffer teaches nobody the syntax. Written once and never again --
+ * unlike the apps, this is a document, and a version the user has edited is
+ * worth more than the one shipped. */
+static void seed_example(void) {
+  static const char PROG[] =
+  "; Sum 1..100 and print it.\n"\
+    ";\n"\
+    "; ctrl-b runs this on the VM, ctrl-l compiles it to real Xtensa\n"\
+    "; and runs that, ctrl-x does both and checks they agree.\n"\
+    "\n"\
+    "        movi r0, 0        ; total\n"\
+    "        movi r1, 1        ; i\n"\
+    "        movi r2, 101      ; limit\n"\
+    "        movi r3, 1\n"\
+    "loop:   add  r0, r0, r1\n"\
+    "        add  r1, r1, r3\n"\
+    "        blt  r1, r2, loop\n"\
+    "        sys  1            ; print r0  -- expect 5050\n"\
+    "        halt\n";
+
+  int fd;
+  if (fs_mkdir(ASM_DIR) != 0) { /* already there, or no card */ }
+  fd = fs_open(ASM_DIR "/sum.s", FS_O_READ);
+  if (fd >= 0) { fs_close(fd); return; }
+  fd = fs_open(ASM_DIR "/sum.s", FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+  if (fd < 0) return;
+  write_all(fd, (const uint8_t *)PROG, sizeof PROG - 1);
+  fs_close(fd);
+}
+
 /* Seed the folder the first time, so a fresh card still has something to click
  * rather than an empty desktop with no clue what to do. Each entry is created
  * only if absent rather than only on a wholly empty folder: a card that
@@ -167,6 +234,7 @@ static void seed_dir(void) {
 
   seed_capps();
   seed_colour_icons();
+  seed_example();
 }
 
 static int ends_with(const char *name, size_t n, const char *ext) {
@@ -260,6 +328,39 @@ static void scan(const char *dir, int bin_only, int parent) {
   }
 }
 
+/* /firmware, behind a folder of its own.
+ *
+ * The images used to be scanned straight onto the top level, which put a
+ * 1.4 MB chain-boot image next to Pinball -- and once the apps were grouped,
+ * they were the only loose things left on the desktop. They are also the one
+ * kind of entry here that does not launch an app but replaces the whole
+ * operating system, which is worth a deliberate step into a folder.
+ *
+ * The entry is made first and withdrawn if nothing turned up, because the
+ * count is only knowable by scanning: a card with no images should show no
+ * folder rather than an empty one. /firmware itself is left alone -- the
+ * images were there before CardOS was, put there by the tools that built
+ * them, and this only changes where they appear. */
+static void scan_firmware_folder(void) {
+  Icon *ic;
+  int before;
+
+  if (s_nicon >= MAX_ICONS) return;
+
+  ic = &s_icon[s_nicon];
+  memset(ic, 0, sizeof *ic);
+  ic->kind = ICON_FOLDER;
+  ic->slot = -1;
+  ic->parent = -1;
+  snprintf(ic->name, sizeof ic->name, "%s", "Firmware");
+  snprintf(ic->path, sizeof ic->path, "%s", FIRMWARE_DIR);
+  s_nicon++;
+
+  before = s_nicon;
+  scan(FIRMWARE_DIR, 1, s_nicon - 1);
+  if (s_nicon == before) s_nicon--;         /* nothing in it: take it back */
+}
+
 /* Stable partition: visible entries keep their order, commands move to the
  * end keeping theirs. The carousel can then walk 0..icons_count()-1 with no
  * gaps, and a lookup still sees everything. Parents are flat indices, so
@@ -292,7 +393,7 @@ void icons_reload(void) {
 
   seed_dir();
   scan(ICONS_DIR, 0, -1);
-  scan(FIRMWARE_DIR, 1, -1);
+  scan_firmware_folder();
   partition_cli();
 }
 
@@ -393,6 +494,20 @@ const uint16_t *icon_colour(int i) {
   ic = &s_icon[i];
   if (ic->colour_tried) return ic->colour;
   ic->colour_tried = 1;
+  if (ic->kind == ICON_FOLDER) {
+    /* Folders look their icon up in a namespace of their own. The card is
+     * FAT, which matches names without regard to case, so a folder called
+     * Firmware and the chip drawn for a firmware *image* would otherwise be
+     * competing for one file called firmware.cic. */
+    char key[32];
+    snprintf(key, sizeof key, "folder-%s", ic->name);
+    ic->colour = load_cic(key);
+    /* No generic fallback: generic.cic is a blank page -- an app with nothing
+     * drawn for it -- and folders wearing it would look like apps, and like
+     * each other. Without a colour they fall through to ICON_FOLDER_, which
+     * is at least the right shape. */
+    return ic->colour;
+  }
   ic->colour = load_cic(ic->kind == ICON_FIRMWARE ? "firmware" : ic->name);
   if (!ic->colour && ic->kind != ICON_FIRMWARE) ic->colour = load_cic("generic");
   return ic->colour;

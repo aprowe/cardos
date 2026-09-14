@@ -58,6 +58,16 @@ void bthid_set_autostart(int on);
 void bthid_stop(BtHidKind kind);
 void bthid_stop_all(void);
 
+/* Is the Bluetooth radio up? Distinct from "nothing is connected": a link
+ * that was never claimed reads as BTH_OFF, so this is what says whether
+ * reconnecting is even possible. */
+int         bthid_radio_on(void);
+
+/* Every BLE device the scan sees, one line each, through `say`. A diagnostic:
+ * when a mouse will not reconnect, this says whether it is advertising at
+ * all, which is the fork in the road. */
+void        bthid_scan_dump(int scan_seconds, void (*say)(const char *line));
+
 BtHidState  bthid_state(BtHidKind kind);
 const char *bthid_status(BtHidKind kind);   /* human-readable, one line */
 

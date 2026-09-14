@@ -146,6 +146,26 @@ int keyboard_held(uint8_t key, int settle_ms) {
   }
 }
 
+/* Is any key down at this instant?
+ *
+ * A peek, not a read: it consumes nothing, so the keypress it saw is still
+ * there for keyboard_poll to deliver properly afterwards. It exists for code
+ * that is blocked in a long operation and wants to know it should stop --
+ * the screen viewer sits inside an HTTP stream that never ends, and this is
+ * how escape reaches it. */
+int keyboard_any_down(void) {
+  uint8_t now[4][14];
+  int x, y;
+
+  scan(now);
+  for (y = 0; y < 4; y++)
+    for (x = 0; x < 14; x++)
+      if (now[y][x] && !IS_SHIFT(x, y) && !IS_CTRL(x, y) && !IS_FN(x, y) &&
+          !IS_OPT(x, y) && !IS_ALT(x, y))
+        return 1;
+  return 0;
+}
+
 uint8_t keyboard_poll(void) {
   uint8_t now[4][14];
   uint8_t out = 0;
@@ -178,18 +198,24 @@ uint8_t keyboard_poll(void) {
           else if (base >= 'a' && base <= 'z') c = (char)KEY_OPT_LETTER(base);
           else c = 0;
         }
-        else if (s_ctrl && (c == 'h' || c == 'H')) c = (char)KEY_HELP;
         else if (s_ctrl && c >= 'a' && c <= 'z') c = (char)(c - 'a' + 1);
         else if (s_ctrl && c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 1);
 
-        /* Fn turns ; , . / into the arrow cluster. */
+        /* Fn is the window modifier: ; , . / are the arrow cluster, and a
+         * letter is a chord of its own. Like opt's, those get codes above the
+         * ASCII range so they survive being typed inside a text field -- fn-w
+         * has to close a window while an editor is swallowing every letter.
+         * See the convention in keyboard.h. */
         if (s_fn) {
-          switch (KEYMAP[y][x]) {
+          char base = KEYMAP[y][x];
+          switch (base) {
           case ';': c = (char)KEY_UP;    break;
           case '.': c = (char)KEY_DOWN;  break;
           case ',': c = (char)KEY_LEFT;  break;
           case '/': c = (char)KEY_RIGHT; break;
-          default: break;
+          default:
+            if (base >= 'a' && base <= 'z') c = (char)KEY_FN_LETTER(base);
+            break;
           }
         }
         if (c) { out = (uint8_t)c; break; }

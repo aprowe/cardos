@@ -33,6 +33,13 @@
 #define KBD_KEY_OPT_DIGIT(d)  ((uint8_t)(0xA0 + (d)))
 #define KBD_KEY_OPT_LETTER(c) ((uint8_t)(0xC0 + ((c) - 'a')))
 
+/* The window modifier. The Cardputer has an Fn key; a Bluetooth keyboard does
+ * not, and its Alt is already spoken for as Opt -- so the GUI key (Windows,
+ * Command) carries fn chords. That is where window management lives on a real
+ * keyboard anyway, which makes it the guessable choice rather than a spare
+ * one. Must mirror KEY_FN_LETTER in kernel/drv/keyboard.h. */
+#define KBD_KEY_FN_LETTER(c)  ((uint8_t)(0xE0 + ((c) - 'a')))
+
 /* Modifier bits, as the HID spec orders them. */
 #define KBD_MOD_LCTRL  0x01
 #define KBD_MOD_LSHIFT 0x02

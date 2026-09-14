@@ -46,6 +46,27 @@ INK = {
 }
 
 ICONS = {
+    # A monitor on a stand, with something on it. The screen being lit is the
+    # difference between this and a picture of a switched-off monitor.
+    "Screen": [
+        "................",
+        ".KKKKKKKKKKKKKK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KWbbbbbbbbbbWK.",
+        ".KWbggbbbbbbbWK.",
+        ".KWbbbbbbggbbWK.",
+        ".KWbbggbbbbbbWK.",
+        ".KWbbbbbbbggbWK.",
+        ".KWbggbbbbbbbWK.",
+        ".KWbbbbbggbbbWK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KKKKKKKKKKKKKK.",
+        ".....KKKKKK.....",
+        "...KKGGGGGGKK...",
+        "..KGGGGGGGGGGK..",
+        "..KKKKKKKKKKKK..",
+    ],
+
     # Two panes with a divider: the shape of the window, which is what the
     # app is for. A folder would say "files" and there is already a Files.
     "Explorer": [
@@ -322,6 +343,137 @@ ICONS = {
         "................",
         "................",
     ],
+    # The three folders the apps are grouped into. One folder body -- amber,
+    # tab on the left, a darker lip along the bottom -- with a different mark
+    # on the face of each, so they read as a set at 16 pixels and still tell
+    # each other apart at a glance. Keyed by the folder's name on the card,
+    # which is how load_cic finds them.
+
+    # Games: a d-pad.
+    "folder-Games": [
+        "................",
+        "..KKKKK.........",
+        ".KyyyyyKKKKKKKK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KyyyyKKKyyyyyK.",
+        ".KyyyyKgKyyyyyK.",
+        ".KyyKKKgKKKyyyK.",
+        ".KyyKgggggKyyyK.",
+        ".KyyKKKgKKKyyyK.",
+        ".KyyyyKgKyyyyyK.",
+        ".KyyyyKKKyyyyyK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KooooooooooooK.",
+        ".KKKKKKKKKKKKKK.",
+        "................",
+    ],
+
+    # Net: a globe, with a meridian and an equator.
+    "folder-Net": [
+        "................",
+        "..KKKKK.........",
+        ".KyyyyyKKKKKKKK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KyyyyKKKKyyyyK.",
+        ".KyyyKbnbnbKyyK.",
+        ".KyyKbbnbbnbKyK.",
+        ".KyynnnnnnnnKyK.",
+        ".KyyKbbnbbnbKyK.",
+        ".KyyyKbnbnbKyyK.",
+        ".KyyyyKKKKyyyyK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KooooooooooooK.",
+        ".KKKKKKKKKKKKKK.",
+        "................",
+    ],
+
+    # Tools: a spanner, laid across the face.
+    "folder-Tools": [
+        "................",
+        "..KKKKK.........",
+        ".KyyyyyKKKKKKKK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KyyyyyyyyKKyyK.",
+        ".KyyyyyyyKGGKyK.",
+        ".KyyyyyyKGGGKyK.",
+        ".KyyyyyKGGKKKyK.",
+        ".KyyyyKGGKyyyyK.",
+        ".KyyyKGGKyyyyyK.",
+        ".KyyKGGKyyyyyyK.",
+        ".KyyKKKyyyyyyyK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KooooooooooooK.",
+        ".KKKKKKKKKKKKKK.",
+        "................",
+    ],
+
+    # Firmware: a chip on the folder face. These replace CardOS rather than
+    # run on it, which is why they are behind a folder at all.
+    "folder-Firmware": [
+        "................",
+        "..KKKKK.........",
+        ".KyyyyyKKKKKKKK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KyyyKKKKKKyyyK.",
+        ".KyyyKGGGGKyyyK.",
+        ".KyKKKGDDGKKKyK.",
+        ".KyyyKGDDGKyyyK.",
+        ".KyKKKGDDGKKKyK.",
+        ".KyyyKGGGGKyyyK.",
+        ".KyyyKKKKKKyyyK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KooooooooooooK.",
+        ".KKKKKKKKKKKKKK.",
+        "................",
+        "................",
+    ],
+
+    # Calendar: a wall calendar, two rings and a red heading band, with rows
+    # of days below it. The band is the one place red appears in the set, and
+    # it is what tells this apart from Todo's clipboard at 16 pixels.
+    "Calendar": [
+        "................",
+        "...K......K.....",
+        "..KKK....KKK....",
+        ".KKKKKKKKKKKKKK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KrrrrrrrrrrrrK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KWKKWKKWWKKWWK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KWKKWKKWWKKWWK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KWKKWKKWWKKWWK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KKKKKKKKKKKKKK.",
+        "................",
+        "................",
+    ],
+
+    # IDE: a terminal window -- a title bar, a prompt chevron, a line of
+    # code and a caret. Dark where the editor apps are light, because it
+    # is the one app whose screen really is a console.
+    "IDE": [
+        "................",
+        ".KKKKKKKKKKKKKK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KKKKKKKKKKKKKK.",
+        ".KnnnnnnnnnnnnK.",
+        ".KngnnnnnnnnnnK.",
+        ".KnngnnnnnnnnnK.",
+        ".KngnnnnnnnnnnK.",
+        ".KnnnnnnnnnnnnK.",
+        ".KnyyyynnnnnnnK.",
+        ".KnnnnnnnnnnnnK.",
+        ".KntnnnnnnnnnnK.",
+        ".KnnnnnnnnnnnnK.",
+        ".KKKKKKKKKKKKKK.",
+        "................",
+        "................",
+    ],
+
     # The fallback: a blank page with a folded corner.
     "generic": [
         "................",

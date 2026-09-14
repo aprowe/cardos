@@ -37,6 +37,7 @@ uint8_t kbd_hid_translate(uint8_t usage, uint8_t mods) {
   /* Alt stands in for the Cardputer's Opt key: a Bluetooth keyboard has no
    * key by that name, and Alt is where a hand goes looking for one. */
   int opt = (mods & (KBD_MOD_LALT | KBD_MOD_RALT)) != 0;
+  int fn  = (mods & (KBD_MOD_LGUI | KBD_MOD_RGUI)) != 0;
 
   switch (usage) {
   case 0x28: return 0x0D;        /* enter */
@@ -67,20 +68,27 @@ uint8_t kbd_hid_translate(uint8_t usage, uint8_t mods) {
     return 0;
   }
 
+  /* The window modifier, before the app sees a letter. Same reasoning as opt
+   * above: fn-w has to close a window while an editor is swallowing text. */
+  if (fn) {
+    if (usage >= 0x04 && usage <= 0x1D)
+      return KBD_KEY_FN_LETTER('a' + (usage - 0x04));
+    return 0;
+  }
+
   if (usage < USAGE_FIRST || usage > USAGE_LAST) return 0;
 
   {
     char c = (shift ? SHIFTED : PLAIN)[usage - USAGE_FIRST];
     if (c == 0) return 0;
-    /* Control characters, the same way the built-in keyboard makes them: the
-     * desktop's chords are ctrl-P, ctrl-S and ctrl-W, and an app that wants
-     * ctrl-S has to receive the same byte from either keyboard. */
+    /* Control characters, the same way the built-in keyboard makes them.
+     * Ctrl belongs entirely to the app now, and an app that wants ctrl-S has
+     * to receive the same byte from either keyboard. */
     if (ctrl) {
-      /* ctrl-h would be 0x08, which is the byte Backspace already sends.
-       * Backspace is a key and ctrl-h is a chord, so the chord moves -- and it
-       * has to move the same way here as on the built-in keyboard, or help
-       * opens from one keyboard and deletes a character from the other. */
-      if (c == 'h' || c == 'H') return KBD_KEY_HELP;
+      /* No special case for ctrl-h any more. It used to become KBD_KEY_HELP
+       * because ctrl-h and Backspace are both 0x08 -- but help is a window
+       * operation and moved to fn-h, so ctrl-h is the app's like every other
+       * ctrl chord, and the tie stopped needing to be broken. */
       if (c >= 'a' && c <= 'z') return (uint8_t)(c - 'a' + 1);
       if (c >= 'A' && c <= 'Z') return (uint8_t)(c - 'A' + 1);
       return 0;

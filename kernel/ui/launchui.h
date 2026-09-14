@@ -16,11 +16,18 @@
 #include <stdint.h>
 
 #include "kernel/input/mouse.h"
+#include "kernel/ui/app.h"   /* AppDef */
 
 void launchui_init(void);
 
 /* Repaint now, for an app that is about to block. */
 void launchui_repaint(void);
+
+/* The app it is showing, or NULL. */
+const AppDef *launchui_running(void);
+
+/* Show a line of news from somewhere that is not the shell. */
+void launchui_note(const char *text);
 
 /* Open a named app straight away, skipping the carousel -- what the console's
  * `run` command does. The name is matched against what the launcher shows,

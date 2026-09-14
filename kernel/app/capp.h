@@ -38,7 +38,21 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 17
+#define CAPP_API_VERSION 22
+
+/* Local time, broken down, as api->now fills it in. */
+typedef struct {
+  uint16_t year;                /* 2026, not 126 */
+  uint8_t  month;               /* 1-12 */
+  uint8_t  day;                 /* 1-31 */
+  uint8_t  hour;                /* 0-23 */
+  uint8_t  min;
+  uint8_t  sec;
+  uint8_t  wday;                /* 0 = Sunday */
+  uint8_t  synced;              /* 0 none, 1 restored and approximate, 2 from
+                                 * the network. Truthy means there is a usable
+                                 * date; 2 means the minute can be trusted. */
+} CappTime;
 
 #define CAPP_ICON_W 16
 #define CAPP_ICON_H 16
@@ -82,6 +96,15 @@
 
 typedef struct { int16_t x, y, w, h; } CRect;
 
+/* One thing an app can be asked to do. See CappUi.actions. */
+typedef struct {
+  const char *id;      /* stable, machine-readable: "save", "run.vm" */
+  const char *label;   /* shown to a person: "Save" */
+  const char *menu;    /* the menu it hangs under, or NULL for no menu */
+  uint8_t     key;     /* the ctrl chord that runs it, or 0 for none */
+  uint8_t     action;  /* the app's own enum value, passed back to `action` */
+} CappAction;
+
 #define CAPP_NAME_MAX 63
 
 /* One directory entry, as list_ex hands it over. Fixed-width on purpose: an
@@ -124,6 +147,9 @@ typedef struct {
 #define CAPP_KEY_BACK  0x08
 
 /* File open flags, matching the kernel's. */
+/* http_poll while the request is still running. */
+#define CAPP_HTTP_PENDING (-1000)
+
 #define CAPP_O_READ   0x01
 #define CAPP_O_WRITE  0x02
 #define CAPP_O_CREATE 0x04
@@ -177,6 +203,32 @@ typedef struct {
    * NULL for the overwhelming majority of apps, which change only when
    * something is pressed. */
   int (*tick)(void *state, uint32_t now_ms);
+
+  /* ---- what this app can be asked to do ----
+   *
+   * One table, and four things come out of it that used to be written
+   * separately and drift apart: the ctrl chords, the menu bar, the help
+   * panel, and a list of verbs something other than a finger can invoke.
+   *
+   * Before this an app said the same facts three times -- capp_info.help as a
+   * string, a switch in `key`, and the toolbar's own menu tables -- and
+   * nothing checked they agreed.
+   *
+   * The shell matches a ctrl chord against this BEFORE offering the key to
+   * `key`, so an app no longer writes a switch for its own shortcuts. Ctrl
+   * belongs entirely to the app now (see the convention in
+   * kernel/drv/keyboard.h), so every chord here is safe to claim.
+   *
+   * `id` is the stable machine-readable name -- "save", "run.vm" -- and is
+   * what the console, the voice verbs in kernel/sys/rpc.c, or a model would
+   * use. kernel/sys/rpc.c already argues the point: an LLM choosing between a
+   * few named verbs is useful, one handed a string to run is not. This is
+   * that list of verbs, per app, written once.
+   *
+   * NULL/0 for an app that has none; it keeps working exactly as before. */
+  const CappAction *actions;
+  uint8_t           nactions;
+  int (*action)(void *state, int action);
 } CappUi;
 
 /* Everything an app is allowed to do. Grows only by appending, with
@@ -274,6 +326,25 @@ typedef struct {
    * drops later shows up as a failed request, which is where it belongs. */
   int (*caps_ok)(void);
 
+  /* A response read as it arrives, for a body that does not end.
+   *
+   * `on_data` is called with each chunk off the socket; return non-zero to
+   * stop. Nothing is buffered beyond a chunk, so the stream can be longer
+   * than the heap -- which for a screen share is the point.
+   *
+   * It blocks for as long as the stream runs, which means the shell does too:
+   * an app using this owns the machine until it returns. Return from
+   * `on_data` promptly, and use key_pending() to notice when the user wants
+   * out. */
+  int (*http_stream)(const char *url,
+                     int (*on_data)(void *ctx, const uint8_t *d, int n),
+                     void *ctx, int timeout_ms);
+
+  /* Is a key down at this instant? A peek that consumes nothing -- the press
+   * is still delivered to key() afterwards. For deciding to stop something
+   * long, since nothing else runs while it does. */
+  int (*key_pending)(void);
+
   /* ---- saying what changed ------------------------------------------
    *
    * The shell repaints an app by calling paint with a clip. Until now that
@@ -321,6 +392,73 @@ typedef struct {
    * message in `out`. Both block for seconds; say so on screen first. */
   int (*update_check)(char *out, size_t n);
   int (*update_apply)(int os, char *out, size_t n);
+
+  /* ---- what day it is ----
+   *
+   * ticks_ms is uptime, which answers "how long since" and nothing else. An
+   * app that needs a date has no other way to get one: there is no RTC on
+   * this board, and an app links against no libc, so it has neither
+   * localtime nor the zone rules to feed it.
+   *
+   * So the kernel does the conversion. `now` fills in local time per env TZ;
+   * `epoch` is UTC seconds, for arithmetic and for talking to a server.
+   *
+   * Both can be honestly ignorant: the clock comes from NTP and is lost at
+   * every power cut. `synced` is 0 and `epoch` returns 0 until it has been
+   * set, and an app should say so rather than draw 1 Jan 1970. */
+  void (*now)(CappTime *t);
+  uint32_t (*epoch)(void);
+
+  /* ---- memory an app can execute ----
+   *
+   * For a program that writes machine code at runtime. Ordinary allocations
+   * cannot be executed: on this chip the same SRAM is reached through an
+   * instruction window that only permits aligned 32-bit fetches and a data
+   * window that permits byte access, so code has to be WRITTEN through one
+   * and RUN through the other. exec_alloc returns the instruction-window
+   * pointer -- the one to call -- and exec_writable turns it into the
+   * byte-addressable alias of the same memory, which is the one to write
+   * through. Writing through the executable pointer faults.
+   *
+   * This is exactly what the app loader does with a .capp; see
+   * kernel/app/elfload.c, and apps/capp.ld for why the split exists at all.
+   * There is no cache to flush: internal SRAM is not cached on this part.
+   *
+   * exec_alloc returns NULL when there is not that much executable RAM left,
+   * which is a real possibility -- it is the scarcest memory on the board. */
+  void *(*exec_alloc)(size_t n);
+  void *(*exec_writable)(void *exec);
+  void  (*exec_free)(void *exec);
+
+  /* ---- a request that does not freeze the machine ----
+   *
+   * `http` above blocks. The shell is one cooperative loop, so for as long as
+   * it blocks nothing repaints and no key is read -- twenty seconds of dead
+   * machine for one sync. These two do the same work off a task of their own.
+   *
+   * Start it, return from your handler, and poll from `tick` until the answer
+   * arrives. The shell keeps drawing and keeps reading keys throughout, and
+   * shows a spinner of its own while a request is in flight, so an app need
+   * not draw one.
+   *
+   *   if (api->http_start("GET", url, 0, 0, tok, 20000) == 0) waiting = 1;
+   *   ...
+   *   int n = api->http_poll(buf, sizeof buf);
+   *   if (n != CAPP_HTTP_PENDING) { waiting = 0; ... }
+   *
+   * http_start returns 0 if accepted, -1 if a request is already in flight --
+   * there is only one, because two TLS sessions do not fit in this heap -- and
+   * -2 if there was no memory for the reply. Every string is copied, so none
+   * of them need outlive the call.
+   *
+   * http_poll returns CAPP_HTTP_PENDING while it runs, and otherwise exactly
+   * what `http` would have: BYTES on success, negative on failure, an HTTP
+   * status negated into it so -403 is a 403. Collecting the answer frees it,
+   * so poll until it is not pending and then stop asking. */
+  int (*http_start)(const char *method, const char *url, const char *body,
+                    const char *content_type, const char *bearer,
+                    int timeout_ms);
+  int (*http_poll)(char *out, size_t out_size);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

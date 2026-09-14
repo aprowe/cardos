@@ -28,7 +28,9 @@
 #include "shellcmd.h"
 #include "kernel/fs/path.h"
 #include "kernel/ui/desktop.h"
+#include "kernel/ui/pins.h"
 #include "kernel/ui/launchui.h"
+#include "kernel/app/capprun.h"
 #include "kernel/net/wifi.h"
 #include "kernel/ui/shell.h"
 #include "kernel/sys/env.h"
@@ -36,6 +38,12 @@
 #include "kernel/ui/help.h"
 #include "kernel/sys/input.h"
 #include "kernel/sys/voice.h"
+#include "kernel/sys/bg.h"
+#include "kernel/sys/clock.h"
+#include "kernel/sys/busy.h"
+#include "kernel/net/httpq.h"
+#include "kernel/sys/power.h"
+#include "kernel/drv/battery.h"
 #include "kernel/sys/hotkeys.h"
 
 #include "nvs.h"
@@ -139,6 +147,7 @@ static void cmd_help(void) {
   con_write("screens  launch (carousel), desk (windows), escape returns\n");
   con_write("boot     apps, boot NAME, boot! NAME, bootinfo\n");
   con_write("system   mem ps taskcost flip clear reboot echo\n");
+  con_write("         time (ntp; no rtc on this board), battery\n");
   con_write("voice    hold the button on top, or type listen\n");
   con_write("recovery opt-0 backlight to full, hold escape at boot for safe\n");
   con_write("         mode, then defaults to clear saved settings\n");
@@ -151,6 +160,28 @@ static void cmd_help(void) {
 static void run_builtin(const char *line, char *arg) {
   if (!strcmp(line, "help"))        cmd_help();
   else if (!strcmp(line, "mem"))    cmd_mem();
+  /* The verbs the running app offers, and a way to run one.
+   *
+   * This is the point of the `id` field in CappAction: the same table that
+   * draws the menus and the help panel is a list of things that can be asked
+   * for by name. kernel/sys/rpc.c already argues it for voice -- an LLM
+   * choosing between a few named verbs is useful, one handed a string to run
+   * is not -- and this is that list, per app, written once by the app. */
+  else if (!strncmp(line, "do", 2) && (line[2] == 0 || line[2] == ' ')) {
+    const AppDef *a = launchui_running();
+    const char *what = line[2] ? line + 3 : NULL;
+    while (what && *what == ' ') what++;
+    if (!a) con_write("no app is running\n");
+    else if (!what || !*what) {
+      int n = 0, i;
+      const CappAction *act = capprun_actions(a, &n);
+      if (!act || !n) con_printf("%s offers none\n", a->name);
+      for (i = 0; i < n; i++)
+        con_printf("  %-10s %s\n", act[i].id, act[i].label);
+    }
+    else if (capprun_action_invoke(a, what) != 0)
+      con_printf("%s has no action '%s'\n", a->name, what);
+  }
   else if (!strcmp(line, "ps"))     cmd_ps();
   else if (!strcmp(line, "ls"))     cmd_ls(arg);
   else if (!strcmp(line, "cd"))     cmd_cd(arg);
@@ -210,6 +241,22 @@ static void run_builtin(const char *line, char *arg) {
       con_write("could not open the settings store\n");
     }
   }
+  else if (!strcmp(line, "time")) {
+    char when[40];
+    clock_full(when, sizeof when);
+    con_printf("%s\n", when);
+    if (!clock_synced()) {
+      con_write("no rtc on this board: the time comes from the network\n");
+      con_write("and is lost at every power cut. syncing...\n");
+      bg_submit(BG_TIME_SYNC);
+    }
+  }
+  else if (!strcmp(line, "battery")) {
+    int mv = battery_mv(), pct = battery_percent();
+    if (mv <= 0) con_write("no reading from the battery ADC\n");
+    else con_printf("%d%%  %d.%02d V%s\n", pct, mv / 1000, (mv % 1000) / 10,
+                    battery_charging() ? "  (charging)" : "");
+  }
   else if (!strcmp(line, "listen")) {
     /* The button, without the button -- for trying voice over the serial
      * line, where there is no button to hold. */
@@ -250,7 +297,8 @@ static void run_builtin(const char *line, char *arg) {
 static const char *const COMMANDS[] = {
   "apps", "boot", "boot!", "bootinfo", "cat", "cd", "clear", "df", "desk",
   "echo", "flip", "get", "gui", "help", "launch", "ls", "mem", "mkdir",
-  "defaults", "listen", "mouse", "ps", "pwd", "reboot", "rm", "run",
+  "battery", "defaults", "listen", "mouse", "ps", "pwd", "reboot", "rm",
+  "run", "time",
   "safe",
   "taskcost", "update", "wifi",
 };
@@ -770,6 +818,18 @@ static int factory_is_newer(const esp_partition_t *self) {
 }
 
 /* Monotonic milliseconds for the scheduler. */
+/* Hands the busy indicator a way to undo itself. There is no back buffer, so
+ * the only way to remove the badge is to redraw what was under it.
+ *
+ * Only the shell that is actually up. Asking both draws the desktop over the
+ * launcher and then the launcher back over that, which reads as the screen
+ * flicking to the desktop and back every time a request finishes. The console
+ * is not a painted shell and wants nothing. */
+static void repaint_shells(void) {
+  if (s_mode == MODE_DESKTOP) desktop_repaint();
+  else if (s_mode == MODE_LAUNCHER) launchui_repaint();
+}
+
 static uint32_t clock_ms(void *ctx) {
   (void)ctx;
   return (uint32_t)(esp_timer_get_time() / 1000);
@@ -968,13 +1028,27 @@ void app_main(void) {
    * for: the radio costs ~67 KB for the whole uptime. */
   if (!s_safe_mode && bthid_autostart()) {
     con_write("bluetooth: looking for paired devices...\n");
-    con_printf("  %d connected\n", bthid_autoconnect(1));
+    con_printf("  %d connected\n", bthid_autoconnect(3));
   }
 
   /* Back into whichever shell was last used. A device that always boots to the
    * same one regardless of what you were doing is a device you have to re-enter
    * a command on every time -- and it makes the firmware round trip land where
    * you left from, which is the behaviour the rollback was built for. */
+  battery_init();
+  pins_init();
+  busy_init();
+  httpq_init();
+  /* Whichever shell is up paints over the badge when a request finishes.
+   * Both are asked: the one that is not running does nothing with it. */
+  busy_on_done(repaint_shells);
+  clock_init();
+  bg_init();
+  /* Asked for rather than waited on: if WiFi is already up this is answered
+   * in a second, and if it is not the job simply finds nothing. Either way
+   * the shell starts now. */
+  bg_submit(BG_TIME_SYNC);
+
   {
     static const ShellOps OPS = { ops_open_app, ops_switch_shell, feed_key };
     static const InputSink SINK = { sink_wants_text, feed_key };
@@ -1020,6 +1094,28 @@ void app_main(void) {
       else if (sc == 0x7F || sc == 0x08) k = KEY_BACKSPACE;
       else if (sc == 0x1B) k = KEY_ESC;
       else if (sc > 0) k = (uint8_t)sc;
+    }
+
+    /* Anything the user did resets the idle clock -- which is what decides
+     * whether the machine is allowed to go and do slow things, and how hard
+     * this loop polls. */
+    if (k) {
+      bg_note_activity();
+      /* Wake first. A key pressed at a dark screen means "come back", and
+       * acting on it as well would open an app nobody asked for. */
+      if (power_dimmed()) { power_wake(); k = 0; }
+    }
+    power_tick();
+    clock_persist_tick();   /* writes at most once every ten minutes */
+
+    /* What the background task finished while nobody was waiting. One per
+     * pass, and only the shell ever draws it. */
+    {
+      const char *done = bg_take_result();
+      if (done) {
+        if (s_mode == MODE_CONSOLE) { con_printf("%s\n", done); prompt(); }
+        else if (s_mode == MODE_LAUNCHER) launchui_note(done);
+      }
     }
 
     /* Before any shell sees it. */
@@ -1088,8 +1184,24 @@ void app_main(void) {
       }
     }
 
-    /* 5 ms while the desktop is up: the pointer wants to keep up with the
-     * hand, and the keyboard matrix scan is cheap. */
-    vTaskDelay(pdMS_TO_TICKS(s_mode != MODE_CONSOLE ? 5 : 10));
+    /* How hard to poll.
+     *
+     * 5 ms while something is happening: the pointer has to keep up with the
+     * hand. But outside the moment somebody is pressing a key this screen is
+     * static -- the clock ticks once a second and nothing else moves -- and
+     * two hundred keyboard scans a second to discover that nothing has
+     * changed is work for its own sake.
+     *
+     * After two seconds of quiet the poll drops to 25 ms. The cost is that
+     * the first keypress after a pause can be noticed 25 ms late, which is
+     * under what anyone perceives, and the very next pass is back to 5 ms
+     * because that keypress reset the clock. Radios and the background task
+     * get the machine in between. */
+    {
+      uint32_t quiet = bg_idle_ms();
+      int ms = (s_mode != MODE_CONSOLE) ? 5 : 10;
+      if (quiet > 2000) ms = 25;
+      vTaskDelay(pdMS_TO_TICKS(ms));
+    }
   }
 }

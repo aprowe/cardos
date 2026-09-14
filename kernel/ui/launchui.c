@@ -21,6 +21,8 @@
 #include "kernel/ui/desktop.h"
 #include "kernel/ui/shell.h"
 #include "kernel/app/capprun.h"
+#include "kernel/sys/bg.h"
+#include "kernel/net/httpq.h"
 #include "kernel/app/capp.h"
 #include "kernel/drv/keyboard.h"
 #include "kernel/drv/bthid.h"
@@ -28,6 +30,8 @@
 #include "kernel/ui/help.h"
 #include "kernel/ui/icons_builtin.h"
 #include "kernel/sys/hotkeys.h"
+#include "kernel/sys/clock.h"
+#include "kernel/drv/battery.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -66,6 +70,9 @@ static int            s_app_clear;    /* the screen still has the carousel on it
 static int            s_help;         /* the key list is over everything */
 static int            s_binding;      /* k was pressed: the next letter binds */
 static int            s_pointer_on;   /* a mouse has moved: there is a cursor */
+
+/* Defined below, beside the rest of the running-app code. */
+static void paint_spinner(uint32_t ms);
 static Rect           s_app_rect;
 
 static Rect R(int x, int y, int w, int h) {
@@ -108,11 +115,29 @@ static void paint_bar(void) {
   draw_rect(R(0, 0, DISPLAY_W, BAR_H), C_TITLE);
   draw_text(4, 2, "CardOS", C_TITLE_FG, C_TITLE);
 
-  snprintf(clock, sizeof clock, "%u:%02u",
-           (unsigned)(s_now_ms / 60000u) % 100u,
-           (unsigned)((s_now_ms / 1000u) % 60u));
+  /* The time, if the device has been told it. Before this it showed
+   * uptime in minutes and seconds, formatted as a clock -- right for the
+   * first hour after a reboot and wrong ever after. "--:--" is the honest
+   * version of not knowing. */
+  clock_hm(clock, sizeof clock);
   x = (int16_t)(x - draw_text_width(clock));
   draw_text(x, 2, clock, C_TITLE_FG, C_TITLE);
+
+  /* The battery, as a little cell: an outline, a nub, and a bar inside it.
+   * A percentage would cost eighteen pixels of a bar that has three radios
+   * to fit as well, and the eye reads a bar faster anyway. */
+  {
+    int pct = battery_percent();
+    if (pct >= 0) {
+      int fill = (pct * 10) / 100;
+      x = (int16_t)(x - 18);
+      draw_frame(R(x, 3, 13, 7), C_TITLE_FG);
+      draw_rect(R(x + 13, 5, 1, 3), C_TITLE_FG);           /* the nub */
+      if (fill > 0)
+        draw_rect(R(x + 2, 5, fill, 3),
+                  pct <= 15 ? C_RED : C_TITLE_FG);        /* red when low */
+    }
+  }
 
   x = (int16_t)(x - 12);
   draw_bitmap1(x, 2, 8, 8, ICON8_KBD,
@@ -316,9 +341,41 @@ static void flush(void) {
   s_dirty = 0;
   paint_bar();
   paint_carousel();
+  if (httpq_active()) paint_spinner(s_now_ms);
+}
+
+/* A request is in flight somewhere.
+ *
+ * Drawn by the shell rather than by kernel/sys/busy.c's task, and the
+ * difference is the whole point of httpq: that badge exists because the shell
+ * is BLOCKED and cannot draw, and it is only safe because nothing else is
+ * drawing either. Here the shell is alive -- which is what the async path
+ * bought -- so it paints its own, and there is only ever one writer to the
+ * panel.
+ *
+ * Three dots in the top-right corner, away from the clock on the left. Small
+ * enough that the area can be repainted from the shell's own background when
+ * it finishes, without a full redraw. */
+#define SPIN_W  20
+#define SPIN_H  7
+#define SPIN_X  (DISPLAY_W - SPIN_W - 2)
+#define SPIN_Y  1
+
+static int s_spin_on;
+
+static void paint_spinner(uint32_t ms) {
+  int i, phase = (int)(ms / 140u) % 3;
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  for (i = 0; i < 3; i++)
+    draw_rect(R(SPIN_X + i * 7, SPIN_Y + 1, 4, 4),
+              i == phase ? RGB565(120, 180, 250) : RGB565(56, 64, 80));
 }
 
 /* ------------------------------------------------------------ running --- */
+
+/* The app the launcher is showing, or NULL. For anything that wants to drive
+ * it without a finger -- see capprun_actions. */
+const AppDef *launchui_running(void) { return s_app; }
 
 void launchui_repaint(void) {
   if (s_app) s_app_dirty = 1;
@@ -327,6 +384,10 @@ void launchui_repaint(void) {
 }
 
 static void leave_app(void) {
+  /* Hand the image back: an app the launcher is no longer showing is not
+   * going to be called into, and its code is 4 KB of a small pool. Starting
+   * it again reloads it, which costs a card read nobody notices. */
+  capprun_release(s_app);
   s_app = NULL;
   s_note[0] = 0;
   s_dirty = 1;
@@ -545,6 +606,9 @@ int launchui_key(uint8_t key) {
     return 0;
   }
   if (key == KEY_HELP) { s_help = 1; flush(); return 0; }
+  /* The window modifier, in a shell whose windows are the whole screen:
+   * closing the app is the only frame operation there is. */
+  if (key == KEY_FN_LETTER('w') && s_app) { leave_app(); return 0; }
 
   /* Bind mode: `k` on an app, then the letter. Two keys rather than a chord,
    * because every Opt chord already means "open" -- including here. */
@@ -641,6 +705,16 @@ int launchui_wants_text(void) {
   return s_app->wants_text(s_app->state);
 }
 
+/* A line under the icon, from something that finished elsewhere -- the
+ * background task's radio news, mostly. Shown where the app description goes,
+ * because that is the line the eye is already on. */
+void launchui_note(const char *text) {
+  if (!text) return;
+  snprintf(s_note, sizeof s_note, "%s", text);
+  s_dirty = 1;
+  flush();
+}
+
 void launchui_tick(uint32_t ms) {
   uint32_t before = s_now_ms / 1000u;
   s_now_ms = ms;
@@ -652,14 +726,42 @@ void launchui_tick(uint32_t ms) {
     if (s_app->tick(s_app->state, ms)) { s_app_dirty = 1; flush(); }
   }
 
+  /* Only over the launcher's own screen. A running app owns every pixel it
+   * was given, and an overlay in its top corner fought its menu bar: the app
+   * repainted the bar, this repainted the dots over it, back and forth at
+   * seven frames a second. An app that wants to say it is busy has a better
+   * place to do it -- see toolbar_busy in apps/toolbar.h.
+   *
+   * The spinner is otherwise the one thing that moves while nothing else
+   * does, so it needs its own reason to redraw. When the request ends, one
+   * full repaint puts back what was under it: there is no back buffer, and
+   * the alternative is a row of dots left on the screen. */
+  if (s_app) {
+    if (s_spin_on) { s_spin_on = 0; launchui_repaint(); }
+  } else if (httpq_active()) {
+    s_spin_on = 1;
+    paint_spinner(ms);
+  } else if (s_spin_on) {
+    s_spin_on = 0;
+    launchui_repaint();
+  }
+
   if (s_now_ms / 1000u == before) return;
   if (s_app) return;               /* the app owns the screen */
 
   /* A mouse that wanders out of range or sleeps drops the link. Look for it
    * again rather than sitting there with a dead pointer -- but not every
    * second, because each attempt is a multi-second scan. */
-  if (bthid_state(BTHID_MOUSE) == BTH_FAILED && (s_now_ms / 1000u) % 15 == 0)
-    bthid_start(4, BTHID_MOUSE);
+  /* Asked for, not done here. This used to call bthid_start(4, ...) inline --
+   * a four-second blocking scan, on the tick that draws the screen, every
+   * fifteen seconds for as long as a paired mouse stayed out of range. The
+   * job runs on the background task now and the shell never waits for it.
+   * Only while idle: a scan competing with someone typing is the same fault
+   * in a quieter coat. */
+  if (bthid_radio_on() && bthid_state(BTHID_MOUSE) != BTH_CONNECTED &&
+      bthid_state(BTHID_MOUSE) != BTH_CONNECTING && (s_now_ms / 1000u) % 15 == 0 &&
+      bg_idle_ms() > 2000)
+    bg_submit(BG_BT_RECONNECT);
 
   paint_bar();                     /* just the clock strip */
 }
@@ -677,6 +779,7 @@ void launchui_mouse_apply(const MouseReport *r) {
   Rect before = draw_cursor_bounds((int16_t)mouse_x(), (int16_t)mouse_y());
 
   mouse_apply(r);
+  bg_note_activity();
   btn = mouse_pressed(MOUSE_LEFT) ? CAPP_BTN_LEFT
       : mouse_pressed(MOUSE_RIGHT) ? CAPP_BTN_RIGHT : 0;
   held = (mouse_down(MOUSE_LEFT) ? CAPP_BTN_LEFT : 0)

@@ -48,7 +48,14 @@ import webbrowser
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
-SCOPE = "https://www.googleapis.com/auth/tasks"
+# Both, space separated, because one refresh token serves every app on the
+# device. Adding Calendar means re-running this and consenting again -- a
+# token minted for Tasks alone is refused by the Calendar API, with a 403 that
+# says "insufficient authentication scopes" and not which scope is missing.
+SCOPE = " ".join([
+    "https://www.googleapis.com/auth/tasks",
+    "https://www.googleapis.com/auth/calendar.events",
+])
 
 _result = {}
 

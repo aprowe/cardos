@@ -110,6 +110,40 @@ def check_image(elf, name):
                          % (name, ", ".join(sorted(set(undef)))))
 
 
+# Which folder of /desktop each app is seeded into.
+#
+# The launcher reads one level of subdirectory, and `update apps` finds an app
+# wherever it already sits (see capp_path in kernel/net/update.c), so grouping
+# is purely a question of where the blob is first written.
+#
+# CLI-only apps are deliberately absent: they never appear as an icon, and
+# leaving them at the top level keeps them on the default PATH, so `grep TODO
+# /desktop` still resolves from the console with nothing to configure.
+FOLDERS = {
+    "mines":    "Games",
+    "pinball":  "Games",
+
+    "web":      "Net",
+    "claude":   "Net",
+    "stocks":   "Net",
+    "screen":   "Net",
+
+    "calendar": "Tools",
+    "files":    "Tools",
+    "ide":      "Tools",
+    "explorer": "Tools",
+    "edit":     "Tools",
+    "photo":    "Tools",
+    "todo":     "Tools",
+}
+
+
+def seed_name(stem):
+    """Where this app's .capp is written, relative to /desktop."""
+    folder = FOLDERS.get(stem)
+    return "%s/%s.capp" % (folder, stem) if folder else "%s.capp" % stem
+
+
 def build(src):
     name = os.path.splitext(os.path.basename(src))[0]
     obj = os.path.join(OUT, name + ".o")
@@ -150,15 +184,15 @@ def emit_header(built):
         lines.append("")
 
     lines.append("typedef struct {")
-    lines.append("  const char    *name;      /* file name under /desktop */")
+    lines.append("  const char    *name;      /* path under /desktop, folder included */")
     lines.append("  const uint8_t *data;")
     lines.append("  size_t         size;")
     lines.append("} CappBlob;")
     lines.append("")
     lines.append("static const CappBlob CAPP_BLOBS[] = {")
     for name, path in built:
-        lines.append('  { "%s.capp", capp_blob_%s, sizeof capp_blob_%s },'
-                     % (name, name, name))
+        lines.append('  { "%s", capp_blob_%s, sizeof capp_blob_%s },'
+                     % (seed_name(name), name, name))
     lines.append("};")
     lines.append("")
     lines.append("#define CAPP_BLOB_COUNT (sizeof CAPP_BLOBS / sizeof CAPP_BLOBS[0])")

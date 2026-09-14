@@ -25,6 +25,15 @@ typedef struct {
   char      name[16];     /* copied out: CappInfo.name need not be terminated */
   char      help[160];
 
+  /* The rest of the descriptor, copied for the same reason the name is: the
+   * image it came from is not resident. Twelve apps' icons are 384 bytes;
+   * twelve apps' code was 48 KB of executable RAM, which is most of the
+   * pool. */
+  uint8_t   icon[CAPP_ICON_BYTES];
+  uint16_t  flags;
+  char      path[80];
+  int       loaded;       /* is the image in memory right now */
+
   CappUi    ui;           /* what the program installed, if anything */
   int       has_ui;
 
@@ -65,13 +74,64 @@ static void tr_paint(void *state, Rect c) {
   s_active = NULL;
 }
 
+/* The action table gets the key before the app's own handler does.
+ *
+ * That is the point of the table: an app declares "ctrl-s is save" once, and
+ * the shortcut, the menu item and the help line all come from the same place.
+ * An app with no table is unaffected -- the loop runs zero times and the key
+ * goes straight through, which is how every app that has not been converted
+ * keeps working. */
 static int tr_key(void *state, uint8_t k) {
   Slot *s = (Slot *)state;
-  int r;
+  int r, i;
+
   s_active = s;
+  for (i = 0; i < (int)s->ui.nactions; i++) {
+    if (!s->ui.actions[i].key || s->ui.actions[i].key != k) continue;
+    r = s->ui.action ? s->ui.action(s->ui.state, s->ui.actions[i].action) : 0;
+    s_active = NULL;
+    return r;
+  }
   r = s->ui.key ? s->ui.key(s->ui.state, k) : 0;
   s_active = NULL;
   return r;
+}
+
+/* Run one by name, for anything that is not a finger: the console, a script,
+ * a model choosing between the verbs an app actually offers. */
+int capprun_action_invoke(const AppDef *a, const char *id) {
+  int i, j;
+  if (!a || !id) return -1;
+  for (i = 0; i < CAPPRUN_MAX; i++) {
+    Slot *s = &s_slot[i];
+    if (!s->used || (const void *)s != a->state) continue;
+    for (j = 0; j < (int)s->ui.nactions; j++) {
+      const char *p = s->ui.actions[j].id, *q = id;
+      while (*p && *p == *q) { p++; q++; }
+      if (*p || *q) continue;
+      if (!s->ui.action) return -1;
+      s_active = s;
+      s->ui.action(s->ui.state, s->ui.actions[j].action);
+      s_active = NULL;
+      return 0;
+    }
+    return -1;
+  }
+  return -1;
+}
+
+/* The table, for a shell that wants to list it. */
+const CappAction *capprun_actions(const AppDef *a, int *n) {
+  int i;
+  if (n) *n = 0;
+  if (!a) return 0;
+  for (i = 0; i < CAPPRUN_MAX; i++) {
+    Slot *s = &s_slot[i];
+    if (!s->used || (const void *)s != a->state) continue;
+    if (n) *n = (int)s->ui.nactions;
+    return s->ui.actions;
+  }
+  return 0;
 }
 
 static int tr_click(void *state, int16_t x, int16_t y, int button) {
@@ -153,6 +213,24 @@ void capprun_install_ui(const CappUi *ui) {
   s->def.pref_w     = ui->pref_w;
   s->def.pref_h     = ui->pref_h;
   s->def.wants_text = ui->wants_text ? tr_wants_text : NULL;
+  /* The help panel, written from the action table rather than by hand.
+   *
+   * capp_info.help is a string an app maintains separately from its key
+   * switch, which is exactly the kind of pair that drifts -- Edit's said
+   * "ctrl-p markdown preview" while the desktop was quietly taking ctrl-P.
+   * With a table there is one description, and this renders it. An app with
+   * no table keeps its written help. */
+  if (ui->actions && ui->nactions) {
+    size_t n = 0;
+    int i;
+    for (i = 0; i < (int)ui->nactions && n + 24 < sizeof s->help; i++) {
+      const CappAction *a = &ui->actions[i];
+      if (!a->key || a->key < 1 || a->key > 26) continue;    /* menu-only */
+      n += (size_t)snprintf(s->help + n, sizeof s->help - n, "ctrl-%c\t%s\n",
+                            'a' + a->key - 1, a->label);
+    }
+    s->help[n] = 0;
+  }
   s->def.help       = s->help[0] ? s->help : NULL;
   s->def.set_args   = NULL;      /* argv was the arguments */
 }
@@ -177,18 +255,62 @@ int capprun_load(const char *path) {
   s->name[sizeof s->name - 1] = 0;
   if (s->la.info->help)
     snprintf(s->help, sizeof s->help, "%s", s->la.info->help);
+  memcpy(s->icon, s->la.info->icon, sizeof s->icon);
+  s->flags = s->la.info->flags;
+  snprintf(s->path, sizeof s->path, "%s", path);
 
+  /* And now give it back.
+   *
+   * This is called once per .capp by the icon scan, purely to find out what
+   * an app is called and what its icon looks like. Keeping the image for that
+   * cost about 4 KB of executable RAM each, and with twelve apps on the card
+   * the pool was down to 28 KB before anything had been run. The descriptor
+   * is copied above; the code is not needed again until someone starts it. */
+  capp_unload(&s->la);
+  s->loaded = 0;
   s->used = 1;
   return i;
+}
+
+/* Bring the image back for a slot that is about to run. */
+static int ensure_loaded(Slot *s) {
+  CappResult r;
+  if (s->loaded) return 0;
+  r = capp_load(s->path, &s->la);
+  if (r != CAPP_OK) {
+    ESP_LOGE(TAG, "%s: %s", s->path, capp_strerror(r));
+    return -1;
+  }
+  s->loaded = 1;
+  return 0;
+}
+
+/* Let go of one, if nothing is still calling into it. */
+static void release_slot(Slot *s) {
+  if (!s->loaded) return;
+  capp_unload(&s->la);
+  s->loaded = 0;
+  s->has_ui = 0;
+}
+
+/* A shell saying it has finished with an app -- the window closed, or escape
+ * left it. Matched by the AppDef's state pointer, which is the slot; a
+ * built-in's AppDef matches nothing here and is left alone. */
+void capprun_release(const AppDef *a) {
+  int i;
+  if (!a) return;
+  for (i = 0; i < CAPPRUN_MAX; i++) {
+    Slot *s = &s_slot[i];
+    if (s->used && (const void *)s == a->state) { release_slot(s); return; }
+  }
 }
 
 void capprun_unload_all(void) {
   int i;
   for (i = 0; i < CAPPRUN_MAX; i++) {
     if (!s_slot[i].used) continue;
-    capp_unload(&s_slot[i].la);
+    release_slot(&s_slot[i]);
     s_slot[i].used = 0;
-    s_slot[i].has_ui = 0;
   }
   s_running = NULL;
 }
@@ -276,11 +398,17 @@ int capprun_start(int slot, const char *name, const char *args) {
    * the twenty seconds of joining a network belong to "starting Web" instead
    * of to "Web is broken". Failure is not fatal: caps_ok() reports what was
    * actually found and the app decides what to say about it. */
-  s_caps_ok = meet_needs(s->la.info ? s->la.info->flags : 0);
+  if (ensure_loaded(s) != 0) return -1;
+  s_caps_ok = meet_needs(s->flags);
 
   s_running = s;
   rc = s->la.main(cardos_api(), argc, argv);
   s_running = NULL;
+
+  /* A command -- grep, cat -- does its work in capp_main and returns having
+   * installed nothing. Nothing will call into it again, so it goes straight
+   * back to the pool. A graphical app installed handlers and has to stay. */
+  if (!s->has_ui) release_slot(s);
   return rc;
 }
 
@@ -298,17 +426,17 @@ const char *capprun_name(int slot) {
 
 const uint8_t *capprun_icon(int slot) {
   if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return NULL;
-  return s_slot[slot].la.info->icon;
+  return s_slot[slot].icon;
 }
 
 int capprun_is_cli(int slot) {
   if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return 0;
-  return (s_slot[slot].la.info->flags & CAPP_CLI) != 0;
+  return (s_slot[slot].flags & CAPP_CLI) != 0;
 }
 
 int capprun_fullscreen(int slot) {
   if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return 0;
-  return (s_slot[slot].la.info->flags & CAPP_FULLSCREEN) != 0;
+  return (s_slot[slot].flags & CAPP_FULLSCREEN) != 0;
 }
 
 const AppDef *capprun_def(int slot) {
