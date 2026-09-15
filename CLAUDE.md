@@ -133,8 +133,8 @@ marks nothing gets its whole rectangle exactly as before**, so this cost the
 existing apps nothing; `apps/files.c` shows the pattern, and Mines, Claude and
 Pinball can drop their hand-rolled versions whenever someone is in there.
 
-**API version 23.** It moved six times in one day — 11 to 17 — and each move
-means every `.capp` must be rebuilt, because the loader refuses a binary built
+**API version 23.** It moved six times in one day — 11 to 17 — and has kept
+moving since; each move means every `.capp` must be rebuilt, because the loader refuses a binary built
 against a different table. `python tools/build_apps.py` before every firmware
 build; the symptom of forgetting is "built for a different API version" at
 boot. What arrived: `tick` and `mouse` (12, 13), `update_check`/`update_apply`

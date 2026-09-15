@@ -10,7 +10,7 @@
 #include "kernel/app/capp.h"
 
 #define LINES     7
-#define LINE_MAX  40
+#define LINE_MAX  36
 
 #define CLR_BG   CAPP_RGB(8, 10, 14)
 #define CLR_FG   CAPP_RGB(226, 232, 242)
@@ -43,7 +43,7 @@ static void app_paint(void *st, CRect c) {
               CLR_DIM, CLR_BG);
     api->text((short)(c.x + 8), (short)(c.y + 32), S.status, CLR_URL, CLR_BG);
     api->text((short)(c.x + 8), (short)(c.y + 46),
-              "map it as a drive on the pc; escape stops", CLR_DIM, CLR_BG);
+              "map it as a drive on the pc. esc stops", CLR_DIM, CLR_BG);
   } else {
     api->text((short)(c.x + 8), (short)(c.y + 20), "not sharing:", CLR_DIM, CLR_BG);
     api->text((short)(c.x + 8), (short)(c.y + 32), S.status, CLR_BAD, CLR_BG);
