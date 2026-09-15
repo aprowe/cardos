@@ -30,6 +30,11 @@ void cmd_get(const char *arg);
 /* update [apps|os|all] -- what the PC has built that is newer, and install it */
 void cmd_update(const char *arg);
 
+/* share        -- put the card on the LAN as a WebDAV drive, print the URL
+ * share off    -- stop
+ * share log    -- what has been asked for since last time */
+void cmd_share(const char *arg);
+
 /* run          -- what there is to run
  * run NAME     -- start it fullscreen; escape returns to the launcher */
 void cmd_run(const char *arg);
