@@ -14,6 +14,7 @@
 #include "kernel/net/wifi.h"
 #include "kernel/net/gauth.h"
 #include "kernel/net/update.h"
+#include "kernel/net/share.h"
 #include "kernel/sys/sio.h"
 #include "kernel/app/capprun.h"
 #include "kernel/ui/launchui.h"
@@ -309,6 +310,13 @@ static int api_http_start(const char *method, const char *url, const char *body,
 
 static int api_http_poll(char *out, size_t n) { return httpq_poll(out, n); }
 
+static int api_share_start(void) { return share_start(capprun_caller()); }
+static void api_share_stop(void) { share_stop(); }
+static const char *api_share_status(void) {
+  return share_running() ? share_url() : share_error();
+}
+static const char *api_share_take_log(void) { return share_take_log(); }
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -328,6 +336,7 @@ static const CardApi API = {
   api_now, api_epoch,
   api_exec_alloc, api_exec_writable, api_exec_free,
   api_http_start, api_http_poll,
+  api_share_start, api_share_stop, api_share_status, api_share_take_log,
 };
 
 const CardApi *cardos_api(void) { return &API; }

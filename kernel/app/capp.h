@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 22
+#define CAPP_API_VERSION 23
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -459,6 +459,19 @@ typedef struct {
                     const char *content_type, const char *bearer,
                     int timeout_ms);
   int (*http_poll)(char *out, size_t out_size);
+
+  /* ---- the card as a network drive ----
+   *
+   * WebDAV on port 80 while it is on; see kernel/net/share.h. share_start
+   * returns 0 or -1, and share_status says either the URL to type on the PC
+   * or why it could not start. The share stops by itself when the app that
+   * started it is closed. share_take_log hands back one line per call --
+   * "PUT /desktop/x.capp" -- or NULL, for an app that shows what is going
+   * on; poll it from tick. */
+  int         (*share_start)(void);
+  void        (*share_stop)(void);
+  const char *(*share_status)(void);
+  const char *(*share_take_log)(void);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a
