@@ -14,10 +14,13 @@
 #ifndef CARDOS_SHARE_H
 #define CARDOS_SHARE_H
 
-/* Start serving. `owned_by_app` records that an app started it, so that the
- * app going away stops it (share_app_closed). 0 on success; -1 and
- * share_error() says why: no wifi, no card, too little memory, already on. */
-int  share_start(int owned_by_app);
+/* Start serving. `owner` is who asked: NULL for the console, or the app's
+ * slot (capprun_caller()) so that this app going away -- and no other --
+ * stops it (share_app_closed). 0 on success; -1 and share_error() says why:
+ * no wifi, no card, too little memory, already on. The listening socket is
+ * opened on the task, so a port that cannot be bound shows up a moment
+ * later: share_running() goes to 0 and share_error() says why. */
+int  share_start(const void *owner);
 void share_stop(void);
 int  share_running(void);
 const char *share_url(void);        /* "http://192.168.1.23/" or "" */
@@ -25,7 +28,8 @@ const char *share_error(void);      /* the last reason share_start refused */
 /* Next log line -- "PUT /desktop/x.capp 201" -- or NULL. One per call; the
  * string is valid until the next call. */
 const char *share_take_log(void);
-/* capprun: an app was released. Stops the share if an app owned it. */
-void share_app_closed(void);
+/* capprun: the slot `slot` was released. Stops the share if that slot owns
+ * it; a share the console started, or another app did, is left alone. */
+void share_app_closed(const void *slot);
 
 #endif /* CARDOS_SHARE_H */

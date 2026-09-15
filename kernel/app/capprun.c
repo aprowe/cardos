@@ -292,7 +292,11 @@ static void release_slot(Slot *s) {
   capp_unload(&s->la);
   s->loaded = 0;
   s->has_ui = 0;
-  share_app_closed();
+  share_app_closed(s);
+}
+
+const void *capprun_caller(void) {
+  return s_active ? s_active : s_running;
 }
 
 /* A shell saying it has finished with an app -- the window closed, or escape

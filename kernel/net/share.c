@@ -59,7 +59,7 @@ static TaskHandle_t  s_task;
 static QueueHandle_t s_log;
 static Bufs         *s_b;
 static volatile int  s_stop, s_done, s_running;
-static int           s_owned_by_app;
+static const void   *s_owner;           /* NULL: the console */
 static int           s_last_status;     /* what send_head last put on the wire */
 static char          s_url[48];
 static char          s_error[96];
@@ -67,10 +67,12 @@ static char          s_logline[LOG_MAX];
 
 /* ---- state the shell reads ------------------------------------------- */
 
-/* A task that outlived share_stop's patience (see there) finishes on its
- * own; whoever asks next collects it. */
+/* The task ends on its own in two ways -- it outlived share_stop's patience
+ * (see there), or it could not bind the port and said so in s_error -- and
+ * whoever asks next collects it, so that share_running never says yes with
+ * a dead socket behind it. */
 static void reap(void) {
-  if (s_running && s_stop && s_done) {
+  if (s_running && s_done) {
     s_task = NULL;
     free(s_b);
     s_b = NULL;
@@ -168,9 +170,11 @@ static int reply(int fd, int status, const char *extra, int keep) {
   return send_head(fd, status, 0, NULL, extra, keep);
 }
 
-/* A status that ends the connection. */
+#define ALLOW_LINE "Allow: " DAV_ALLOW "\r\n"
+
+/* A status that ends the connection. A 405 always says what is allowed. */
 static int refuse(int fd, int status) {
-  reply(fd, status, NULL, 0);
+  reply(fd, status, status == 405 ? ALLOW_LINE : NULL, 0);
   return -1;
 }
 
@@ -246,7 +250,7 @@ static int copy_file(const char *from, const char *to) {
 static int do_options(int fd, const DavRequest *q) {
   if (q->has_content_length && drain(fd, q->content_length)) return -1;
   return reply(fd, 200,
-    "DAV: 1,2\r\nMS-Author-Via: DAV\r\nAllow: " DAV_ALLOW "\r\n", q->keep_alive);
+    "DAV: 1,2\r\nMS-Author-Via: DAV\r\n" ALLOW_LINE, q->keep_alive);
 }
 
 static int propfind_one(int fd, const char *path, const FsStat *st) {
@@ -310,8 +314,9 @@ static int do_get(int fd, const DavRequest *q, int head_only) {
   }
   if (head_only) return 0;
 
-  while ((n = fs_read(in, s_b->io, IO_MAX)) > 0)
-    if (send_all(fd, s_b->io, (size_t)n)) { fs_close(in); return -1; }
+  while ((n = fs_read(in, s_b->io, IO_MAX)) > 0) {
+    if (s_stop || send_all(fd, s_b->io, (size_t)n)) { fs_close(in); return -1; }
+  }
   fs_close(in);
   return n < 0 ? -1 : 0;
 }
@@ -323,7 +328,7 @@ static int do_put(int fd, const DavRequest *q) {
   int existed, out;
   uint32_t left;
 
-  if (q->chunked || !q->has_content_length) return refuse(fd, 411);
+  if (!q->has_content_length) return refuse(fd, 411);
   existed = fs_stat(q->path, &st) == 0;
   if (existed && st.is_dir) return refuse(fd, 405);
   if (!parent_exists(q->path)) return refuse(fd, 409);
@@ -359,12 +364,11 @@ static int do_delete(int fd, const DavRequest *q) {
 
 static int do_mkcol(int fd, const DavRequest *q) {
   FsStat st;
-  if (q->chunked) return refuse(fd, 415);
   if (q->has_content_length && q->content_length) {
     if (drain(fd, q->content_length)) return -1;
     return reply(fd, 415, NULL, q->keep_alive);
   }
-  if (fs_stat(q->path, &st) == 0) return reply(fd, 405, NULL, q->keep_alive);
+  if (fs_stat(q->path, &st) == 0) return reply(fd, 405, ALLOW_LINE, q->keep_alive);
   if (!parent_exists(q->path)) return reply(fd, 409, NULL, q->keep_alive);
   if (fs_mkdir(q->path) != 0) return reply(fd, 507, NULL, q->keep_alive);
   return reply(fd, 201, NULL, q->keep_alive);
@@ -372,12 +376,15 @@ static int do_mkcol(int fd, const DavRequest *q) {
 
 /* MOVE and COPY share their preamble: a Destination, a source that exists,
  * a parent for the destination, and the Overwrite rule. Returns 0 to go on,
- * 1 when a refusal was already sent, -1 when the connection is gone. */
-static int move_copy_check(int fd, const DavRequest *q, FsStat *src, int *dest_existed) {
+ * 1 when a refusal was already sent, -1 when the connection is gone. COPY
+ * of a folder is refused here, before Overwrite has removed anything: a
+ * request that is going to be refused must not delete the target first. */
+static int move_copy_check(int fd, const DavRequest *q, int copying, FsStat *src, int *dest_existed) {
   FsStat dst;
   if (q->has_content_length && drain(fd, q->content_length)) return -1;
   if (!q->dest[0]) return reply(fd, 400, NULL, q->keep_alive) ? -1 : 1;
   if (fs_stat(q->path, src) != 0) return reply(fd, 404, NULL, q->keep_alive) ? -1 : 1;
+  if (copying && src->is_dir) return reply(fd, 403, NULL, q->keep_alive) ? -1 : 1;   /* the documented limit */
   if (strcmp(q->path, q->dest) == 0) return reply(fd, 403, NULL, q->keep_alive) ? -1 : 1;
   if (!parent_exists(q->dest)) return reply(fd, 409, NULL, q->keep_alive) ? -1 : 1;
   *dest_existed = fs_stat(q->dest, &dst) == 0;
@@ -390,7 +397,7 @@ static int move_copy_check(int fd, const DavRequest *q, FsStat *src, int *dest_e
 
 static int do_move(int fd, const DavRequest *q) {
   FsStat src;
-  int existed = 0, rc = move_copy_check(fd, q, &src, &existed);
+  int existed = 0, rc = move_copy_check(fd, q, 0, &src, &existed);
   if (rc) return rc < 0 ? -1 : 0;
   if (fs_rename(q->path, q->dest) != 0) return reply(fd, 403, NULL, q->keep_alive);
   return reply(fd, existed ? 204 : 201, NULL, q->keep_alive);
@@ -398,9 +405,8 @@ static int do_move(int fd, const DavRequest *q) {
 
 static int do_copy(int fd, const DavRequest *q) {
   FsStat src;
-  int existed = 0, rc = move_copy_check(fd, q, &src, &existed);
+  int existed = 0, rc = move_copy_check(fd, q, 1, &src, &existed);
   if (rc) return rc < 0 ? -1 : 0;
-  if (src.is_dir) return reply(fd, 403, NULL, q->keep_alive);   /* the documented limit */
   if (copy_file(q->path, q->dest) != 0) return reply(fd, 507, NULL, q->keep_alive);
   return reply(fd, existed ? 204 : 201, NULL, q->keep_alive);
 }
@@ -456,8 +462,15 @@ static int serve_one(int fd) {
     note("refused", q.bad == 403 ? "(path)" : "(bad request)", q.bad);
     return 0;
   }
-  /* Whatever followed the blank line is the body's first bytes. A chunked
-   * body is refused before anything reads it, so this is never a chunk. */
+  /* A chunked body, on any method, is refused before anything reads it:
+   * there is no chunk decoder, so the only safe answer is one that closes
+   * the connection, or the chunks would be parsed as the next request. */
+  if (q.chunked) {
+    refuse(fd, 411);
+    note(dav_method_name(q.method), q.path, 411);
+    return 0;
+  }
+  /* Whatever followed the blank line is the body's first bytes. */
   if (have > end) {
     s_b->pending = s_b->hdr + end;
     s_b->pending_n = (size_t)(have - end);
@@ -477,11 +490,8 @@ static int serve_one(int fd) {
   case DAV_LOCK:      rc = do_lock(fd, &q); break;
   case DAV_UNLOCK:    rc = do_unlock(fd, &q); break;
   default:
-    if (q.chunked || (q.has_content_length && drain(fd, q.content_length))) {
-      rc = refuse(fd, 405);
-    } else {
-      rc = reply(fd, 405, "Allow: " DAV_ALLOW "\r\n", q.keep_alive);
-    }
+    if (q.has_content_length && drain(fd, q.content_length)) rc = refuse(fd, 405);
+    else rc = reply(fd, 405, ALLOW_LINE, q.keep_alive);
     break;
   }
   note(dav_method_name(q.method), q.path, s_last_status);
@@ -499,14 +509,16 @@ static void share_task(void *arg) {
   (void)arg;
 
   lfd = socket(AF_INET, SOCK_STREAM, 0);
-  if (lfd < 0) { ESP_LOGE(TAG, "no socket"); goto out; }
+  if (lfd < 0) { snprintf(s_error, sizeof s_error, "no socket: errno %d", errno); goto out; }
   setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
   memset(&addr, 0, sizeof addr);
   addr.sin_family = AF_INET;
   addr.sin_port = htons(PORT);
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  if (bind(lfd, (struct sockaddr *)&addr, sizeof addr) < 0) { ESP_LOGE(TAG, "bind failed"); goto out; }
-  if (listen(lfd, BACKLOG) < 0) { ESP_LOGE(TAG, "listen failed"); goto out; }
+  if (bind(lfd, (struct sockaddr *)&addr, sizeof addr) < 0 || listen(lfd, BACKLOG) < 0) {
+    snprintf(s_error, sizeof s_error, "could not listen on port %d: errno %d", PORT, errno);
+    goto out;
+  }
 
   while (!s_stop) {
     fd_set rf;
@@ -528,11 +540,12 @@ static void share_task(void *arg) {
 out:
   if (cfd >= 0) close(cfd);
   if (lfd >= 0) close(lfd);
-  s_done = 1;
+  if (s_error[0]) ESP_LOGE(TAG, "%s", s_error);
+  s_done = 1;                      /* the last word: reap() may free s_b after this */
   vTaskDelete(NULL);
 }
 
-int share_start(int owned_by_app) {
+int share_start(const void *owner) {
   reap();
   if (s_running) { snprintf(s_error, sizeof s_error, "already sharing"); return -1; }
   if (!fs_mounted()) { snprintf(s_error, sizeof s_error, "no card mounted"); return -1; }
@@ -558,7 +571,8 @@ int share_start(int owned_by_app) {
   snprintf(s_url, sizeof s_url, "http://%s/", wifi_ip());
   s_stop = 0;
   s_done = 0;
-  s_owned_by_app = owned_by_app;
+  s_owner = owner;
+  s_error[0] = 0;                  /* the task writes here if it cannot listen */
   if (xTaskCreatePinnedToCore(share_task, "share", S_STACK, NULL, S_PRIORITY,
                               &s_task, S_CORE) != pdPASS) {
     free(s_b); s_b = NULL;
@@ -566,7 +580,6 @@ int share_start(int owned_by_app) {
     return -1;
   }
   s_running = 1;
-  s_error[0] = 0;
   ESP_LOGI(TAG, "sharing at %s", s_url);
   return 0;
 }
@@ -578,16 +591,16 @@ void share_stop(void) {
   /* The task looks at the flag every 200 ms between connections and every
    * second inside one, so a transfer in flight ends within about a second
    * plus one write. What could outlast this wait is the card itself, and a
-   * task that is inside fs_write holds the open-table lock: deleting it
-   * from here would leave that lock taken and the shell's next file
-   * operation waiting forever. So it is left to finish, and reap() collects
-   * it on the next call. */
+   * task deleted from here while inside FatFs would take FatFs's mutex with
+   * it (every later file operation then fails at CONFIG_FATFS_TIMEOUT_MS)
+   * and leak the lwIP socket, with the port still bound. So it is left to
+   * finish, and reap() collects it on the next call. */
   while (!s_done && waited < STOP_WAIT_MS) { vTaskDelay(pdMS_TO_TICKS(20)); waited += 20; }
   if (!s_done) { ESP_LOGW(TAG, "share task has not stopped yet"); return; }
   reap();
   ESP_LOGI(TAG, "stopped");
 }
 
-void share_app_closed(void) {
-  if (s_running && s_owned_by_app) share_stop();
+void share_app_closed(const void *slot) {
+  if (s_running && s_owner && slot == s_owner) share_stop();
 }
