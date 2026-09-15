@@ -159,6 +159,13 @@ static const AppDef *app_of(WinId w) {
   return i < 0 ? app_at(0) : s_app[i];
 }
 
+const AppDef *desktop_focused_app(void) {
+  WinId w;
+  if (s_full) return s_full;
+  w = wm_focus();
+  return w == WIN_NONE ? NULL : app_of(w);
+}
+
 /* How tall the app wants to be, and therefore whether this window scrolls.
  * Zero from the app means "exactly the window", which is the common case. */
 static int16_t content_height(const AppDef *a, Rect inner) {

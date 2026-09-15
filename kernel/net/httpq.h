@@ -38,6 +38,14 @@ void httpq_init(void);
 int httpq_start(const char *method, const char *url, const char *body,
                 const char *content_type, const char *bearer, int timeout_ms);
 
+/* The same, with the body read from a file on the card and the reply
+ * written to one: for a request too large to hold, which is what a
+ * conversation is. `auth` reads as http_request's `bearer` does. The poll
+ * below then returns bytes written or a failure, and copies nothing. */
+int httpq_start_files(const char *url, const char *body_path,
+                      const char *content_type, const char *auth,
+                      const char *reply_path, int timeout_ms);
+
 /* HTTPQ_PENDING while it runs. Otherwise whatever http_request would have
  * returned -- bytes on success, negative on failure, an HTTP status negated
  * into it -- and the body is copied into `out`, truncated to fit. Collecting

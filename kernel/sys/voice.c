@@ -5,6 +5,7 @@
 
 #include "kernel/sys/input.h"
 #include "kernel/sys/rpc.h"
+#include "kernel/sys/agent.h"
 #include "kernel/sys/env.h"
 #include "kernel/drv/mic.h"
 #include "kernel/drv/display.h"
@@ -84,9 +85,10 @@ static const char *base_url(void) {
 
 /* ---- what to do with what was heard --------------------------------------- */
 
-/* Execute one line of the RPC vocabulary. Everything here is a verb the device
- * already had a way to do; the model chooses between them and never supplies
- * anything but the choice. */
+/* Execute one line of the RPC vocabulary. The verbs themselves live in
+ * kernel/sys/agent.c now, where the on-device Claude runs the same list
+ * through the same function; this only parses the line and shows what
+ * happened. */
 static void run_command(const char *line) {
   RpcCmd c;
 
@@ -94,59 +96,7 @@ static void run_command(const char *line) {
     snprintf(s_status, sizeof s_status, "not a command: %.40s", c.arg);
     return;
   }
-
-  switch (c.verb) {
-  case RPC_OPEN:
-    /* "notes" is what a person calls the editor. */
-    if (!strcmp(c.arg, "notes")) snprintf(c.arg, sizeof c.arg, "%s", "edit");
-    if (shell_open_app(c.arg) == 0)
-      snprintf(s_status, sizeof s_status, "opened %.40s", c.arg);
-    else
-      snprintf(s_status, sizeof s_status, "no app called %.40s", c.arg);
-    break;
-
-  case RPC_SHELL:
-    shell_switch(c.arg);
-    snprintf(s_status, sizeof s_status, "%.40s", c.arg);
-    break;
-
-  case RPC_BRIGHT:
-    display_set_brightness(c.num);
-    snprintf(s_status, sizeof s_status, "brightness %d%%", display_brightness());
-    break;
-
-  case RPC_WIFI:
-    if (c.num) { wifi_connect_saved(20000); say(wifi_status()); }
-    else { wifi_stop(); say("wifi off"); }
-    break;
-
-  case RPC_SAY:
-    if (input_text(c.arg) > 0) say("typed");
-    else say("nothing here is taking text");
-    break;
-
-  case RPC_KEY: {
-    /* The names the model is allowed to use, mapped to what the keyboard
-     * would have produced. */
-    uint8_t k = 0;
-    if (!strcmp(c.arg, "escape")) k = 0x1B;
-    else if (!strcmp(c.arg, "enter")) k = 0x0D;
-    else if (!strcmp(c.arg, "up")) k = 0x80;
-    else if (!strcmp(c.arg, "down")) k = 0x81;
-    else if (!strcmp(c.arg, "left")) k = 0x82;
-    else if (!strcmp(c.arg, "right")) k = 0x83;
-    if (k) { shell_feed_key(k); say(c.arg); }
-    break;
-  }
-
-  case RPC_NONE:
-    snprintf(s_status, sizeof s_status, "%.60s", c.arg[0] ? c.arg : "not understood");
-    break;
-
-  default:
-    say("not a command");
-    break;
-  }
+  agent_execute(&c, s_status, sizeof s_status);
 }
 
 /* Send the recording and act on the answer.

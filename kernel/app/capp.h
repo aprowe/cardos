@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 22
+#define CAPP_API_VERSION 23
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -230,6 +230,19 @@ typedef struct {
   uint8_t           nactions;
   int (*action)(void *state, int action);
 } CappUi;
+
+/* What the Claude terminal needs of the agent. See kernel/sys/agent.h for
+ * the semantics; the names are the same. */
+typedef struct {
+  int         (*ask)(const char *text);   /* 0 started; -1 busy; -2 no key; -3 no card; -4 failed */
+  void        (*reset)(void);             /* forget the conversation */
+  int         (*busy)(void);
+  int         (*has_key)(void);
+  unsigned    (*generation)(void);        /* changes when the transcript does */
+  const char *(*transcript)(void);        /* lines; "> " yours, "-> " a tool */
+  const char *(*status)(void);            /* "thinking", or "" */
+  void        (*seen)(void);              /* call every tick while on screen */
+} CappAgent;
 
 /* Everything an app is allowed to do. Grows only by appending, with
  * CAPP_API_VERSION bumped -- never by reordering. */
@@ -459,6 +472,12 @@ typedef struct {
                     const char *content_type, const char *bearer,
                     int timeout_ms);
   int (*http_poll)(char *out, size_t out_size);
+
+  /* The on-device Claude agent (kernel/sys/agent.h): the conversation lives
+   * in the kernel, so the terminal that shows it can come and go. One entry
+   * for a table rather than eight entries, so the agent can grow without
+   * this moving again. */
+  const CappAgent *(*agent)(void);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

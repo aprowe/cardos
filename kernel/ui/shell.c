@@ -70,3 +70,7 @@ void shell_switch(const char *which) {
 void shell_feed_key(uint8_t k) {
   if (s_ops.feed_key) s_ops.feed_key(k);
 }
+
+const AppDef *shell_running_app(void) {
+  return s_ops.running_app ? s_ops.running_app() : NULL;
+}

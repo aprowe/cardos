@@ -23,7 +23,9 @@ int http_get(const char *url, char *buf, size_t size, int timeout_ms);
 
 /* The general form. `method` is "GET", "POST", "PATCH" or "DELETE"; `body` and
  * `content_type` are NULL for a request without one; `bearer` is an OAuth
- * access token, or NULL.
+ * access token, or NULL -- or, with a colon in it, header lines sent as they
+ * are ("x-api-key: K\nanthropic-version: V"), for an API that does not take
+ * a bearer. Every function here that takes `bearer` reads it this way.
  *
  * One call rather than three because the difference between them here is two
  * strings, and an API with get/post/patch would have to grow again the first
@@ -55,6 +57,16 @@ int http_download(const char *url, const char *path, int timeout_ms);
 typedef void (*HttpProgress)(void *ctx, uint32_t done, uint32_t total);
 int http_download_ex(const char *url, const char *path, const char *bearer,
                      HttpProgress progress, void *ctx, int timeout_ms);
+
+/* Body from a file, reply to a file: the request the on-device Claude agent
+ * makes, whose body is a conversation the RAM cannot hold and whose reply is
+ * scanned from the card. Returns bytes of reply written, or the codes above;
+ * on a non-2xx status the reply file is still written, because an API's
+ * error is a document worth reading. Does not arm the busy indicator: its
+ * caller is kernel/net/httpq.c. */
+int http_exchange_files(const char *url, const char *body_path,
+                        const char *content_type, const char *auth,
+                        const char *reply_path, int timeout_ms);
 
 /* A response read as it arrives, for a body that does not end.
  *

@@ -18,6 +18,7 @@
  *     wifi on|off
  *     say TEXT         put TEXT into the focused app, as if typed
  *     key NAME         escape enter up down left right
+ *     action ID        run one entry of the focused app's action table
  *     none REASON      nothing matched; REASON is shown to the user
  */
 #ifndef CARDOS_RPC_H
@@ -31,6 +32,7 @@ typedef enum {
   RPC_WIFI,
   RPC_SAY,
   RPC_KEY,
+  RPC_ACTION,
   RPC_NONE            /* the model declined, and said why */
 } RpcVerb;
 

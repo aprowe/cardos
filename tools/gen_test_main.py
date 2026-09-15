@@ -50,7 +50,10 @@ for _, names in groups:
     for name in names:
         out.append("void %s(void);" % name)
 
-out += ["", "int main(void) {"]
+out += ["", "int main(void) {",
+        "  /* Unbuffered, so a crash is reported next to the test that caused it",
+        "   * rather than pages earlier. */",
+        "  setvbuf(stdout, NULL, _IONBF, 0);"]
 for title, names in groups:
     out.append('  printf("-- %s --%s");' % (title, NL))
     for name in names:

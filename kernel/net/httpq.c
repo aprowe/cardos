@@ -47,6 +47,11 @@ static char s_ct[CT_MAX];
 static char s_bearer[BEARER_MAX];
 static int  s_has_body, s_has_ct, s_has_bearer, s_timeout;
 
+/* The file mode: body read from one path, reply written to another, and
+ * s_reply stays NULL because nothing comes back through it. */
+static char s_body_path[80], s_reply_path[80];
+static int  s_files;
+
 int httpq_active(void) { return s_state == RUNNING; }
 
 static void httpq_task(void *arg) {
@@ -58,11 +63,17 @@ static void httpq_task(void *arg) {
      * badge must not be armed -- two writers to the panel is the one thing
      * kernel/sys/busy.c is careful to avoid. The shell draws its own
      * indicator instead, which it can, because it is not blocked. */
-    s_result = http_request_quiet(s_method, s_url,
-                                  s_has_body ? s_body : NULL,
-                                  s_has_ct ? s_ct : NULL,
-                                  s_has_bearer ? s_bearer : NULL,
-                                  s_reply, REPLY_MAX, s_timeout);
+    if (s_files)
+      s_result = http_exchange_files(s_url, s_body_path,
+                                     s_has_ct ? s_ct : NULL,
+                                     s_has_bearer ? s_bearer : NULL,
+                                     s_reply_path, s_timeout);
+    else
+      s_result = http_request_quiet(s_method, s_url,
+                                    s_has_body ? s_body : NULL,
+                                    s_has_ct ? s_ct : NULL,
+                                    s_has_bearer ? s_bearer : NULL,
+                                    s_reply, REPLY_MAX, s_timeout);
     s_state = DONE;
   }
 }
@@ -100,12 +111,39 @@ int httpq_start(const char *method, const char *url, const char *body,
   if (s_has_ct) snprintf(s_ct, sizeof s_ct, "%s", content_type);
   if (s_has_bearer) snprintf(s_bearer, sizeof s_bearer, "%s", bearer);
   s_timeout = timeout_ms;
+  s_files = 0;
   s_result = HTTPQ_PENDING;
   s_state = RUNNING;
   xSemaphoreGive(s_lock);
 
   xSemaphoreGive(s_go);
   return rc;
+}
+
+int httpq_start_files(const char *url, const char *body_path,
+                      const char *content_type, const char *auth,
+                      const char *reply_path, int timeout_ms) {
+  if (!s_task || !url || !body_path || !reply_path) return -1;
+
+  xSemaphoreTake(s_lock, portMAX_DELAY);
+  if (s_state != IDLE) { xSemaphoreGive(s_lock); return -1; }
+
+  s_reply = NULL;                          /* the reply goes to the card */
+  snprintf(s_url, sizeof s_url, "%s", url);
+  snprintf(s_body_path, sizeof s_body_path, "%s", body_path);
+  snprintf(s_reply_path, sizeof s_reply_path, "%s", reply_path);
+  s_has_ct = content_type && content_type[0];
+  s_has_bearer = auth && auth[0];
+  if (s_has_ct) snprintf(s_ct, sizeof s_ct, "%s", content_type);
+  if (s_has_bearer) snprintf(s_bearer, sizeof s_bearer, "%s", auth);
+  s_timeout = timeout_ms;
+  s_files = 1;
+  s_result = HTTPQ_PENDING;
+  s_state = RUNNING;
+  xSemaphoreGive(s_lock);
+
+  xSemaphoreGive(s_go);
+  return 0;
 }
 
 int httpq_poll(char *out, size_t out_size) {

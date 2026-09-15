@@ -29,6 +29,8 @@
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
 
+#include "kernel/sys/agent.h"
+
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -315,6 +317,12 @@ static int api_http_start(const char *method, const char *url, const char *body,
 
 static int api_http_poll(char *out, size_t n) { return httpq_poll(out, n); }
 
+static const CappAgent AGENT = {
+  agent_ask, agent_new, agent_busy, agent_has_key,
+  agent_generation, agent_transcript, agent_status, agent_seen,
+};
+static const CappAgent *api_agent(void) { return &AGENT; }
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -334,6 +342,7 @@ static const CardApi API = {
   api_now, api_epoch,
   api_exec_alloc, api_exec_writable, api_exec_free,
   api_http_start, api_http_poll,
+  api_agent,
 };
 
 const CardApi *cardos_api(void) { return &API; }

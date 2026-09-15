@@ -14,7 +14,7 @@
 /* Every app exports these two names; the pinball test already has them. */
 #define capp_info claude_capp_info
 #define capp_main claude_capp_main
-#include "apps/claude.c"
+#include "apps/build.c"
 
 static CappUi   INST;
 static uint32_t NOW;
@@ -76,7 +76,7 @@ static int press(unsigned char k) {
   return FILLS + TEXTS;
 }
 
-void test_claude_installs_a_ui(void) {
+void test_build_installs_a_ui(void) {
   boot();
   CHECK(INST.paint != NULL);
   CHECK(INST.key != NULL);
@@ -86,7 +86,7 @@ void test_claude_installs_a_ui(void) {
 
 /* Typing a character changes the input line and nothing else, so that is
  * all that should be drawn. Before: bar, every log line, and the input. */
-void test_claude_typing_repaints_only_the_input_line(void) {
+void test_build_typing_repaints_only_the_input_line(void) {
   int full, typed;
   boot();
   FILLS = TEXTS = 0;
@@ -100,7 +100,7 @@ void test_claude_typing_repaints_only_the_input_line(void) {
 }
 
 /* And the same for backspace, which also only touches the input line. */
-void test_claude_backspace_repaints_only_the_input_line(void) {
+void test_build_backspace_repaints_only_the_input_line(void) {
   int full, n;
   boot();
   press('h');
@@ -115,7 +115,7 @@ void test_claude_backspace_repaints_only_the_input_line(void) {
 
 /* A paint the app did not ask for is the shell telling it something was
  * drawn over it; the only safe answer is everything. */
-void test_claude_an_unrequested_paint_draws_everything(void) {
+void test_build_an_unrequested_paint_draws_everything(void) {
   int first, again;
   boot();
   FILLS = TEXTS = 0;
@@ -131,7 +131,7 @@ void test_claude_an_unrequested_paint_draws_everything(void) {
 /* The prompt is always open, so the terminal is always taking text -- even
  * before the first character. Voice asks this before delivering a sentence,
  * and "no" here meant every spoken sentence was heard and then dropped. */
-void test_claude_wants_text_before_anything_is_typed(void) {
+void test_build_wants_text_before_anything_is_typed(void) {
   boot();
   CHECK(INST.wants_text != NULL);
   CHECK_EQ(C.in_len, 0);
@@ -139,7 +139,7 @@ void test_claude_wants_text_before_anything_is_typed(void) {
 }
 
 /* Scrolling with nothing typed moves the log, and the log is what repaints. */
-void test_claude_scrolling_repaints_the_log(void) {
+void test_build_scrolling_repaints_the_log(void) {
   int i, n;
   boot();
   for (i = 0; i < 30; i++) note("a line of scrollback to move through");

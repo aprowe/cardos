@@ -110,6 +110,14 @@ int rpc_parse(const char *line, RpcCmd *cmd) {
       cmd->verb = RPC_BAD;
       return 0;
     }
+    if ((rest = word_is(p, "action")) != NULL) {
+      /* The id is validated by the app that owns it, not here: this list
+       * cannot know what Todo calls its verbs, and an unknown one is
+       * refused with the app's own list in the answer. */
+      cmd->verb = RPC_ACTION;
+      copy_arg(cmd, rest);
+      return cmd->arg[0] ? 1 : (cmd->verb = RPC_BAD, 0);
+    }
     if ((rest = word_is(p, "none")) != NULL) {
       cmd->verb = RPC_NONE;
       copy_arg(cmd, rest);

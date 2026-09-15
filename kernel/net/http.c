@@ -24,6 +24,39 @@ static const char *TAG = "http";
  * twenty free. */
 static uint8_t s_chunk[1024];
 
+/* The `auth` string, applied. A bare token is a bearer; anything with a
+ * colon in it is header lines, "Name: value" separated by newlines, sent as
+ * they are. One parameter covers OAuth, an API key and a version header
+ * without the signature growing a field per kind. */
+static void set_auth(esp_http_client_handle_t cli, const char *auth) {
+  char hdr[600];
+  const char *p;
+  if (!auth || !*auth) return;
+  if (!strchr(auth, ':')) {
+    snprintf(hdr, sizeof hdr, "Bearer %s", auth);
+    esp_http_client_set_header(cli, "Authorization", hdr);
+    return;
+  }
+  p = auth;
+  while (*p) {
+    const char *end = p, *colon;
+    while (*end && *end != '\n' && *end != '\r') end++;
+    colon = memchr(p, ':', (size_t)(end - p));
+    if (colon && end - p < (int)sizeof hdr) {
+      char name[64], *v;
+      size_t nl_ = (size_t)(colon - p);
+      if (nl_ < sizeof name) {
+        memcpy(name, p, nl_); name[nl_] = 0;
+        memcpy(hdr, colon + 1, (size_t)(end - colon - 1)); hdr[end - colon - 1] = 0;
+        for (v = hdr; *v == ' '; v++) {}
+        esp_http_client_set_header(cli, name, v);
+      }
+    }
+    p = end;
+    while (*p == '\n' || *p == '\r') p++;
+  }
+}
+
 /* What a TLS handshake needs on top of whatever the caller is holding: the
  * record buffers, the peer certificate while it is being verified, and the
  * socket. Measured by watching the free heap either side of a request, not
@@ -94,11 +127,7 @@ int http_request_quiet(const char *method, const char *url,
   cli = esp_http_client_init(&cfg);
   if (!cli) return -2;
 
-  if (bearer && *bearer) {
-    char hdr[600];
-    snprintf(hdr, sizeof hdr, "Bearer %s", bearer);
-    esp_http_client_set_header(cli, "Authorization", hdr);
-  }
+  set_auth(cli, bearer);
   if (content_type && *content_type)
     esp_http_client_set_header(cli, "Content-Type", content_type);
 
@@ -225,6 +254,88 @@ int http_post_file_progress(const char *url, const char *path,
   return got;
 }
 
+int http_exchange_files(const char *url, const char *body_path,
+                        const char *content_type, const char *auth,
+                        const char *reply_path, int timeout_ms) {
+  esp_http_client_config_t cfg;
+  esp_http_client_handle_t cli;
+  int fd, size, sent = 0, got = 0, status, rc;
+
+  if (!url || !body_path || !reply_path) return -2;
+  if (!wifi_is_connected() && wifi_connect_saved(20000) != 0) return -1;
+  if (!enough_memory(url)) return -4;
+
+  fd = fs_open(body_path, FS_O_READ);
+  if (fd < 0) return -2;
+  size = fs_seek(fd, 0, FS_SEEK_END);
+  if (size <= 0 || fs_seek(fd, 0, FS_SEEK_SET) < 0) { fs_close(fd); return -2; }
+
+  memset(&cfg, 0, sizeof cfg);
+  cfg.url = url;
+  cfg.timeout_ms = timeout_ms;
+  cfg.crt_bundle_attach = esp_crt_bundle_attach;
+  cfg.method = HTTP_METHOD_POST;
+  cfg.buffer_size = 1024;
+
+  cli = esp_http_client_init(&cfg);
+  if (!cli) { fs_close(fd); return -2; }
+  set_auth(cli, auth);
+  if (content_type && *content_type)
+    esp_http_client_set_header(cli, "Content-Type", content_type);
+
+  if (esp_http_client_open(cli, size) != ESP_OK) {
+    fs_close(fd);
+    esp_http_client_cleanup(cli);
+    return -3;
+  }
+  while (sent < size) {
+    int n = fs_read(fd, s_chunk, sizeof s_chunk);
+    if (n <= 0) break;
+    if (esp_http_client_write(cli, (const char *)s_chunk, n) != n) break;
+    sent += n;
+  }
+  fs_close(fd);
+  if (sent != size || esp_http_client_fetch_headers(cli) < 0) {
+    esp_http_client_close(cli);
+    esp_http_client_cleanup(cli);
+    return -3;
+  }
+
+  /* The reply is written whatever the status, as http_request reads it
+   * whatever the status: an API's error is a document that explains itself,
+   * and the caller can only show it if it was kept. */
+  fd = fs_open(reply_path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+  if (fd < 0) {
+    esp_http_client_close(cli);
+    esp_http_client_cleanup(cli);
+    return -2;
+  }
+  for (;;) {
+    int n = esp_http_client_read(cli, (char *)s_chunk, sizeof s_chunk);
+    int put = 0;
+    if (n <= 0) break;
+    while (put < n) {
+      int w = fs_write(fd, s_chunk + put, (size_t)(n - put));
+      if (w <= 0) { n = -1; break; }
+      put += w;
+    }
+    if (n < 0) { got = -3; break; }
+    got += n;
+  }
+  fs_close(fd);
+
+  status = esp_http_client_get_status_code(cli);
+  esp_http_client_close(cli);
+  esp_http_client_cleanup(cli);
+  if (got < 0) return -3;
+  if (status < 200 || status >= 300) {
+    ESP_LOGW(TAG, "POST %s -> %d", url, status);
+    rc = (status > 0 && status < 1000) ? -status : -4;
+    return rc;
+  }
+  return got;
+}
+
 int http_stream(const char *url, HttpSink on_data, void *ctx, int timeout_ms) {
   esp_http_client_config_t cfg;
   esp_http_client_handle_t cli;
@@ -300,11 +411,7 @@ static int http_download_ex_do(const char *url, const char *path, const char *be
   cli = esp_http_client_init(&cfg);
   if (!cli) return -2;
 
-  if (bearer && *bearer) {
-    char hdr[600];
-    snprintf(hdr, sizeof hdr, "Bearer %s", bearer);
-    esp_http_client_set_header(cli, "Authorization", hdr);
-  }
+  set_auth(cli, bearer);
 
   if (esp_http_client_open(cli, 0) != ESP_OK) {
     esp_http_client_cleanup(cli);

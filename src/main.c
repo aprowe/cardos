@@ -42,6 +42,7 @@
 #include "kernel/sys/clock.h"
 #include "kernel/sys/busy.h"
 #include "kernel/sys/shot.h"
+#include "kernel/sys/agent.h"
 #include "kernel/net/httpq.h"
 #include "kernel/sys/power.h"
 #include "kernel/drv/battery.h"
@@ -832,6 +833,13 @@ static int factory_is_newer(const esp_partition_t *self) {
  * launcher and then the launcher back over that, which reads as the screen
  * flicking to the desktop and back every time a request finishes. The console
  * is not a painted shell and wants nothing. */
+/* What has the keyboard, for the agent's `action` tool. */
+static const AppDef *ops_running_app(void) {
+  if (s_mode == MODE_LAUNCHER) return launchui_running();
+  if (s_mode == MODE_DESKTOP) return desktop_focused_app();
+  return NULL;
+}
+
 static void repaint_shells(void) {
   if (s_mode == MODE_DESKTOP) desktop_repaint();
   else if (s_mode == MODE_LAUNCHER) launchui_repaint();
@@ -1064,6 +1072,7 @@ void app_main(void) {
   /* Whichever shell is up paints over the badge when a request finishes.
    * Both are asked: the one that is not running does nothing with it. */
   busy_on_done(repaint_shells);
+  agent_init();
   clock_init();
   bg_init();
   /* Asked for rather than waited on: if WiFi is already up this is answered
@@ -1072,7 +1081,7 @@ void app_main(void) {
   bg_submit(BG_TIME_SYNC);
 
   {
-    static const ShellOps OPS = { ops_open_app, ops_switch_shell, feed_key };
+    static const ShellOps OPS = { ops_open_app, ops_switch_shell, feed_key, ops_running_app };
     static const InputSink SINK = { sink_wants_text, feed_key };
     shell_set_ops(&OPS);
     input_set_sink(&SINK);
@@ -1095,6 +1104,7 @@ void app_main(void) {
     /* The button on top, polled beside the keyboard so it works in every
      * shell and over every app. Press and hold to talk; see kernel/sys/voice.c
      * for why the whole cycle happens inside this call. */
+    agent_tick();
     if (voice_tick()) {
       if (s_mode == MODE_LAUNCHER) launchui_repaint();
       else if (s_mode == MODE_DESKTOP) desktop_repaint();

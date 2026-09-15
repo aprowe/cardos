@@ -164,6 +164,7 @@ TOUR = [
     ("photos",   "run photos /shots/",              b"",       0),   # its own screenshots; the slash means folder
     ("web",      "run web https://news.ycombinator.com", b"",   12),
     ("claude",   "run claude",                       b"",       0),
+    ("build",    "run build",                        b"",       0),
     ("stocks",   "run stocks",                       b"r",      8),
     ("screen",   "run screen",                       ENTER,     4),
     ("memory",   "run memory",                       b"",       0),

@@ -24,3 +24,4 @@ tools/cardos6x8.ttf
 # Speech the tests synthesise, and the recording the device sends. Both are
 # throwaway audio that happens to land where the tool was run.
 *.wav
+chatlog_test_*/

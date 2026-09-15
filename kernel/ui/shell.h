@@ -11,6 +11,8 @@
 
 #include <stdint.h>
 
+#include "kernel/ui/app.h"
+
 typedef enum { UI_NONE = 0, UI_DESKTOP, UI_LAUNCHER } UiShell;
 
 /* Setting the shell also remembers it, so the machine comes back up in
@@ -40,6 +42,7 @@ typedef struct {
   int  (*open_app)(const char *name);      /* 0 if it opened */
   void (*switch_shell)(const char *which); /* launcher | desktop | console */
   void (*feed_key)(uint8_t k);             /* as if the key were pressed */
+  const AppDef *(*running_app)(void); /* what has the keyboard, or NULL */
 } ShellOps;
 
 void shell_set_ops(const ShellOps *ops);
@@ -47,5 +50,6 @@ void shell_set_ops(const ShellOps *ops);
 int  shell_open_app(const char *name);
 void shell_switch(const char *which);
 void shell_feed_key(uint8_t k);
+const AppDef *shell_running_app(void);
 
 #endif /* CARDOS_SHELL_H */

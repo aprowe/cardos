@@ -268,6 +268,27 @@ ICONS = {
         "................",
     ],
 
+    # The same bubble, blue, with a hammer in it: Build is the conversation
+    # that changes the machine, and the hammer is what says so.
+    "Build": [
+        "................",
+        "...KKKKKKKKKK...",
+        "..KbbbbbbbbbbK..",
+        ".KbbbbbbbbbbbbK.",
+        ".KbbbWWWWWbbbbK.",
+        ".KbbbWWWWWbbbbK.",
+        ".KbbbWWWWWbbbbK.",
+        ".KbbbbbbobbbbbK.",
+        ".KbbbbbbobbbbbbK",
+        ".KbbbbbbobbbbbK.",
+        "..KbbbbbobbbbK..",
+        "...KbbbbbbbbK...",
+        "...KbbK.KKKK....",
+        "..KbbK..........",
+        "..KK............",
+        "................",
+    ],
+
     "Pinball": [
         "................",
         "..KKKKKKKKKKKK..",

@@ -125,6 +125,7 @@ FOLDERS = {
 
     "web":      "Net",
     "claude":   "Net",
+    "build":    "Net",
     "stocks":   "Net",
     "screen":   "Net",
 

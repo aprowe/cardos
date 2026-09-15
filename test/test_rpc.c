@@ -39,6 +39,12 @@ void test_rpc_the_verbs_parse(void) {
   c = parse("key escape", &ok);
   CHECK(ok); CHECK_EQ(c.verb, RPC_KEY); CHECK(!strcmp(c.arg, "escape"));
 
+  c = parse("action save", &ok);
+  CHECK(ok); CHECK_EQ(c.verb, RPC_ACTION); CHECK(!strcmp(c.arg, "save"));
+
+  c = parse("action", &ok);
+  CHECK(!ok);
+
   c = parse("none I did not understand that", &ok);
   CHECK(ok); CHECK_EQ(c.verb, RPC_NONE);
   CHECK(!strcmp(c.arg, "I did not understand that"));
