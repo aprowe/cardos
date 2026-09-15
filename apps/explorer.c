@@ -490,6 +490,13 @@ static int app_click(void *st, short x, short y, int button) {
   (void)st;
 
   if (!X.have_at) return 1;
+  /* Clicks arrive local to the app; every box below is in the screen
+   * coordinates paint was handed (see the note in toolbar.h). Translating
+   * once here is what makes the menus, tools, tree and list line up in a
+   * window that is not at the origin -- fullscreen the two are the same,
+   * which is how this went unnoticed. */
+  x = (short)(x + c.x);
+  y = (short)(y + c.y);
   body_y = c.y + MENU_H + TOOL_H;
 
   /* A menu that is down eats the next click, wherever it lands -- which is

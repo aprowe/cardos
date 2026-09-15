@@ -78,7 +78,8 @@ in `/desktop`; the firmware goes to the card and then through the same
 `factory` is USB-only and is where a bad update rolls back to; if a USB flash
 puts a newer build in `factory`, boot notices and switches to it. Design in
 `docs/superpowers/specs/2026-09-11-remote-update-design.md`. The partition
-table changed for this (two OTA slots, `spiffs` down to 316 KB), so the
+table changed for this (two OTA slots; `factory` is 2.75 MB and `spiffs`
+700 KB since 2026-09-12, see the comments in `partitions.csv`), so the
 first flash after it needs the whole table: `python -m platformio run -t
 upload` does that, but old NVS contents (WiFi credentials, PATH) are gone.
 
@@ -126,22 +127,28 @@ marks nothing gets its whole rectangle exactly as before**, so this cost the
 existing apps nothing; `apps/files.c` shows the pattern, and Mines, Claude and
 Pinball can drop their hand-rolled versions whenever someone is in there.
 
-**API version 17.** It moved six times in one day — 11 to 17 — and each move
-means every `.capp` must be rebuilt, because the loader refuses a binary built
-against a different table. `python tools/build_apps.py` before every firmware
-build; the symptom of forgetting is "built for a different API version" at
-boot. What arrived: `tick` and `mouse` (12, 13), `update_check`/`update_apply`
-(14), `caps_ok` (15), the file operations `list_ex`, `stat`, `mkdir`,
-`remove`, `rename` and `run` that the file manager needed (16), and
-`damage`/`paint_area` (17).
+**API version 23** (`CAPP_API_VERSION` in `capp.h` is the truth; this
+paragraph is history). It moved six times in one day — 11 to 17 — and each
+move means every `.capp` must be rebuilt, because the loader refuses a binary
+built against a different table. `python tools/build_apps.py` before every
+firmware build; the symptom of forgetting is "built for a different API
+version" at boot. What arrived: `tick` and `mouse` (12, 13),
+`update_check`/`update_apply` (14), `caps_ok` (15), the file operations
+`list_ex`, `stat`, `mkdir`, `remove`, `rename` and `run` that the file manager
+needed (16), `damage`/`paint_area` (17), then actions, `http_stream`,
+`key_pending`, `now`, the `exec_*` memory the IDE compiles into and the
+`http_start`/`http_poll` pair (18 to 22), and the agent table (23). **The
+`worktree-webdav-share` branch also calls itself 23** with `share_*` in the
+slots master gave to `agent`; whichever lands second must bump to 24.
 
 **`CAPP_PROXY_DEFAULT` in `capp.h` is the one place the PC's address is
 written.** Kernel and apps both include that header; the kernel prefers
 `env PROXY` over it. It used to be spelled out in five files, which is a bug
 waiting for the laptop's address to change.
 
-**Flash is the constraint now, not RAM: 90% of the 1.75 MB `factory`
-partition**, ~175 KB spare. Half the image is radio and TLS (net80211 158 KB,
+**Flash is the constraint now, not RAM.** `factory` grew to 2.75 MB on
+2026-09-12 after the image hit 93% of 1.75 MB; it is at about 66% now.
+Half the image is radio and TLS (net80211 158 KB,
 mbedTLS + PSA crypto 228 KB, Bluetooth 177 KB, lwIP 103 KB), which is not
 shrinkable by writing tighter kernel code — CardOS's own code is about 178 KB.
 The lever that is available: **204 KB of embedded `.capp` blobs**, which are

@@ -360,6 +360,8 @@ static int scan_block(Reader *r, Scan *s) {
 
   if (!strcmp(type, "tool_use")) {
     if (s->out->ntools < CHAT_TOOLS_MAX) s->out->tool[s->out->ntools++] = tc;
+    else if (s->out->nextra < CHAT_EXTRA_MAX)
+      memcpy(s->out->extra_id[s->out->nextra++], tc.id, sizeof tc.id);
   } else if (strcmp(type, "text") != 0) {
     /* Not text: whatever landed in the text buffer from this block goes. */
     s->textlen = text_before;

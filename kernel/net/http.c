@@ -97,6 +97,8 @@ int http_request_quiet(const char *method, const char *url,
   esp_http_client_handle_t cli;
   int status, got = 0;
 
+  int truncated = 0;
+
   if (!url || !out || out_size < 2) return -2;
   out[0] = 0;
 
@@ -156,10 +158,16 @@ int http_request_quiet(const char *method, const char *url,
    * end was not going to be looked at. */
   while ((size_t)got < out_size - 1) {
     int n = esp_http_client_read(cli, out + got, (int)(out_size - 1 - (size_t)got));
-    if (n <= 0) break;
+    if (n < 0) { truncated = 1; break; }
+    if (n == 0) break;
     got += n;
   }
   out[got] = 0;
+  /* A connection that dropped mid-body used to come back as a shorter
+   * document and a success. Only when the buffer had room for more: a body
+   * the buffer cut short is the caller's choice, and was never complete. */
+  if ((size_t)got < out_size - 1 && !esp_http_client_is_complete_data_received(cli))
+    truncated = 1;
 
   status = esp_http_client_get_status_code(cli);
   esp_http_client_close(cli);
@@ -169,6 +177,7 @@ int http_request_quiet(const char *method, const char *url,
     ESP_LOGW(TAG, "%s %s -> %d", method ? method : "GET", url, status);
     return (status > 0 && status < 1000) ? -status : -4;
   }
+  if (truncated) return -3;
   return got;
 }
 
@@ -184,7 +193,7 @@ int http_post_file_progress(const char *url, const char *path,
                             void (*progress)(int sent, int total)) {
   esp_http_client_config_t cfg;
   esp_http_client_handle_t cli;
-  int fd, size, sent = 0, got = 0, status;
+  int fd, size, sent = 0, got = 0, status, truncated = 0;
 
   if (!url || !path || !out || out_size < 2) return -2;
   out[0] = 0;
@@ -239,10 +248,16 @@ int http_post_file_progress(const char *url, const char *path,
   }
   while ((size_t)got < out_size - 1) {
     int n = esp_http_client_read(cli, out + got, (int)(out_size - 1 - (size_t)got));
-    if (n <= 0) break;
+    if (n < 0) { truncated = 1; break; }
+    if (n == 0) break;
     got += n;
   }
   out[got] = 0;
+  /* A connection that dropped mid-body used to come back as a shorter
+   * document and a success. Only when the buffer had room for more: a body
+   * the buffer cut short is the caller's choice, and was never complete. */
+  if ((size_t)got < out_size - 1 && !esp_http_client_is_complete_data_received(cli))
+    truncated = 1;
 
   status = esp_http_client_get_status_code(cli);
   esp_http_client_close(cli);
@@ -251,6 +266,7 @@ int http_post_file_progress(const char *url, const char *path,
     ESP_LOGW(TAG, "POST %s -> %d", url, status);
     return (status > 0 && status < 1000) ? -status : -4;
   }
+  if (truncated) return -3;
   return got;
 }
 
@@ -313,7 +329,8 @@ int http_exchange_files(const char *url, const char *body_path,
   for (;;) {
     int n = esp_http_client_read(cli, (char *)s_chunk, sizeof s_chunk);
     int put = 0;
-    if (n <= 0) break;
+    if (n < 0) { got = -3; break; }
+    if (n == 0) break;
     while (put < n) {
       int w = fs_write(fd, s_chunk + put, (size_t)(n - put));
       if (w <= 0) { n = -1; break; }
@@ -323,6 +340,9 @@ int http_exchange_files(const char *url, const char *body_path,
     got += n;
   }
   fs_close(fd);
+  /* Half a reply is not a reply: a connection dropped mid-body used to leave
+   * a file that scanned cleanly as a shorter answer, and was believed. */
+  if (got >= 0 && !esp_http_client_is_complete_data_received(cli)) got = -3;
 
   status = esp_http_client_get_status_code(cli);
   esp_http_client_close(cli);
@@ -433,7 +453,8 @@ static int http_download_ex_do(const char *url, const char *path, const char *be
   for (;;) {
     int n = esp_http_client_read(cli, (char *)s_chunk, sizeof s_chunk);
     int put = 0;
-    if (n <= 0) break;
+    if (n < 0) { fs_close(fd); rc = -3; goto done; }
+    if (n == 0) break;
     /* Written in full or not at all: fs_write returns -1 on a short write and
      * leaves the partial bytes behind, which is how a truncated file gets
      * written and believed. */
@@ -446,6 +467,15 @@ static int http_download_ex_do(const char *url, const char *path, const char *be
     if (progress) progress(ctx, (uint32_t)total, (uint32_t)(expected > 0 ? expected : 0));
   }
   fs_close(fd);
+  /* Fewer bytes than promised is a failure here, not a smaller file: the
+   * firmware and app installers hash what they get, but a page or a photo
+   * cut short by a dropped connection was being kept and shown. */
+  if (!esp_http_client_is_complete_data_received(cli) ||
+      (expected > 0 && total != expected)) {
+    ESP_LOGW(TAG, "%s: got %d of %d bytes", url, total, (int)expected);
+    rc = -3;
+    goto done;
+  }
   rc = total;
 
 done:

@@ -223,6 +223,7 @@ static int s_upd_valid;
 static int api_update_check(char *out, size_t n) {
   int i, count = 0;
   size_t len = 0;
+  if (!out || n == 0) return -1;
   s_upd_valid = 0;
   if (update_check(&s_upd) != 0) {
     snprintf(out, n, "%s", update_error());
@@ -244,22 +245,29 @@ static int api_update_check(char *out, size_t n) {
   return count;
 }
 
+/* The progress line goes into the app's own buffer, sized by the app: this
+ * used to write 80 bytes whatever `n` was, on the strength of the one
+ * caller passing 96. */
+typedef struct { char *out; size_t n; } UpdSay;
+
 static void upd_say(void *ctx, const char *line) {
-  char *out = (char *)ctx;
-  snprintf(out, 80, "%s", line);
+  UpdSay *u = (UpdSay *)ctx;
+  snprintf(u->out, u->n, "%s", line);
 }
 
 static int api_update_apply(int os, char *out, size_t n) {
+  UpdSay say = { out, n };
   int done;
+  if (!out || n == 0) return -1;
   if (!s_upd_valid && update_check(&s_upd) != 0) {
     snprintf(out, n, "%s", update_error());
     return -1;
   }
   s_upd_valid = 0;
   out[0] = 0;
-  done = update_apps(&s_upd, upd_say, out);
+  done = update_apps(&s_upd, upd_say, &say);
   if (os && s_upd.firmware_stale) {
-    update_firmware(upd_say, out);           /* only returns on failure */
+    update_firmware(upd_say, &say);          /* only returns on failure */
     snprintf(out, n, "%s", update_error());
     return -1;
   }

@@ -83,6 +83,19 @@ static const char *next_line(const char *p) {
   return *p ? p + 1 : p;
 }
 
+/* A name becomes NAME.capp under /desktop, so it is letters, digits, `-`
+ * and `_` and nothing that could be a path: not a slash, not a dot. */
+static int name_ok(const char *n) {
+  if (!*n) return 0;
+  for (; *n; n++) {
+    char c = *n;
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '-' || c == '_') continue;
+    return 0;
+  }
+  return 1;
+}
+
 int manifest_parse(const char *text, Manifest *out) {
   const char *p = text;
   int understood = 0;
@@ -107,7 +120,7 @@ int manifest_parse(const char *text, Manifest *out) {
     } else if (!strcmp(kind, "app") && out->napps < MANIFEST_MAX_APPS) {
       ManifestApp *ap = &out->app[out->napps];
       uint32_t hash, size;
-      if ((q = word(q, ap->name, sizeof ap->name)) &&
+      if ((q = word(q, ap->name, sizeof ap->name)) && name_ok(ap->name) &&
           (q = word(q, b, sizeof b)) && (q = word(q, c, sizeof c)) &&
           parse_hex32(b, &hash) == 0 && parse_dec(c, &size) == 0) {
         ap->hash = hash;

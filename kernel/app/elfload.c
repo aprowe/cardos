@@ -218,9 +218,16 @@ CappResult capp_load(const char *path, LoadedApp *out) {
         /* r_offset is a link-time address, so it carries its section's origin
          * with it. */
         off = into_code ? rela.r_offset : rela.r_offset - CAPP_DATA_ORIGIN;
-        if (off + 4 > (into_code ? code_size : data_size)) {
-          rc = CAPP_ERR_RELOC;
-          goto done;
+        /* Written so it cannot wrap: an r_offset just below the section's
+         * origin gave an `off` near 2^32, and `off + 4` came round to
+         * something small that passed. Word-aligned too: a relocation on
+         * an odd address is not something a linker emits. */
+        {
+          uint32_t limit = into_code ? code_size : data_size;
+          if (off >= limit || limit - off < 4 || (off & 3u)) {
+            rc = CAPP_ERR_RELOC;
+            goto done;
+          }
         }
 
         slot = (uint32_t *)((into_code ? code_w : data) + off);

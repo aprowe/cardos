@@ -52,3 +52,19 @@ void test_oversized_allocation_is_refused(void) {
   CHECK_EQ(kmem_alloc(MEM_MAX_BLOCK + 1, 0), 0);
   CHECK_EQ(kmem_alloc(0, 0), 0);
 }
+
+/* The lock count is a byte. Nesting past 255 used to wrap it to zero, and a
+ * block with 256 live pointers into it became movable. The 256th lock is
+ * refused instead. */
+void test_lock_nesting_has_a_ceiling(void) {
+  static unsigned char heap[8192];
+  Handle h;
+  int i, got = 0;
+  kmem_init(heap, sizeof heap);
+  h = kmem_alloc(64, 0);
+  for (i = 0; i < 300; i++) if (kmem_lock(h)) got++;
+  CHECK_EQ(got, 255);
+  for (i = 0; i < got; i++) kmem_unlock(h);
+  CHECK(kmem_lock(h) != NULL);            /* fully unlocked: usable again */
+  kmem_unlock(h);
+}

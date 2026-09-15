@@ -49,6 +49,13 @@ typedef struct {
  * caller can show what was rejected. */
 int rpc_parse(const char *line, RpcCmd *cmd);
 
+/* Text for `say` is one line. A line break would be delivered as enter, and
+ * with the console listening that turns a string into a command that runs;
+ * this replaces every break and tab with a space, in place. rpc_parse does
+ * it for `say`; the agent does it for its `type` tool, whose argument comes
+ * from a tool call rather than a line. */
+void rpc_one_line(char *s);
+
 /* The wake word.
  *
  * Returns a pointer into `text` just past the wake word and any punctuation

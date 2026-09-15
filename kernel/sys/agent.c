@@ -254,7 +254,7 @@ static int tool_to_cmd(const ChatToolCall *t, RpcCmd *c) {
   c->num = t->num;
   if (!strcmp(t->name, "open"))       c->verb = RPC_OPEN;
   else if (!strcmp(t->name, "action")) c->verb = RPC_ACTION;
-  else if (!strcmp(t->name, "type"))   c->verb = RPC_SAY;
+  else if (!strcmp(t->name, "type")) { c->verb = RPC_SAY; rpc_one_line(c->arg); }
   else if (!strcmp(t->name, "key"))    c->verb = RPC_KEY;
   else if (!strcmp(t->name, "shell"))  c->verb = RPC_SHELL;
   else if (!strcmp(t->name, "brightness")) {
@@ -271,6 +271,12 @@ static int tool_to_cmd(const ChatToolCall *t, RpcCmd *c) {
 
 static int start_request(void) {
   ensure_dir();
+  /* The last reply goes before the next request is made. The download only
+   * opens the file once headers have arrived, so a proxy that is down or a
+   * network that has gone leaves the old file in place -- and on_reply used
+   * to scan it, believe it, run its tool calls again and append its turn to
+   * the history a second time, round after round, until ROUNDS_MAX. */
+  fs_remove(DIR "/" REPLY);
   if (chatlog_trim(HISTORY_CAP) != 0) ESP_LOGW(TAG, "could not trim the history");
   if (chatlog_write_request(REQUEST, HEAD, TAIL) != 0) return -4;
   if (httpq_start_files(URL, DIR "/" REQUEST, "application/json", s_auth,
@@ -322,8 +328,8 @@ static void finish_with(const char *text) {
 /* The reply is in. Read it, act on it, and either start the next round or
  * stop. */
 static void on_reply(int rc) {
-  static ChatReply r;              /* 2 KB: static rather than on the stack */
-  ChatToolResult results[CHAT_TOOLS_MAX];
+  static ChatReply r;              /* 3 KB: static rather than on the stack */
+  ChatToolResult results[CHAT_TOOLS_MAX + CHAT_EXTRA_MAX];
   static char result_text[CHAT_TOOLS_MAX][160];
   int i;
 
@@ -375,7 +381,14 @@ static void on_reply(int rc) {
     transcript_add("-> ", line);
     ESP_LOGI(TAG, "%s", line);
   }
-  if (chatlog_add_tool_results(results, r.ntools) != 0) {
+  /* Every tool_use gets a tool_result, including the ones past the cap that
+   * were not run: an unanswered id makes the API refuse every later request
+   * in the conversation. */
+  for (i = 0; i < r.nextra; i++) {
+    results[r.ntools + i].id = r.extra_id[i];
+    results[r.ntools + i].text = "not run: too many tool calls in one turn";
+  }
+  if (chatlog_add_tool_results(results, r.ntools + r.nextra) != 0) {
     finish_with("could not keep the tool results");
     return;
   }

@@ -3,7 +3,6 @@ build/
 sdkconfig
 sdkconfig.old
 *.log
-.pio/
 
 # Generated: the app binaries and the header that embeds them. Both come out of
 # tools/build_apps.py, and a stale committed copy is worse than no copy -- the
@@ -24,4 +23,4 @@ tools/cardos6x8.ttf
 # Speech the tests synthesise, and the recording the device sends. Both are
 # throwaway audio that happens to land where the tool was run.
 *.wav
-chatlog_test_*/
+chatlog_test*/

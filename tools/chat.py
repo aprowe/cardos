@@ -77,6 +77,7 @@ class ChatService:
         self.model = model
         self.use_api_key = use_api_key
         self.session_id = None
+        self.generation = 0        # bumped by reset(); see _claude
         self.jobs = {}
         self.next_id = 1
         self.lock = threading.Lock()
@@ -110,6 +111,10 @@ class ChatService:
         with self.lock:
             self.session_id = None
             self.jobs.clear()
+            # A turn already running belongs to the conversation just
+            # forgotten. It used to finish a minute later and put its session
+            # id back, and the next "new" conversation was resumed into it.
+            self.generation += 1
 
     # ---- running the agent ------------------------------------------------
 
@@ -168,6 +173,7 @@ class ChatService:
             cmd += ["--model", self.model]
         if self.session_id:
             cmd += ["--resume", self.session_id]
+        generation = self.generation
 
         # Serialised: one agent in one working tree at a time.
         with self.run_lock:
@@ -190,7 +196,7 @@ class ChatService:
 
         if isinstance(obj, dict):
             sid = obj.get("session_id") or obj.get("sessionId")
-            if sid:
+            if sid and generation == self.generation:
                 self.session_id = sid
             for key in ("result", "text", "response", "content"):
                 v = obj.get(key)

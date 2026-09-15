@@ -51,6 +51,17 @@ void test_manifest_refuses_a_malformed_line_but_keeps_the_rest(void) {
   CHECK(strcmp(m.app[0].name, "ok") == 0);
 }
 
+/* The name becomes a path under /desktop. A proxy is trusted, but a name
+ * with a slash or a dot in it is not a name, and `../x` would have landed
+ * outside the folder. */
+void test_manifest_name_that_is_not_a_name_is_dropped(void) {
+  Manifest m;
+  int n = manifest_parse("app ../x 1 2\napp a/b 1 2\napp a.b 1 2\napp ok-1_2 1 2\n", &m);
+  CHECK_EQ(n, 1);
+  CHECK_EQ(m.napps, 1);
+  CHECK(strcmp(m.app[0].name, "ok-1_2") == 0);
+}
+
 void test_manifest_name_too_long_is_dropped(void) {
   Manifest m;
   int n = manifest_parse("app abcdefghijklmnopqrstuvwxyz 1 2\napp b 1 2\n", &m);

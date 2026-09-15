@@ -398,8 +398,9 @@ static void submit(void) {
     return;
   }
   if (C.input[0] == '/' && C.input[1] == 'u') {
-    const char *p = C.input + 2;
-    while (*p == ' ' || (*p >= 'a' && *p <= 'z')) p++;   /* skip "/url " */
+    const char *p = C.input + 1;
+    while (*p >= 'a' && *p <= 'z') p++;   /* the word "url" -- and only it: */
+    while (*p == ' ') p++;                /* eating letters ate "http" too */
     if (*p) {
       api->fmt(C.base, sizeof C.base, "%s", p);
       note(C.base);

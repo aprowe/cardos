@@ -18,6 +18,7 @@ DevTools protocol instead: navigate, restyle, wait for the font, capture.
 import base64
 import json
 import os
+import shutil
 import re
 import socket
 import subprocess
@@ -158,6 +159,13 @@ class Chrome:
                 self.ws.close()
         finally:
             self.proc.kill()
+            try:
+                self.proc.wait(timeout=5)
+            except Exception:
+                pass
+            # The profile is a few MB of cache per render, and nothing else
+            # ever removes it: a day of browsing left hundreds behind in TEMP.
+            shutil.rmtree(self.dir, ignore_errors=True)
 
     def _target(self):
         """The page target's websocket URL, once Chrome is listening."""
@@ -195,6 +203,11 @@ class Chrome:
                 return False
             if msg.get("method") == name:
                 return True
+        # Whatever the last short wait left on the socket is not what the
+        # next call wants: after a load event that never came, the timeout
+        # here could be half a second, and the evaluate that follows -- over
+        # every element on a heavy page -- took longer than that and died.
+        self.ws.settimeout(90)
         return False
 
 

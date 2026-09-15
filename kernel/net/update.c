@@ -159,7 +159,7 @@ int update_check(UpdateCheck *out) {
 /* ---- apps ----------------------------------------------------------------- */
 
 static int install_app(const ManifestApp *a, UpdateLog log, void *ctx) {
-  char url[160], tmp[88], dst[80], line[96];
+  char url[160], tmp[88], old[88], dst[80], line[96];
   uint32_t hash = 0;
   FsStat st;
   int n;
@@ -186,12 +186,26 @@ static int install_app(const ManifestApp *a, UpdateLog log, void *ctx) {
     return -1;
   }
 
-  fs_remove(dst);                      /* FAT rename does not overwrite */
+  /* FAT rename does not overwrite, so the old one has to move aside first
+   * -- aside, not away: removing it and then failing the rename left the
+   * user with no app at all and the new one stranded as NAME.capp.new. If
+   * the swap fails the old one is put back. */
+  snprintf(old, sizeof old, "%s.old", dst);
+  fs_remove(old);
+  if (fs_stat(dst, &st) == 0 && fs_rename(dst, old) != 0) {
+    snprintf(line, sizeof line, "%s: could not move the old one aside", a->name);
+    say(log, ctx, line);
+    fs_remove(tmp);
+    return -1;
+  }
   if (fs_rename(tmp, dst) != 0) {
     snprintf(line, sizeof line, "%s: could not replace the old one", a->name);
     say(log, ctx, line);
+    fs_rename(old, dst);
+    fs_remove(tmp);
     return -1;
   }
+  fs_remove(old);
   snprintf(line, sizeof line, "%s.capp %u bytes", a->name, (unsigned)a->size);
   say(log, ctx, line);
   return 0;

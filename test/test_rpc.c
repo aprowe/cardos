@@ -143,3 +143,23 @@ void test_rpc_wake_word_alone_leaves_nothing(void) {
   parse(rest, &ok);
   CHECK(!ok);
 }
+
+/* `say` puts text into whatever is listening, and the console listens. A line
+ * break in the text would be delivered as enter -- so "say ls\nrm /x" was a
+ * command typed and run, which is exactly what the vocabulary exists to
+ * prevent. The text is one line: breaks become spaces. */
+void test_rpc_say_is_one_line(void) {
+  int ok;
+  RpcCmd c = parse("say hello\nrm /x\r\tthere", &ok);
+  CHECK(ok);
+  CHECK_EQ(c.verb, RPC_SAY);
+  CHECK(!strcmp(c.arg, "hello rm /x  there"));
+}
+
+/* And the same guard as a function, for the agent's `type` tool, whose
+ * argument does not come through rpc_parse. */
+void test_rpc_one_line_flattens_breaks(void) {
+  char s[] = "a\nb\r\nc";
+  rpc_one_line(s);
+  CHECK(!strcmp(s, "a b  c"));
+}

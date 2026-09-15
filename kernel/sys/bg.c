@@ -35,6 +35,11 @@ static QueueHandle_t s_jobs;
 static QueueHandle_t s_results;
 static volatile int  s_running;          /* the job in progress, or 0 */
 static volatile int  s_queued;           /* a bitmask, so one scan is one scan */
+/* Both are read-modify-written from two cores: the shell sets a bit on core
+ * 0 while this task clears one on core 1. Without the lock a lost clear
+ * left a job's bit set for good, and bg_submit refused it until reboot --
+ * the Bluetooth reconnect just silently stopped happening. */
+static portMUX_TYPE  s_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint32_t s_last_activity;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -136,10 +141,12 @@ static void bg_task(void *arg) {
     BgJob job;
     if (xQueueReceive(s_jobs, &job, portMAX_DELAY) != pdTRUE) continue;
 
+    portENTER_CRITICAL(&s_lock);
     s_running = (int)job;
+    s_queued &= ~(1 << (int)job);
+    portEXIT_CRITICAL(&s_lock);
     run_job(job);
     s_running = 0;
-    s_queued &= ~(1 << (int)job);
   }
 }
 
@@ -162,9 +169,19 @@ int bg_submit(BgJob job) {
   if (!s_jobs) return -1;
   /* Already queued or already running: one scan is one scan, however many
    * times a tick asks for it. */
-  if ((s_queued & bit) || s_running == (int)job) return -1;
-  if (xQueueSend(s_jobs, &job, 0) != pdTRUE) return -1;
+  portENTER_CRITICAL(&s_lock);
+  if ((s_queued & bit) || s_running == (int)job) {
+    portEXIT_CRITICAL(&s_lock);
+    return -1;
+  }
   s_queued |= bit;
+  portEXIT_CRITICAL(&s_lock);
+  if (xQueueSend(s_jobs, &job, 0) != pdTRUE) {
+    portENTER_CRITICAL(&s_lock);
+    s_queued &= ~bit;
+    portEXIT_CRITICAL(&s_lock);
+    return -1;
+  }
   return 0;
 }
 

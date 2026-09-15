@@ -194,3 +194,26 @@ void test_swapped_and_resident_bytes_are_reported(void) {
   CHECK_EQ(s.swapped_bytes, 16384);
   CHECK_EQ(s.resident_bytes, 2 * MEM_MAX_BLOCK);
 }
+
+/* A write that fails should cost that one block its turn, not end eviction:
+ * the loop used to stop at the first block it could not push out, and the
+ * allocation failed with candidates still on the list. Worse, the same block
+ * stayed at the head, so every later allocation under pressure hit the same
+ * failure. Here the least recently used block's write fails once and the
+ * allocation succeeds by evicting the next one. */
+void test_a_failed_swap_write_moves_on_to_the_next_victim(void) {
+  Handle a, b, c;
+  setup_heap(40 * 1024);
+  a = kmem_alloc(16384, 0);
+  b = kmem_alloc(16384, 0);
+  fill(a, 0xAA);
+  fill(b, 0xBB);
+  CHECK_EQ(check_fill(a, 0xAA), 1);         /* b is the first victim */
+  fake_swapdev_fail_next_write(g_f);
+  c = kmem_alloc(16384, 0);
+  CHECK(c != 0);
+  CHECK_EQ(kmem_resident(b), 1);            /* b's write failed: it stayed */
+  CHECK_EQ(kmem_resident(a), 0);            /* a went instead */
+  CHECK_EQ(check_fill(a, 0xAA), 1);
+  CHECK_EQ(check_fill(b, 0xBB), 1);
+}

@@ -106,7 +106,7 @@ static void parse_line(char *line) {
 
   /* A number here is a share count; anything else is the start of the label. */
   k = 0;
-  while (line[i] && line[i] != ' ' && k < LABEL_LEN - 1) word[k++] = line[i];
+  while (line[i + k] && line[i + k] != ' ' && k < LABEL_LEN - 1) { word[k] = line[i + k]; k++; }
   word[k] = 0;
   if (all_digits(word)) {
     shares = to_long(word);

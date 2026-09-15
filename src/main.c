@@ -333,6 +333,20 @@ static void split_path(const char *word, char *dir, size_t dirn, const char **st
   *stem = slash + 1;
 }
 
+/* The directory to list for a completion, as something fs_opendir accepts:
+ * absolute paths as they are, everything else under the current directory.
+ * Only `.` used to be resolved, so `ls Games/mi<Tab>` opened "Games", which
+ * the path normaliser refuses as relative, and offered nothing. */
+static void completion_dir(const char *dir, char *full, size_t n) {
+  if (dir[0] == '.' && dir[1] == 0) snprintf(full, n, "%s", shell_cwd());
+  else if (dir[0] == '/') snprintf(full, n, "%s", dir);
+  else {
+    const char *cwd = shell_cwd();
+    int root = cwd[0] == '/' && cwd[1] == 0;
+    snprintf(full, n, "%s%s%s", cwd, root ? "" : "/", dir);
+  }
+}
+
 /* Collects matches, tracking the longest shared prefix and printing them if
  * there is more than one. Returns what to append to what is already typed. */
 typedef struct {
@@ -383,8 +397,7 @@ static void complete_line(void) {
     split_path(word, dir, sizeof dir, &stem);
     c.stem = stem;
     c.stem_len = strlen(stem);
-    if (dir[0] == '.' && dir[1] == 0) snprintf(full, sizeof full, "%s", shell_cwd());
-    else snprintf(full, sizeof full, "%s", dir);
+    completion_dir(dir, full, sizeof full);
 
     if (fs_opendir(full, &d) == 0) {
       while (fs_readdir(&d, &e) == 1) offer(&c, e.name);
@@ -422,8 +435,7 @@ static void complete_line(void) {
       FsDir d;
       FsEntry e;
       split_path(word, dir, sizeof dir, &stem);
-      if (dir[0] == '.' && dir[1] == 0) snprintf(full, sizeof full, "%s", shell_cwd());
-      else snprintf(full, sizeof full, "%s", dir);
+      completion_dir(dir, full, sizeof full);
       if (fs_opendir(full, &d) == 0) {
         while (fs_readdir(&d, &e) == 1)
           if (strncmp(e.name, stem, strlen(stem)) == 0) con_printf("%s  ", e.name);
@@ -468,12 +480,19 @@ typedef struct {
  * argument, and the program must never see one. */
 static void take_redirects(Stage *st) {
   char clean[CARDOS_LINE_MAX + 1];
+  char quote = 0;
   int i = 0, n = 0;
 
   while (st->text[i]) {
     char c = st->text[i];
 
-    if (c == '<' || c == '>') {
+    /* Inside quotes an arrow is a character, as it already is for the pipe
+     * split above: `echo "a > b"` used to write a file called b". The quotes
+     * themselves are kept for the argument splitter. */
+    if (!quote && (c == '"' || c == '\'')) quote = c;
+    else if (quote && c == quote) quote = 0;
+
+    if (!quote && (c == '<' || c == '>')) {
       char *dest = (c == '<') ? st->in_file : st->out_file;
       int m = 0;
       i++;

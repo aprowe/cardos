@@ -139,8 +139,11 @@ static const char *json_str_at(const char *from, const char *name,
 
 /* ---- the cache ----------------------------------------------------------
  *
- * One line per item: done flag, dirty flag, id, then the title. The title is
- * last because it is the only field that can contain a space. */
+ * One line per item: done, deleted and dirty flags, the id (or `-` for an
+ * item that has never reached Google), then the title. The title is last
+ * because it is the only field that can contain a space. A deleted item is
+ * kept: it is still waiting to be deleted at Google, and dropping it here
+ * would bring it back on the next pull. */
 static void cache_save(void) {
   char line[ID_MAX + TITLE_MAX + 16];
   int fd, i;
@@ -148,8 +151,8 @@ static void cache_save(void) {
   fd = api->open(CACHE_PATH, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
   if (fd < 0) return;
   for (i = 0; i < T.n; i++) {
-    int n = api->fmt(line, sizeof line, "%d %d %s %s\n",
-                     T.item[i].done, T.item[i].dirty,
+    int n = api->fmt(line, sizeof line, "%d %d %d %s %s\n",
+                     T.item[i].done, T.item[i].deleted, T.item[i].dirty,
                      T.item[i].id[0] ? T.item[i].id : "-", T.item[i].title);
     api->write(fd, line, (size_t)n);
   }
@@ -176,11 +179,15 @@ static void cache_load(void) {
       {
         Item *it = &T.item[T.n];
         int p = 0, q = 0;
-        if (line[0] < '0' || line[0] > '1') continue;
-        it->done = line[0] - '0';
-        it->deleted = (line[1] == '1');
-        it->dirty = (line[3] == '1');
-        p = 5;
+        /* The three flags, each one digit and a space: the shape the saver
+         * writes, checked rather than assumed. */
+        if (line[0] < '0' || line[0] > '1' || line[1] != ' ') continue;
+        if (line[2] < '0' || line[2] > '1' || line[3] != ' ') continue;
+        if (line[4] < '0' || line[4] > '1' || line[5] != ' ') continue;
+        it->done    = line[0] - '0';
+        it->deleted = line[2] - '0';
+        it->dirty   = line[4] - '0';
+        p = 6;
         while (line[p] && line[p] != ' ' && q < ID_MAX - 1) it->id[q++] = line[p++];
         it->id[q] = 0;
         if (it->id[0] == '-' && !it->id[1]) it->id[0] = 0;

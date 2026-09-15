@@ -33,6 +33,15 @@ typedef struct {
   uint16_t  flags;
   char      path[80];
   int       loaded;       /* is the image in memory right now */
+  /* Set when the icon scan re-ran while a shell still held this app. The
+   * scan loaded a fresh copy into another slot; this one lives on only until
+   * the shell lets go, and must not be handed out as an app again. */
+  int       stale;
+  /* A release asked for while one of this slot's own handlers was on the
+   * stack -- Files calling run("edit") from its click handler, and the
+   * launcher letting go of Files. Freeing the code then would return into
+   * it; the trampoline does the release on its way out instead. */
+  int       release_pending;
 
   CappUi    ui;           /* what the program installed, if anything */
   int       has_ui;
@@ -64,14 +73,31 @@ static CRect to_crect(Rect r) {
 
 /* One set of trampolines for every slot, with the slot as the AppDef's state.
  * Generated thunks per slot would be the alternative, and there is no need. */
+/* Every trampoline checks that the image is still there before calling into
+ * it. It should be -- a shell releases an app only when it closes it -- but
+ * the window that outlives its twin (open the same app twice, close one) and
+ * an update that reloads the icons under a running app both used to jump
+ * into freed executable RAM, and a check costs nothing. */
+#define IMAGE_GONE(s) (!(s)->loaded || !(s)->has_ui)
+
+static void release_slot(Slot *s);
+
+/* The tail of every trampoline: the handler has returned, so a release that
+ * was asked for while it ran can happen now. */
+static void handler_done(Slot *s) {
+  s_active = NULL;
+  if (s->release_pending) { s->release_pending = 0; release_slot(s); }
+}
+
 static void tr_paint(void *state, Rect c) {
   Slot *s = (Slot *)state;
+  if (IMAGE_GONE(s)) return;
   s_active = s;
   /* Painting settles the account: whatever was damaged is being repaired
    * now, and anything the app marks from here on belongs to the next frame. */
   s->has_damage = 0;
   if (s->ui.paint) s->ui.paint(s->ui.state, to_crect(c));
-  s_active = NULL;
+  handler_done(s);
 }
 
 /* The action table gets the key before the app's own handler does.
@@ -85,15 +111,16 @@ static int tr_key(void *state, uint8_t k) {
   Slot *s = (Slot *)state;
   int r, i;
 
+  if (IMAGE_GONE(s)) return 0;
   s_active = s;
   for (i = 0; i < (int)s->ui.nactions; i++) {
     if (!s->ui.actions[i].key || s->ui.actions[i].key != k) continue;
     r = s->ui.action ? s->ui.action(s->ui.state, s->ui.actions[i].action) : 0;
-    s_active = NULL;
+    handler_done(s);
     return r;
   }
   r = s->ui.key ? s->ui.key(s->ui.state, k) : 0;
-  s_active = NULL;
+  handler_done(s);
   return r;
 }
 
@@ -105,6 +132,7 @@ int capprun_action_invoke(const AppDef *a, const char *id) {
   for (i = 0; i < CAPPRUN_MAX; i++) {
     Slot *s = &s_slot[i];
     if (!s->used || (const void *)s != a->state) continue;
+    if (IMAGE_GONE(s)) return -1;
     for (j = 0; j < (int)s->ui.nactions; j++) {
       const char *p = s->ui.actions[j].id, *q = id;
       while (*p && *p == *q) { p++; q++; }
@@ -112,7 +140,7 @@ int capprun_action_invoke(const AppDef *a, const char *id) {
       if (!s->ui.action) return -1;
       s_active = s;
       s->ui.action(s->ui.state, s->ui.actions[j].action);
-      s_active = NULL;
+      handler_done(s);
       return 0;
     }
     return -1;
@@ -137,37 +165,42 @@ const CappAction *capprun_actions(const AppDef *a, int *n) {
 static int tr_click(void *state, int16_t x, int16_t y, int button) {
   Slot *s = (Slot *)state;
   int r;
+  if (IMAGE_GONE(s)) return 0;
   s_active = s;
   r = s->ui.click ? s->ui.click(s->ui.state, x, y, button) : 0;
-  s_active = NULL;
+  handler_done(s);
   return r;
 }
 
 static int tr_mouse(void *state, int16_t x, int16_t y, int buttons, int wheel) {
   Slot *s = (Slot *)state;
   int r;
+  if (IMAGE_GONE(s)) return 0;
   s_active = s;
   r = s->ui.mouse ? s->ui.mouse(s->ui.state, x, y, buttons, wheel) : 0;
-  s_active = NULL;
+  handler_done(s);
   return r;
 }
 
 static int tr_tick(void *state, uint32_t now_ms) {
   Slot *s = (Slot *)state;
   int r;
+  if (IMAGE_GONE(s)) return 0;
   s_active = s;
   r = s->ui.tick ? s->ui.tick(s->ui.state, now_ms) : 0;
-  s_active = NULL;
+  handler_done(s);
   return r;
 }
 
 static int16_t tr_height(void *state, int16_t w) {
   Slot *s = (Slot *)state;
+  if (IMAGE_GONE(s)) return 0;
   return s->ui.height ? s->ui.height(s->ui.state, w) : 0;
 }
 
 static int tr_wants_text(void *state) {
   Slot *s = (Slot *)state;
+  if (IMAGE_GONE(s)) return 0;
   return s->ui.wants_text ? s->ui.wants_text(s->ui.state) : 0;
 }
 
@@ -223,11 +256,17 @@ void capprun_install_ui(const CappUi *ui) {
   if (ui->actions && ui->nactions) {
     size_t n = 0;
     int i;
-    for (i = 0; i < (int)ui->nactions && n + 24 < sizeof s->help; i++) {
+    for (i = 0; i < (int)ui->nactions && n < sizeof s->help - 1; i++) {
       const CappAction *a = &ui->actions[i];
+      int w;
       if (!a->key || a->key < 1 || a->key > 26) continue;    /* menu-only */
-      n += (size_t)snprintf(s->help + n, sizeof s->help - n, "ctrl-%c\t%s\n",
-                            'a' + a->key - 1, a->label);
+      w = snprintf(s->help + n, sizeof s->help - n, "ctrl-%c\t%s\n",
+                   'a' + a->key - 1, a->label);
+      /* snprintf says how long the line would have been, not how much it
+       * wrote; a label that did not fit is dropped whole rather than
+       * counted, so n never runs past the buffer into the icon. */
+      if (w < 0 || (size_t)w >= sizeof s->help - n) { s->help[n] = 0; break; }
+      n += (size_t)w;
     }
     s->help[n] = 0;
   }
@@ -287,10 +326,19 @@ static int ensure_loaded(Slot *s) {
 
 /* Let go of one, if nothing is still calling into it. */
 static void release_slot(Slot *s) {
-  if (!s->loaded) return;
-  capp_unload(&s->la);
+  if (s->loaded) capp_unload(&s->la);
   s->loaded = 0;
   s->has_ui = 0;
+  if (s->stale) { s->stale = 0; s->used = 0; }
+}
+
+/* Is a shell still calling into this one? An app that installed an interface
+ * and is still in memory is being hosted: capprun_start releases anything
+ * that installed nothing, and a shell releases what it hosts when it closes
+ * it. The one executing right now counts too, whether or not it has a UI --
+ * a command may be the thing asking for the reload. */
+static int slot_busy(const Slot *s) {
+  return (s->loaded && s->has_ui) || s == s_running || s == s_active;
 }
 
 /* A shell saying it has finished with an app -- the window closed, or escape
@@ -301,18 +349,29 @@ void capprun_release(const AppDef *a) {
   if (!a) return;
   for (i = 0; i < CAPPRUN_MAX; i++) {
     Slot *s = &s_slot[i];
-    if (s->used && (const void *)s == a->state) { release_slot(s); return; }
+    if (!s->used || (const void *)s != a->state) continue;
+    if (s == s_active || s == s_running) s->release_pending = 1;
+    else release_slot(s);
+    return;
   }
 }
 
+/* Forget every slot, so the icon scan can start again. Except the ones a
+ * shell is still hosting, and the one running right now: `update apps` is
+ * asked for from inside Build and from the Claude terminal, and the reload
+ * that follows used to free the caller's own code and return into it. Those
+ * keep their image, marked stale, and go when the shell lets go of them; the
+ * scan loads a fresh copy of the same file into another slot, so the icon
+ * grid shows the new version while the old one is still on screen. */
 void capprun_unload_all(void) {
   int i;
   for (i = 0; i < CAPPRUN_MAX; i++) {
-    if (!s_slot[i].used) continue;
-    release_slot(&s_slot[i]);
-    s_slot[i].used = 0;
+    Slot *s = &s_slot[i];
+    if (!s->used) continue;
+    if (slot_busy(s)) { s->stale = 1; continue; }
+    release_slot(s);
+    s->used = 0;
   }
-  s_running = NULL;
 }
 
 /* Split a command line into argv. In place, into a buffer of our own, because
@@ -387,6 +446,15 @@ int capprun_start(int slot, const char *name, const char *args) {
 
   if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return -1;
   s = &s_slot[slot];
+
+  /* Already on screen somewhere? Its globals hold that run's state, and
+   * calling capp_main over them is not a second copy of the app, it is the
+   * first one with its memory scribbled on. Start from a fresh image. A shell
+   * that would rather keep the running one (the desktop raises the existing
+   * window) checks before it gets here. The app asking to restart itself
+   * from one of its own handlers is refused: its code is on the stack. */
+  if (s == s_active || s == s_running || s->stale) return -1;
+  if (s->loaded && s->has_ui) release_slot(s);
   s->has_ui = 0;
 
   argc = split_args(name ? name : s->name, args, argbuf, sizeof argbuf,

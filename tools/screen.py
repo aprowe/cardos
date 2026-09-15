@@ -105,6 +105,7 @@ class Screen:
         # the machine the screen belongs to, which on Windows means user32.
         try:
             import ctypes
+            import ctypes.wintypes
             pt = ctypes.wintypes.POINT()
             ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
             cx, cy = pt.x, pt.y

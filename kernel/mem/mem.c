@@ -118,8 +118,16 @@ static void lru_touch(MemDesc *d) {
 
 /* -------------------------------------------------------- fixed arena ---- */
 
+/* The fixed arena works in whole words. A block's recorded size is what the
+ * caller asked for; the space it holds is that rounded up, so a freed range
+ * is always word-sized and word-placed and anything carved from it is too.
+ * Before this the bump path aligned and the reuse path did not, and a block
+ * taken by first fit from a hole left by a 7-byte one could land on any
+ * byte -- which for the stacks and DMA buffers this arena is for is an
+ * alignment exception. */
 static void fixed_free_insert(uint32_t off, uint32_t size) {
   int i, at = 0;
+  size = ALIGN_UP(size);
   while (at < g_fixed_free_n && g_fixed_free[at].off < off) at++;
   if (g_fixed_free_n < FIXED_FREE_MAX) {
     for (i = g_fixed_free_n; i > at; i--) g_fixed_free[i] = g_fixed_free[i - 1];
@@ -150,6 +158,7 @@ static void fixed_free_insert(uint32_t off, uint32_t size) {
 
 static int fixed_alloc(uint32_t size, uint32_t *out_off) {
   int i;
+  size = ALIGN_UP(size);
   for (i = 0; i < g_fixed_free_n; i++) {      /* first fit in a freed range */
     if (g_fixed_free[i].size >= size) {
       *out_off = g_fixed_free[i].off;
@@ -190,6 +199,7 @@ void kmem_init(void *heap, size_t bytes) {
     uintptr_t aligned = (raw + (MEM_ALIGN - 1u)) & ~(uintptr_t)(MEM_ALIGN - 1u);
     g_base = (uint8_t *)aligned;
     g_size = (uint32_t)(bytes - (size_t)(aligned - raw));
+    g_size &= ~(MEM_ALIGN - 1u);   /* the top too: the fixed arena grows down from it */
   }
   g_movable_top = 0;
   g_fixed_bottom = g_size;
@@ -375,35 +385,44 @@ static uint16_t pages_for(uint32_t bytes) {
  * was actually released. The RAM it occupied becomes a gap; the caller
  * compacts to turn that into usable space. */
 static int evict_one(void) {
-  MemDesc *d;
-  uint16_t need;
+  uint8_t idx = g_lru_head;
 
-  if (g_lru_head == MEM_NO_LRU) return 0;      /* nothing is evictable */
-  d = &g_table[g_lru_head];
-  need = pages_for(d->size);
+  /* Least recently used first, but not only: a block whose write fails, or
+   * that needs more contiguous swap than is free, is skipped for the next
+   * one rather than ending the search. Giving up at the head meant one bad
+   * sector, or one 32 KB block in a fragmented swap, failed the allocation
+   * with candidates still on the list -- and since the head stayed put,
+   * failed every allocation after it the same way. */
+  while (idx != MEM_NO_LRU) {
+    MemDesc *d = &g_table[idx];
+    uint16_t need = pages_for(d->size);
+    uint8_t next = d->lru_next;
 
-  if ((d->flags & D_BACKED) && !(d->flags & D_DIRTY)) {
-    /* Its copy in swap is still valid, so this eviction is free. This is what
-     * kmem_lock_ro buys: read-mostly data costs one write, ever. */
-  } else {
-    if (!(d->flags & D_BACKED)) {
-      uint16_t first = swap_alloc_pages(need);
-      if (first == SWAP_INVALID_PAGE) return 0;   /* swap is full */
-      d->swap_page = first;
+    if ((d->flags & D_BACKED) && !(d->flags & D_DIRTY)) {
+      /* Its copy in swap is still valid, so this eviction is free. This is
+       * what kmem_lock_ro buys: read-mostly data costs one write, ever. */
+    } else {
+      if (!(d->flags & D_BACKED)) {
+        uint16_t first = swap_alloc_pages(need);
+        if (first == SWAP_INVALID_PAGE) { idx = next; continue; }  /* no room for this one */
+        d->swap_page = first;
+      }
+      if (swap_write(d->swap_page, g_base + d->off, d->size) != 0) {
+        if (!(d->flags & D_BACKED)) swap_free_pages(d->swap_page, need);
+        idx = next;                                /* device error: keep it resident */
+        continue;
+      }
+      d->flags |= D_BACKED;
+      g_evict_writes++;
     }
-    if (swap_write(d->swap_page, g_base + d->off, d->size) != 0) {
-      if (!(d->flags & D_BACKED)) swap_free_pages(d->swap_page, need);
-      return 0;                                    /* device error: keep it resident */
-    }
-    d->flags |= D_BACKED;
-    g_evict_writes++;
+
+    lru_remove(d);
+    d->flags = (uint8_t)(d->flags & ~(D_RESIDENT | D_DIRTY));
+    d->off = MEM_OFF_NONE;
+    g_evictions++;
+    return 1;
   }
-
-  lru_remove(d);
-  d->flags = (uint8_t)(d->flags & ~(D_RESIDENT | D_DIRTY));
-  d->off = MEM_OFF_NONE;
-  g_evictions++;
-  return 1;
+  return 0;                                        /* nothing could go */
 }
 
 /* The escalation the spec specifies: compact, then evict least-recently-used
@@ -484,6 +503,10 @@ static void *lock_common(Handle h, int mark_dirty) {
     d->flags |= D_RESIDENT;
     g_page_ins++;
   }
+
+  /* The count is a byte. Wrapping it to zero would make a block with 255
+   * live pointers into it movable again; the 256th lock is refused. */
+  if (d->lock == 255) return NULL;
 
   lru_remove(d);                               /* pinned blocks are not victims */
   if (d->lock == 0) d->owner = g_owner;        /* first lock records the owner */

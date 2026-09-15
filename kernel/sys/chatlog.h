@@ -79,7 +79,11 @@ int chatlog_write_request(const char *request_file, const char *head, const char
 typedef enum { CHAT_STOP_END, CHAT_STOP_TOOL, CHAT_STOP_MAX, CHAT_STOP_OTHER } ChatStop;
 
 #define CHAT_TEXT_MAX  1500
-#define CHAT_TOOLS_MAX 4
+/* Eight, up from four: the note recipe alone is six calls in one turn. Calls
+ * past this are not executed, but their ids are kept so every one of them
+ * can be answered -- the API refuses the whole conversation otherwise. */
+#define CHAT_TOOLS_MAX   8
+#define CHAT_EXTRA_MAX   8
 
 typedef struct {
   char id[40];
@@ -94,6 +98,8 @@ typedef struct {
   char         text[CHAT_TEXT_MAX]; /* the text blocks joined, unescaped -- or the error message */
   int          ntools;
   ChatToolCall tool[CHAT_TOOLS_MAX];
+  int          nextra;              /* tool calls past CHAT_TOOLS_MAX: ids only */
+  char         extra_id[CHAT_EXTRA_MAX][40];
 } ChatReply;
 
 /* Scan a reply file into `out`. 0 on success, -1 if the file could not be

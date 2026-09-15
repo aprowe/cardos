@@ -35,12 +35,14 @@ Run it, then on the device:  web http://<this machine>:8080/render?url=...
 """
 
 import argparse
+import hmac
 import io
 import os
 import struct
 import subprocess
 import sys
 import tempfile
+import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -259,6 +261,18 @@ def to_cpx(im, links=()):
     return bytes(out)
 
 
+def _int_arg(args, name, default):
+    """A query parameter as an int, or the default; a value that is not a
+    number is a client error, not a traceback."""
+    raw = (args.get(name) or [None])[0]
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValueError("%s=%r is not a number" % (name, raw))
+
+
 class Handler(BaseHTTPRequestHandler):
     chrome = None
     chat = None
@@ -300,8 +314,9 @@ class Handler(BaseHTTPRequestHandler):
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             auth = auth[7:]
-        if self.chat.token in (self.headers.get("X-Token", ""), auth):
-            return True
+        for given in (self.headers.get("X-Token", ""), auth):
+            if hmac.compare_digest(self.chat.token, given):
+                return True
         self._text("unauthorised" + "\n", 403)
         return False
 
@@ -315,8 +330,7 @@ class Handler(BaseHTTPRequestHandler):
         tools/shots.py for both halves."""
         name = (args.get("name") or ["shot"])[0]
         name = "".join(c for c in name if c.isalnum() or c in "-_") or "shot"
-        n = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(n) if n else b""
+        raw = self._body(2 * 240 * 135 + 64)     # one screen of RGB565
         try:
             img = shots.decode_rgb565(raw)
         except ValueError as e:
@@ -334,11 +348,10 @@ class Handler(BaseHTTPRequestHandler):
         seconds and a command translation about one, which is inside what the
         device will wait for -- and unlike a chat turn, there is nothing useful
         to show while it happens."""
-        n = int(self.headers.get("Content-Length") or 0)
-        if n <= 44:                     # a header and no audio
+        wav = self._body(4 << 20)       # 16 kHz mono: two minutes is 3.8 MB
+        if len(wav) <= 44:              # a header and no audio
             self._text("error nothing recorded\n", 400)
             return
-        wav = self.rfile.read(n)
 
         text, err = self.voice.transcribe(wav)
         if err:
@@ -369,7 +382,41 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("voice: %r -> %s\n" % (wake[:60], line))
         self._text("cmd %s\n" % line)
 
+    # An exception inside a handler used to close the socket with no status
+    # line at all: the device then waited out its whole timeout rather than
+    # reading one line saying what went wrong. Everything the handlers do is
+    # wrapped, and the traceback goes to the terminal as before.
+    def do_GET(self):
+        self._guarded(self._get)
+
     def do_POST(self):
+        self._guarded(self._post)
+
+    def _guarded(self, fn):
+        try:
+            fn()
+        except (BrokenPipeError, ConnectionResetError):
+            pass                     # the device gave up first; nothing to tell
+        except Exception as e:
+            traceback.print_exc()
+            try:
+                self._text("error %s: %s\n" % (type(e).__name__, e), 500)
+            except Exception:
+                pass
+
+    def _body(self, limit):
+        """The request body, refused rather than read if it is longer than
+        the route could possibly want. Content-Length was trusted whole: one
+        request claiming four gigabytes had the server trying to hold it."""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise ValueError("bad Content-Length")
+        if n < 0 or n > limit:
+            raise ValueError("body of %d bytes is more than %d" % (n, limit))
+        return self.rfile.read(n) if n else b""
+
+    def _post(self):
         q = urllib.parse.urlparse(self.path)
         if q.path == "/voice":
             if not self._authorised():
@@ -386,8 +433,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._authorised():
             return
-        n = int(self.headers.get("Content-Length") or 0)
-        text = self.rfile.read(n).decode("utf-8", "replace").strip() if n else ""
+        text = self._body(64 << 10).decode("utf-8", "replace").strip()
         if not text:
             self._text("empty" + "\n", 400)
             return
@@ -404,7 +450,7 @@ class Handler(BaseHTTPRequestHandler):
         a device that cannot keep up arrives as a slow write, which paces the
         capture for free."""
         mode = (args.get("mode") or ["follow"])[0]
-        fps = int((args.get("fps") or ["12"])[0])
+        fps = _int_arg(args, "fps", 12)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
@@ -422,7 +468,7 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("screen: stopped after %d bytes" % sent + "\n")
 
     def _do_chat_get(self, args):
-        jid = int((args.get("id") or ["0"])[0])
+        jid = _int_arg(args, "id", 0)
         state, reply = self.chat.poll(jid)
         if state == "pending":
             self._text("pending" + "\n")
@@ -432,7 +478,7 @@ class Handler(BaseHTTPRequestHandler):
         self._text(state + "\n" + reply)
         sys.stderr.write("chat #%d: %s, %d chars" % (jid, state, len(reply)) + "\n")
 
-    def do_GET(self):
+    def _get(self):
         q = urllib.parse.urlparse(self.path)
         args = urllib.parse.parse_qs(q.query)
 
@@ -455,6 +501,10 @@ class Handler(BaseHTTPRequestHandler):
             # question with the last bug you fixed.
             c = self.chat
             env = c._child_env() if c else {}
+            # Behind the token when there is one: it names the repo and the
+            # open session, which is more than a stranger needs.
+            if c and c.token and not self._authorised():
+                return
             self._text(
                 "claude:        %s\n" % (c.claude if c else "-") +
                 "api key given: %s\n" % ("yes" if "ANTHROPIC_API_KEY" in env else "no") +
@@ -502,6 +552,12 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         url = (args.get("url") or [""])[0]
+        # The banner is public; a render is not. Chrome here will fetch any
+        # URL it is given, file:// and the LAN included, and hand the pixels
+        # back -- with a token set, that is not something a stranger on the
+        # network gets to do.
+        if url and not self._authorised():
+            return
         if not url:
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
@@ -516,14 +572,14 @@ class Handler(BaseHTTPRequestHandler):
         if "://" not in url:
             url = "https://" + url
 
-        height = min(int((args.get("h") or [2000])[0]), MAX_HEIGHT)
-        wait = int((args.get("wait") or [6000])[0])
+        height = min(_int_arg(args, "h", 2000), MAX_HEIGHT)
+        wait = _int_arg(args, "wait", 6000)
 
         # px=0 asks for the other renderer: real fonts, rendered wide and
         # scaled down. Softer text, but a page of photographs looks like
         # itself. The device offers both under f.
         pixel = (args.get("px") or ["1"])[0] not in ("0", "no", "off")
-        css_w = max(WIDTH, min(int((args.get("w") or [DEFAULT_WIDTH])[0]), 1280))
+        css_w = max(WIDTH, min(_int_arg(args, "w", DEFAULT_WIDTH), 1280))
         links = []
         if pixel:
             sys.stderr.write("render %s (6x8 font at %dpx)\n" % (url, WIDTH))
@@ -537,8 +593,13 @@ class Handler(BaseHTTPRequestHandler):
         im = trim(im)
         # A link past the trimmed tail points at nothing the device can
         # scroll to, so it is dropped rather than shipped.
+        # And one parked off-screen -- the "skip to content" link at
+        # left:-9999px is on every other site -- has a coordinate the packer
+        # cannot hold, and used to kill the whole render.
         links = [(l["x"], l["y"], l["w"], l["h"], l["href"])
-                 for l in links if l["y"] < im.size[1]]
+                 for l in links
+                 if l["y"] < im.size[1] and
+                 all(0 <= l[k] <= 65535 for k in ("x", "y", "w", "h"))]
         data = to_cpx(im, links)
         sys.stderr.write("  %dx%d -> %d bytes, %d links (raw would be %d)\n"
                          % (im.size[0], im.size[1], len(data), len(links),
@@ -587,7 +648,7 @@ def main():
         if args.no_pixel:
             im, links = shoot(Handler.chrome, args.test, 2000, 6000, args.width)
         else:
-            im = shoot_pixelfont(Handler.chrome, args.test, 2000, 6000)
+            im, links = shoot_pixelfont(Handler.chrome, args.test, 2000, 6000)
         if im is None:
             raise SystemExit("render failed")
         im = trim(im)

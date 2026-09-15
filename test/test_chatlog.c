@@ -46,9 +46,14 @@ static const ChatlogOps OPS = { h_open, h_read, h_write, h_seek, h_close, h_remo
 
 static char s_dir[260];
 
+/* One directory, emptied before each test. A fresh numbered one per test
+ * was fourteen directories in the repo root after every run, and nothing
+ * ever removed them. */
 static void fresh(void) {
-  static int n;
-  snprintf(s_dir, sizeof s_dir, "chatlog_test_%d", ++n);
+  static const char *const LEFTOVERS[] = { "reply.json", "request.json" };
+  char path[300];
+  size_t i;
+  snprintf(s_dir, sizeof s_dir, "chatlog_test");
 #ifdef _WIN32
   _mkdir(s_dir);
 #else
@@ -56,6 +61,10 @@ static void fresh(void) {
 #endif
   chatlog_init(&OPS, s_dir);
   chatlog_clear();
+  for (i = 0; i < sizeof LEFTOVERS / sizeof LEFTOVERS[0]; i++) {
+    snprintf(path, sizeof path, "%s/%s", s_dir, LEFTOVERS[i]);
+    remove(path);
+  }
 }
 
 static char *slurp(const char *name) {
@@ -153,6 +162,31 @@ void test_chatlog_scans_tool_calls_with_string_number_and_bool(void) {
   CHECK(!strcmp(r.tool[2].name, "wifi"));
   CHECK_EQ(r.tool[2].num, 0);
   CHECK(!strcmp(r.tool[2].arg, "false"));
+}
+
+/* The model's note recipe is six calls in one turn. A turn with more calls
+ * than the reply struct holds used to drop the surplus on the floor, while
+ * the history kept the whole content array: every later request was refused
+ * for tool_use ids with no tool_result, until the conversation was reset.
+ * The surplus ids come back too, so they can be answered. */
+void test_chatlog_surplus_tool_calls_keep_their_ids(void) {
+  ChatReply r;
+  char reply[4096];
+  int i, n;
+  fresh();
+  n = snprintf(reply, sizeof reply,
+    "{\"id\":\"msg_3\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[");
+  for (i = 0; i < CHAT_TOOLS_MAX + 2; i++)
+    n += snprintf(reply + n, sizeof reply - (size_t)n,
+      "%s{\"type\":\"tool_use\",\"id\":\"toolu_%02d\",\"name\":\"key\",\"input\":{\"name\":\"enter\"}}",
+      i ? "," : "", i);
+  snprintf(reply + n, sizeof reply - (size_t)n, "],\"stop_reason\":\"tool_use\"}");
+  spit("reply.json", reply);
+  CHECK_EQ(chatlog_scan_reply("reply.json", &r), 0);
+  CHECK_EQ(r.ntools, CHAT_TOOLS_MAX);
+  CHECK_EQ(r.nextra, 2);
+  CHECK(!strcmp(r.extra_id[0], "toolu_08"));
+  CHECK(!strcmp(r.extra_id[1], "toolu_09"));
 }
 
 void test_chatlog_an_error_reply_is_its_message(void) {

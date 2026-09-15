@@ -502,13 +502,40 @@ static void report(AsmStop stop, uint32_t ms) {
  * Two pointers to the same memory: `exec` is the one to call, `writable` the
  * byte-addressable alias to build in. Writing through `exec` faults -- that
  * window only permits aligned 32-bit access. See CardApi.exec_alloc. */
+/* Off until the emitter speaks the ABI the app is built in. asm_compile
+ * produces call0 code -- an `addi a1` prologue, `ret`, arguments in a2 -- but
+ * every .capp is built with the toolchain's default, which is windowed
+ * (`-Q --help=target` says so: -mabi=windowed enabled). The kernel's call
+ * into capp_main is a callx8, so this entry is reached by callx8 too, and a
+ * call0 prologue under a windowed call stores through a stack pointer the
+ * caller never set up and returns through an a0 whose top bits hold the
+ * window increment. That is a reboot on `halt`. Switching apps to call0 is
+ * not an option either: the kernel would then callx8 into a function that
+ * returns with `ret`, which is the same fault from the other side.
+ *
+ * What it needs, in asmvm.h: `entry a1, N` and `retw`, a0 saved and restored
+ * around the body because the VM's own call/ret use it as the link, a callx8
+ * for `sys` with a8-a15 spilled around it (the callee's window lands on
+ * them), and a device attached to try it on -- the host tests pin the bytes
+ * but cannot run them. The four encoding bugs found in review (shifts past
+ * the golden-tested range, `call` targets not word-aligned, the long-branch
+ * hop and the fault stub each one byte out) belong to the same session. */
+#define NATIVE_RUN_ENABLED 0
+
 static AsmStop run_native(uint32_t *ms) {
-  void *exec = api->exec_alloc(EXEC_MAX);
+  void *exec;
   uint8_t *w;
   AsmEmit e;
   uint32_t t0;
   int (*entry)(AsmState *);
 
+  if (!NATIVE_RUN_ENABLED) {
+    con_line("native run is off: the compiler emits call0 code");
+    con_line("and this app is windowed; see run_native in ide.c");
+    *ms = 0;
+    return RUN_NOCODE;
+  }
+  exec = api->exec_alloc(EXEC_MAX);
   if (!exec) { con_line("no executable RAM"); return RUN_NOCODE; }
   w = (uint8_t *)api->exec_writable(exec);
 

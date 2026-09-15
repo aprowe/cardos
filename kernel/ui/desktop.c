@@ -692,18 +692,20 @@ void desktop_repaint(void) {
 
 /* Leaving fullscreen throws away nothing: the window system's state was never
  * touched, so the desktop comes back exactly as it was. */
-static void open_def_ex(const AppDef *a, int fresh);
+static int open_def_ex(const AppDef *a, int fresh);
 
 static void leave_fullscreen(void) {
   const AppDef *a = s_full;
   if (!a) return;
-  s_full = NULL;
   /* Back into a window, not into nothing. This used to just drop the app: the
    * screen came back to the desktop and whatever had been running was no
    * longer anywhere, because a fullscreen app has no window to return to
    * unless one is made. Escape means "stop filling the screen", and it keeps
-   * the app's state -- fresh = 0 -- for the same reason maximise does. */
-  open_def_ex(a, 0);
+   * the app's state -- fresh = 0 -- for the same reason maximise does. With
+   * four windows already up there is nowhere to put it, and it stays as it
+   * is rather than disappearing while still loaded. */
+  if (!open_def_ex(a, 0)) return;
+  s_full = NULL;
   desktop_repaint();
 }
 
@@ -711,7 +713,24 @@ static void leave_fullscreen(void) {
 
 static void open_def(const AppDef *a);
 static void toggle_fullscreen(void);
-static void open_def_ex(const AppDef *a, int fresh);
+static int open_def_ex(const AppDef *a, int fresh);
+static void unminimise(int i);
+
+/* If this app is already on screen -- in a window, on the taskbar, or filling
+ * the screen -- bring it forward and say so. Built-ins are matched the same
+ * way; a NULL (a .capp that has not run) matches nothing. */
+static int raise_existing(const AppDef *a) {
+  int i;
+  if (!a) return 0;
+  if (s_full == a) return 1;
+  for (i = 0; i < s_nwin; i++) {
+    if (s_app[i] != a) continue;
+    if (s_minimised[i]) unminimise(i);
+    else { s_icon_focus = 0; wm_raise(s_win[i]); desktop_repaint(); }
+    return 1;
+  }
+  return 0;
+}
 
 /* By icon index, so both the desktop and the Start menu reach it -- the one
  * works in slots and the other in menu rows, and neither should have its own
@@ -735,6 +754,11 @@ static void launch_icon_index(int idx) {
   }
 
   if (ic->kind == ICON_CAPP) {
+    /* Already open? Then this is "show me that", not "another one". Two
+     * windows on one slot were two views of one set of globals, and closing
+     * either freed the code the other still called into. */
+    if (raise_existing(capprun_def(ic->slot))) return;
+
     /* Running the program *is* opening it: capp_main builds whatever state it
      * has and installs an interface if it wants one. There is no AppDef before
      * that -- capprun_def returns NULL until the program has run -- which is
@@ -766,8 +790,10 @@ static void launch_icon_index(int idx) {
 
   /* open_def_ex(a, 0): capp_main already did the opening, and a built-in had
    * its open called above. Calling it again here would reset the app the
-   * moment its window appeared. */
-  open_def_ex(a, 0);
+   * moment its window appeared. No window slot free: the app ran for
+   * nothing, and is let go rather than left resident with no way to reach
+   * it. */
+  if (!open_def_ex(a, 0) && ic->kind == ICON_CAPP) capprun_release(a);
   desktop_repaint();
 }
 
@@ -813,10 +839,10 @@ void desktop_icon_click(int16_t x, int16_t y) {
  * created because the user asked for one does; a window being created because
  * an app came out of fullscreen does not -- that would throw away whatever
  * they were in the middle of, which is the opposite of what a toggle means. */
-static void open_def_ex(const AppDef *a, int fresh) {
+static int open_def_ex(const AppDef *a, int fresh) {
   Rect frame;
   WinId w;
-  if (!a || s_nwin >= MAX_OPEN) return;
+  if (!a || s_nwin >= MAX_OPEN) return 0;
   /* Cascade, so a new window is visibly on top rather than exactly covering
    * the last one. An app with a preferred content size gets a frame built
    * around it; the chrome is a border and title bar on top, and the content
@@ -833,7 +859,7 @@ static void open_def_ex(const AppDef *a, int fresh) {
     if (frame.y < 0) frame.y = 0;
   }
   w = wm_create(a->name, frame);
-  if (w == WIN_NONE) return;
+  if (w == WIN_NONE) return 0;
   if (fresh && a->open) a->open(a->state);
   s_win[s_nwin] = w;
   s_app[s_nwin] = a;
@@ -841,6 +867,7 @@ static void open_def_ex(const AppDef *a, int fresh) {
   s_scroll[s_nwin] = 0;
   s_nwin++;
   s_icon_focus = 0;            /* the new window has the keyboard */
+  return 1;
 }
 
 static void close_focused(void);
@@ -889,8 +916,8 @@ static void toggle_fullscreen(void) {
 
   if (s_full) {
     a = s_full;
+    if (!open_def_ex(a, 0)) return;
     s_full = NULL;
-    open_def_ex(a, 0);
     desktop_repaint();
     return;
   }
@@ -954,17 +981,29 @@ static void cycle_focus(void) {
 
   if (s_nwin == 0) { s_icon_focus = 1; return; }
 
+  /* A minimised slot holds WIN_NONE, and raising that is a no-op: Tab used
+   * to stop dead on the window before it. Only the ones that are up count. */
   if (s_icon_focus) {              /* desktop -> the bottom window */
-    s_icon_focus = 0;
-    wm_raise(s_win[0]);
-    desktop_repaint();
-    return;
+    for (i = 0; i < s_nwin; i++) {
+      if (s_minimised[i]) continue;
+      s_icon_focus = 0;
+      wm_raise(s_win[i]);
+      desktop_repaint();
+      return;
+    }
+    return;                        /* everything is on the taskbar */
   }
 
   for (i = 0; i < s_nwin; i++) {
+    int j;
     if (s_win[i] != f) continue;
-    if (i + 1 < s_nwin) wm_raise(s_win[i + 1]);
-    else s_icon_focus = 1;         /* the last window -> the desktop */
+    for (j = i + 1; j < s_nwin; j++) {
+      if (s_minimised[j]) continue;
+      wm_raise(s_win[j]);
+      desktop_repaint();
+      return;
+    }
+    s_icon_focus = 1;              /* the last window -> the desktop */
     desktop_repaint();
     return;
   }
@@ -1192,11 +1231,11 @@ void desktop_tick(uint32_t ms) {
    * window it lives in, so its damage goes through the window system and
    * whatever is stacked above it stays on top. */
   if (s_full && s_full->tick) {
-    if (s_full->tick(s_full->state, ms)) {
-      draw_set_clip(s_full_rect);
-      s_full->paint(s_full->state, s_full_rect);
-      draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-    }
+    /* Through desktop_flush, not a direct paint: that honours the app's
+     * damage rectangle (Pinball moving a ball should not repaint 240x135
+     * every 5 ms) and puts the pointer back, which a direct paint erased on
+     * every frame until the mouse moved. */
+    if (s_full->tick(s_full->state, ms)) { s_full_dirty = 1; desktop_flush(); }
   } else {
     int i, any = 0;
     for (i = 0; i < s_nwin; i++) {
@@ -1293,6 +1332,11 @@ int desktop_autostart(void) {
 void desktop_init(void) {
   int i;
   ui_set_shell(UI_DESKTOP);
+  /* Let go of whatever the last visit left open, before the list below
+   * forgets it. The reload used to free every image as a side effect; it
+   * keeps hosted ones now, so a shell has to say when it is done with them. */
+  for (i = 0; i < s_nwin; i++) capprun_release(s_app[i]);
+  capprun_release(s_full);
   wm_init(DISPLAY_W, DISPLAY_H);
   mouse_init(DISPLAY_W, DISPLAY_H);
   s_nwin = 0;

@@ -518,6 +518,11 @@ static int md_render(CRect c, int from, int rows) {
     uint16_t fg = CLR_PG_TX, bg = CLR_PG;
     int bold = 0;
 
+    /* Editing keeps E.len and leaves old bytes past it; the preview reads
+     * lines as strings, so it terminates each one first, or a line that was
+     * backspaced or split showed its old tail. */
+    E.line[i][E.len[i]] = 0;
+
     /* A fenced block is verbatim: no headings, no bullets, no emphasis. */
     if (E.line[i][0] == '`' && E.line[i][1] == '`' && E.line[i][2] == '`') {
       fenced = !fenced;

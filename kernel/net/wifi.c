@@ -26,7 +26,8 @@ static const char *TAG = "wifi";
 #define BIT_FAILED   BIT1
 
 static WifiState s_state;
-static int       s_started;
+static int       s_started;   /* the radio is running */
+static int       s_inited;    /* the driver, netif and handlers exist */
 static char      s_detail[64];
 static char      s_ip[16] = "0.0.0.0";
 static char      s_ssid[WIFI_SSID_MAX];
@@ -94,6 +95,21 @@ int wifi_start(void) {
   if (s_started) return 0;
   heap_before = esp_get_free_heap_size();
 
+  /* Stopped and starting again: the driver is still there, only the radio
+   * went. Building it twice registered the handlers twice; and until stop
+   * cleared s_started, this returned early with the radio off and every
+   * connect waited twenty seconds for a driver that was not listening. */
+  if (s_inited) {
+    if (esp_wifi_start() != ESP_OK) {
+      snprintf(s_detail, sizeof s_detail, "radio would not restart");
+      s_state = WIFI_FAILED;
+      return -1;
+    }
+    s_started = 1;
+    s_state = WIFI_OFF;
+    return 0;
+  }
+
   if (heap_before < WIFI_MIN_HEAP) {
     snprintf(s_detail, sizeof s_detail, "only %u KB free, needs %u",
              (unsigned)(heap_before / 1024), (unsigned)(WIFI_MIN_HEAP / 1024));
@@ -146,6 +162,7 @@ int wifi_start(void) {
   }
 
   s_started = 1;
+  s_inited = 1;
   s_heap_cost = (uint32_t)(heap_before - esp_get_free_heap_size());
   ESP_LOGI(TAG, "radio up, %u bytes of heap", (unsigned)s_heap_cost);
   return 0;
@@ -155,6 +172,7 @@ void wifi_stop(void) {
   if (!s_started) return;
   esp_wifi_disconnect();
   esp_wifi_stop();
+  s_started = 0;
   s_state = WIFI_OFF;
   strcpy(s_ip, "0.0.0.0");
   snprintf(s_detail, sizeof s_detail, "off");

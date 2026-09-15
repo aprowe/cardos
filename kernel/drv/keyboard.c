@@ -177,7 +177,7 @@ uint8_t keyboard_poll(void) {
     for (x = 0; x < 14; x++) {
       if (!now[y][x] || s_down[y][x]) continue;    /* only rising edges */
       if (IS_SHIFT(x, y) || IS_CTRL(x, y) || IS_FN(x, y) || IS_OPT(x, y) ||
-          IS_ALT(x, y) || IS_OPT(x, y)) continue;  /* modifiers are not keys */
+          IS_ALT(x, y)) continue;                  /* modifiers are not keys */
 
       {
         char c = s_shift ? KEYMAP_SHIFT[y][x] : KEYMAP[y][x];
@@ -218,13 +218,25 @@ uint8_t keyboard_poll(void) {
             break;
           }
         }
+        /* Taken, whether or not it meant anything: a chord with no meaning
+         * is consumed, not retried every scan for as long as it is held. */
+        s_down[y][x] = 1;
         if (c) { out = (uint8_t)c; break; }
       }
     }
   }
 
+  /* Releases and modifiers are recorded now; a second key that went down in
+   * this same scan is not. Copying the whole matrix here marked it as
+   * already down, and it was never delivered -- with the idle poll at 25 ms
+   * the second letter of a fast pair went missing. It stays a rising edge
+   * for the next poll instead. */
   for (y = 0; y < 4; y++)
-    for (x = 0; x < 14; x++) s_down[y][x] = now[y][x];
+    for (x = 0; x < 14; x++) {
+      if (!now[y][x]) s_down[y][x] = 0;
+      else if (IS_SHIFT(x, y) || IS_CTRL(x, y) || IS_FN(x, y) || IS_OPT(x, y) ||
+               IS_ALT(x, y)) s_down[y][x] = 1;
+    }
 
   return out;
 }

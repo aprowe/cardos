@@ -500,10 +500,11 @@ static void need_icons(void) {
 }
 
 void launchui_init(void) {
+  capprun_release(s_app);      /* from the last visit, if any */
+  s_app = NULL;
   icons_reload();
   s_sel = 0;
   s_folder = -1;
-  s_app = NULL;
   enter();
   flush();
 }
@@ -511,6 +512,12 @@ void launchui_init(void) {
 /* Put an app on the screen. The launcher runs everything fullscreen: there is
  * no desktop behind it for a window to sit on. */
 static void host(const AppDef *a) {
+  /* Whatever was on screen is not any more, and its image is not needed:
+   * Files handing over to Edit used to leave Files resident, in a pool that
+   * holds about a dozen apps, until the next reload. capprun defers the
+   * release if the old app is the one asking (it is, when run() is called
+   * from a handler), so this is safe from inside a callback. */
+  if (s_app && s_app != a) capprun_release(s_app);
   s_app = a;
   s_app_rect = app_rect(a);
   s_app_clear = 1;

@@ -43,6 +43,11 @@ static int parse_num(const char *s, int *out) {
   return 1;
 }
 
+void rpc_one_line(char *s) {
+  for (; *s; s++)
+    if (*s == '\n' || *s == '\r' || *s == '\t') *s = ' ';
+}
+
 int rpc_parse(const char *line, RpcCmd *cmd) {
   const char *p;
   int i;
@@ -96,6 +101,7 @@ int rpc_parse(const char *line, RpcCmd *cmd) {
     if ((rest = word_is(p, "say")) != NULL) {
       cmd->verb = RPC_SAY;
       copy_arg(cmd, rest);
+      rpc_one_line(cmd->arg);
       /* An empty `say` is not a command, it is a model with nothing to add. */
       return cmd->arg[0] ? 1 : (cmd->verb = RPC_BAD, 0);
     }
