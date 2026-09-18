@@ -1,6 +1,6 @@
 /* Todo -- Google Tasks on the Cardputer.
  *
- * Reads the default task list, ticks things off, and adds new ones. The sign-in
+ * Reads the account's task lists, ticks things off, and adds new ones. The sign-in
  * happened once on a PC (tools/google_auth.py); this asks the kernel for an
  * access token and makes three kinds of request with it.
  *
@@ -10,6 +10,25 @@
  * ticked while there is no network is queued in the cache and pushed on the
  * next sync -- a todo app that refuses to take a note until it has wifi is a
  * todo app you stop using.
+ *
+ * More than one list, but one at a time: only the current list's tasks are in
+ * memory, and each list has its own cache file under /todo. Left and Right
+ * step between lists, `l` shows them all. Lists are made and named on a
+ * phone or a PC; there is no request type here for that, on purpose.
+ *
+ * ONE SWEEP, AT OPEN. Opening the app fetches the lists, pushes and pulls the
+ * list on screen, then pulls every other list into its own cache file -- and
+ * then stops. Nothing starts on its own after that; `s` runs the sweep again.
+ * It used to pull the current list every ten minutes, which meant the app
+ * reached out and rearranged the screen while you were reading it, and the
+ * list you were not looking at was never fetched at all, so `o` had nothing
+ * real to show. A list off screen is absorbed straight into its file rather
+ * than into the item array, because nothing on screen depends on it and the
+ * array is the one on display.
+ *
+ * `o` is that overview: every list's open tasks under its own heading, the
+ * way the calendar's agenda groups by day. It is read from the cache files,
+ * so it costs one small array and no requests of its own.
  *
  * The JSON is read by looking for field names rather than parsed. A real parser
  * is several kilobytes to extract three strings per item from a document this
@@ -24,10 +43,32 @@
 #define ID_MAX     56
 #define ROW_H      11
 #define REPLY_MAX  6000
-#define CACHE_PATH "/todo.cache"
+#define MAX_LISTS  8
+#define NAME_MAX   24
 
-#define LIST_URL "https://tasks.googleapis.com/tasks/v1/users/@me/lists"
-#define TASKS_URL "https://tasks.googleapis.com/tasks/v1/lists/%s/tasks?showCompleted=true&showHidden=false&maxResults=40"
+/* One file per list, named by the list's id, so switching lists is a file
+ * swap rather than a bigger array. Before lists, there was one file at the
+ * root; cache_migrate moves it under the directory as "_", the id of "no list
+ * known yet", and the first lists reply files it under the first list. */
+#define CACHE_DIR  "/todo"
+#define CACHE_FMT  "/todo/%s.cache"
+#define CACHE_OLD  "/todo.cache"
+#define LISTS_PATH "/todo/lists"
+
+/* `fields=` is not an optimisation here, it is the difference between a list
+ * that syncs and one that silently loses tasks.
+ *
+ * A Google task carries kind, etag, selfLink, position, updated, links and
+ * more -- three hundred bytes of it -- and forty of those is twelve kilobytes
+ * against a six-kilobyte buffer and the kernel's eight. Nothing reports that:
+ * the HTTP layer fills the buffer, sees it full, and cannot tell a body that
+ * ended from one that was cut off, so the app parses as far as the cut and
+ * shows a short list as though it were the whole one. Asking for the three
+ * fields actually read brings a task to about sixty bytes, and forty of them
+ * to well under the buffer. apps/calendar.c says the same thing about the
+ * same problem; Todo simply never had it done. */
+#define LIST_URL "https://tasks.googleapis.com/tasks/v1/users/@me/lists?fields=items(id,title)"
+#define TASKS_URL "https://tasks.googleapis.com/tasks/v1/lists/%s/tasks?showCompleted=true&showHidden=false&maxResults=40&fields=items(id,title,status)"
 #define TASK_URL "https://tasks.googleapis.com/tasks/v1/lists/%s/tasks/%s"
 #define ADD_URL  "https://tasks.googleapis.com/tasks/v1/lists/%s/tasks"
 
@@ -42,15 +83,19 @@
 #define CLR_WARN    CAPP_RGB(240, 176, 80)
 #define CLR_PEND    CAPP_RGB(150, 170, 255)
 
-typedef enum { VIEW_LIST = 0, VIEW_ADD } View;
+typedef enum { VIEW_LIST = 0, VIEW_ADD, VIEW_LISTS, VIEW_ALL } View;
 
 /* The sync runs on the OS's request task and is collected from tick, so the
  * screen never stops. See CardApi.http_start. */
-enum { SYNC_IDLE = 0, SYNC_LIST, SYNC_PUSH, SYNC_PULL };
+/* The sweep, in order: the lists themselves, then the pending edits of the
+ * list on screen, then its tasks, then every other list in turn. */
+enum { SYNC_IDLE = 0, SYNC_LIST, SYNC_PUSH, SYNC_PULL, SYNC_SWEEP };
 
-/* Ten minutes: often enough that a list edited elsewhere turns up on its own,
- * rare enough not to be what flattens the battery. */
-#define AUTO_EVERY_MS (10u * 60u * 1000u)
+/* The overview's rows. Capped rather than sized to the lists, because eight
+ * lists of forty tasks is more than fits on a 135-pixel screen many times
+ * over -- and this array is charged to an app that already holds forty items
+ * and a six-kilobyte reply. What does not fit says so on the last line. */
+#define OVER_MAX   48
 
 /* When a sync could not even be attempted -- no radio yet, no token yet --
  * try again soon rather than in ten minutes. Opening the app during the few
@@ -65,6 +110,19 @@ typedef struct {
   int  deleted;             /* gone here, not yet gone at Google */
 } Item;
 
+typedef struct {
+  char id[ID_MAX];
+  char name[NAME_MAX];
+} TList;
+
+/* One line of the overview. The title is copied rather than pointed at
+ * because it comes out of a cache file that is read and closed. */
+typedef struct {
+  char title[TITLE_MAX + 1];
+  unsigned char list;               /* index into lists[] */
+  unsigned char head;               /* first row of that list: draw a heading */
+} OverRow;
+
 static const CardApi *api;
 
 static struct {
@@ -73,7 +131,32 @@ static struct {
   int  n;
   int  sel;
 
-  char list_id[ID_MAX];
+  /* The lists, and which one the items above belong to. `cur` is an index
+   * into lists[] or -1 while none is known; list_id is the current id either
+   * way, because it is remembered on the card before the lists are. */
+  TList lists[MAX_LISTS];
+  int   nlists;
+  int   cur;
+  int   lists_fresh;                /* fetched this run, not just from the card */
+  int   psel;                       /* the picker's highlighted row */
+  int   discard;                    /* the reply in flight is another list's */
+  int   sweep;                      /* the list being pulled off screen, or -1 */
+  int   swept;                      /* how many the sweep has finished */
+  int   synced_once;                /* the sweep has run; do not start another */
+
+  OverRow over[OVER_MAX];
+  int     nover;
+  int     osel;
+  int     over_full;                /* there was more than the array holds */
+  /* Where paint actually put each row. A heading makes the row under it two
+   * rows tall, so a click cannot be divided back into an index the way the
+   * flat list's can -- it is matched against what was drawn, for the same
+   * reason paint_list keeps shown_top. -1 means "not on screen". */
+  short   oy[OVER_MAX];
+
+  CRect content;                    /* what paint was last given, for damage */
+  char  last_status[52];            /* to know whether the strip changed */
+  char  list_id[ID_MAX];
   char status[52];
   int  online;
 
@@ -96,6 +179,15 @@ static CRect rect(int x, int y, int w, int h) {
 }
 
 static void say(const char *s) { api->fmt(T.status, sizeof T.status, "%s", s); }
+
+/* To /cache/app.log, via the kernel. A sync that fails once a day cannot be
+ * caught on a USB serial port that is not plugged in -- which is exactly when
+ * it fails. Sparingly: this writes to an SD card, so it is a handful of lines
+ * per sweep and never one per tick.
+ *
+ * A macro because the API has fmt but no vfmt, and adding one would move
+ * every .capp to a new API version to save four lines here. */
+#define logf(...) do { char lb_[120];                        api->fmt(lb_, sizeof lb_, __VA_ARGS__);                        api->log(lb_); } while (0)
 
 /* ---- the smallest JSON reader that answers the question ------------------ */
 
@@ -144,11 +236,17 @@ static const char *json_str_at(const char *from, const char *name,
  * because it is the only field that can contain a space. A deleted item is
  * kept: it is still waiting to be deleted at Google, and dropping it here
  * would bring it back on the next pull. */
+static const char *cache_path(void) {
+  static char path[ID_MAX + 16];
+  api->fmt(path, sizeof path, CACHE_FMT, T.list_id[0] ? T.list_id : "_");
+  return path;
+}
+
 static void cache_save(void) {
   char line[ID_MAX + TITLE_MAX + 16];
   int fd, i;
 
-  fd = api->open(CACHE_PATH, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
+  fd = api->open(cache_path(), CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
   if (fd < 0) return;
   for (i = 0; i < T.n; i++) {
     int n = api->fmt(line, sizeof line, "%d %d %d %s %s\n",
@@ -164,7 +262,7 @@ static void cache_load(void) {
   int fd, n, i, len = 0;
 
   T.n = 0;
-  fd = api->open(CACHE_PATH, CAPP_O_READ);
+  fd = api->open(cache_path(), CAPP_O_READ);
   if (fd < 0) return;
 
   while ((n = api->read(fd, buf, sizeof buf)) > 0) {
@@ -200,6 +298,211 @@ static void cache_load(void) {
   api->close(fd);
 }
 
+/* The one file from before there were lists. Moved, not copied: a rename is
+ * atomic on the card and the old path is then plainly gone. */
+static void cache_migrate(void) {
+  int fd = api->open(CACHE_OLD, CAPP_O_READ);
+  if (fd < 0) return;
+  api->close(fd);
+  api->rename(CACHE_OLD, "/todo/_.cache");
+}
+
+/* ---- the lists -----------------------------------------------------------
+ *
+ * /todo/lists: the current list's id on the first line, then "id name" per
+ * list. On the card so that Left and Right work on a train, and so the app
+ * opens on the list it was closed on. */
+static int same(const char *a, const char *b) {
+  while (*a && *a == *b) { a++; b++; }
+  return !*a && !*b;
+}
+
+static void lists_save(void) {
+  char line[ID_MAX + NAME_MAX + 4];
+  int fd, i, n;
+
+  fd = api->open(LISTS_PATH, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
+  if (fd < 0) return;
+  n = api->fmt(line, sizeof line, "%s\n", T.list_id[0] ? T.list_id : "-");
+  api->write(fd, line, (size_t)n);
+  for (i = 0; i < T.nlists; i++) {
+    n = api->fmt(line, sizeof line, "%s %s\n", T.lists[i].id, T.lists[i].name);
+    api->write(fd, line, (size_t)n);
+  }
+  api->close(fd);
+}
+
+static void lists_load(void) {
+  char buf[256], line[ID_MAX + NAME_MAX + 4];
+  int fd, n, i, len = 0, row = 0;
+
+  T.nlists = 0;
+  T.cur = -1;
+  fd = api->open(LISTS_PATH, CAPP_O_READ);
+  if (fd < 0) return;
+  while ((n = api->read(fd, buf, sizeof buf)) > 0) {
+    for (i = 0; i < n; i++) {
+      char c = buf[i];
+      if (c != '\n') {
+        if (len < (int)sizeof line - 1) line[len++] = c;
+        continue;
+      }
+      line[len] = 0;
+      len = 0;
+      if (row++ == 0) {
+        if (line[0] == '-' && !line[1]) line[0] = 0;
+        api->fmt(T.list_id, sizeof T.list_id, "%s", line);
+      } else if (T.nlists < MAX_LISTS) {
+        TList *l = &T.lists[T.nlists];
+        int p = 0, q = 0;
+        while (line[p] && line[p] != ' ' && q < ID_MAX - 1) l->id[q++] = line[p++];
+        l->id[q] = 0;
+        while (line[p] == ' ') p++;
+        api->fmt(l->name, sizeof l->name, "%s", line + p);
+        if (l->id[0]) T.nlists++;
+      }
+    }
+  }
+  api->close(fd);
+  for (i = 0; i < T.nlists; i++)
+    if (same(T.lists[i].id, T.list_id)) T.cur = i;
+}
+
+/* The lists reply. The current list stays current if it is still there;
+ * otherwise -- first run, or a list deleted elsewhere -- the first one is,
+ * and whatever tasks are in memory go with it: on a first run they are the
+ * ones added before any sync, and they belong to the only list there was. */
+static void absorb_lists(void) {
+  const char *p = T.reply;
+  int count = 0, i;
+
+  while (count < MAX_LISTS) {
+    TList *l = &T.lists[count];
+    const char *after_id = json_str_at(p, "id", l->id, ID_MAX);
+    if (!after_id) break;
+    if (!json_str_at(after_id, "title", l->name, NAME_MAX)) break;
+    p = after_id;
+    if (l->id[0]) count++;
+  }
+  T.nlists = count;
+  T.lists_fresh = 1;
+  if (!count) return;
+
+  T.cur = -1;
+  for (i = 0; i < count; i++)
+    if (same(T.lists[i].id, T.list_id)) T.cur = i;
+  if (T.cur < 0) {
+    /* The tasks in memory were filed under a list that is not here (or under
+     * none). They are refiled under the first list: saved to its file and
+     * the old file dropped, so a restart does not find them twice. */
+    if (T.n) api->remove(cache_path());
+    T.cur = 0;
+    api->fmt(T.list_id, sizeof T.list_id, "%s", T.lists[0].id);
+    if (T.n) cache_save();
+  }
+  lists_save();
+}
+
+/* Make list i current: file the current tasks, load that list's. A pull or a
+ * lists fetch in flight is simply dropped when it lands (sync_tick). A push
+ * is not: its reply is what clears an item's dirty flag, and discarding it
+ * means the item is pushed again -- twice at Google -- so that one is
+ * waited for. It is one small request, not a whole sync. */
+static void select_list(int i) {
+  if (T.nlists == 0) { say("no lists yet -- s syncs"); return; }
+  if (T.stage == SYNC_PUSH) { say("sending -- wait a moment"); return; }
+  if (T.stage == SYNC_SWEEP) { say("syncing -- wait a moment"); return; }
+  if (i < 0) i = T.nlists - 1;
+  if (i >= T.nlists) i = 0;
+  if (i == T.cur) return;
+  if (T.stage != SYNC_IDLE) T.discard = 1;
+
+  cache_save();
+  T.cur = i;
+  api->fmt(T.list_id, sizeof T.list_id, "%s", T.lists[i].id);
+  cache_load();
+  T.sel = 0;
+  lists_save();
+  api->fmt(T.status, sizeof T.status, "%d cached -- s syncs", T.n);
+  /* Sync it as soon as the tick comes round, not in ten minutes. */
+  T.tried_once = 0;
+}
+
+/* ---- the overview -------------------------------------------------------
+ *
+ * Read from the cache files rather than the network: every list has one by
+ * the time the sweep has run once, and a view that costs nothing to open is
+ * a view you will actually use. Done tasks are left out -- the question this
+ * view answers is "what is there to do", and a finished task is not part of
+ * it. Deleted ones too: they are on their way out.
+ */
+static void over_add(int list, const char *title, int first) {
+  OverRow *r;
+  if (T.nover >= OVER_MAX) { T.over_full = 1; return; }
+  r = &T.over[T.nover++];
+  api->fmt(r->title, sizeof r->title, "%s", title);
+  r->list = (unsigned char)list;
+  r->head = (unsigned char)(first ? 1 : 0);
+}
+
+/* One list's open tasks, straight off the card. The parsing is cache_load's,
+ * deliberately: one format, read the same way in both places. */
+static void over_scan(int li) {
+  char buf[256], line[ID_MAX + TITLE_MAX + 16];
+  char path[ID_MAX + 16];
+  int fd, n, i, len = 0, first = 1;
+
+  api->fmt(path, sizeof path, CACHE_FMT, T.lists[li].id);
+  fd = api->open(path, CAPP_O_READ);
+  if (fd < 0) return;
+
+  while ((n = api->read(fd, buf, sizeof buf)) > 0) {
+    for (i = 0; i < n; i++) {
+      char c = buf[i];
+      if (c != '\n') {
+        if (len < (int)sizeof line - 1) line[len++] = c;
+        continue;
+      }
+      line[len] = 0;
+      len = 0;
+      if (line[0] < '0' || line[0] > '1' || line[1] != ' ') continue;
+      if (line[2] < '0' || line[2] > '1' || line[3] != ' ') continue;
+      if (line[4] < '0' || line[4] > '1' || line[5] != ' ') continue;
+      if (line[0] == '1' || line[2] == '1') continue;    /* done, or going */
+      {
+        int p = 6;
+        while (line[p] && line[p] != ' ') p++;           /* past the id */
+        while (line[p] == ' ') p++;
+        if (!line[p]) continue;
+        over_add(li, line + p, first);
+        first = 0;
+      }
+    }
+  }
+  api->close(fd);
+}
+
+static void over_build(void) {
+  int i;
+  T.nover = 0;
+  T.over_full = 0;
+  /* The list on screen is the live one: its array may hold edits that are
+   * not in its file yet, so it is read from memory and the rest from disk. */
+  for (i = 0; i < T.nlists; i++) {
+    if (i == T.cur) {
+      int j, first = 1;
+      for (j = 0; j < T.n; j++) {
+        if (T.item[j].done || T.item[j].deleted) continue;
+        over_add(i, T.item[j].title, first);
+        first = 0;
+      }
+    } else {
+      over_scan(i);
+    }
+  }
+  if (T.osel >= T.nover) T.osel = T.nover ? T.nover - 1 : 0;
+}
+
 /* ---- Google -------------------------------------------------------------- */
 
 /* Removing a row from the array. Used once the delete has reached Google, and
@@ -213,14 +516,26 @@ static void drop(int i) {
 }
 
 /* Marked rather than removed, so a delete made offline still happens when the
- * network comes back. An item that never reached Google has nothing to tell it
- * about and goes immediately. */
+ * network comes back -- and marked rather than done, so pressing the key
+ * again takes it back. Until the sweep sends it, a delete is a local opinion
+ * and there is no reason the user cannot change it; before, the only way back
+ * from a mis-hit `d` was to retype the task.
+ *
+ * An item that never reached Google is the exception: there is nothing at the
+ * other end to delete, so it simply goes, and there is nothing to restore. */
 static void delete_selected(void) {
   Item *it;
 
   if (T.sel < 0 || T.sel >= T.n) return;
   it = &T.item[T.sel];
 
+  if (it->deleted) {
+    it->deleted = 0;
+    it->dirty = 1;
+    cache_save();
+    say("kept -- s syncs");
+    return;
+  }
   if (!it->id[0]) {
     drop(T.sel);
     cache_save();
@@ -230,7 +545,7 @@ static void delete_selected(void) {
   it->deleted = 1;
   it->dirty = 1;
   cache_save();
-  say("deleted -- s syncs");
+  say("deleted -- d undoes, s syncs");
 }
 
 /* ---- syncing, without stopping the world ---------------------------------
@@ -309,44 +624,132 @@ static void absorb_tasks(void) {
   cache_save();
 }
 
+/* http_start said no: the device runs one request at a time, and someone
+ * else -- the Claude terminal mid-answer, another window's sync -- has it.
+ * Say so and try again soon. Returning silently left the old status on
+ * screen and the next attempt ten minutes off, which reads as "broken". */
+/* A list nobody is looking at, written straight to its file.
+ *
+ * The item array is what is on screen, so a sweep that loaded each list into
+ * it would rearrange the display three times while you read. This walks the
+ * reply and writes the cache lines as it goes: no array, no repaint, and the
+ * file is exactly what cache_load would later read back. Pending edits in
+ * that file are not overwritten blindly -- there are none, because a list
+ * with pending edits is pushed when you switch to it, and its dirty flag
+ * survives in the file until then.
+ */
+static int absorb_into(const char *list_id, int *count_out) {
+  const char *p = T.reply;
+  char path[ID_MAX + 16], line[ID_MAX + TITLE_MAX + 16];
+  char id[ID_MAX], title[TITLE_MAX + 1], status[16];
+  int fd, count = 0;
+
+  api->fmt(path, sizeof path, CACHE_FMT, list_id);
+  fd = api->open(path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
+  if (fd < 0) return -1;
+
+  while (count < MAX_ITEMS) {
+    const char *after_id = json_str_at(p, "id", id, ID_MAX);
+    int n, done;
+    if (!after_id) break;
+    if (!json_str_at(after_id, "title", title, TITLE_MAX + 1)) break;
+    status[0] = 0;
+    json_str_at(after_id, "status", status, sizeof status);
+    done = (status[0] == 'c');
+    p = after_id;
+    if (!title[0]) continue;
+    n = api->fmt(line, sizeof line, "%d %d %d %s %s\n",
+                 done, 0, 0, id[0] ? id : "-", title);
+    api->write(fd, line, (size_t)n);
+    count++;
+  }
+  api->close(fd);
+  if (count_out) *count_out = count;
+  return 0;
+}
+
+static void start_refused(void) {
+  T.online = 0;
+  say("busy -- another request is running, retrying");
+  T.next_auto = api->ticks_ms() + RETRY_MS;
+}
+
+/* The next list the sweep has not done, skipping the one on screen (already
+ * pulled) and anything with pending edits (pushed when you switch to it).
+ * Returns -1 when the sweep is finished. */
+static int sweep_next(void) {
+  int i;
+  for (i = T.swept; i < T.nlists; i++) {
+    T.swept = i + 1;
+    if (i == T.cur) continue;
+    return i;
+  }
+  return -1;
+}
+
+static void sweep_done(void) {
+  T.stage = SYNC_IDLE;
+  T.sweep = -1;
+  T.online = 1;
+  over_build();
+  api->fmt(T.status, sizeof T.status, "%d task%s", T.n, T.n == 1 ? "" : "s");
+  logf("sweep done, %d list%s", T.nlists, T.nlists == 1 ? "" : "s");
+}
+
+/* Start the next off-screen pull, or finish. */
+static void sweep_step(const char *tok) {
+  int i = sweep_next();
+  char url[256];
+
+  if (i < 0) { sweep_done(); return; }
+  api->fmt(url, sizeof url, TASKS_URL, T.lists[i].id);
+  if (api->http_start("GET", url, 0, 0, tok, 20000) != 0) {
+    /* The queue is busy. One list missing from the overview is not worth
+     * wedging the sweep over: stop here and let `s` try again. */
+    logf("sweep: %s refused, stopping", T.lists[i].name);
+    sweep_done();
+    return;
+  }
+  T.sweep = i;
+  T.stage = SYNC_SWEEP;
+  api->fmt(T.status, sizeof T.status, "syncing %s (%d/%d)",
+           T.lists[i].name, T.swept, T.nlists);
+}
+
 static void sync_begin(void) {
   const char *tok;
 
   if (T.stage != SYNC_IDLE) return;
-  T.next_auto = api->ticks_ms() + AUTO_EVERY_MS;
   T.tried_once = 1;
 
-  /* A sync that could not start is not a sync that succeeded. Both paths
-   * below leave the next attempt ten minutes away otherwise, so opening the
-   * app one second before the radio came up meant it said "offline" and then
-   * sat there saying it for ten minutes with WiFi plainly connected. */
-
+  /* A sync that could not start is not a sync that succeeded: it is tried
+   * again shortly rather than being counted as the one sweep this open
+   * gets. Opening the app a second before the radio comes up is the common
+   * case, not the rare one. */
   if (!api->net_ready()) {
-    /* No blocking twenty-second join from here: the OS brings the radio up
-     * for its own clock sync, and the next round will find it. */
     T.online = 0;
     say("offline -- showing the cache");
     T.next_auto = api->ticks_ms() + RETRY_MS;
+    logf("offline: %s", api->net_status ? api->net_status() : "no radio");
     return;
   }
   tok = api->google_token();
-  if (!tok || !tok[0]) { T.online = 0; say(api->google_status()); T.next_auto = api->ticks_ms() + RETRY_MS; return; }
-
-  if (!T.list_id[0]) {
-    if (start_list(tok) != 0) return;
-    T.stage = SYNC_LIST;
-  } else {
-    int i = next_dirty();
-    if (i >= 0) {
-      if (start_push(tok, i) != 0) return;
-      T.pushing = i;
-      T.stage = SYNC_PUSH;
-    } else {
-      if (start_pull(tok) != 0) return;
-      T.stage = SYNC_PULL;
-    }
+  if (!tok || !tok[0]) {
+    T.online = 0;
+    say(api->google_status());
+    T.next_auto = api->ticks_ms() + RETRY_MS;
+    logf("no token: %s", api->google_status());
+    return;
   }
+
+  /* Always the lists first, even on a second sweep: a list renamed or added
+   * on a phone should show up without restarting the app. */
+  if (start_list(tok) != 0) { start_refused(); return; }
+  T.stage = SYNC_LIST;
+  T.swept = 0;
+  T.sweep = -1;
   say("syncing...");
+  logf("sweep begins (%s)", T.synced_once ? "asked" : "opened");
 }
 
 static void sync_tick(void) {
@@ -357,15 +760,28 @@ static void sync_tick(void) {
   n = api->http_poll(T.reply, sizeof T.reply);
   if (n == CAPP_HTTP_PENDING) return;
 
+  /* The list changed under it. The lists themselves are not per-list and
+   * are kept; anything else was the old list's and is dropped. select_list
+   * left tried_once clear, so the next tick syncs the new list. */
+  if (T.discard) {
+    T.discard = 0;
+    if (T.stage == SYNC_LIST && n >= 0) absorb_lists();
+    T.stage = SYNC_IDLE;
+    return;
+  }
+
   tok = api->google_token();
 
   if (T.stage == SYNC_LIST) {
-    if (n < 0 || !json_str_at(T.reply, "id", T.list_id, ID_MAX)) {
+    if (n >= 0) absorb_lists();
+    if (n < 0 || !T.nlists) {
       T.online = 0;
       say(n < 0 ? "cannot reach Google" : "no task lists on this account");
+      logf("lists failed (%d)", n);
       T.stage = SYNC_IDLE;
       return;
     }
+    logf("%d list%s", T.nlists, T.nlists == 1 ? "" : "s");
     i = next_dirty();
     if (i >= 0 && tok && start_push(tok, i) == 0) {
       T.pushing = i; T.stage = SYNC_PUSH; return;
@@ -389,9 +805,15 @@ static void sync_tick(void) {
       }
       cache_save();
     } else {
+      /* Kept local and still dirty, so the next sweep tries again. The pull
+       * below is skipped for this list on purpose: it would overwrite the
+       * edit that just failed to send with the server's older answer. */
       T.online = 0;
       say("push failed, keeping it local");
-      T.stage = SYNC_IDLE;
+      logf("push failed (%d), keeping it local", n);
+      T.synced_once = 1;
+      if (tok) sweep_step(tok);
+      else sweep_done();
       return;
     }
     i = next_dirty();
@@ -401,10 +823,49 @@ static void sync_tick(void) {
     return;
   }
 
-  /* SYNC_PULL */
-  if (n < 0) { T.online = 0; say("pull failed, showing the cache"); }
-  else absorb_tasks();
-  T.stage = SYNC_IDLE;
+  if (T.stage == SYNC_SWEEP) {
+    /* One list of the sweep came back. A failure here is logged and stepped
+     * past: the others are the only chance they get until the user asks
+     * again, and abandoning them for one 403 is how the overview ends up
+     * half empty with nothing saying why. */
+    int got = 0;
+    if (n < 0) {
+      logf("%s: pull failed (%d)", T.sweep >= 0 ? T.lists[T.sweep].name : "?", n);
+    } else if (T.sweep >= 0) {
+      absorb_into(T.lists[T.sweep].id, &got);
+      logf("%s: %d task%s", T.lists[T.sweep].name, got, got == 1 ? "" : "s");
+    }
+    if (tok) sweep_step(tok);
+    else sweep_done();
+    return;
+  }
+
+  /* SYNC_PULL: the list on screen. Then the rest of them. */
+  if (n < 0) {
+    T.online = 0;
+    /* -4 is the kernel refusing to start the request at all, and it knows
+     * why -- "not enough memory: 37 KB free, TLS needs about 33" is
+     * something the owner of the device can act on, where "pull failed" is
+     * not. See kernel/net/http.c. */
+    if (n == -4) {
+      api->fmt(T.status, sizeof T.status, "%s", api->net_status());
+      T.next_auto = api->ticks_ms() + RETRY_MS;
+      T.synced_once = 0;             /* transient: let the retry sweep */
+    } else {
+      say("pull failed, showing the cache");
+    }
+    logf("%s: pull failed (%d) %s", T.lists[T.cur >= 0 ? T.cur : 0].name, n,
+         n == -4 ? api->net_status() : "");
+    T.stage = SYNC_IDLE;
+    if (n != -4) T.synced_once = 1;
+    return;
+  }
+  absorb_tasks();
+  logf("%s: %d task%s", T.cur >= 0 ? T.lists[T.cur].name : "?", T.n,
+       T.n == 1 ? "" : "s");
+  T.synced_once = 1;
+  if (tok) sweep_step(tok);
+  else sweep_done();
 }
 
 /* ---- local edits --------------------------------------------------------- */
@@ -497,6 +958,82 @@ static void paint_list(CRect c) {
   }
 }
 
+/* Every list's open tasks under its own heading, the way the calendar's
+ * agenda groups by day. Read-only on purpose: ticking and adding belong to a
+ * list, so there is one place that knows how to push them, and this stays a
+ * report you can trust. Enter goes to the list the row belongs to. */
+static void paint_all(CRect c) {
+  int rows = (c.h - ROW_H) / ROW_H;
+  int top = 0, r, y;
+
+  /* The heading a row carries is drawn above it, so a row with a heading is
+   * two rows tall -- which the scroll has to know about or the selection
+   * walks off the bottom. Counted the simple way: from the top until the
+   * selected row fits. */
+  while (top < T.osel) {
+    int used = 0, i;
+    for (i = top; i <= T.osel && i < T.nover; i++)
+      used += T.over[i].head ? 2 : 1;
+    if (used <= rows) break;
+    top++;
+  }
+
+  api->fill(rect(c.x, c.y, c.w, c.h - ROW_H), CLR_BG);
+  for (r = 0; r < T.nover; r++) T.oy[r] = -1;
+  y = c.y;
+  for (r = top; r < T.nover && y + ROW_H <= c.y + c.h - ROW_H; r++) {
+    OverRow *o = &T.over[r];
+    uint16_t bg;
+    if (o->head) {
+      if (y + 2 * ROW_H > c.y + c.h - ROW_H) break;
+      api->text((short)(c.x + 2), (short)(y + 1),
+                T.lists[o->list].name, CLR_PEND, CLR_BG);
+      y += ROW_H;
+    }
+    bg = (r == T.osel) ? CLR_SEL : CLR_BG;
+    T.oy[r] = (short)y;
+    api->fill(rect(c.x, y, c.w, ROW_H), bg);
+    api->frame(rect(c.x + 8, y + 2, 7, 7), CLR_DONE);
+    api->text((short)(c.x + 19), (short)(y + 2), o->title, CLR_TEXT, bg);
+    y += ROW_H;
+  }
+
+  if (!T.nover)
+    api->text((short)(c.x + 6), (short)(c.y + 6),
+              T.nlists ? "nothing to do anywhere" : "no lists yet -- s syncs",
+              CLR_DONE, CLR_BG);
+
+  api->fill(rect(c.x, c.y + c.h - ROW_H, c.w, ROW_H), CLR_BAR);
+  {
+    char bar[52];
+    api->fmt(bar, sizeof bar, "%d task%s%s   enter opens", T.nover,
+             T.nover == 1 ? "" : "s", T.over_full ? "+" : "");
+    api->text((short)(c.x + 3), (short)(c.y + c.h - ROW_H + 2), bar,
+              CLR_BARFG, CLR_BAR);
+  }
+}
+
+static void paint_lists(CRect c) {
+  int rows = (c.h - ROW_H) / ROW_H, r;
+
+  api->fill(c, CLR_BG);
+  for (r = 0; r < rows && r < T.nlists; r++) {
+    short y = (short)(c.y + r * ROW_H);
+    int sel = (r == T.psel);
+    uint16_t bg = sel ? CLR_SEL : ((r & 1) ? CLR_ROW : CLR_BG);
+    api->fill(rect(c.x, y, c.w, ROW_H), bg);
+    /* A dot marks the one whose tasks are on the card right now. */
+    if (r == T.cur) api->fill(rect(c.x + 5, y + 4, 3, 3), CLR_TICK);
+    api->text((short)(c.x + 14), (short)(y + 2), T.lists[r].name, CLR_TEXT, bg);
+  }
+  if (!T.nlists)
+    api->text((short)(c.x + 6), (short)(c.y + 6), "no lists yet -- s syncs",
+              CLR_DONE, CLR_BG);
+  api->fill(rect(c.x, c.y + c.h - ROW_H, c.w, ROW_H), CLR_BAR);
+  api->text((short)(c.x + 3), (short)(c.y + c.h - ROW_H + 2),
+            "enter opens   backspace cancels", CLR_BARFG, CLR_BAR);
+}
+
 static void paint_add(CRect c) {
   char shown[TITLE_MAX + 2];
   int i;
@@ -524,13 +1061,28 @@ static void paint_add(CRect c) {
  * Ctrl belongs entirely to the app now (kernel/drv/keyboard.h), so these
  * chords are safe to claim: the desktop used to take ctrl-S for its Start
  * menu, which is why an editor's save did nothing in a window. */
-enum { ACT_ADD = 1, ACT_TICK, ACT_DELETE, ACT_SYNC, ACT_SAVE, ACT_CANCEL };
+enum { ACT_ADD = 1, ACT_TICK, ACT_DELETE, ACT_SYNC, ACT_LISTS, ACT_ALL,
+       ACT_SAVE, ACT_CANCEL, ACT_OPEN, ACT_GOTO };
 
 static const CappAction LIST_ACTIONS[] = {
   { "add",    "Add",      "Task", 0x01, ACT_ADD },     /* ctrl-a */
   { "tick",   "Tick",     "Task", 0x14, ACT_TICK },    /* ctrl-t */
   { "delete", "Delete",   "Task", 0x04, ACT_DELETE },  /* ctrl-d */
   { "sync",   "Sync now", "List", 0x13, ACT_SYNC },    /* ctrl-s */
+  { "lists",  "Lists...", "List", 0x0C, ACT_LISTS },   /* ctrl-l */
+  { "all",    "All lists", "List", 0x0F, ACT_ALL },   /* ctrl-o */
+};
+
+/* The overview. Reading, and a way into the list a row belongs to. */
+static const CappAction ALL_ACTIONS[] = {
+  { "goto",   "Open list", "All", 0, ACT_GOTO },
+  { "cancel", "Back",      "All", 0, ACT_CANCEL },
+};
+
+/* Choosing a list. */
+static const CappAction PICK_ACTIONS[] = {
+  { "open",   "Open",   "Lists", 0, ACT_OPEN },
+  { "cancel", "Cancel", "Lists", 0, ACT_CANCEL },
 };
 
 /* While typing, the only two things that apply. */
@@ -543,9 +1095,13 @@ static const TbIcon LIST_ICONS[] = { { "+", ACT_ADD } };
 
 #define NLIST ((int)(sizeof LIST_ACTIONS / sizeof LIST_ACTIONS[0]))
 #define NADD  ((int)(sizeof ADD_ACTIONS / sizeof ADD_ACTIONS[0]))
+#define NPICK ((int)(sizeof PICK_ACTIONS / sizeof PICK_ACTIONS[0]))
+#define NALL  ((int)(sizeof ALL_ACTIONS / sizeof ALL_ACTIONS[0]))
 
 static void use_list_menus(void) { toolbar_set(LIST_ACTIONS, NLIST, LIST_ICONS, 1); }
 static void use_add_menus(void)  { toolbar_set(ADD_ACTIONS, NADD, 0, 0); }
+static void use_pick_menus(void) { toolbar_set(PICK_ACTIONS, NPICK, 0, 0); }
+static void use_all_menus(void)  { toolbar_set(ALL_ACTIONS, NALL, 0, 0); }
 
 static int do_action(int a);
 
@@ -563,12 +1119,17 @@ static void app_paint(void *st, CRect c) {
     toolbar_paint_bar(full);
     c = toolbar_rest(full);
 
+    T.content = c;               /* what damage() has to be expressed in */
     if (T.view == VIEW_ADD) paint_add(c);
+    else if (T.view == VIEW_ALL) paint_all(c);
+    else if (T.view == VIEW_LISTS) paint_lists(c);
     else {
       paint_list(c);
 
       api->fill(rect(c.x, c.y + c.h - ROW_H, c.w, ROW_H), CLR_BAR);
-      api->fmt(bar, sizeof bar, "%s%s", T.online ? "" : "offline  ", T.status);
+      api->fmt(bar, sizeof bar, "%s%s%s%s", T.online ? "" : "offline  ",
+               T.cur >= 0 ? T.lists[T.cur].name : "",
+               T.cur >= 0 ? "  " : "", T.status);
       api->text((short)(c.x + 3), (short)(c.y + c.h - ROW_H + 2), bar,
                 T.online ? CLR_BARFG : CLR_WARN, CLR_BAR);
     }
@@ -593,6 +1154,29 @@ static int do_action(int a) {
   case ACT_TICK:   toggle(); return 1;
   case ACT_DELETE: delete_selected(); return 1;
   case ACT_SYNC:   sync_begin(); return 1;
+  case ACT_LISTS:
+    T.psel = T.cur < 0 ? 0 : T.cur;
+    T.view = VIEW_LISTS;
+    use_pick_menus();
+    return 1;
+  case ACT_OPEN:
+    select_list(T.psel);
+    T.view = VIEW_LIST;
+    use_list_menus();
+    return 1;
+  case ACT_ALL:
+    over_build();
+    T.view = VIEW_ALL;
+    use_all_menus();
+    return 1;
+  case ACT_GOTO:
+    /* Into the list the highlighted row belongs to, with that list's own
+     * selection left where it was: the overview is a way in, not a cursor
+     * shared between views. */
+    if (T.osel >= 0 && T.osel < T.nover) select_list(T.over[T.osel].list);
+    T.view = VIEW_LIST;
+    use_list_menus();
+    return 1;
   case ACT_SAVE:
     add_draft();                       /* returns to the list itself */
     use_list_menus();
@@ -612,10 +1196,14 @@ static int key_list(unsigned char k) {
   switch (k) {
   case CAPP_KEY_UP:   if (T.sel > 0) T.sel--; return 1;
   case CAPP_KEY_DOWN: if (T.sel + 1 < T.n) T.sel++; return 1;
+  case CAPP_KEY_LEFT:  select_list(T.cur - 1); return 1;
+  case CAPP_KEY_RIGHT: select_list(T.cur + 1); return 1;
   case CAPP_KEY_ENTER:
   case ' ':           return do_action(ACT_TICK);
   case 'a': case 'A': return do_action(ACT_ADD);
   case 's': case 'S': return do_action(ACT_SYNC);
+  case 'l': case 'L': return do_action(ACT_LISTS);
+  case 'o': case 'O': return do_action(ACT_ALL);
   case 'd': case 'D':
   case 0x7F:          return do_action(ACT_DELETE);
   default: return 0;
@@ -626,6 +1214,9 @@ static int key_list(unsigned char k) {
  * keys are separate. */
 static int key_add(unsigned char k) {
   if (k == CAPP_KEY_ENTER) return do_action(ACT_SAVE);
+  /* Escape abandons the draft, not the app. It used to leave Todo entirely
+   * from here, which is a poor answer to "no, not that one". */
+  if (k == CAPP_KEY_ESC) return do_action(ACT_CANCEL);
   if (k == CAPP_KEY_BACK) {
     if (T.draft_len > 0) { T.draft[--T.draft_len] = 0; return 1; }
     return do_action(ACT_CANCEL);
@@ -641,9 +1232,58 @@ static int key_add(unsigned char k) {
   return 0;
 }
 
+/* The picker. Escape reaches an app before the shell acts on it now, so it
+ * means "back to the list" here -- and the shell only leaves the app when a
+ * view declines it, which the list view does. */
+static int key_pick(unsigned char k) {
+  switch (k) {
+  case CAPP_KEY_UP:   if (T.psel > 0) T.psel--; return 1;
+  case CAPP_KEY_DOWN: if (T.psel + 1 < T.nlists) T.psel++; return 1;
+  case CAPP_KEY_ENTER: return do_action(ACT_OPEN);
+  case CAPP_KEY_ESC:
+  case CAPP_KEY_BACK:
+  case 'l': case 'L':  return do_action(ACT_CANCEL);
+  default: return 0;
+  }
+}
+
+static int key_all(unsigned char k) {
+  switch (k) {
+  case CAPP_KEY_UP:   if (T.osel > 0) T.osel--; return 1;
+  case CAPP_KEY_DOWN: if (T.osel + 1 < T.nover) T.osel++; return 1;
+  case CAPP_KEY_ENTER: return do_action(ACT_GOTO);
+  case CAPP_KEY_ESC:
+  case CAPP_KEY_BACK:
+  case 'o': case 'O':  return do_action(ACT_CANCEL);
+  case 's': case 'S':  return do_action(ACT_SYNC);
+  default: return 0;
+  }
+}
+
+/* The bar first, and it answers for every key while it has them. fn-b puts
+ * the keyboard in it; an item chosen there becomes an action, the same one a
+ * click would have produced. */
+static int menu_key(unsigned char k, int *handled) {
+  int a = toolbar_key(k);
+  *handled = 1;
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return do_action(a);
+  *handled = 0;
+  return 0;
+}
+
 static int app_key(void *st, unsigned char k) {
+  int handled, r;
   (void)st;
-  return T.view == VIEW_ADD ? key_add(k) : key_list(k);
+  r = menu_key(k, &handled);
+  if (handled) return r;
+  if (T.view == VIEW_ADD) return key_add(k);
+  if (T.view == VIEW_LISTS) return key_pick(k);
+  if (T.view == VIEW_ALL) return key_all(k);
+  /* The list is the top level: it declines Escape, and the shell takes that
+   * as "leave the app". Every view above returns 1 for it and goes back a
+   * step instead, which is the whole point of the app seeing it first. */
+  return key_list(k);
 }
 
 /* What the shell calls for a chord out of the table, and what the menu bar
@@ -668,6 +1308,25 @@ static int app_click(void *st, short x, short y, int button) {
   y = (short)(y - toolbar_h());
   row = y / ROW_H;
 
+  if (T.view == VIEW_ALL) {
+    int r;
+    for (r = 0; r < T.nover; r++) {
+      if (T.oy[r] < 0) continue;
+      if (y < T.oy[r] || y >= T.oy[r] + ROW_H) continue;
+      /* The first click selects, a click on the row already selected opens
+       * it -- the same two-step the flat list uses for its tick box, so a
+       * mis-aimed tap does not change which list you are looking at. */
+      if (r == T.osel) return do_action(ACT_GOTO);
+      T.osel = r;
+      return 1;
+    }
+    return 0;
+  }
+  if (T.view == VIEW_LISTS) {
+    if (row < 0 || row >= T.nlists) return 0;
+    T.psel = row;
+    return do_action(ACT_OPEN);
+  }
   if (T.view != VIEW_LIST) return 0;
   /* The bottom strip is the status line, not a task. */
   if (row >= T.shown_rows) return 0;
@@ -688,22 +1347,59 @@ static int app_click(void *st, short x, short y, int button) {
  * layout shifts down -- hence the repaint. */
 /* Collects an in-flight request and starts one when it is due. The first is
  * on open, because the reason to open a list is to see what is on it. */
+/* The status strip, and nothing else.
+ *
+ * This is the flicker the user saw, and it was the OS doing exactly what it
+ * was told: an app that asks for a repaint without marking anything gets its
+ * whole rectangle (kernel/app/capprun.c), and toolbar_damage_bar marks
+ * nothing until a mouse has appeared and the bar exists. So a sync redrew
+ * every task, several times a second, and in a window the frame with them --
+ * which is why it was worst there. The strip is the only thing that changes
+ * while a sync runs, so the strip is what gets marked. */
+static void damage_status(void) {
+  CRect c = T.content;
+  if (c.w <= 0 || c.h < ROW_H) return;
+  api->damage(rect(c.x, c.y + c.h - ROW_H, c.w, ROW_H));
+}
+
+static int status_changed(void) {
+  const char *a = T.status, *b = T.last_status;
+  while (*a && *a == *b) { a++; b++; }
+  if (!*a && !*b) return 0;
+  api->fmt(T.last_status, sizeof T.last_status, "%s", T.status);
+  return 1;
+}
+
 static int app_tick(void *st, uint32_t now_ms) {
-  int was = T.stage, n = T.n;
+  int was = T.stage, n = T.n, redraw = 0;
   (void)st;
 
   sync_tick();
   toolbar_busy(T.stage != SYNC_IDLE);
-  /* Just the bar, so the dots can move without redrawing the window. */
-  if (T.stage != SYNC_IDLE) toolbar_damage_bar();
-  toolbar_busy(T.stage != SYNC_IDLE);
-  if (T.stage == SYNC_IDLE &&
+
+  /* One sweep, at open. Everything the app is going to fetch, it fetches
+   * now: the lists, the list on screen, then the rest into their files. What
+   * used to happen instead was a pull of the current list every ten minutes,
+   * which rearranged the screen under whoever was reading it and still left
+   * every other list unfetched. `s` is how you ask for another.
+   *
+   * The exception is a sweep that could not start at all -- no radio yet, no
+   * token yet -- which is not a sweep and is retried shortly. */
+  if (T.stage == SYNC_IDLE && !T.synced_once &&
       (!T.tried_once || (int32_t)(now_ms - T.next_auto) >= 0))
     sync_begin();
 
-  /* Repaint while waiting, so the bar's dots animate. Otherwise only when
-   * something actually changed. */
-  return was != T.stage || n != T.n || T.stage != SYNC_IDLE;
+  if (was != T.stage || n != T.n) redraw = 1;
+  if (status_changed()) { damage_status(); redraw = 1; }
+  /* The bar's dots animate off the clock, so while one is in the air the bar
+   * asks for itself back -- and only the bar. When there is no bar (no mouse
+   * has appeared) this marks nothing and asks for nothing, which is the
+   * whole fix. */
+  if (T.stage != SYNC_IDLE && toolbar_bar_rect().w) {
+    toolbar_damage_bar();
+    redraw = 1;
+  }
+  return redraw;
 }
 
 static int app_mouse(void *st, int16_t x, int16_t y, int buttons, int wheel) {
@@ -716,6 +1412,9 @@ static int app_mouse(void *st, int16_t x, int16_t y, int buttons, int wheel) {
 
 static int app_wants_text(void *st) {
   (void)st;
+  /* Not while the menu has the keyboard: a spoken sentence or a Bluetooth
+   * keyboard would otherwise type into a draft that is not on screen. */
+  if (toolbar_has_keys()) return 0;
   return T.view == VIEW_ADD;
 }
 
@@ -728,7 +1427,9 @@ const CappInfo capp_info = {
     0x30, 0x0C, 0x37, 0x8C, 0x33, 0x0C, 0x30, 0x0C,
     0x36, 0x0C, 0x33, 0x0C, 0x31, 0x8C, 0x30, 0xCC,
     0x30, 0x6C, 0x3F, 0xFC, 0x00, 0x00, 0x00, 0x00 },
-  "arrows\tmove\nenter\ttick it off\na\tadd a task\nd\tdelete\ns\tsync with Google\n",
+  "arrows\tmove\nenter\ttick it off\na\tadd a task\nd\tdelete / undo\n"
+  "s\tsync every list\nleft/right\tnext list\nl\tchoose a list\n"
+  "o\tall lists at once\nescape\tback, then out\n",
 };
 
 static CappUi UI;
@@ -743,7 +1444,14 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   /* The cache first, so the list is on screen before the radio has finished
    * thinking about it. A todo list that shows nothing until it is online is a
    * todo list you cannot use on a train. */
+  api->mkdir(CACHE_DIR);
+  T.sweep = -1;
+  cache_migrate();
+  lists_load();
   cache_load();
+  /* From the cache files, so `o` shows everything the last sweep left even
+   * on a device that has not been online since. */
+  over_build();
   api->fmt(T.status, sizeof T.status, "%d cached -- s syncs", T.n);
 
   toolbar_init(api, LIST_ACTIONS, NLIST, LIST_ICONS, 1);

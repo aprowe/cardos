@@ -13,6 +13,7 @@
 #include "kernel/ui/icons.h"
 #include "kernel/ui/launchui.h"
 #include "kernel/sys/env.h"
+#include "kernel/sys/clock.h"
 #include "kernel/sys/hotkeys.h"
 #include "kernel/sys/sio.h"
 #include "kernel/net/gauth.h"
@@ -555,6 +556,15 @@ void cmd_set(const char *arg) {
   }
   if (env_set(name, eq + 1) != 0) { err("set", "no room for another variable"); return; }
   con_printf("%s=%s\n", name, eq + 1);
+
+  /* TZ is read by the C library, not by whoever asks the time, so it has to
+   * be pushed through tzset() before anything reads a clock again. Without
+   * this, `set TZ=...` listed the new value and changed nothing until the
+   * next reboot. */
+  if (!strcmp(name, "TZ")) {
+    clock_apply_zone();
+    con_printf("clock now %s\n", clock_zone());
+  }
 }
 
 /* --------------------------------------------------------------- hotkey --- */

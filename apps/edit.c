@@ -840,8 +840,23 @@ static int app_action(void *st, int a) {
   return do_action(a);
 }
 
+/* The bar first, and it answers for every key while it has them. fn-b puts
+ * the keyboard in it; an item chosen there becomes an action, the same one a
+ * click would have produced. */
+static int menu_key(unsigned char k, int *handled) {
+  int a = toolbar_key(k);
+  *handled = 1;
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return do_action(a);
+  *handled = 0;
+  return 0;
+}
+
 static int app_key(void *st, unsigned char k) {
+  int handled, r;
   (void)st;
+  r = menu_key(k, &handled);
+  if (handled) return r;
   if (E.view == VIEW_BROWSE) return key_browse(k);
   if (E.view == VIEW_NAME) return key_name(k);
   if (E.view == VIEW_PREVIEW) return key_preview(k);
@@ -910,7 +925,9 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
 static int app_wants_text(void *st) {
   (void)st;
   /* Not while previewing: nothing there takes typing, and saying otherwise
-   * would cost the arrow keys, which are how you scroll it. */
+   * would cost the arrow keys, which are how you scroll it. Nor while the
+   * menu has the keyboard. */
+  if (toolbar_has_keys()) return 0;
   return E.view == VIEW_EDIT || E.view == VIEW_NAME;
 }
 

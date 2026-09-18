@@ -64,7 +64,7 @@ static Rect s_full_rect;
  * no return value that reaches the main loop. */
 static int s_leave_for_console;
 
-/* The ctrl-h key list, drawn over the compositor's output like the start
+/* The fn-h key list, drawn over the compositor's output like the start
  * menu. Closing it repaints, because nothing below it knows it was there. */
 static int s_help;
 
@@ -1031,8 +1031,9 @@ int desktop_key(uint8_t key) {
     s_help = 1;
     help_paint(a ? a->name : "Desktop", a ? a->help : NULL,
                s_full
-               ? "escape\tleave fullscreen\nctrl-f\tleave fullscreen\nctrl-h\tclose this\n"
-               : "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nctrl-s\tstart menu\nctrl-f\tfullscreen / window\nctrl-w\tclose window\nescape\tthe console\nctrl-h\tclose this\n");
+               ? "escape\tback, or leave fullscreen\nfn-b\tmenu bar, by keyboard\n"
+                 "fn-`\tleave fullscreen always\nfn-f\twindowed\nfn-h\tclose this\n"
+               : "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nfn-s\tstart menu\nfn-f\tfullscreen / window\nfn-w\tclose window\nfn-m\tminimise\nfn-p\tkeyboard mouse\nescape\tthe console\nfn-h\tclose this\n");
     return 0;
   }
 
@@ -1047,16 +1048,19 @@ int desktop_key(uint8_t key) {
     }
   }
 
-  /* A fullscreen app has the keyboard as well as the panel. Escape is the one
-   * key it does not get, because something has to bring the desktop back. */
+  /* A fullscreen app has the keyboard as well as the panel. Escape reaches it
+   * first and means "back" if it has anywhere to go back to; fn-` and fn-w
+   * bring the desktop back whatever it thinks. */
   if (s_full) {
-    if (key == KEY_ESC) { leave_fullscreen(); return 0; }
+    if (key == KEY_QUIT) { leave_fullscreen(); return 0; }
     if (key == KEY_FN_LETTER('f')) { toggle_fullscreen(); return 0; }
     if (key == KEY_FN_LETTER('w')) { leave_fullscreen(); return 0; }
     if (s_full->key && s_full->key(s_full->state, key)) {
       s_full_dirty = 1;
       desktop_flush();
+      return 0;
     }
+    if (key == KEY_ESC) { leave_fullscreen(); return 0; }
     return 0;
   }
 
@@ -1193,6 +1197,7 @@ int desktop_key(uint8_t key) {
    * menu rather than saving. Ctrl belongs to whatever has focus now; the
    * frame around it answers to fn. See kernel/drv/keyboard.h. */
   switch (key) {
+  case KEY_QUIT: close_focused(); desktop_repaint(); return 0;
   case KEY_FN_LETTER('p'): desktop_set_kbd_mouse(!s_kbd_mouse); return 0;
   case KEY_FN_LETTER('s'): s_start_open = 1; s_start_sel = 0; menu_touch();
                            desktop_flush(); return 0;

@@ -121,12 +121,16 @@ class Device:
         """Ask for one and wait for the proxy to have written it."""
         import glob
         import os
-        before = set(glob.glob(os.path.join(self.out_dir, "serial*.png")))
+        # By modification time, not by name: the device numbers its shots
+        # from 1 again after every reboot, and a serial2.png left behind by a
+        # run that never collected it made the next serial2.png invisible.
+        started = time.time()
         self.s.write(bytes([SHOT_BYTE]))
         t = time.time()
         while time.time() - t < timeout:
-            new = set(glob.glob(os.path.join(self.out_dir, "serial*.png"))) - before
-            new = {p for p in new if "@" not in os.path.basename(p)}
+            new = {p for p in glob.glob(os.path.join(self.out_dir, "serial*.png"))
+                   if "@" not in os.path.basename(p)
+                   and os.path.getmtime(p) >= started - 1}
             if new:
                 time.sleep(0.3)               # the @3x is written second
                 src = new.pop()

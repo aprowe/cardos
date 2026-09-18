@@ -1,4 +1,4 @@
-/* The ctrl-h key list. Device-only.
+/* The fn-h key list. Device-only.
  *
  * Every shell shows the same panel over whatever is on screen: the app's keys
  * first, then the ones the shell itself owns. Shared rather than written twice

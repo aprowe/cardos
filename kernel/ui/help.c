@@ -1,4 +1,4 @@
-/* The ctrl-h key list. See help.h. */
+/* The fn-h key list. See help.h. */
 
 #include "kernel/ui/help.h"
 #include "kernel/ui/draw.h"

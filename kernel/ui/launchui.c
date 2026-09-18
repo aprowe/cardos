@@ -300,14 +300,15 @@ static const char *shell_keys(void) {
   char c;
   size_t n;
 
-  if (s_app) return "escape\tback to the launcher\nctrl-h\tclose this\n";
+  if (s_app) return "escape\tback, or leave the app\nfn-b\tmenu bar, by keyboard\n"
+                    "fn-`\tleave the app always\nfn-h\tclose this\n";
 
   /* The bindings are listed here rather than on a screen of their own: the
    * key list is where someone looks to find out what opt-p does. */
   snprintf(buf, sizeof buf,
            "arrows\tmove along the row\nenter\topen\nk\tbind opt-letter to this app\n"
            "r\treload the app list\nd\tswitch to the desktop\n"
-           "escape\tup a level, or the console\nctrl-h\tclose this\n");
+           "escape\tup a level, or the console\nfn-h\tclose this\n");
   n = strlen(buf);
   for (c = 'a'; c <= 'z' && n < sizeof buf - 40; c++) {
     const char *name = hotkey_get(c);
@@ -602,7 +603,7 @@ int launchui_run_path(const char *path, const char *args) {
 }
 
 int launchui_key(uint8_t key) {
-  /* The key list is over everything, so it gets the key first: ctrl-h closes
+  /* The key list is over everything, so it gets the key first: fn-h closes
    * it and so does anything else, because a panel you have to dismiss with
    * one specific key is a panel you fight. */
   if (s_help) {
@@ -645,11 +646,18 @@ int launchui_key(uint8_t key) {
   }
 
   if (s_app) {
-    if (key == KEY_ESC) { leave_app(); return 0; }
+    /* Escape goes to the app first, exactly as it does to a windowed app on
+     * the desktop. It used to leave from here unconditionally, so the same
+     * key closed a dialog in a window and threw the app away fullscreen.
+     * An app that has nothing to go back to declines it and it leaves;
+     * fn-` leaves whatever the app says. */
+    if (key == KEY_QUIT) { leave_app(); return 0; }
     if (s_app->key && s_app->key(s_app->state, key)) {
       s_app_dirty = 1;
       flush();
+      return 0;
     }
+    if (key == KEY_ESC) { leave_app(); return 0; }
     return 0;
   }
 

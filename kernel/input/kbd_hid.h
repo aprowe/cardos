@@ -25,7 +25,11 @@
 /* Must match KEY_HELP in kernel/drv/keyboard.h. Repeated rather than included
  * because this module is portable and host-tested, and keyboard.h is device
  * code -- the test for it is the thing that keeps the two in step. */
-#define KBD_KEY_HELP 0x86
+#define KBD_KEY_HELP (0xE0 + ('h' - 'a'))   /* fn-h, as keyboard.h has it */
+
+/* Leave the app whatever it wants: the GUI key with Escape, which is fn-`
+ * on the Cardputer's own keyboard. See KEY_QUIT in kernel/drv/keyboard.h. */
+#define KBD_KEY_QUIT 0x84
 
 /* Must match KEY_OPT_DIGIT / KEY_OPT_LETTER in kernel/drv/keyboard.h. Repeated
  * because this module is portable and that one is device code; the test is

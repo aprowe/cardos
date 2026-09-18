@@ -21,11 +21,24 @@
  * else the rest of the time. A menu item that cannot apply is worse than an
  * absent one.
  *
- * It appears only once a mouse has actually moved, which is the rule the
- * launcher uses to decide whether to draw a pointer (s_pointer_on in
+ * It appears once a mouse has actually moved, which is the rule the launcher
+ * uses to decide whether to draw a pointer (s_pointer_on in
  * kernel/ui/launchui.c). So the bar and the cursor arrive together, and no
  * API was needed to ask whether a mouse exists -- the arrival of a mouse
  * event IS the answer.
+ *
+ * AND IT IS A KEYBOARD MENU TOO. fn-b shows the bar and puts the keyboard in
+ * it; left and right walk the menu names, down opens one, up and down walk
+ * its items, Enter runs the highlighted one and Escape steps back out to the
+ * app with the bar still showing. fn-b again hides it. The same table draws
+ * both, so a menu reached by keyboard and a menu reached by pointer cannot
+ * disagree about what the app can do -- and every item shows its chord, which
+ * is how anybody ever learns one without a mouse.
+ *
+ * WHILE THE KEYBOARD IS IN THE BAR, THE APP GETS NO KEYS. toolbar_key()
+ * answers TB_CONSUMED for everything it is given, arrows and letters alike.
+ * Letting unclaimed keys through meant typing into the app underneath an open
+ * menu, which is how you end up with a stray letter in a to-do.
  *
  * PAINTING IS TWO CALLS, and the order matters. The bar goes before the app's
  * content and the open dropdown after it, because a dropdown overlaps what it
@@ -94,6 +107,8 @@ static struct {
   int               nicon;
 
   int seen_mouse;
+  int shown;                   /* asked for with fn-b, with or without a mouse */
+  int focus;                   /* the keyboard is in the bar, not the app */
   int busy;
   int open;                    /* index of the open menu, or -1 */
   int hot_menu, hot_item, hot_icon;
@@ -134,6 +149,8 @@ static TB_OPT void toolbar_init(const CardApi *a, const CappAction *actions,
                                 int n, const TbIcon *icons, int nicon) {
   TB.api = a;
   TB.seen_mouse = 0;
+  TB.shown = 0;
+  TB.focus = 0;
   TB.busy = 0;
   toolbar_set(actions, n, icons, nicon);
 }
@@ -153,7 +170,7 @@ static TB_OPT int toolbar_saw_mouse(void) {
 static TB_OPT void toolbar_busy(int on) { TB.busy = on; }
 
 static TB_OPT int toolbar_h(void) {
-  return TB.seen_mouse && (TB.nmenu || TB.nicon) ? TB_H : 0;
+  return (TB.seen_mouse || TB.shown) && (TB.nmenu || TB.nicon) ? TB_H : 0;
 }
 
 static TB_OPT CRect toolbar_rest(CRect c) {
@@ -351,6 +368,122 @@ static TB_OPT void toolbar_paint_menu(CRect c) {
     TB.api->text((short)(m.x + TB_PAD), (short)(yy + 1), buf, TB_TEXT, bg);
   }
 }
+
+/* ---- the keyboard ---------------------------------------------------------
+ *
+ * Call this FIRST from the app's key handler and act on the answer: TB_NONE
+ * means the key was not the bar's and the app should handle it as usual,
+ * TB_CONSUMED means the bar used it and wants a repaint, anything else is an
+ * app action to run -- the same three answers toolbar_click gives, so an app
+ * handles a menu item the same way whichever way it was reached.
+ *
+ * Damage is marked here rather than left to the app: moving down an open
+ * dropdown changes a dropdown-sized piece of the screen, and an app that
+ * answers "repaint" without saying what changed gets its whole window
+ * redrawn, which is the flicker this file already has two fast paths for. */
+static TB_OPT void toolbar_damage_all(CRect before) {
+  CRect bar = toolbar_bar_rect(), now = toolbar_menu_rect();
+  if (bar.w) TB.api->damage(bar);
+  if (before.w) TB.api->damage(before);
+  if (now.w) TB.api->damage(now);
+}
+
+/* Leave the bar to the app, keeping it on screen. */
+static TB_OPT void toolbar_unfocus(void) {
+  TB.focus = 0;
+  TB.open = -1;
+  TB.hot_menu = TB.hot_item = -1;
+}
+
+static TB_OPT int toolbar_key(uint8_t k) {
+  CRect before;
+
+  if (!TB.nmenu && !TB.nicon) return TB_NONE;
+
+  /* The one key that works whether or not the bar has the keyboard. */
+  if (k == CAPP_KEY_MENU) {
+    if (TB.shown || TB.focus) {
+      /* Hidden outright rather than merely unfocused: the same key that
+       * summoned it puts it away, and the app gets its eleven pixels back. */
+      toolbar_unfocus();
+      TB.shown = 0;
+    } else {
+      TB.shown = 1;
+      TB.focus = 1;
+      TB.hot_menu = TB.nmenu ? 0 : -1;
+      TB.hot_item = -1;
+      TB.open = -1;
+    }
+    return TB_CONSUMED;      /* the layout moved: the app repaints in full */
+  }
+
+  if (!TB.focus) return TB_NONE;
+
+  before = toolbar_menu_rect();
+
+  switch (k) {
+  case CAPP_KEY_LEFT:
+  case CAPP_KEY_RIGHT: {
+    int d = (k == CAPP_KEY_RIGHT) ? 1 : -1;
+    if (TB.nmenu) {
+      TB.hot_menu = (TB.hot_menu + d + TB.nmenu) % TB.nmenu;
+      /* A dropdown that was open follows along, which is what every menu bar
+       * does and the only way to read across them without reopening each. */
+      if (TB.open >= 0) { TB.open = TB.hot_menu; TB.hot_item = 0; }
+    }
+    break;
+  }
+
+  case CAPP_KEY_DOWN:
+    if (TB.open < 0) { TB.open = TB.hot_menu; TB.hot_item = 0; }
+    else {
+      int n = tb_menu_count(TB.open);
+      if (n) TB.hot_item = (TB.hot_item + 1) % n;
+    }
+    break;
+
+  case CAPP_KEY_UP:
+    if (TB.open >= 0) {
+      int n = tb_menu_count(TB.open);
+      /* Up off the top closes the menu rather than wrapping to the bottom:
+       * the way back to the bar has to be the way you came. */
+      if (TB.hot_item <= 0) { TB.open = -1; TB.hot_item = -1; }
+      else if (n) TB.hot_item--;
+    }
+    break;
+
+  case CAPP_KEY_ENTER:
+    if (TB.open < 0) { TB.open = TB.hot_menu; TB.hot_item = 0; break; }
+    {
+      const CappAction *a = tb_menu_item(TB.open, TB.hot_item);
+      /* Running an item gives the keyboard back: the thing you asked for is
+       * about to happen and it is the app's business, not the menu's. */
+      toolbar_unfocus();
+      toolbar_damage_all(before);
+      return a ? a->action : TB_CONSUMED;
+    }
+
+  case CAPP_KEY_ESC:
+    /* Outwards one step at a time, the same as everywhere else in the OS:
+     * the dropdown, then the bar, and only then is Escape the app's. */
+    if (TB.open >= 0) { TB.open = -1; TB.hot_item = -1; break; }
+    toolbar_unfocus();
+    break;
+
+  default:
+    /* Swallowed. See the note at the top of the file: an unclaimed key that
+     * fell through reached the app underneath an open menu. */
+    break;
+  }
+
+  toolbar_damage_all(before);
+  return TB_CONSUMED;
+}
+
+/* Is the keyboard in the bar? An app asks before deciding that a key means
+ * something to it -- and wants_text answers no while a menu is up, so voice
+ * and the matrix do not type into a list that is not listening. */
+static TB_OPT int toolbar_has_keys(void) { return TB.focus; }
 
 /* ---- hit testing ----------------------------------------------------------- */
 

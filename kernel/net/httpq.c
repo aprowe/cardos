@@ -2,6 +2,7 @@
 
 #include "kernel/net/httpq.h"
 #include "kernel/net/http.h"
+#include "kernel/net/httpslot.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -30,13 +31,15 @@ static const char *TAG = "httpq";
 #define Q_STACK     6144
 #define Q_CORE      1
 
-enum { IDLE = 0, RUNNING, DONE };
-
 static TaskHandle_t      s_task;
 static SemaphoreHandle_t s_go;         /* signals the task that work is ready */
 static SemaphoreHandle_t s_lock;
 
-static volatile int s_state;
+/* Who has the slot and whether they are still around: kernel/net/httpslot.c,
+ * which is where the sequence that used to wedge this is written down. Read
+ * without the lock only to answer "is it running" -- every transition is
+ * made under it. */
+static HttpSlot     s_slot;
 static int          s_result;
 static char        *s_reply;           /* owned here; freed on collection */
 
@@ -52,7 +55,7 @@ static int  s_has_body, s_has_ct, s_has_bearer, s_timeout;
 static char s_body_path[80], s_reply_path[80];
 static int  s_files;
 
-int httpq_active(void) { return s_state == RUNNING; }
+int httpq_active(void) { return s_slot.state == HTTPSLOT_RUNNING; }
 
 static void httpq_task(void *arg) {
   (void)arg;
@@ -74,7 +77,22 @@ static void httpq_task(void *arg) {
                                     s_has_ct ? s_ct : NULL,
                                     s_has_bearer ? s_bearer : NULL,
                                     s_reply, REPLY_MAX, s_timeout);
-    s_state = DONE;
+
+    /* Under the lock, because the owner may be being unloaded on the other
+     * core at this very moment. A reply nobody is coming for is freed here
+     * rather than left as DONE: that was the reply that sat in the slot until
+     * reboot and answered "busy" to every app that asked after it. */
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    {
+      const void *owner = s_slot.owner;
+      if (httpslot_finish(&s_slot)) {
+        ESP_LOGI(TAG, "%d for %p, who left: dropped", s_result, owner);
+        free(s_reply); s_reply = NULL;
+      } else {
+        ESP_LOGD(TAG, "%d for %p, waiting to be collected", s_result, owner);
+      }
+    }
+    xSemaphoreGive(s_lock);
   }
 }
 
@@ -83,21 +101,29 @@ void httpq_init(void) {
   s_go = xSemaphoreCreateBinary();
   s_lock = xSemaphoreCreateMutex();
   if (!s_go || !s_lock) { ESP_LOGE(TAG, "no memory for the queue"); return; }
+  httpslot_init(&s_slot);
   xTaskCreatePinnedToCore(httpq_task, "httpq", Q_STACK, NULL, Q_PRIORITY,
                           &s_task, Q_CORE);
 }
 
-int httpq_start(const char *method, const char *url, const char *body,
-                const char *content_type, const char *bearer, int timeout_ms) {
+int httpq_start(const void *owner, const char *method, const char *url,
+                const char *body, const char *content_type, const char *bearer,
+                int timeout_ms) {
   int rc = 0;
 
   if (!s_task || !url || !method) return -1;
 
   xSemaphoreTake(s_lock, portMAX_DELAY);
-  if (s_state != IDLE) { xSemaphoreGive(s_lock); return -1; }
+  if (httpslot_claim(&s_slot, owner) != 0) {
+    ESP_LOGW(TAG, "refused %p: slot is %s, owner %p", owner,
+             s_slot.state == HTTPSLOT_RUNNING ? "running" : "done", s_slot.owner);
+    xSemaphoreGive(s_lock);
+    return -1;
+  }
+  ESP_LOGI(TAG, "%p starts %s %s", owner, method, url);
 
   s_reply = malloc(REPLY_MAX);
-  if (!s_reply) { xSemaphoreGive(s_lock); return -2; }
+  if (!s_reply) { httpslot_collect(&s_slot); xSemaphoreGive(s_lock); return -2; }
   s_reply[0] = 0;
 
   /* Copied, not referenced: the caller is an app that may be unloaded, or a
@@ -113,20 +139,20 @@ int httpq_start(const char *method, const char *url, const char *body,
   s_timeout = timeout_ms;
   s_files = 0;
   s_result = HTTPQ_PENDING;
-  s_state = RUNNING;
   xSemaphoreGive(s_lock);
 
   xSemaphoreGive(s_go);
   return rc;
 }
 
-int httpq_start_files(const char *url, const char *body_path,
-                      const char *content_type, const char *auth,
-                      const char *reply_path, int timeout_ms) {
+int httpq_start_files(const void *owner, const char *url,
+                      const char *body_path, const char *content_type,
+                      const char *auth, const char *reply_path,
+                      int timeout_ms) {
   if (!s_task || !url || !body_path || !reply_path) return -1;
 
   xSemaphoreTake(s_lock, portMAX_DELAY);
-  if (s_state != IDLE) { xSemaphoreGive(s_lock); return -1; }
+  if (httpslot_claim(&s_slot, owner) != 0) { xSemaphoreGive(s_lock); return -1; }
 
   s_reply = NULL;                          /* the reply goes to the card */
   snprintf(s_url, sizeof s_url, "%s", url);
@@ -139,7 +165,6 @@ int httpq_start_files(const char *url, const char *body_path,
   s_timeout = timeout_ms;
   s_files = 1;
   s_result = HTTPQ_PENDING;
-  s_state = RUNNING;
   xSemaphoreGive(s_lock);
 
   xSemaphoreGive(s_go);
@@ -149,8 +174,8 @@ int httpq_start_files(const char *url, const char *body_path,
 int httpq_poll(char *out, size_t out_size) {
   int r;
 
-  if (s_state == IDLE) return -1;           /* nothing was ever started */
-  if (s_state == RUNNING) return HTTPQ_PENDING;
+  if (s_slot.state == HTTPSLOT_IDLE) return -1;   /* nothing was ever started */
+  if (s_slot.state == HTTPSLOT_RUNNING) return HTTPQ_PENDING;
 
   xSemaphoreTake(s_lock, portMAX_DELAY);
   r = s_result;
@@ -159,7 +184,17 @@ int httpq_poll(char *out, size_t out_size) {
   }
   free(s_reply);
   s_reply = NULL;
-  s_state = IDLE;
+  httpslot_collect(&s_slot);
   xSemaphoreGive(s_lock);
   return r;
+}
+
+void httpq_abandon(const void *owner) {
+  if (!s_lock || !owner) return;
+  xSemaphoreTake(s_lock, portMAX_DELAY);
+  if (s_slot.state != HTTPSLOT_IDLE)
+    ESP_LOGD(TAG, "%p leaves; slot is %s for %p", owner,
+             s_slot.state == HTTPSLOT_RUNNING ? "running" : "done", s_slot.owner);
+  if (httpslot_abandon(&s_slot, owner)) { free(s_reply); s_reply = NULL; }
+  xSemaphoreGive(s_lock);
 }

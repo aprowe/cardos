@@ -6,10 +6,21 @@
  * event added with no signal is queued with no id and pushed on the next
  * sync.
  *
- * Two views over the same list. The agenda is the default because it answers
+ * Three views over the same list. The agenda is the default because it answers
  * "what is next", which is the question a small screen is actually good for;
  * the month grid is a date picker, because at 240x135 a month cell is about
- * thirty pixels wide and can hold a number and a dot and nothing else.
+ * thirty pixels wide and can hold a number and a dot and nothing else. The day
+ * view is what the other two cannot do: one date, in full, with the empty days
+ * shown as empty. The agenda skips a day nothing happens on, which is right
+ * for "what is next" and wrong for "am I free on Thursday" -- so left and
+ * right step a day at a time there, including onto the days the agenda never
+ * draws.
+ *
+ * The day view is a layer, not a fourth place to be: it remembers whether the
+ * agenda or the grid opened it and Escape goes back there. Escape reaches an
+ * app before the shell acts on it, so returning 1 keeps the app open and
+ * returning 0 leaves it -- which is why key_agenda, the top level, must not
+ * claim it.
  *
  * THE MEMORY PROBLEM, AND THE ONE TRICK THAT SOLVES IT. A Google event is
  * about 700 bytes of JSON -- attendees, reminders, conferencing, html links,
@@ -72,7 +83,14 @@
 #define CLR_PEND    CAPP_RGB(150, 170, 255)
 #define CLR_GRID    CAPP_RGB(44, 48, 58)
 
-typedef enum { VIEW_AGENDA = 0, VIEW_MONTH, VIEW_ADD } View;
+/* The shell hands Escape to the app before acting on it, so an app that has
+ * somewhere to go back to says so by handling it. Defined here rather than
+ * assumed, because an older capp.h has no name for it. */
+#ifndef CAPP_KEY_ESC
+#define CAPP_KEY_ESC 0x1B
+#endif
+
+typedef enum { VIEW_AGENDA = 0, VIEW_MONTH, VIEW_DAY, VIEW_ADD } View;
 typedef enum { FIELD_TITLE = 0, FIELD_DATE, FIELD_TIME, FIELD_COUNT } Field;
 
 typedef struct {
@@ -83,6 +101,14 @@ typedef struct {
   uint8_t  all_day;
   uint8_t  dirty;                   /* made here, not yet pushed */
   uint8_t  deleted;                 /* gone here, not yet gone at Google */
+  /* This event is the one a POST is currently in the air for. It lives on the
+   * event and not in an index beside it because adding or deleting during
+   * those few seconds sorts the array out from under an index: the reply then
+   * cleared the dirty flag of whichever event had slid into that slot, which
+   * dropped one event on the floor and posted another one twice. A flag
+   * travels with the struct through sort_events and through the compaction in
+   * absorb, so it cannot point at the wrong thing. */
+  uint8_t  sending;
 } Event;
 
 static const CardApi *api;
@@ -95,6 +121,15 @@ static struct {
   int   top;                        /* first agenda line drawn */
   int   shown_rows;
   int   shown_top;
+
+  /* The day view. day_sel counts events within that day, not within the
+   * list, so stepping to another day does not need it translated. */
+  int32_t day_shown;
+  int   day_sel;
+  int   day_top;
+  int   day_rows;                   /* how many fitted, from the last paint */
+  View  day_back;                   /* what Escape returns to */
+  CRect day_rect;                   /* where the last paint put the rows */
 
   int32_t offset;                   /* local time minus UTC, in seconds */
   int   cur_y, cur_m, cur_d;        /* the day the month grid is sitting on */
@@ -115,7 +150,6 @@ static struct {
    * keeps drawing and the keyboard keeps working while it is in the air. The
    * shell draws the spinner; this app draws none. */
   int      stage;                   /* SYNC_* below */
-  int      pushing;                 /* index of the event being pushed */
   uint32_t next_auto;               /* when to sync again, unprompted */
   int      tried_once;
 } C;
@@ -138,6 +172,15 @@ static CRect rect(int x, int y, int w, int h) {
 }
 
 static void say(const char *s) { api->fmt(C.status, sizeof C.status, "%s", s); }
+
+/* A line in /cache/app.log, tagged and timestamped by the kernel.
+ *
+ * Only the sync writes here, and only a handful of lines per round: this is
+ * an SD card, and a log that costs a write per tick is a log nobody can
+ * afford to leave on. It exists because a sync that fails now and then leaves
+ * nothing to read afterwards -- the status bar holds one sentence, and by the
+ * time anyone looks it says something else. */
+static void logline(const char *s) { if (api->log) api->log(s); }
 
 static const char *WDAY[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 static const char *MON[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -381,6 +424,42 @@ static int day_has_event(int32_t day) {
   return 0;
 }
 
+/* The list index of the nth event on a day, or -1. The day view walks the one
+ * sorted list rather than holding a second array of its own: forty events is
+ * a walk of forty, and a second array is a second thing to keep true. */
+static int day_event_at(int32_t day, int nth) {
+  int i, seen = 0;
+  for (i = 0; i < C.n; i++) {
+    if (C.ev[i].deleted) continue;
+    if (local_day(C.ev[i].start) != day) continue;
+    if (seen++ == nth) return i;
+  }
+  return -1;
+}
+
+static int day_event_count(int32_t day) {
+  int i, n = 0;
+  for (i = 0; i < C.n; i++) {
+    if (C.ev[i].deleted) continue;
+    if (local_day(C.ev[i].start) == day) n++;
+  }
+  return n;
+}
+
+/* Which of that day's events an index into the whole list is, or 0 when it is
+ * not one of them -- opening the day view on the selected event should land
+ * on the event, not on the top of the day. */
+static int day_position_of(int32_t day, int idx) {
+  int i, seen = 0;
+  for (i = 0; i < C.n; i++) {
+    if (C.ev[i].deleted) continue;
+    if (local_day(C.ev[i].start) != day) continue;
+    if (i == idx) return seen;
+    seen++;
+  }
+  return 0;
+}
+
 /* ---- the cache -----------------------------------------------------------
  *
  * One line an event: flags, the two instants, the id, then the summary last
@@ -470,6 +549,19 @@ static int next_dirty(void) {
   return -1;
 }
 
+/* Which event the POST in the air belongs to. See Event.sending. */
+static void mark_sending(int i) {
+  int j;
+  for (j = 0; j < C.n; j++) C.ev[j].sending = 0;
+  if (i >= 0 && i < C.n) C.ev[i].sending = 1;
+}
+
+static int sending_index(void) {
+  int i;
+  for (i = 0; i < C.n; i++) if (C.ev[i].sending) return i;
+  return -1;
+}
+
 static int start_push(const char *tok, int i) {
   char body[SUMMARY_MAX + 160], s[24], e[24];
   rfc3339_utc(C.ev[i].start, s, sizeof s);
@@ -500,10 +592,10 @@ static int start_fetch(const char *tok) {
 
 /* Rebuild the list from a reply. Anything still queued survives, so a
  * deletion made in a browser disappears here too. */
-static void absorb(void) {
+static int absorb(void) {
   char *p;
   int got = 0;
-  int i, keep = 0;
+  int i, keep = 0, added = 0;
 
   for (i = 0; i < C.n; i++) {
     if (!C.ev[i].dirty || C.ev[i].id[0]) continue;
@@ -537,7 +629,7 @@ static void absorb(void) {
     if (ep) json_when(ep, &e->end, &got);
     if (!e->end) e->end = e->start + 3600u;
 
-    if (e->id[0] && e->start) C.n++;
+    if (e->id[0] && e->start) { C.n++; added++; }
     if (next) *next = saved;
     p = next;
   }
@@ -545,6 +637,12 @@ static void absorb(void) {
   sort_events();
   cache_save();
   if (C.sel >= C.n) C.sel = C.n ? C.n - 1 : 0;
+  /* A fetch that returns fewer events than the last one leaves the agenda
+   * scrolled past the end, which paints nothing at all -- indistinguishable
+   * on screen from a sync that wiped the diary. */
+  if (C.top > C.sel) C.top = C.sel;
+  if (C.top < 0) C.top = 0;
+  return added;
 }
 
 static void sync_failed(int n) {
@@ -553,18 +651,44 @@ static void sync_failed(int n) {
    * from the OAuth scope and a different thing to go and fix. */
   if (n == -403)      say("403: enable the Calendar API");
   else if (n == -401) say("401: sign in again on the PC");
-  else                api->fmt(C.status, sizeof C.status, "sync failed (%d)", n);
+  else if (n == -4) {
+    /* The kernel refused the request before it was sent, and it knows why --
+     * usually "not enough memory: 37 KB free, TLS needs about 33", which
+     * happens with both radios up and a big app loaded. "sync failed (-4)"
+     * sends the reader to look at the network; the sentence sends them to
+     * close an app, which is the thing that actually works. And it is
+     * transient, so it is worth trying again shortly rather than at the next
+     * ten-minute mark. */
+    api->fmt(C.status, sizeof C.status, "%s", api->net_status());
+    C.next_auto = api->ticks_ms() + RETRY_MS;
+  }
+  else api->fmt(C.status, sizeof C.status, "sync failed (%d)", n);
   C.stage = SYNC_IDLE;
 }
 
-/* Kick one off. Returns without waiting for anything. */
-static void sync_begin(void) {
+/* http_start said no: one request at a time on this device, and someone
+ * else has it. Say so and try again soon, rather than leaving the old status
+ * on screen with the next attempt ten minutes away. */
+static void start_refused(void) {
+  say("busy -- another request is running, retrying");
+  logline("sync: the request queue was busy, retrying");
+  C.stage = SYNC_IDLE;
+  C.next_auto = api->ticks_ms() + RETRY_MS;
+}
+
+/* Kick one off. Returns without waiting for anything. `why` is for the log:
+ * an intermittent failure is much easier to read when the line says whether
+ * anybody asked for that sync. */
+static void sync_begin(const char *why) {
   const char *tok;
+  char m[80];
   int i;
 
   if (C.stage != SYNC_IDLE) return;
   C.next_auto = api->ticks_ms() + AUTO_EVERY_MS;
   C.tried_once = 1;
+  api->fmt(m, sizeof m, "sync start (%s), %d cached", why, C.n);
+  logline(m);
 
   /* A sync that could not start is not a sync that succeeded. Both paths
    * below leave the next attempt ten minutes away otherwise, so opening the
@@ -575,20 +699,42 @@ static void sync_begin(void) {
     /* Not worth a blocking twenty-second join from here; the OS brings the
      * radio up for its own clock sync and this will catch the next round. */
     say("offline -- showing the cache");
+    logline("sync: no network, showing the cache");
     C.next_auto = api->ticks_ms() + RETRY_MS;
     return;
   }
   tok = api->google_token();
-  if (!tok || !tok[0]) { say(api->google_status()); C.next_auto = api->ticks_ms() + RETRY_MS; return; }
+  if (!tok || !tok[0]) {
+    say(api->google_status());
+    api->fmt(m, sizeof m, "sync: no token (%s)", api->google_status());
+    logline(m);
+    C.next_auto = api->ticks_ms() + RETRY_MS;
+    return;
+  }
+
+  /* The clock usually arrives from NTP a few seconds after boot, and opening
+   * the calendar in those seconds used to poison every sync for the life of
+   * the app: have_clock was sampled once in capp_main, so the fetch window
+   * stayed at day 0 and asked Google for sixty days from 1 January 1970. That
+   * returns nothing, every time, and absorb then rewrote the cache with the
+   * nothing it got. Re-sample here, and rather than fetch a window that is
+   * known to be wrong, wait. */
+  if (!C.have_clock) refresh_clock();
+  if (!C.have_clock) {
+    say("waiting for the clock -- showing the cache");
+    logline("sync: no clock yet, a 1970 window would empty the cache");
+    C.next_auto = api->ticks_ms() + RETRY_MS;
+    return;
+  }
 
   i = next_dirty();
   if (i >= 0) {
-    if (start_push(tok, i) != 0) return;
-    C.pushing = i;
+    if (start_push(tok, i) != 0) { start_refused(); return; }
+    mark_sending(i);
     C.stage = SYNC_PUSH;
     say("sending...");
   } else {
-    if (start_fetch(tok) != 0) return;
+    if (start_fetch(tok) != 0) { start_refused(); return; }
     C.stage = SYNC_FETCH;
     say("syncing...");
   }
@@ -596,32 +742,62 @@ static void sync_begin(void) {
 
 /* Called every pass. Does nothing until there is something to collect. */
 static void sync_tick(void) {
+  char m[80];
   int n;
 
   if (C.stage == SYNC_IDLE) return;
   n = api->http_poll(C.reply, sizeof C.reply);
+  /* Still running. This is not a result and is never logged as one: it
+   * arrives every 5 ms, and a -1000 in the log would read like a failure. */
   if (n == CAPP_HTTP_PENDING) return;
+
+  /* The HTTP layer negates the status into the return, so -403 here is a 403
+   * from Google. One line per completed request, which is what makes an
+   * intermittent failure readable afterwards. */
+  api->fmt(m, sizeof m, "sync: %s returned %d",
+           C.stage == SYNC_PUSH ? "push" : "fetch", n);
+  logline(m);
 
   if (n < 0) { sync_failed(n); return; }
 
   if (C.stage == SYNC_PUSH) {
     const char *tok = api->google_token();
-    int i;
+    int i = sending_index();
     /* It exists at Google now, so it is no longer queued. The id comes back
      * on the next fetch rather than being read out of the reply -- one place
      * that parses an event is better than two. */
-    if (C.pushing >= 0 && C.pushing < C.n) C.ev[C.pushing].dirty = 0;
+    if (i >= 0) { C.ev[i].dirty = 0; C.ev[i].sending = 0; }
     cache_save();
+
+    /* A token that expired mid-sync, or a queue that someone else took while
+     * this was in the air, used to drop straight to SYNC_IDLE without a word
+     * and with the next attempt ten minutes away -- a sync that pushed one
+     * event and then silently did nothing else. */
+    if (!tok || !tok[0]) {
+      say(api->google_status());
+      api->fmt(m, sizeof m, "sync: token gone mid-sync (%s)", api->google_status());
+      logline(m);
+      C.stage = SYNC_IDLE;
+      C.next_auto = api->ticks_ms() + RETRY_MS;
+      return;
+    }
     i = next_dirty();
-    if (i >= 0 && tok && start_push(tok, i) == 0) { C.pushing = i; return; }
-    if (tok && start_fetch(tok) == 0) { C.stage = SYNC_FETCH; return; }
-    C.stage = SYNC_IDLE;
+    if (i >= 0) {
+      if (start_push(tok, i) != 0) { start_refused(); return; }
+      mark_sending(i);
+      return;
+    }
+    if (start_fetch(tok) != 0) { start_refused(); return; }
+    C.stage = SYNC_FETCH;
     return;
   }
 
-  absorb();
+  n = absorb();
   C.stage = SYNC_IDLE;
   api->fmt(C.status, sizeof C.status, "%d event%s", C.n, C.n == 1 ? "" : "s");
+  api->fmt(m, sizeof m, "sync ok: %d event%s absorbed, %d held",
+           n, n == 1 ? "" : "s", C.n);
+  logline(m);
 }
 
 /* ---- adding --------------------------------------------------------------- */
@@ -630,7 +806,10 @@ static void begin_add(void) {
   C.draft[0] = 0;
   C.draft_len = 0;
   C.field = FIELD_TITLE;
-  C.draft_day = C.have_clock ? days_from_civil(C.cur_y, C.cur_m, C.cur_d) : 0;
+  /* Whichever day is on screen: adding from the day view means adding to the
+   * day you are looking at, not to the one the grid was last left on. */
+  C.draft_day = (C.view == VIEW_DAY) ? C.day_shown
+              : (C.have_clock ? days_from_civil(C.cur_y, C.cur_m, C.cur_d) : 0);
   C.draft_hour = 9;
   C.draft_min = 0;
   C.view = VIEW_ADD;
@@ -710,6 +889,8 @@ static void paint_agenda(CRect c) {
               CLR_DIM, CLR_BG);
     api->text((short)(c.x + 8), (short)(c.y + 58), "m  month view",
               CLR_DIM, CLR_BG);
+    api->text((short)(c.x + 8), (short)(c.y + 70), "d  one day on its own",
+              CLR_DIM, CLR_BG);
     paint_bar(c);
     return;
   }
@@ -747,6 +928,85 @@ static void paint_agenda(CRect c) {
     rows++;
   }
   C.shown_rows = rows;
+  paint_bar(c);
+}
+
+/* The heading a whole day gets: the date in full, with the year, because the
+ * point of this view is to be sure which day you are looking at. */
+static void day_heading(int32_t day, char *out, int n) {
+  int y, m, d;
+  civil_from_days(day, &y, &m, &d);
+  if (C.have_clock && day == today_day())
+    api->fmt(out, (size_t)n, "Today -- %s %d %s %d",
+             WDAY[weekday_of_day(day)], d, MON[m - 1], y);
+  else
+    api->fmt(out, (size_t)n, "%s %d %s %d",
+             WDAY[weekday_of_day(day)], d, MON[m - 1], y);
+}
+
+#define DAY_HEAD_H 13
+
+/* Where the nth row of the day view landed, in screen coordinates, so a
+ * selection that moves can ask for those two rows back instead of the
+ * window. Zero width when that row is not on screen. */
+static CRect day_row_rect(int nth) {
+  CRect r = rect(0, 0, 0, 0);
+  if (!C.day_rect.w || nth < C.day_top || nth >= C.day_top + C.day_rows)
+    return r;
+  return rect(C.day_rect.x,
+              C.day_rect.y + DAY_HEAD_H + (nth - C.day_top) * ROW_H,
+              C.day_rect.w, ROW_H - 1);
+}
+
+static void paint_day(CRect c) {
+  char head[32];
+  int count = day_event_count(C.day_shown);
+  int i, y;
+
+  C.day_rect = c;
+  api->fill(rect(c.x, c.y, c.w, c.h - BAR_H), CLR_BG);
+  day_heading(C.day_shown, head, sizeof head);
+  api->text((short)(c.x + 2), (short)(c.y + 2), head,
+            (C.have_clock && C.day_shown == today_day()) ? CLR_TODAY : CLR_HEAD,
+            CLR_BG);
+
+  if (!count) {
+    /* An empty day is the answer to a question, not a failure, so it says so
+     * plainly and still says how to leave. */
+    api->text((short)(c.x + 8), (short)(c.y + DAY_HEAD_H + 10), "Nothing on.",
+              CLR_DIM, CLR_BG);
+    api->text((short)(c.x + 8), (short)(c.y + DAY_HEAD_H + 26),
+              "left/right  another day", CLR_DIM, CLR_BG);
+    api->text((short)(c.x + 8), (short)(c.y + DAY_HEAD_H + 38),
+              "a  add   esc  back", CLR_DIM, CLR_BG);
+    C.day_rows = 0;
+    paint_bar(c);
+    return;
+  }
+
+  y = c.y + DAY_HEAD_H;
+  C.day_rows = 0;
+  for (i = C.day_top; i < count && y + ROW_H <= c.y + c.h - BAR_H; i++) {
+    int idx = day_event_at(C.day_shown, i);
+    Event *e;
+    char when[8];
+    int hh, mm;
+    uint16_t bg = (i == C.day_sel) ? CLR_SEL : CLR_ROW;
+
+    if (idx < 0) break;
+    e = &C.ev[idx];
+    api->fill(rect(c.x, y, c.w, ROW_H - 1), bg);
+    if (e->all_day) api->fmt(when, sizeof when, "%s", "all");
+    else {
+      local_hm(e->start, &hh, &mm);
+      api->fmt(when, sizeof when, "%02d:%02d", hh, mm);
+    }
+    api->text((short)(c.x + 3), (short)(y + 2), when,
+              e->dirty ? CLR_PEND : CLR_DIM, bg);
+    api->text((short)(c.x + 38), (short)(y + 2), e->summary, CLR_TEXT, bg);
+    y += ROW_H;
+    C.day_rows++;
+  }
   paint_bar(c);
 }
 
@@ -827,14 +1087,23 @@ static void paint_add(CRect c) {
 /* Everything this app can be asked to do, stated once: the ctrl chords, the
  * menu bar, the help panel and the names a script or a model would use all
  * come out of this table. See CappUi.actions. */
-enum { ACT_ADD = 1, ACT_DELETE, ACT_SYNC, ACT_AGENDA, ACT_MONTH,
+enum { ACT_ADD = 1, ACT_DELETE, ACT_SYNC, ACT_AGENDA, ACT_MONTH, ACT_DAY,
        ACT_SAVE, ACT_CANCEL };
 
 static const CappAction MAIN_ACTIONS[] = {
   { "add",    "Add",      "Event", 0x01, ACT_ADD },     /* ctrl-a */
   { "delete", "Delete",   "Event", 0x04, ACT_DELETE },  /* ctrl-d */
   { "agenda", "Agenda",   "View",  0x07, ACT_AGENDA },  /* ctrl-g */
-  { "month",  "Month",    "View",  0x0D, ACT_MONTH },   /* ctrl-m */
+  { "day",    "Day",      "View",  0x19, ACT_DAY },     /* ctrl-y: ctrl-d is
+                                                        * already Delete, and
+                                                        * "day" has a y in it */
+  /* NOT ctrl-m. ASCII says ctrl-m is 0x0D, which is the byte Enter sends --
+   * and the shell matches this table before the app's key handler sees
+   * anything, so claiming 0x0D means Enter opens the month grid everywhere
+   * in the app and no view can ever use Enter for its own purpose. The same
+   * trap took the help key (ctrl-h is Backspace) -- see keyboard.h. Ctrl-n
+   * is free and next to it on the keyboard. */
+  { "month",  "Month",    "View",  0x0E, ACT_MONTH },   /* ctrl-n */
   { "sync",   "Sync now", "View",  0x13, ACT_SYNC },    /* ctrl-s */
 };
 
@@ -862,13 +1131,42 @@ static void goto_month(void) {
   C.view = VIEW_MONTH;
 }
 
+/* Open one day, remembering where to come back to. The day is whichever the
+ * caller was already looking at: the selected event's day in the agenda, the
+ * highlighted cell in the grid. */
+static void open_day(int32_t day, View back) {
+  C.day_shown = day;
+  C.day_back = back;
+  C.day_sel = (back == VIEW_AGENDA && C.sel >= 0 && C.sel < C.n)
+            ? day_position_of(day, C.sel) : 0;
+  C.day_top = 0;
+  C.day_rect = rect(0, 0, 0, 0);
+  C.view = VIEW_DAY;
+}
+
+/* The day the day view should open on when nothing has been selected: today
+ * if the clock knows, otherwise the first event there is. */
+static int32_t day_for_selection(void) {
+  if (C.sel >= 0 && C.sel < C.n) return local_day(C.ev[C.sel].start);
+  if (C.have_clock) return today_day();
+  return C.n ? local_day(C.ev[0].start) : 0;
+}
+
 /* The one place that knows what anything does. */
 static int do_action(int a) {
   switch (a) {
   case ACT_ADD:    begin_add(); use_add_menus(); return 1;
   case ACT_DELETE: delete_selected(); return 1;
-  case ACT_SYNC:   sync_begin(); return 1;
+  case ACT_SYNC:   sync_begin("s"); return 1;
   case ACT_AGENDA: C.view = VIEW_AGENDA; return 1;
+  case ACT_DAY:
+    /* From the grid the highlighted cell is the day; from anywhere else it is
+     * whatever the agenda is sitting on. */
+    open_day(C.view == VIEW_MONTH
+               ? days_from_civil(C.cur_y, C.cur_m, C.cur_d)
+               : day_for_selection(),
+             C.view == VIEW_MONTH ? VIEW_MONTH : VIEW_AGENDA);
+    return 1;
   case ACT_MONTH:  goto_month(); return 1;
   case ACT_SAVE:   commit_add(); use_main_menus(); return 1;
   case ACT_CANCEL: C.view = VIEW_AGENDA; use_main_menus(); return 1;
@@ -888,6 +1186,7 @@ static void app_paint(void *st, CRect c) {
     toolbar_paint_bar(full);
     c = toolbar_rest(full);
     if (C.view == VIEW_MONTH)    paint_month(c);
+    else if (C.view == VIEW_DAY) paint_day(c);
     else if (C.view == VIEW_ADD) paint_add(c);
     else                         paint_agenda(c);
     /* Last: a dropdown is drawn over the content it covers. */
@@ -916,7 +1215,73 @@ static int key_agenda(unsigned char k) {
   case 'm': case 'M': return do_action(ACT_MONTH);
   case 'a': case 'A': return do_action(ACT_ADD);
   case 's': case 'S': return do_action(ACT_SYNC);
-  case 'd': case 'D': case 0x7F: return do_action(ACT_DELETE);
+  /* Enter opens the day the selected event is on. A letter for it was tried
+   * and taken back: `d` deletes in Todo, and the same key meaning "delete"
+   * in one app and "show me this day" in another is exactly the sort of
+   * inconsistency that loses somebody an event. Enter is "act on what is
+   * selected" in both. */
+  case CAPP_KEY_ENTER: return do_action(ACT_DAY);
+  case 'd': case 'D':
+  case 0x7F: return do_action(ACT_DELETE);
+  /* The agenda is the top of this app: Escape here is the shell's, and
+   * answering 0 is what lets it leave. */
+  case CAPP_KEY_ESC: return 0;
+  default: return 0;
+  }
+}
+
+/* Move within the day, asking for the two rows that changed rather than the
+ * window: everything else on screen -- the heading, the bar, the rows either
+ * side -- is exactly as it was. */
+static void day_move(int to) {
+  int count = day_event_count(C.day_shown);
+  CRect a, b;
+  if (to < 0) to = 0;
+  if (to >= count) to = count ? count - 1 : 0;
+  if (to == C.day_sel) return;
+  a = day_row_rect(C.day_sel);
+  b = day_row_rect(to);
+  C.day_sel = to;
+  /* Scrolling moves every row, so let the whole view repaint instead. */
+  if (C.day_rows > 0 && (to < C.day_top || to >= C.day_top + C.day_rows)) {
+    if (to < C.day_top) C.day_top = to;
+    else C.day_top = to - C.day_rows + 1;
+    if (C.day_top < 0) C.day_top = 0;
+    return;
+  }
+  if (a.w) api->damage(a);
+  if (b.w) api->damage(b);
+}
+
+static int key_day(unsigned char k) {
+  switch (k) {
+  case CAPP_KEY_LEFT:
+  case CAPP_KEY_RIGHT: {
+    /* Stepping lands on a day that may hold nothing, which is the point:
+     * the agenda cannot show you an empty Thursday. */
+    C.day_shown += (k == CAPP_KEY_RIGHT) ? 1 : -1;
+    C.day_sel = 0;
+    C.day_top = 0;
+    return 1;
+  }
+  case CAPP_KEY_UP:   day_move(C.day_sel - 1); return 1;
+  case CAPP_KEY_DOWN: day_move(C.day_sel + 1); return 1;
+  case CAPP_KEY_ESC: {
+    /* Back where it came from, on the day it ended on -- paging five days
+     * forward and then leaving should not undo the paging. */
+    if (C.day_back == VIEW_MONTH) {
+      civil_from_days(C.day_shown, &C.cur_y, &C.cur_m, &C.cur_d);
+      C.view = VIEW_MONTH;
+    } else {
+      int idx = day_event_at(C.day_shown, C.day_sel);
+      if (idx >= 0) { C.sel = idx; scroll_to_sel(); }
+      C.view = VIEW_AGENDA;
+    }
+    return 1;
+  }
+  case 'm': case 'M': return do_action(ACT_MONTH);
+  case 'a': case 'A': return do_action(ACT_ADD);
+  case 's': case 'S': return do_action(ACT_SYNC);
   default: return 0;
   }
 }
@@ -930,18 +1295,14 @@ static int key_month(unsigned char k) {
   case 'm': case 'M':  return do_action(ACT_AGENDA);
   case 'a': case 'A':  return do_action(ACT_ADD);
   case 's': case 'S':  return do_action(ACT_SYNC);
-  case CAPP_KEY_ENTER: {
-    /* Into the agenda, at the first event on this day -- or the next one
-     * after it, so an empty day still lands somewhere useful. */
-    int32_t want = days_from_civil(C.cur_y, C.cur_m, C.cur_d);
-    int i;
-    for (i = 0; i < C.n; i++)
-      if (local_day(C.ev[i].start) >= want) break;
-    C.sel = (i < C.n) ? i : (C.n ? C.n - 1 : 0);
-    C.top = C.sel;
-    C.view = VIEW_AGENDA;
-    return 1;
-  }
+  /* Into that day. This used to jump to the agenda at the first event on or
+   * after the cell, which answered a question nobody asked of a date picker:
+   * clicking a day and being shown the day after it is not picking a day. */
+  case CAPP_KEY_ENTER: return do_action(ACT_DAY);
+  /* Back to the agenda, not out of the app. The grid is a view you went
+   * into, so Escape comes out of it the way it comes out of the day view;
+   * only the agenda declines Escape and lets the shell leave. */
+  case CAPP_KEY_ESC:   return do_action(ACT_AGENDA);
   default: return 0;
   }
 }
@@ -987,9 +1348,25 @@ static int key_add(unsigned char k) {
   return 0;
 }
 
+/* The bar first, and it answers for every key while it has them. fn-b puts
+ * the keyboard in it; an item chosen there becomes an action, the same one a
+ * click would have produced. */
+static int menu_key(unsigned char k, int *handled) {
+  int a = toolbar_key(k);
+  *handled = 1;
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return do_action(a);
+  *handled = 0;
+  return 0;
+}
+
 static int app_key(void *st, unsigned char k) {
+  int handled, r;
   (void)st;
+  r = menu_key(k, &handled);
+  if (handled) return r;
   if (C.view == VIEW_ADD)   return key_add(k);
+  if (C.view == VIEW_DAY)   return key_day(k);
   if (C.view == VIEW_MONTH) return key_month(k);
   return key_agenda(k);
 }
@@ -1009,6 +1386,16 @@ static int app_click(void *st, short x, short y, int button) {
     if (a != TB_NONE) return do_action(a);
   }
   y = (short)(y - toolbar_h());
+  if (C.view == VIEW_DAY) {
+    /* Fixed pitch here, unlike the agenda: one day needs no day headers
+     * between its rows. */
+    int row = (y - DAY_HEAD_H) / ROW_H + C.day_top;
+    if (y >= DAY_HEAD_H && row >= 0 && row < day_event_count(C.day_shown)) {
+      day_move(row);
+      return 1;
+    }
+    return 0;
+  }
   if (C.view != VIEW_AGENDA) return 0;
   {
     /* The agenda's rows are not a fixed pitch -- day headers sit between them
@@ -1046,7 +1433,7 @@ static int app_tick(void *st, uint32_t now_ms) {
    * calendar is to find out what is in it. */
   if (C.stage == SYNC_IDLE &&
       (!C.tried_once || (int32_t)(now_ms - C.next_auto) >= 0))
-    sync_begin();
+    sync_begin(C.tried_once ? "auto" : "opened");
 
   /* Repaint while waiting, so the bar's dots animate. Otherwise only when
    * something actually changed. */
@@ -1063,6 +1450,7 @@ static int app_mouse(void *st, int16_t x, int16_t y, int buttons, int wheel) {
 
 static int app_wants_text(void *st) {
   (void)st;
+  if (toolbar_has_keys()) return 0;
   return C.view == VIEW_ADD && C.field == FIELD_TITLE;
 }
 
@@ -1075,8 +1463,9 @@ const CappInfo capp_info = {
     0x7F, 0xFE, 0x40, 0x02, 0x55, 0x52, 0x40, 0x02,
     0x55, 0x52, 0x40, 0x02, 0x55, 0x52, 0x40, 0x02,
     0x7F, 0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-  "arrows\tmove\nm\tmonth view / agenda\nenter\topen the day\n"
-  "a\tadd an event\nd\tdelete (unsynced only)\ns\tsync with Google\n",
+  "arrows\tmove\nenter\tthis day on its own\nm\tmonth view / agenda\n"
+  "esc\tback, then out\na\tadd an event\n"
+  "d / del\tdelete (unsynced only)\ns\tsync with Google\n",
 };
 
 static CappUi UI;

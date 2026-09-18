@@ -157,6 +157,14 @@ void test_the_two_keyboards_agree_about_fn(void) {
   CHECK_EQ(KBD_KEY_HELP, KEY_HELP);
 }
 
+/* The help key must be a chord a keyboard actually sends. It was 0x86 while
+ * both drivers emitted the fn-letter code for fn-h, and the shells waited
+ * for 0x86: no key on either keyboard opened the key list. */
+void test_fn_h_is_the_help_key_on_both_keyboards(void) {
+  CHECK_EQ(kbd_hid_translate(0x0B, KBD_MOD_LGUI), KBD_KEY_HELP);
+  CHECK_EQ(KEY_FN_LETTER('h'), KEY_HELP);
+}
+
 /* Alt stands in for Opt, and its chords get codes of their own so an app
  * taking text cannot swallow the shortcut that leaves it. */
 void test_alt_makes_the_global_shortcut_codes(void) {
@@ -214,4 +222,20 @@ void test_repeat_survives_the_millisecond_counter_wrapping(void) {
   /* The deadline is past the wrap; a time just after the wrap is later. */
   CHECK_EQ(kbd_hid_repeat(&k, near_wrap + KBD_REPEAT_DELAY_MS, out, 8), 1);
   CHECK_EQ(out[0], 'a');
+}
+
+/* Escape is the app's to use as "back" now, so leaving an app that keeps it
+ * needs a chord of its own: fn-` on the Cardputer, GUI-Escape over
+ * Bluetooth. The two keyboards must agree, or an app is inescapable from
+ * one of them. */
+void test_fn_escape_is_the_quit_chord_on_both_keyboards(void) {
+  CHECK_EQ(kbd_hid_translate(0x29, KBD_MOD_LGUI), KBD_KEY_QUIT);
+  CHECK_EQ(kbd_hid_translate(0x29, KBD_MOD_RGUI), KBD_KEY_QUIT);
+  CHECK_EQ(KBD_KEY_QUIT, KEY_QUIT);
+  /* Escape on its own still reaches the app as Escape. */
+  CHECK_EQ(kbd_hid_translate(0x29, 0), KEY_ESC);
+  /* And the quit chord cannot collide with the arrows or a fn letter. */
+  CHECK(KEY_QUIT != KEY_UP && KEY_QUIT != KEY_DOWN);
+  CHECK(KEY_QUIT != KEY_LEFT && KEY_QUIT != KEY_RIGHT);
+  CHECK(!KEY_IS_FN(KEY_QUIT) && !KEY_IS_OPT(KEY_QUIT));
 }

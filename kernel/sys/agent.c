@@ -279,8 +279,8 @@ static int start_request(void) {
   fs_remove(DIR "/" REPLY);
   if (chatlog_trim(HISTORY_CAP) != 0) ESP_LOGW(TAG, "could not trim the history");
   if (chatlog_write_request(REQUEST, HEAD, TAIL) != 0) return -4;
-  if (httpq_start_files(URL, DIR "/" REQUEST, "application/json", s_auth,
-                        DIR "/" REPLY, TIMEOUT_MS) != 0)
+  if (httpq_start_files(&s_running, URL, DIR "/" REQUEST, "application/json",
+                        s_auth, DIR "/" REPLY, TIMEOUT_MS) != 0)
     return -4;
   s_running = 1;
   status("thinking");

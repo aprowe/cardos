@@ -213,6 +213,9 @@ uint8_t keyboard_poll(void) {
           case '.': c = (char)KEY_DOWN;  break;
           case ',': c = (char)KEY_LEFT;  break;
           case '/': c = (char)KEY_RIGHT; break;
+          /* The key labelled ESC. Alone it is Escape, which an app may keep
+           * for going back a level; with fn it always leaves. */
+          case '`': c = (char)KEY_QUIT;  break;
           default:
             if (base >= 'a' && base <= 'z') c = (char)KEY_FN_LETTER(base);
             break;

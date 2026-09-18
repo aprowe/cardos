@@ -39,6 +39,11 @@ uint8_t kbd_hid_translate(uint8_t usage, uint8_t mods) {
   int opt = (mods & (KBD_MOD_LALT | KBD_MOD_RALT)) != 0;
   int fn  = (mods & (KBD_MOD_LGUI | KBD_MOD_RGUI)) != 0;
 
+  /* Before the plain meanings below: Escape with the window modifier is
+   * "leave the app", and the switch would otherwise have answered Escape
+   * and never reached the fn block at all. */
+  if (fn && usage == 0x29) return KBD_KEY_QUIT;
+
   switch (usage) {
   case 0x28: return 0x0D;        /* enter */
   case 0x29: return 0x1B;        /* escape */

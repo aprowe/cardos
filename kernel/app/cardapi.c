@@ -16,6 +16,7 @@
 #include "kernel/net/update.h"
 #include "kernel/sys/sio.h"
 #include "kernel/app/capprun.h"
+#include "kernel/sys/applog.h"
 #include "kernel/ui/launchui.h"
 #include "kernel/drv/keyboard.h"
 #include "kernel/console/console.h"
@@ -145,7 +146,10 @@ static int api_fmt(char *buf, size_t n, const char *fmt, ...) {
 }
 
 static uint32_t api_ticks(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
-static void api_log(const char *m) { ESP_LOGI("app", "%s", m ? m : ""); }
+/* To the card as well as the serial port, tagged with whoever called. A
+ * sync that fails once an hour cannot be caught on a USB port that is not
+ * attached -- see kernel/sys/applog.h. */
+static void api_log(const char *m) { applog(capprun_executing_name(), m); }
 
 static void api_out(const char *s)              { sio_write(s); }
 static void api_out_line(const char *s)         { sio_write_line(s); }
@@ -320,7 +324,12 @@ static void api_exec_free(void *exec) { heap_caps_free(exec); }
 static int api_http_start(const char *method, const char *url, const char *body,
                           const char *content_type, const char *bearer,
                           int timeout_ms) {
-  return httpq_start(method, url, body, content_type, bearer, timeout_ms);
+  /* Owned by the app asking, so that unloading it disowns the request. An
+   * app that sets nothing up (a command's capp_main returning at once) still
+   * has an identity here; only kernel code calling through the table would
+   * not, and none does. */
+  return httpq_start(capprun_executing(), method, url, body, content_type,
+                     bearer, timeout_ms);
 }
 
 static int api_http_poll(char *out, size_t n) { return httpq_poll(out, n); }

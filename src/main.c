@@ -36,6 +36,7 @@
 #include "kernel/sys/env.h"
 #include "kernel/sys/sio.h"
 #include "kernel/ui/help.h"
+#include "kernel/sys/applog.h"
 #include "kernel/sys/input.h"
 #include "kernel/sys/voice.h"
 #include "kernel/sys/bg.h"
@@ -80,10 +81,36 @@
  * It stays rather than going to zero because the swap allocator and handle
  * table are a real part of the design and 16 KB keeps them exercisable. If
  * something ever does allocate from here in earnest, this number is the one to
- * raise -- and `mem` is where to see that it needs raising. */
+ * raise -- and `mem` is where to see that it needs raising.
+ *
+ * RESERVED ON FIRST USE, NOT AT BOOT (2026-09-18). The size was never the
+ * whole story: a 16 KB block taken early sits in the middle of the heap and
+ * splits it, and what a TLS handshake needs is not 34 KB of total free space
+ * but one contiguous run of about 17 KB. With an app loaded the largest run
+ * was 16384 bytes against that threshold, so Calendar's sync was refused --
+ * intermittently, because it depended on what else had been loaded. Since
+ * nothing outside kernel/mem calls kmem_alloc (grep says so, and a test
+ * asserts it), reserving the block up front bought a split heap and nothing
+ * else. kmem_ensure() below makes it appear the moment something actually
+ * allocates, which is also the moment `mem` starts reporting it. */
 #define CARDOS_HEAP_BYTES (16 * 1024)
 
 static uint8_t *s_heap;
+
+/* The handle arena, brought into existence by the first thing that wants it.
+ * Nothing does today, which is exactly why it must not be taken at boot: it
+ * would be 16 KB sitting in the middle of the heap, splitting the contiguous
+ * run a TLS handshake needs. Every would-be caller of kmem_alloc calls this
+ * first; if that ever becomes more than a handful of places, the call belongs
+ * inside kmem_alloc rather than in front of it. */
+int kmem_ensure(void) {
+  if (s_heap) return 0;
+  s_heap = heap_caps_malloc(CARDOS_HEAP_BYTES,
+                            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!s_heap) return -1;
+  kmem_init(s_heap, CARDOS_HEAP_BYTES);
+  return 0;
+}
 static char     s_line[CARDOS_LINE_MAX + 1];
 static int      s_len;
 /* Three shells over the same kernel. The launcher is the one meant for daily
@@ -110,8 +137,14 @@ static void cmd_mem(void) {
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_EXEC));
   con_printf("low water        %6u B\n",
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
-  con_printf("handle arena     %6u B  reserved at boot\n",
-             (unsigned)CARDOS_HEAP_BYTES);
+  /* Reported as what it is. "reserved at boot" was true and was also the
+   * bug: the reader had no way to see that the reservation was the thing
+   * standing between a TLS handshake and a contiguous block. */
+  if (s_heap)
+    con_printf("handle arena     %6u B  in use\n", (unsigned)CARDOS_HEAP_BYTES);
+  else
+    con_printf("handle arena          0 B  reserved on first use (%u KB)\n",
+               (unsigned)(CARDOS_HEAP_BYTES / 1024));
   con_printf("bluetooth        %6u B\n", (unsigned)bthid_heap_cost());
   con_printf("wifi             %6u B\n", (unsigned)wifi_heap_cost());
 }
@@ -144,11 +177,14 @@ static void cmd_help(void) {
   con_write("run      run NAME [args], ./prog, or just the name\n");
   con_write("         | pipes, > and >> redirect, < feeds stdin\n");
   con_write("shell    env set NAME=VALUE, hotkey X NAME, tab completes\n");
+  con_write("         set TZ=PST8PDT,M3.2.0,M11.1.0 -- clocks are UTC until\n");
+  con_write("         you do; every app reads it\n");
   con_write("radios   wifi [scan|SSID PASS|saved|forget|off]\n");
   con_write("         mouse, get URL\n");
   con_write("screens  launch (carousel), desk (windows), escape returns\n");
   con_write("boot     apps, boot NAME, boot! NAME, bootinfo\n");
   con_write("system   mem ps taskcost flip clear reboot echo\n");
+  con_write("         log [N|clear] -- what the apps wrote to the card\n");
   con_write("         time (ntp; no rtc on this board), battery\n");
   con_write("voice    hold the button on top, or type listen\n");
   con_write("shot     screenshot to /shots and the proxy (shot NAME)\n");
@@ -157,11 +193,28 @@ static void cmd_help(void) {
   con_write("on card  cat grep -- run with no argument lists them\n");
 }
 
+/* What the apps have been writing to /cache/app.log. The card is where an
+ * intermittent fault is actually caught: the USB serial port is not attached
+ * when the device is in a pocket, and that is when the sync fails. */
+static void log_line(const char *s) { con_write(s); con_write("\n"); }
+
+static void cmd_log(const char *arg) {
+  int n;
+  if (arg && !strcmp(arg, "clear")) {
+    applog_clear();
+    con_write("log cleared\n");
+    return;
+  }
+  n = applog_tail(arg && arg[0] ? atoi(arg) : 20, log_line);
+  if (!n) con_write("nothing logged yet (" APPLOG_PATH ")\n");
+}
+
 /* A stand-in for the real shell, which needs the context switch so it can run
  * as a task and block on the keyboard rather than polling it. */
 /* One command, already separated from its pipeline and redirections. */
 static void run_builtin(const char *line, char *arg) {
   if (!strcmp(line, "help"))        cmd_help();
+  else if (!strcmp(line, "log"))    cmd_log(arg);
   else if (!strcmp(line, "mem"))    cmd_mem();
   /* The verbs the running app offers, and a way to run one.
    *
@@ -253,6 +306,13 @@ static void run_builtin(const char *line, char *arg) {
     char when[40];
     clock_full(when, sizeof when);
     con_printf("%s\n", when);
+    /* Which zone that is in. NTP hands over UTC and nothing on this board
+     * knows better, so a device with no TZ shows UTC and looks exactly like
+     * one whose clock is simply wrong -- which is how a calendar event at
+     * half five in the afternoon read as half past midnight the next day. */
+    con_printf("zone     %s\n", clock_zone());
+    if (!clock_zone_set())
+      con_write("         set TZ=PST8PDT,M3.2.0,M11.1.0 (or your own)\n");
     if (!clock_synced()) {
       con_write("no rtc on this board: the time comes from the network\n");
       con_write("and is lost at every power cut. syncing...\n");
@@ -304,7 +364,7 @@ static void run_builtin(const char *line, char *arg) {
  * half-remembered a name. */
 static const char *const COMMANDS[] = {
   "apps", "boot", "boot!", "bootinfo", "cat", "cd", "clear", "df", "desk",
-  "echo", "flip", "get", "gui", "help", "launch", "ls", "mem", "mkdir",
+  "echo", "flip", "get", "gui", "help", "launch", "log", "ls", "mem", "mkdir",
   "battery", "defaults", "listen", "mouse", "ps", "pwd", "reboot", "rm",
   "run", "time",
   "safe",
@@ -687,7 +747,7 @@ static int s_opt_help;
 static void show_opt_help(void) {
   s_opt_help = 1;
   help_paint("Shortcuts", "opt-1\tlauncher\nopt-2\tdesktop\nopt-3\tconsole\nopt-0\tbacklight to full\nopt-9\tbacklight down a step\nopt-t\ttodo\nopt-s\tstocks\nopt-e\tedit\nopt-m\tmines\nopt-b\treconnect bluetooth\nopt-w\treconnect wifi\n",
-             "ctrl-h\tthe keys of whatever is running\nany key\tclose this\n");
+             "fn-h\tthe keys of whatever is running\nany key\tclose this\n");
 }
 
 /* ---- what voice and the shells are allowed to do to each other ----------
@@ -876,7 +936,11 @@ static void serial_shot(void) {
   static int n;
   char name[24];
   snprintf(name, sizeof name, "serial%d", ++n);
-  shot_take(name, repaint_all);
+  /* Asked for over serial, so serial is where the answer goes: tools/shots.py
+   * waits for a PNG, and "no shot arrived" on its own says nothing about
+   * whether the card, the proxy or the post was the problem. */
+  if (shot_take(name, repaint_all) != 0 || *shot_error())
+    ESP_LOGW("shot", "%s: %s", name, shot_error());
 }
 
 static uint32_t clock_ms(void *ctx) {
@@ -982,15 +1046,7 @@ void app_main(void) {
     con_set_color(COLOR_GREEN);
   }
 
-  s_heap = heap_caps_malloc(CARDOS_HEAP_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  if (!s_heap) {
-    con_set_color(COLOR_RED);
-    con_printf("could not reserve %u KB for the handle heap\n",
-                   (unsigned)(CARDOS_HEAP_BYTES / 1024));
-    con_set_color(COLOR_GREEN);
-  } else {
-    kmem_init(s_heap, CARDOS_HEAP_BYTES);
-  }
+  /* The handle arena is not taken here any more. See CARDOS_HEAP_BYTES. */
 
   /* The scheduler's policy half runs now; the Xtensa context switch does not
    * exist yet, so this loop *is* the shell task rather than being switched to

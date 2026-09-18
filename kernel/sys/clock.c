@@ -76,14 +76,32 @@ static uint32_t load_saved(void) {
   return v >= EPOCH_FLOOR ? v : 0;
 }
 
-static void apply_zone(void) {
+/* The zone, from env TZ. Public because it has to be re-applied the moment
+ * TZ changes: it used to run only at boot and at each NTP sync, so `set
+ * TZ=...` appeared to work -- env listed it, and the clock went on reporting
+ * UTC until the next reboot. Every time on the device was UTC, which is how
+ * an event at half five in the afternoon showed up as half past midnight the
+ * next day. */
+void clock_apply_zone(void) {
   const char *tz = env_get("TZ");
   setenv("TZ", (tz && tz[0]) ? tz : "UTC0", 1);
   tzset();
 }
 
+/* Whether a zone was actually chosen, as opposed to falling back to UTC.
+ * "19:37" with no way to tell it is UTC is the part that wasted the time. */
+int clock_zone_set(void) {
+  const char *tz = env_get("TZ");
+  return tz && tz[0];
+}
+
+const char *clock_zone(void) {
+  const char *tz = env_get("TZ");
+  return (tz && tz[0]) ? tz : "UTC0 (TZ is not set)";
+}
+
 void clock_init(void) {
-  apply_zone();
+  clock_apply_zone();
 
   /* A clock set in a previous life would still be running -- the RTC timer
    * survives a soft reset even though it does not survive power loss -- so
@@ -128,7 +146,7 @@ int clock_sync(int timeout_ms) {
 
   if (!wifi_is_connected()) return -1;
 
-  apply_zone();
+  clock_apply_zone();
 
   if (!s_started) {
     /* Started once and left running: SNTP re-polls on its own schedule after

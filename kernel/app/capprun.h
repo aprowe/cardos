@@ -48,6 +48,14 @@ int            capprun_fullscreen(int slot);
 /* Which of the running app's declared needs were met. See CAPP_NEEDS_*. */
 int            capprun_caps_ok(void);
 
+/* An identity for the app whose handler (or capp_main) is running: the
+ * owner of anything it starts that outlives the call, such as a request in
+ * kernel/net/httpq.c. NULL when no app code is on the stack. */
+const void    *capprun_executing(void);
+
+/* Its name, for a log line. "app" when no app code is running. */
+const char    *capprun_executing_name(void);
+
 /* An app marking what it changed, from inside one of its own callbacks.
  * Outside one there is no app to credit it to, and it is dropped. */
 void           capprun_damage(CRect r);

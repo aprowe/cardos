@@ -146,6 +146,19 @@ typedef struct {
 #define CAPP_KEY_ENTER 0x0D
 #define CAPP_KEY_BACK  0x08
 
+/* The key labelled ESC. An app now receives this before the shell acts on
+ * it: return 1 to use it as "back a level", return 0 and the shell leaves
+ * the app. A top-level view should decline it. fn-` leaves regardless and
+ * never reaches here, so an app cannot trap the user by keeping it. */
+#define CAPP_KEY_ESC   0x1B
+
+/* fn-b: show the menu bar and put the keyboard in it, or hide it again.
+ * Handed straight to toolbar_key() by any app with a toolbar -- see
+ * apps/toolbar.h. It is a window operation, so it lives on fn with the rest
+ * of them, and it survives being typed into a text field for the same reason
+ * fn-w does. */
+#define CAPP_KEY_MENU  0xE1
+
 /* File open flags, matching the kernel's. */
 /* http_poll while the request is still running. */
 #define CAPP_HTTP_PENDING (-1000)

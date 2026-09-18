@@ -47,12 +47,17 @@ static size_t fake_strlen(const char *s)                   { return strlen(s); }
 
 static CardApi FAKE;
 
+/* The day view marks the rows that changed instead of the window, so a fake
+ * that only formats strings is no longer enough to drive the keys. */
+static void fake_damage(CRect r) { (void)r; }
+
 static void use_fake_api(void) {
   memset(&FAKE, 0, sizeof FAKE);
   FAKE.fmt = fake_fmt;
   FAKE.mem_set = fake_memset;
   FAKE.mem_cpy = fake_memcpy;
   FAKE.str_len = fake_strlen;
+  FAKE.damage = fake_damage;
   api = &FAKE;
   memset(&C, 0, sizeof C);
 }
@@ -463,4 +468,447 @@ void test_a_cache_number_scans_back_out(void) {
   CHECK_EQ(1789567800, (int)scan_ul(" 1789567800 x", &pos));
   /* Stops on the space, ready for the next field. */
   CHECK_EQ(11, pos);
+}
+
+/* ---- a start the queue refused ------------------------------------------ */
+
+/* The device runs one request at a time, so http_start can say no. The app
+ * used to return without a word and try again in ten minutes, which on the
+ * screen looks exactly like a sync that never works. */
+static uint32_t    fake_ticks(void)        { return 1000; }
+static int         fake_net_ready(void)    { return 1; }
+static const char *fake_token(void)        { return "ya29.token"; }
+static int fake_start_refused(const char *m, const char *u, const char *b,
+                              const char *ct, const char *tok, int ms) {
+  (void)m; (void)u; (void)b; (void)ct; (void)tok; (void)ms;
+  return -1;
+}
+
+void test_calendar_a_refused_start_says_so_and_retries_soon(void) {
+  use_fake_api();
+  FAKE.ticks_ms = fake_ticks;
+  FAKE.net_ready = fake_net_ready;
+  FAKE.google_token = fake_token;
+  FAKE.http_start = fake_start_refused;
+  C.have_clock = 1;             /* a sync without one never reaches http_start */
+  snprintf(C.status, sizeof C.status, "%s", "17 events");
+
+  sync_begin("s");
+
+  CHECK_EQ(C.stage, SYNC_IDLE);
+  CHECK(strstr(C.status, "busy") != NULL);
+  CHECK_EQ(C.next_auto, 1000 + RETRY_MS);
+}
+
+/* ---- the day view --------------------------------------------------------
+ *
+ * The agenda draws nothing at all for a day with nothing on it, which is the
+ * right answer to "what is next" and the wrong one to "am I free on
+ * Thursday". These check the two ways in, the stepping that makes it a week,
+ * and the Escape rule -- which is the fragile part, because the shell now
+ * offers Escape to the app first and leaves the app only if the app says no.
+ */
+
+/* Two events on the 13th, one on the 14th, and nothing on the 12th. */
+static void three_events_no_zone(void) {
+  use_fake_api();
+  C.offset = 0;
+  parse_reply(REPLY);
+}
+
+void test_calendar_enter_opens_the_day_of_the_selected_event(void) {
+  three_events_no_zone();
+  C.sel = 2;                                  /* the birthday, on the 14th */
+  CHECK_EQ(1, key_agenda(CAPP_KEY_ENTER));
+  CHECK_EQ(VIEW_DAY, C.view);
+  CHECK_EQ(days_from_civil(2026, 9, 14), (int)C.day_shown);
+  CHECK_EQ(1, day_event_count(C.day_shown));
+}
+
+void test_calendar_the_day_view_opens_on_the_event_not_the_top_of_the_day(void) {
+  three_events_no_zone();
+  C.sel = 1;                                  /* the dentist, second that day */
+  key_agenda(CAPP_KEY_ENTER);
+  CHECK_EQ(1, C.day_sel);
+}
+
+void test_calendar_left_and_right_page_through_the_week(void) {
+  three_events_no_zone();
+  C.sel = 0;
+  key_agenda(CAPP_KEY_ENTER);
+  CHECK_EQ(days_from_civil(2026, 9, 13), (int)C.day_shown);
+  CHECK_EQ(1, key_day(CAPP_KEY_RIGHT));
+  CHECK_EQ(days_from_civil(2026, 9, 14), (int)C.day_shown);
+  key_day(CAPP_KEY_LEFT);
+  key_day(CAPP_KEY_LEFT);
+  /* The 12th is a day the agenda never draws, and the point of the view. */
+  CHECK_EQ(days_from_civil(2026, 9, 12), (int)C.day_shown);
+  CHECK_EQ(0, day_event_count(C.day_shown));
+  CHECK_EQ(0, C.day_sel);
+}
+
+void test_calendar_up_and_down_move_between_that_days_events(void) {
+  three_events_no_zone();
+  C.sel = 0;
+  key_agenda(CAPP_KEY_ENTER);
+  CHECK_EQ(2, day_event_count(C.day_shown));
+  CHECK_EQ(0, C.day_sel);
+  key_day(CAPP_KEY_DOWN);
+  CHECK_EQ(1, C.day_sel);
+  key_day(CAPP_KEY_DOWN);
+  CHECK_EQ(1, C.day_sel);          /* the end of the day is the end of it */
+  key_day(CAPP_KEY_UP);
+  CHECK_EQ(0, C.day_sel);
+  key_day(CAPP_KEY_UP);
+  CHECK_EQ(0, C.day_sel);
+}
+
+void test_calendar_escape_leaves_the_day_view_and_not_the_app(void) {
+  three_events_no_zone();
+  C.sel = 1;
+  key_agenda(CAPP_KEY_ENTER);
+  /* Handled, so the shell keeps the app open. */
+  CHECK_EQ(1, app_key(0, CAPP_KEY_ESC));
+  CHECK_EQ(VIEW_AGENDA, C.view);
+  CHECK_EQ(1, C.sel);
+  /* And at the top there is nowhere to go back to, so the shell may leave. */
+  CHECK_EQ(0, app_key(0, CAPP_KEY_ESC));
+  CHECK_EQ(VIEW_AGENDA, C.view);
+}
+
+void test_calendar_enter_on_the_month_grid_opens_that_day(void) {
+  three_events_no_zone();
+  C.view = VIEW_MONTH;
+  C.cur_y = 2026; C.cur_m = 9; C.cur_d = 14;
+  CHECK_EQ(1, key_month(CAPP_KEY_ENTER));
+  CHECK_EQ(VIEW_DAY, C.view);
+  CHECK_EQ(days_from_civil(2026, 9, 14), (int)C.day_shown);
+  /* Paged forward, then back to the grid -- which should be sitting on the
+   * day the paging ended on, not on the one it started from. */
+  key_day(CAPP_KEY_RIGHT);
+  CHECK_EQ(1, app_key(0, CAPP_KEY_ESC));
+  CHECK_EQ(VIEW_MONTH, C.view);
+  CHECK_EQ(15, C.cur_d);
+}
+
+void test_calendar_the_day_view_is_one_of_the_apps_declared_actions(void) {
+  int i, found = 0;
+  three_events_no_zone();
+  for (i = 0; i < NMAIN; i++)
+    if (strcmp(MAIN_ACTIONS[i].id, "day") == 0) found = 1;
+  CHECK_EQ(1, found);
+  /* The menu bar and the fn-h panel reach it through the same door the key
+   * does, so it is the action that must open the view. */
+  C.sel = 0;
+  CHECK_EQ(1, do_action(ACT_DAY));
+  CHECK_EQ(VIEW_DAY, C.view);
+}
+
+void test_calendar_adding_from_the_day_view_adds_to_that_day(void) {
+  three_events_no_zone();
+  C.sel = 0;
+  key_agenda(CAPP_KEY_ENTER);
+  key_day(CAPP_KEY_RIGHT);
+  key_day('a');
+  CHECK_EQ(VIEW_ADD, C.view);
+  CHECK_EQ(days_from_civil(2026, 9, 14), (int)C.draft_day);
+}
+
+/* ---- the sync, driven end to end ------------------------------------------
+ *
+ * The report was "it fails now and then", which is the report a sync with no
+ * log produces. These pin the three things that made it fail silently, and
+ * the log lines that would have said so.
+ */
+
+static char LOGGED[24][96];
+static int  NLOGGED;
+
+static void fake_log(const char *s) {
+  if (NLOGGED >= (int)(sizeof LOGGED / sizeof LOGGED[0])) return;
+  snprintf(LOGGED[NLOGGED++], sizeof LOGGED[0], "%s", s);
+}
+
+static int logged_has(const char *needle) {
+  int i;
+  for (i = 0; i < NLOGGED; i++)
+    if (strstr(LOGGED[i], needle)) return 1;
+  return 0;
+}
+
+static int  STARTS, START_RESULT, POLL_RESULT;
+static char LAST_BODY[256];
+static char LAST_URL[URL_MAX];
+static const char *POLL_BODY;
+
+static int fake_start(const char *m, const char *u, const char *b,
+                      const char *ct, const char *tok, int ms) {
+  (void)m; (void)ct; (void)tok; (void)ms;
+  STARTS++;
+  snprintf(LAST_URL, sizeof LAST_URL, "%s", u);
+  snprintf(LAST_BODY, sizeof LAST_BODY, "%s", b ? b : "");
+  return START_RESULT;
+}
+
+static int fake_poll(char *out, size_t n) {
+  if (POLL_BODY) snprintf(out, n, "%s", POLL_BODY);
+  return POLL_RESULT;
+}
+
+/* No card in the tests, so every cache write is a no-op. */
+static int fake_open(const char *path, int flags) { (void)path; (void)flags; return -1; }
+
+static uint32_t fake_epoch(void) { return (uint32_t)(20709u * 86400u + 12u * 3600u); }
+
+static void fake_now(CappTime *t) {
+  memset(t, 0, sizeof *t);
+  t->year = 2026; t->month = 9; t->day = 13; t->hour = 12; t->synced = 2;
+}
+
+static void fake_now_unsynced(CappTime *t) {
+  memset(t, 0, sizeof *t);
+  t->year = 1970; t->month = 1; t->day = 1;
+}
+
+static const char *fake_no_token(void) { return ""; }
+static const char *fake_gstatus(void)  { return "not signed in on the PC"; }
+
+static void use_sync_api(void) {
+  use_fake_api();
+  FAKE.ticks_ms = fake_ticks;
+  FAKE.net_ready = fake_net_ready;
+  FAKE.google_token = fake_token;
+  FAKE.google_status = fake_gstatus;
+  FAKE.http_start = fake_start;
+  FAKE.http_poll = fake_poll;
+  FAKE.open = fake_open;
+  FAKE.now = fake_now;
+  FAKE.epoch = fake_epoch;
+  FAKE.log = fake_log;
+  NLOGGED = 0;
+  STARTS = 0;
+  START_RESULT = 0;
+  POLL_RESULT = CAPP_HTTP_PENDING;
+  POLL_BODY = 0;
+  LAST_BODY[0] = 0;
+  LAST_URL[0] = 0;
+  refresh_clock();
+}
+
+void test_calendar_a_sync_logs_what_started_it_and_what_came_back(void) {
+  use_sync_api();
+  sync_begin("opened");
+  CHECK_EQ(1, STARTS);
+  CHECK(logged_has("opened"));
+
+  /* -1000 means the request is still running. It arrives every few
+   * milliseconds and is not a result; logging it would fill the card and
+   * read like a failure. */
+  NLOGGED = 0;
+  sync_tick();
+  CHECK_EQ(0, NLOGGED);
+
+  POLL_RESULT = (int)strlen(REPLY);
+  POLL_BODY = REPLY;
+  sync_tick();
+  CHECK_EQ(SYNC_IDLE, C.stage);
+  CHECK_EQ(3, C.n);
+  CHECK(logged_has("3 events absorbed"));
+}
+
+void test_calendar_a_failed_request_is_logged_with_its_code(void) {
+  use_sync_api();
+  sync_begin("s");
+  POLL_RESULT = -403;                 /* the HTTP status, negated */
+  sync_tick();
+  CHECK(logged_has("-403"));
+  CHECK(strstr(C.status, "403") != NULL);
+  CHECK_EQ(SYNC_IDLE, C.stage);
+}
+
+void test_calendar_a_refused_start_is_logged_as_a_busy_queue(void) {
+  use_sync_api();
+  START_RESULT = -1;                  /* one request at a time, device-wide */
+  sync_begin("auto");
+  CHECK_EQ(SYNC_IDLE, C.stage);
+  CHECK(logged_has("busy"));
+  CHECK_EQ((int)(1000 + RETRY_MS), (int)C.next_auto);
+}
+
+void test_calendar_a_missing_token_is_logged_with_what_google_said(void) {
+  use_sync_api();
+  FAKE.google_token = fake_no_token;
+  sync_begin("opened");
+  CHECK_EQ(0, STARTS);
+  CHECK(logged_has("not signed in on the PC"));
+  CHECK_EQ((int)(1000 + RETRY_MS), (int)C.next_auto);
+}
+
+/* The bug behind "it works some mornings": the clock arrives from NTP a few
+ * seconds after boot, and a calendar opened inside those seconds sampled
+ * have_clock once and never again. Every fetch then asked for sixty days from
+ * 1 January 1970, got nothing, and wrote the nothing over the cache. */
+void test_calendar_a_sync_without_a_clock_does_not_fetch_1970(void) {
+  use_sync_api();
+  FAKE.now = fake_now_unsynced;
+  C.have_clock = 0;
+  sync_begin("opened");
+  CHECK_EQ(0, STARTS);
+  CHECK_EQ(SYNC_IDLE, C.stage);
+  CHECK(logged_has("clock"));
+  CHECK_EQ((int)(1000 + RETRY_MS), (int)C.next_auto);
+}
+
+void test_calendar_a_clock_that_arrives_late_is_picked_up(void) {
+  use_sync_api();
+  C.have_clock = 0;                   /* opened before NTP answered */
+  C.today_y = 0;
+  sync_begin("auto");
+  CHECK_EQ(1, C.have_clock);
+  CHECK_EQ(2026, C.today_y);
+  CHECK_EQ(1, STARTS);
+  CHECK(strstr(LAST_URL, "timeMin=2026-09-13") != NULL);
+}
+
+/* The other silent one: a POST was remembered by its index into the list, and
+ * anything typed or deleted while it was in the air re-sorted that list. */
+void test_calendar_a_push_is_matched_to_its_event_not_its_index(void) {
+  use_sync_api();
+  C.n = 1;
+  memset(&C.ev[0], 0, sizeof C.ev[0]);
+  snprintf(C.ev[0].summary, sizeof C.ev[0].summary, "Dentist");
+  C.ev[0].start = 20709u * 86400u + 14u * 3600u;
+  C.ev[0].dirty = 1;
+
+  sync_begin("s");
+  CHECK_EQ(SYNC_PUSH, C.stage);
+  CHECK(strstr(LAST_BODY, "Dentist") != NULL);
+
+  /* Typed while the POST was still in the air, and earlier in the day, so it
+   * sorts in front of the event being pushed. */
+  memset(&C.ev[1], 0, sizeof C.ev[1]);
+  snprintf(C.ev[1].summary, sizeof C.ev[1].summary, "Standup");
+  C.ev[1].start = 20709u * 86400u + 9u * 3600u;
+  C.ev[1].dirty = 1;
+  C.n = 2;
+  sort_events();
+
+  POLL_RESULT = 2;
+  POLL_BODY = "{}";
+  START_RESULT = -1;                  /* stop the chain here; the bookkeeping
+                                         is what is under test */
+  sync_tick();
+
+  CHECK(strcmp(C.ev[0].summary, "Standup") == 0);
+  CHECK_EQ(1, C.ev[0].dirty);         /* never sent, so still queued */
+  CHECK_EQ(0, C.ev[1].dirty);         /* Dentist, which Google now has */
+  CHECK_EQ(0, C.ev[1].sending);
+}
+
+/* And the same request failing to start halfway through a sync used to drop
+ * to idle without a word, with the next attempt ten minutes away. */
+void test_calendar_a_refused_push_mid_sync_says_so_and_retries_soon(void) {
+  use_sync_api();
+  C.n = 2;
+  memset(C.ev, 0, sizeof C.ev[0] * 2);
+  snprintf(C.ev[0].summary, sizeof C.ev[0].summary, "One");
+  C.ev[0].start = 20709u * 86400u + 9u * 3600u;
+  C.ev[0].dirty = 1;
+  snprintf(C.ev[1].summary, sizeof C.ev[1].summary, "Two");
+  C.ev[1].start = 20709u * 86400u + 10u * 3600u;
+  C.ev[1].dirty = 1;
+
+  sync_begin("s");
+  CHECK_EQ(SYNC_PUSH, C.stage);
+  POLL_RESULT = 2;
+  POLL_BODY = "{}";
+  START_RESULT = -1;
+  sync_tick();
+
+  CHECK_EQ(SYNC_IDLE, C.stage);
+  CHECK(strstr(C.status, "busy") != NULL);
+  CHECK_EQ((int)(1000 + RETRY_MS), (int)C.next_auto);
+}
+
+/* A fetch that comes back shorter left the agenda scrolled off the end of
+ * the list, which paints an empty screen -- and on a device with no other
+ * report, an empty screen is a sync that lost the diary. */
+void test_calendar_absorbing_a_shorter_list_pulls_the_scroll_back(void) {
+  use_sync_api();
+  parse_reply(REPLY);
+  C.sel = 2;
+  C.top = 2;
+  snprintf(C.reply, sizeof C.reply, "%s", "{\"items\":[]}");
+  CHECK_EQ(0, absorb());
+  CHECK_EQ(0, C.n);
+  CHECK_EQ(0, C.sel);
+  CHECK_EQ(0, C.top);
+}
+
+/* And `d` still deletes, which is what it does in Todo too. A letter that
+ * deletes in one app and changes the view in another is how an event gets
+ * lost by someone who learned the other app first. */
+void test_calendar_d_deletes_rather_than_changing_the_view(void) {
+  three_events_no_zone();
+  C.sel = 0;
+  C.view = VIEW_AGENDA;
+  key_agenda('d');
+  CHECK_EQ(VIEW_AGENDA, C.view);
+}
+
+/* A chord in the action table is matched by the SHELL, before the app's key
+ * handler runs (kernel/app/capprun.c). So an action that claims a control
+ * byte a real key already sends takes that key away from every view in the
+ * app, and no test that calls key_agenda() directly can see it: the table is
+ * not consulted on that path.
+ *
+ * That is exactly what happened. Month claimed 0x0D "ctrl-m", which is the
+ * byte Enter sends, so Enter opened the month grid and the day view could
+ * never have it. It is the same collision that took the help key, where
+ * ctrl-h is the byte Backspace sends. */
+void test_calendar_no_action_chord_collides_with_a_real_key(void) {
+  int i;
+  for (i = 0; i < (int)(sizeof MAIN_ACTIONS / sizeof MAIN_ACTIONS[0]); i++) {
+    unsigned char k = (unsigned char)MAIN_ACTIONS[i].key;
+    CHECK(k != CAPP_KEY_ENTER);        /* 0x0D, ctrl-m */
+    CHECK(k != CAPP_KEY_BACK);         /* 0x08, ctrl-h */
+    CHECK(k != 0x09);                  /* tab, ctrl-i */
+    CHECK(k != CAPP_KEY_ESC);          /* 0x1B */
+  }
+}
+
+/* The month grid is a view you went into, so Escape comes back out of it.
+ * It used to fall through to the shell, which took that as "leave the app" --
+ * the same key going back in one view and quitting from another. */
+void test_calendar_escape_leaves_the_month_grid_and_not_the_app(void) {
+  three_events_no_zone();
+  C.view = VIEW_AGENDA;
+  do_action(ACT_MONTH);
+  CHECK_EQ(VIEW_MONTH, C.view);
+  CHECK_EQ(1, key_month(CAPP_KEY_ESC));
+  CHECK_EQ(VIEW_AGENDA, C.view);
+  /* And the agenda still declines it, so the shell can leave. */
+  CHECK_EQ(0, key_agenda(CAPP_KEY_ESC));
+}
+
+static const char *fake_net_status_memory(void) {
+  return "not enough memory: 37 KB free, TLS needs about 33";
+}
+
+/* -4 is the kernel refusing to start the request at all, and it already
+ * knows why. Printing the code sends the reader to look at their wifi; the
+ * sentence sends them to close an app, which is the thing that works. It is
+ * also transient, so the next attempt belongs in seconds, not ten minutes. */
+void test_calendar_a_refusal_for_memory_says_so_and_retries_soon(void) {
+  three_events_no_zone();
+  FAKE.net_status = fake_net_status_memory;
+  FAKE.ticks_ms = fake_ticks;
+  C.next_auto = 0;
+
+  sync_failed(-4);
+
+  CHECK(strstr(C.status, "not enough memory") != NULL);
+  CHECK(strstr(C.status, "-4") == NULL);
+  CHECK_EQ(C.next_auto, fake_ticks() + RETRY_MS);
+  CHECK_EQ(SYNC_IDLE, C.stage);
 }

@@ -127,6 +127,94 @@ marks nothing gets its whole rectangle exactly as before**, so this cost the
 existing apps nothing; `apps/files.c` shows the pattern, and Mines, Claude and
 Pinball can drop their hand-rolled versions whenever someone is in there.
 
+**The toolbar is a keyboard menu too** (2026-09-18). `fn-b` shows the bar and
+puts the keyboard in it: left/right walk the menu names, down opens one,
+up/down walk its items, Enter runs the highlighted one as an action, Escape
+steps out a level at a time and `fn-b` hides it again. It still appears on its
+own only when a mouse moves. While the bar has the keyboard `toolbar_key`
+answers for *every* key and `toolbar_has_keys()` makes `wants_text` say no --
+a key that fell through typed into the app underneath an open menu. An app
+wires it with one call at the top of its key handler (`menu_key` in
+`apps/todo.c` is the pattern); the menus still come from the same CappAction
+table as the chords and the help panel, so they cannot disagree.
+
+**The clock is UTC until `TZ` is set, and every app reads it** (2026-09-18).
+NTP hands over UTC, `kernel/sys/clock.c` applies `env TZ` (default `UTC0`),
+and `api->now()` minus `api->epoch()` is how an app gets a local offset
+without a zone database. With TZ unset the offset is zero and everything --
+the clock, the calendar, the taskbar -- is UTC, which looks exactly like a
+clock that is simply wrong: an event at 17:30 read as 00:30 the next day.
+`set TZ=PST8PDT,M3.2.0,M11.1.0` fixes it and persists in NVS. Two things made
+it hard to find, both now fixed: the zone was applied only at boot and at each
+NTP sync, so `set TZ=...` listed the new value and changed nothing until a
+reboot; and `time` printed an hour with no indication of which zone it was in.
+`time` now names the zone and says when there is none.
+
+**Escape belongs to the app; fn-` is the way out** (2026-09-18). The shell
+offers Escape to the focused app first and only leaves when the app declines
+it, so a subview goes back a level and the top level falls through to
+"leave". The launcher and the fullscreen path used to take Escape
+unconditionally while a windowed app got it first, which is why the same key
+went back in one place and quit in another. `fn` + the ` key (`KEY_QUIT`,
+`KBD_KEY_QUIT` over Bluetooth) always leaves, so an app that keeps Escape
+cannot trap anyone. `CAPP_KEY_ESC` in `capp.h` is the constant an app matches.
+
+**The help panel is fn-h, and for a while it was nothing at all.** Help moved
+off ctrl-h because ctrl-h is 0x08, the byte Backspace sends. The header and
+the shells were updated; the key code was not, so both drivers emitted the
+fn-letter code while every shell waited for the old dedicated 0x86 and no key
+on either keyboard opened help. `KEY_HELP` is now defined as the fn-h chord
+itself. If a chord ever stops working, check that the code the driver emits
+is the code the shell matches -- a test in `test_kbd_hid.c` pins both.
+
+**Apps log to the card.** `api->log()` reaches `/cache/app.log` (tagged with
+the calling app, stamped with uptime, rotated at 32 KB to `app.log.1`) as well
+as the serial port, because the USB port is not attached when the device is in
+a pocket and that is when the intermittent fault happens. `log`, `log N` and
+`log clear` in the console read it. The format and the rotation rule are in
+`kernel/sys/logring.c` so the host suite can reach them; `kernel/sys/applog.c`
+is the device glue. Log a handful of lines per sync, never one per tick -- it
+is an SD card.
+
+**Todo syncs once, at open** (2026-09-18). One sweep: the lists, then the
+list on screen (pending edits pushed first, then pulled), then every other
+list straight into its own cache file. Then it stops -- `s` asks for another.
+It used to re-pull the current list every ten minutes, which rearranged the
+screen while you were reading it and still never fetched the lists you were
+not looking at. A list off screen is absorbed into its file rather than into
+the item array, because the array is what is on display. `o` is the overview:
+every list's open tasks under its own heading, read from those files. `d`
+toggles a pending delete rather than only setting it.
+
+**`fields=` is not an optimisation, it is why the reply fits.** Todo asked
+Google for whole task objects -- etag, selfLink, position, updated, three
+hundred bytes each -- against a 6 KB app buffer and the kernel's 8 KB. The
+HTTP layer fills the buffer, cannot tell a body that ended from one that was
+cut off, and the app parses as far as the cut: a long list came back short
+with nothing saying so. Both Todo URLs now carry a field mask, as
+`apps/calendar.c` always did. Any new Google call needs one.
+
+**Todo has lists** (2026-09-17). All of the account's task lists, one at a
+time: only the current list's tasks are in memory, each list caches to
+`/todo/<id>.cache`, and `/todo/lists` remembers the names and the choice so
+Left/Right work offline. `l` is the picker. Switching mid-pull drops that
+reply; switching mid-push waits, because a dropped push reply means the item
+is sent twice. Lists are made and named elsewhere, on purpose.
+
+**One HTTP request at a time, and it has an owner.** `kernel/net/httpq.c`
+runs a single request off the shell's loop; `api->http_start` refuses a
+second. Every request is owned by the app slot whose handler started it, and
+`capprun.c` disowns it when that slot is released, so a reply that lands after
+the user has left the app is dropped. Before that, it sat in the slot forever:
+leave Todo or Calendar within the two seconds its sync takes and neither could
+sync again until reboot, with nothing on screen to say why (2026-09-17,
+`test/test_httpslot.c` pins the sequence). The second half of that bug: the
+trampolines in `capprun.c` nest. A tick that fetches a Google token blocks in
+`http_request`, whose busy badge repaints the shell on the way out, and that
+paint used to clear the active slot for the rest of the tick — so `damage()`
+marks were dropped and the request had no owner. Apps now say "busy" when a
+start is refused instead of returning silently.
+
 **API version 23** (`CAPP_API_VERSION` in `capp.h` is the truth; this
 paragraph is history). It moved six times in one day — 11 to 17 — and each
 move means every `.capp` must be rebuilt, because the loader refuses a binary

@@ -16,14 +16,16 @@
 #define KEY_BACKSPACE 0x08
 #define KEY_TAB       0x09
 
-/* The help panel. Fn-h produces it.
+/* The help panel. Fn-h produces it, so it IS the fn-h chord.
  *
  * It was ctrl-h, which ASCII says is 0x08 -- the same byte Backspace sends --
- * and this code existed to break the tie. Under the modifier convention the
- * collision simply stops existing: ctrl belongs to the app, so ctrl-h is
- * whatever the app wants it to be, and help moved to the modifier that owns
- * the window. The code is kept because every shell already handles it. */
-#define KEY_HELP      0x86
+ * and a code of its own (0x86) existed to break the tie. Under the modifier
+ * convention the collision simply stops existing: ctrl belongs to the app, so
+ * ctrl-h is whatever the app wants it to be, and help moved to the modifier
+ * that owns the window. For a while the header said "fn-h" while the code
+ * stayed 0x86 and the drivers emitted the fn-letter code below, so no key on
+ * either keyboard opened help. Defining it as the chord closes that gap. */
+#define KEY_HELP      (0xE0 + ('h' - 'a'))   /* == KEY_FN_LETTER('h') */
 
 /* Opt is the global-shortcut modifier.
  *
@@ -54,6 +56,17 @@
  * nobody thinks of an arrow as a chord. */
 #define KEY_FN_LETTER(c)  ((uint8_t)(0xE0 + ((c) - 'a')))
 #define KEY_IS_FN(k)      ((k) >= 0xE0)
+
+/* Fn plus the ` key: leave the app, whatever it thinks about it.
+ *
+ * Escape alone used to do this, unconditionally, in the launcher and over a
+ * fullscreen app -- so the same key went back inside a windowed app and quit
+ * outright everywhere else, which is the sort of inconsistency you learn by
+ * losing a draft. Escape is now offered to the app first everywhere, and this
+ * is the way out of one that wants to keep it. It is a chord of its own for
+ * the reason every fn chord is: it has to survive being typed into a text
+ * field. */
+#define KEY_QUIT      0x84
 
 #define KEY_UP        0x80   /* the ; , . / keys double as arrows under Fn */
 #define KEY_DOWN      0x81

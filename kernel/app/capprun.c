@@ -4,6 +4,7 @@
 #include "kernel/app/elfload.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/http.h"
+#include "kernel/net/httpq.h"
 #include "kernel/sys/env.h"
 
 #include <stdio.h>
@@ -83,21 +84,34 @@ static CRect to_crect(Rect r) {
 static void release_slot(Slot *s);
 
 /* The tail of every trampoline: the handler has returned, so a release that
- * was asked for while it ran can happen now. */
-static void handler_done(Slot *s) {
-  s_active = NULL;
-  if (s->release_pending) { s->release_pending = 0; release_slot(s); }
+ * was asked for while it ran can happen now.
+ *
+ * `prev` is what s_active was on the way in, and it goes back, because
+ * trampolines nest. A tick that asks for a Google token blocks in
+ * http_request, whose busy badge repaints the shell on its way out -- and
+ * that repaint is a paint trampoline, inside the tick. Clearing s_active
+ * there left the rest of the tick running as nobody: its damage() marks
+ * were dropped, and the request it then started had no owner, so the slot
+ * could not be disowned when the app closed. That reply sat uncollected and
+ * every sync after it was refused until reboot. See httpq.h. */
+static void handler_done(Slot *s, Slot *prev) {
+  s_active = prev;
+  if (s->release_pending && s_active != s) {
+    s->release_pending = 0;
+    release_slot(s);
+  }
 }
 
 static void tr_paint(void *state, Rect c) {
-  Slot *s = (Slot *)state;
+  Slot *s = (Slot *)state, *prev;
   if (IMAGE_GONE(s)) return;
+  prev = s_active;
   s_active = s;
   /* Painting settles the account: whatever was damaged is being repaired
    * now, and anything the app marks from here on belongs to the next frame. */
   s->has_damage = 0;
   if (s->ui.paint) s->ui.paint(s->ui.state, to_crect(c));
-  handler_done(s);
+  handler_done(s, prev);
 }
 
 /* The action table gets the key before the app's own handler does.
@@ -108,19 +122,20 @@ static void tr_paint(void *state, Rect c) {
  * goes straight through, which is how every app that has not been converted
  * keeps working. */
 static int tr_key(void *state, uint8_t k) {
-  Slot *s = (Slot *)state;
+  Slot *s = (Slot *)state, *prev;
   int r, i;
 
   if (IMAGE_GONE(s)) return 0;
+  prev = s_active;
   s_active = s;
   for (i = 0; i < (int)s->ui.nactions; i++) {
     if (!s->ui.actions[i].key || s->ui.actions[i].key != k) continue;
     r = s->ui.action ? s->ui.action(s->ui.state, s->ui.actions[i].action) : 0;
-    handler_done(s);
+    handler_done(s, prev);
     return r;
   }
   r = s->ui.key ? s->ui.key(s->ui.state, k) : 0;
-  handler_done(s);
+  handler_done(s, prev);
   return r;
 }
 
@@ -128,6 +143,7 @@ static int tr_key(void *state, uint8_t k) {
  * a model choosing between the verbs an app actually offers. */
 int capprun_action_invoke(const AppDef *a, const char *id) {
   int i, j;
+  Slot *prev;
   if (!a || !id) return -1;
   for (i = 0; i < CAPPRUN_MAX; i++) {
     Slot *s = &s_slot[i];
@@ -138,9 +154,10 @@ int capprun_action_invoke(const AppDef *a, const char *id) {
       while (*p && *p == *q) { p++; q++; }
       if (*p || *q) continue;
       if (!s->ui.action) return -1;
-      s_active = s;
+      prev = s_active;
+  s_active = s;
       s->ui.action(s->ui.state, s->ui.actions[j].action);
-      handler_done(s);
+      handler_done(s, prev);
       return 0;
     }
     return -1;
@@ -163,32 +180,35 @@ const CappAction *capprun_actions(const AppDef *a, int *n) {
 }
 
 static int tr_click(void *state, int16_t x, int16_t y, int button) {
-  Slot *s = (Slot *)state;
+  Slot *s = (Slot *)state, *prev;
   int r;
   if (IMAGE_GONE(s)) return 0;
+  prev = s_active;
   s_active = s;
   r = s->ui.click ? s->ui.click(s->ui.state, x, y, button) : 0;
-  handler_done(s);
+  handler_done(s, prev);
   return r;
 }
 
 static int tr_mouse(void *state, int16_t x, int16_t y, int buttons, int wheel) {
-  Slot *s = (Slot *)state;
+  Slot *s = (Slot *)state, *prev;
   int r;
   if (IMAGE_GONE(s)) return 0;
+  prev = s_active;
   s_active = s;
   r = s->ui.mouse ? s->ui.mouse(s->ui.state, x, y, buttons, wheel) : 0;
-  handler_done(s);
+  handler_done(s, prev);
   return r;
 }
 
 static int tr_tick(void *state, uint32_t now_ms) {
-  Slot *s = (Slot *)state;
+  Slot *s = (Slot *)state, *prev;
   int r;
   if (IMAGE_GONE(s)) return 0;
+  prev = s_active;
   s_active = s;
   r = s->ui.tick ? s->ui.tick(s->ui.state, now_ms) : 0;
-  handler_done(s);
+  handler_done(s, prev);
   return r;
 }
 
@@ -326,6 +346,10 @@ static int ensure_loaded(Slot *s) {
 
 /* Let go of one, if nothing is still calling into it. */
 static void release_slot(Slot *s) {
+  /* A request it started and will never collect goes with it. Left in the
+   * queue, that reply refused every sync on the device until the next
+   * reboot -- see httpq.h. */
+  httpq_abandon(s);
   if (s->loaded) capp_unload(&s->la);
   s->loaded = 0;
   s->has_ui = 0;
@@ -481,6 +505,22 @@ int capprun_start(int slot, const char *name, const char *args) {
 }
 
 int capprun_caps_ok(void) { return s_caps_ok; }
+
+/* The app whose code is on the stack right now: inside capp_main it is the
+ * one being started, inside a handler the one the trampoline entered, and a
+ * capp_main entered from another app's handler is the innermost. Used as an
+ * identity, never dereferenced -- it names the owner of a request, so
+ * release_slot can disown it. NULL between handlers. */
+const void *capprun_executing(void) {
+  return s_running ? (const void *)s_running : (const void *)s_active;
+}
+
+/* What to call it in a log line. "app" when no app is on the stack, which
+ * means the kernel logged through the same path. */
+const char *capprun_executing_name(void) {
+  Slot *s = s_running ? s_running : s_active;
+  return (s && s->name[0]) ? s->name : "app";
+}
 
 int capprun_is_app(int slot) {
   if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return 0;

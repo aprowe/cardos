@@ -28,6 +28,15 @@
  * Cheap and idempotent; the actual waiting happens on the background task. */
 void clock_init(void);
 
+/* Re-read env TZ and apply it. Called at boot, at each sync, and by `set`
+ * -- changing TZ has to take effect now, not at the next reboot. */
+void clock_apply_zone(void);
+
+/* Was a zone chosen at all, and what is it? Without this, a device quietly
+ * running on UTC looks exactly like one whose clock is wrong. */
+int         clock_zone_set(void);
+const char *clock_zone(void);
+
 /* Ask the network. Blocks for up to timeout_ms -- call it from the background
  * task, not from a shell. Returns 0 once the clock is set. */
 int  clock_sync(int timeout_ms);

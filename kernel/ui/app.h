@@ -59,7 +59,7 @@ typedef struct {
    * NULL means it never takes text, which is the common case. */
   int (*wants_text)(void *state);
 
-  /* The app's keys, one per line as "key	meaning". Shown by ctrl-h over
+  /* The app's keys, one per line as "key	meaning". Shown by fn-h over
    * whatever the app is doing. NULL means it has none worth listing, and the
    * shell still shows its own. A plain string rather than a callback because
    * an app's keys do not change while it runs, and one that did would be a
