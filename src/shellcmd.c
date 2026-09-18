@@ -392,10 +392,10 @@ void cmd_wifi(const char *arg) {
     return;
   }
 
-  /* wifi SSID PASS. An SSID with a space in it has to be joined from the
-   * Settings app instead; splitting on the first space is the price of a
-   * one-line shell. */
-  sp = strchr(arg, ' ');
+  /* wifi SSID PASS, split at the last space: passwords rarely contain one
+   * and SSIDs often do ("Ocean Beach Coffee and Plants"). An open network
+   * whose name has a space still needs the Settings app. */
+  sp = strrchr(arg, ' ');
   if (!sp) {
     snprintf(ssid, sizeof ssid, "%s", arg);
     pass[0] = 0;
