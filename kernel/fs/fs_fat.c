@@ -25,6 +25,9 @@
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #define PIN_SD_CS   12
 #define PIN_SD_MOSI 14
 #define PIN_SD_MISO 39
@@ -39,7 +42,12 @@ static const char *TAG = "fs";
 static sdmmc_card_t *s_card;
 static int           s_mounted;
 static FILE         *s_open[FS_MAX_OPEN];
-static char          s_dir_prefix[FS_PATH_MAX + 8];
+
+/* The share server opens files from its own task while the shell may be
+ * opening one too. FatFs itself is built reentrant; this table was the only
+ * unguarded thing. A critical section rather than a mutex because a slot
+ * claim is eight pointer reads. */
+static portMUX_TYPE  s_open_lock = portMUX_INITIALIZER_UNLOCKED;
 
 /* Map a CardOS path onto the VFS mount point. */
 static int real_path(const char *cardos_path, char *out, size_t out_size) {
@@ -126,11 +134,21 @@ void fs_space(uint64_t *total, uint64_t *freebytes) {
 
 /* ------------------------------------------------------------- files ---- */
 
+#define FD_CLAIMED ((FILE *)1)
+
 static int alloc_fd(void) {
-  int i;
+  int i, fd = -1;
+  taskENTER_CRITICAL(&s_open_lock);
   for (i = 0; i < FS_MAX_OPEN; i++)
-    if (!s_open[i]) return i;
-  return -1;
+    if (!s_open[i]) { s_open[i] = FD_CLAIMED; fd = i; break; }
+  taskEXIT_CRITICAL(&s_open_lock);
+  return fd;
+}
+
+static void free_fd(int fd) {
+  taskENTER_CRITICAL(&s_open_lock);
+  s_open[fd] = NULL;
+  taskEXIT_CRITICAL(&s_open_lock);
 }
 
 int fs_open(const char *path, int flags) {
@@ -151,14 +169,14 @@ int fs_open(const char *path, int flags) {
   else                          mode = "rb";
 
   f = fopen(real, mode);
-  if (!f) return -1;
+  if (!f) { free_fd(fd); return -1; }
 
   s_open[fd] = f;
   return fd;
 }
 
 static FILE *file_of(int fd) {
-  if (fd < 0 || fd >= FS_MAX_OPEN) return NULL;
+  if (fd < 0 || fd >= FS_MAX_OPEN || s_open[fd] == FD_CLAIMED) return NULL;
   return s_open[fd];
 }
 
@@ -193,7 +211,7 @@ void fs_close(int fd) {
   FILE *f = file_of(fd);
   if (!f) return;
   fclose(f);
-  s_open[fd] = NULL;
+  free_fd(fd);
 }
 
 /* -------------------------------------------------------- directories --- */
@@ -206,6 +224,7 @@ int fs_stat(const char *path, FsStat *out) {
   if (stat(real, &st) != 0) return -1;
   out->size = (uint32_t)st.st_size;
   out->is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
+  out->mtime = (uint32_t)st.st_mtime;
   return 0;
 }
 
@@ -220,8 +239,8 @@ int fs_opendir(const char *path, FsDir *d) {
   if (!dir) return -1;
   d->impl = dir;
   /* Remember the directory so readdir can stat each child. */
-  strncpy(s_dir_prefix, real, sizeof s_dir_prefix - 1);
-  s_dir_prefix[sizeof s_dir_prefix - 1] = '\0';
+  strncpy(d->prefix, real, sizeof d->prefix - 1);
+  d->prefix[sizeof d->prefix - 1] = '\0';
   return 0;
 }
 
@@ -238,10 +257,12 @@ int fs_readdir(FsDir *d, FsEntry *out) {
   out->name[FS_NAME_MAX] = '\0';
   out->size = 0;
   out->is_dir = 0;
-  if (snprintf(child, sizeof child, "%s/%s", s_dir_prefix, e->d_name) > 0 &&
+  out->mtime = 0;
+  if (snprintf(child, sizeof child, "%s/%s", d->prefix, e->d_name) > 0 &&
       stat(child, &st) == 0) {
     out->size = (uint32_t)st.st_size;
     out->is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
+    out->mtime = (uint32_t)st.st_mtime;
   }
   return 1;
 }

@@ -180,7 +180,7 @@ static void cmd_help(void) {
   con_write("         set TZ=PST8PDT,M3.2.0,M11.1.0 -- clocks are UTC until\n");
   con_write("         you do; every app reads it\n");
   con_write("radios   wifi [scan|SSID PASS|saved|forget|off]\n");
-  con_write("         mouse, get URL\n");
+  con_write("         mouse, get URL, share [off|log] (card as a drive)\n");
   con_write("screens  launch (carousel), desk (windows), escape returns\n");
   con_write("boot     apps, boot NAME, boot! NAME, bootinfo\n");
   con_write("system   mem ps taskcost flip clear reboot echo\n");
@@ -273,6 +273,7 @@ static void run_builtin(const char *line, char *arg) {
       con_printf("%s%s%s\n", shot_last_path(), *shot_error() ? ": " : "", shot_error());
     else con_printf("shot: %s\n", shot_error());
   }
+  else if (!strcmp(line, "share")) cmd_share(arg);
   else if (!strcmp(line, "env"))  cmd_env();
   else if (!strcmp(line, "set"))  cmd_set(arg);
   else if (!strcmp(line, "hotkey")) cmd_hotkey(arg);
@@ -368,7 +369,7 @@ static const char *const COMMANDS[] = {
   "battery", "defaults", "listen", "mouse", "ps", "pwd", "reboot", "rm",
   "run", "time",
   "safe",
-  "shot", "taskcost", "update", "wifi",
+  "share", "shot", "taskcost", "update", "wifi",
 };
 #define NCOMMANDS ((int)(sizeof COMMANDS / sizeof COMMANDS[0]))
 

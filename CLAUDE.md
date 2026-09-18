@@ -102,6 +102,13 @@ what says whether anything is listening. `listen` in the console does the same
 thing without the button. Design in
 `docs/specs/2026-09-12-voice-and-capabilities.md`.
 
+**The card is a network drive when you ask.** `share` in the console, or the
+Share app, runs a WebDAV server on port 80 (`kernel/net/share.c` is the
+socket and task; `kernel/net/dav.c` is the protocol and is host-tested).
+Windows maps `http://IP/` as a drive letter, Finder connects to it. No
+password: the boundary is the LAN, so it is a thing you turn on. Design in
+`docs/superpowers/specs/2026-09-14-webdav-share-design.md`.
+
 **Apps declare what they need**: `CAPP_NEEDS_NET`, `CAPP_NEEDS_PROXY`, or
 nothing (Mines and Pinball work on a device that has never seen a network).
 The OS joins WiFi and checks the proxy answers *before* `capp_main` runs, so
@@ -215,19 +222,19 @@ paint used to clear the active slot for the rest of the tick — so `damage()`
 marks were dropped and the request had no owner. Apps now say "busy" when a
 start is refused instead of returning silently.
 
-**API version 23** (`CAPP_API_VERSION` in `capp.h` is the truth; this
-paragraph is history). It moved six times in one day — 11 to 17 — and each
-move means every `.capp` must be rebuilt, because the loader refuses a binary
-built against a different table. `python tools/build_apps.py` before every
-firmware build; the symptom of forgetting is "built for a different API
-version" at boot. What arrived: `tick` and `mouse` (12, 13),
-`update_check`/`update_apply` (14), `caps_ok` (15), the file operations
-`list_ex`, `stat`, `mkdir`, `remove`, `rename` and `run` that the file manager
-needed (16), `damage`/`paint_area` (17), then actions, `http_stream`,
-`key_pending`, `now`, the `exec_*` memory the IDE compiles into and the
-`http_start`/`http_poll` pair (18 to 22), and the agent table (23). **The
-`worktree-webdav-share` branch also calls itself 23** with `share_*` in the
-slots master gave to `agent`; whichever lands second must bump to 24.
+**API version 24** (`CAPP_API_VERSION` in `capp.h` is the truth; this
+paragraph is history). It moved six times in one day — 11 to 17 — and has
+kept moving since; each move means every `.capp` must be rebuilt, because the
+loader refuses a binary built against a different table. `python
+tools/build_apps.py` before every firmware build; the symptom of forgetting is
+"built for a different API version" at boot. What arrived: `tick` and `mouse`
+(12, 13), `update_check`/`update_apply` (14), `caps_ok` (15), the file
+operations `list_ex`, `stat`, `mkdir`, `remove`, `rename` and `run` that the
+file manager needed (16), `damage`/`paint_area` (17), then actions,
+`http_stream`, `key_pending`, `now`, the `exec_*` memory the IDE compiles into
+and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
+`share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
+branch and master both called themselves 23, so the merge bumped it).
 
 **`CAPP_PROXY_DEFAULT` in `capp.h` is the one place the PC's address is
 written.** Kernel and apps both include that header; the kernel prefers

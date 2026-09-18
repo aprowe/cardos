@@ -5,6 +5,7 @@
 #include "kernel/net/wifi.h"
 #include "kernel/net/http.h"
 #include "kernel/net/httpq.h"
+#include "kernel/net/share.h"
 #include "kernel/sys/env.h"
 
 #include <stdio.h>
@@ -354,6 +355,11 @@ static void release_slot(Slot *s) {
   s->loaded = 0;
   s->has_ui = 0;
   if (s->stale) { s->stale = 0; s->used = 0; }
+  share_app_closed(s);
+}
+
+const void *capprun_caller(void) {
+  return s_active ? s_active : s_running;
 }
 
 /* Is a shell still calling into this one? An app that installed an interface

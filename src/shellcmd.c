@@ -10,6 +10,7 @@
 #include "kernel/net/wifi.h"
 #include "kernel/net/http.h"
 #include "kernel/net/update.h"
+#include "kernel/net/share.h"
 #include "kernel/ui/icons.h"
 #include "kernel/ui/launchui.h"
 #include "kernel/sys/env.h"
@@ -472,6 +473,38 @@ void cmd_update(const char *arg) {
     update_firmware(update_say, NULL);
     err("update", update_error());           /* only reached on failure */
   }
+}
+
+/* share        -- put the card on the LAN as a WebDAV drive, print the URL
+ * share off    -- stop
+ * share log    -- what has been asked for since last time */
+void cmd_share(const char *arg) {
+  const char *l;
+
+  if (arg && !strcmp(arg, "off")) {
+    if (!share_running()) { con_write("not sharing\n"); return; }
+    share_stop();
+    con_write("stopped\n");
+    return;
+  }
+  if (arg && !strcmp(arg, "log")) {
+    int n = 0;
+    while ((l = share_take_log()) != NULL) { con_printf("  %s\n", l); n++; }
+    if (!n) con_write("nothing since last time\n");
+    return;
+  }
+  if (arg && *arg) { con_write("usage: share [off|log]\n"); return; }
+
+  if (share_running()) {
+    con_printf("sharing at %s\n", share_url());
+    return;
+  }
+  if (share_start(NULL) != 0) { err("share", share_error()); return; }
+  con_printf("sharing the card at %s\n", share_url());
+  con_write("windows: map network drive, or  net use X: ");
+  con_printf("%s\n", share_url());
+  con_write("mac: finder, go, connect to server. no password.\n");
+  con_write("anyone on this network can read and write the card. share off ends it.\n");
 }
 
 /* ----------------------------------------------------------------- run --- */

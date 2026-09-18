@@ -66,6 +66,12 @@ void           capprun_damage(CRect r);
  * built-in's AppDef, or twice; both do nothing. */
 void           capprun_release(const AppDef *a);
 
+/* The slot whose code is executing right now -- its capp_main, or one of its
+ * callbacks -- or NULL when the caller is the kernel itself. An identity for
+ * things an app can own, so that its release, and only its release, lets go
+ * of them; share_start takes it as the owner. */
+const void    *capprun_caller(void);
+
 /* Valid only after a run that installed an interface. */
 const AppDef *capprun_def(int slot);
 

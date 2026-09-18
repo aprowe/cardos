@@ -128,6 +128,7 @@ FOLDERS = {
     "build":    "Net",
     "stocks":   "Net",
     "screen":   "Net",
+    "share":    "Net",
 
     "calendar": "Tools",
     "files":    "Tools",

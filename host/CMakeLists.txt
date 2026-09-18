@@ -19,6 +19,7 @@ file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
   ${ROOT}/kernel/fs/path.c
   ${ROOT}/kernel/net/manifest.c   # update.c is device glue around it
   ${ROOT}/kernel/net/httpslot.c   # httpq.c is the task and lock around it
+  ${ROOT}/kernel/net/dav.c
   ${ROOT}/kernel/input/mouse.c ${ROOT}/kernel/input/kbd_hid.c
   ${ROOT}/kernel/sys/input.c ${ROOT}/kernel/sys/rpc.c   # text in, commands in
   ${ROOT}/kernel/sys/hotkeys.c ${ROOT}/kernel/sys/chatlog.c
