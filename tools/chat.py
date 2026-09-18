@@ -150,7 +150,11 @@ class ChatService:
         if not self.use_api_key:
             env.pop("ANTHROPIC_API_KEY", None)
             env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        # ... except the OAuth token, which on a server with no interactive login
+        # is the login. It is a credential, not a session id.
         for k in list(env):
+            if k == "CLAUDE_CODE_OAUTH_TOKEN":
+                continue
             if k.startswith("CLAUDE_CODE_") or k in ("CLAUDECODE", "CLAUDE_PID",
                                                      "CLAUDE_PROJECT_DIR"):
                 env.pop(k, None)

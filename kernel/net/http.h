@@ -96,7 +96,7 @@ int http_post_file(const char *url, const char *path, const char *content_type,
  * with bytes sent and the total -- half a megabyte over WiFi takes a few
  * seconds, and a bar that means something beats a spinner that does not. */
 int http_post_file_progress(const char *url, const char *path,
-                            const char *content_type,
+                            const char *content_type, const char *bearer,
                             char *out, size_t out_size, int timeout_ms,
                             void (*progress)(int sent, int total));
 

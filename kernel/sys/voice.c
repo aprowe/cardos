@@ -10,6 +10,7 @@
 #include "kernel/drv/mic.h"
 #include "kernel/drv/display.h"
 #include "kernel/net/http.h"
+#include "kernel/net/update.h"
 #include "kernel/net/wifi.h"
 #include "kernel/ui/shell.h"
 #include "kernel/ui/overlay.h"
@@ -112,8 +113,12 @@ static void send_and_act(void) {
   snprintf(url, sizeof url, "%s/voice", base_url());
   say("recognising...");
 
-  n = http_post_file_progress(url, WAV_PATH, "audio/wav", reply, sizeof reply,
-                              60000, send_cb);
+  /* The proxy may be remote and behind the device's shared secret. */
+  {
+    const char *t = update_token();
+    n = http_post_file_progress(url, WAV_PATH, "audio/wav", *t ? t : NULL,
+                                reply, sizeof reply, 60000, send_cb);
+  }
   /* The upload finished; whatever happens next has no progress to report --
    * whisper is chewing, or a model is deciding what the sentence meant. */
   overlay_working("recognising");

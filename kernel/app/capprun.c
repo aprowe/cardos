@@ -6,6 +6,7 @@
 #include "kernel/net/http.h"
 #include "kernel/net/httpq.h"
 #include "kernel/net/share.h"
+#include "kernel/net/update.h"
 #include "kernel/sys/env.h"
 
 #include <stdio.h>
@@ -461,7 +462,11 @@ static int meet_needs(uint16_t flags) {
     char url[160];
     const char *base = env_get("PROXY");
     snprintf(url, sizeof url, "%s/status", base && base[0] ? base : CAPP_PROXY_DEFAULT);
-    if (http_get(url, buf, sizeof buf, 4000) >= 0) got |= CAPP_CAP_PROXY;
+    /* With the shared secret the device already keeps for update, or a
+     * remote proxy answers 403 and every app that needs it is refused. */
+    const char *t = update_token();
+    if (http_request("GET", url, NULL, NULL, *t ? t : NULL, buf, sizeof buf, 4000) >= 0)
+      got |= CAPP_CAP_PROXY;
     else ESP_LOGW(TAG, "app needs the proxy, and %s did not answer", url);
   }
   return got;

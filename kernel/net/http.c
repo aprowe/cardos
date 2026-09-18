@@ -183,12 +183,12 @@ int http_request_quiet(const char *method, const char *url,
 
 int http_post_file(const char *url, const char *path, const char *content_type,
                    char *out, size_t out_size, int timeout_ms) {
-  return http_post_file_progress(url, path, content_type, out, out_size,
+  return http_post_file_progress(url, path, content_type, NULL, out, out_size,
                                  timeout_ms, NULL);
 }
 
 int http_post_file_progress(const char *url, const char *path,
-                            const char *content_type,
+                            const char *content_type, const char *bearer,
                             char *out, size_t out_size, int timeout_ms,
                             void (*progress)(int sent, int total)) {
   esp_http_client_config_t cfg;
@@ -217,6 +217,7 @@ int http_post_file_progress(const char *url, const char *path,
   if (!cli) { fs_close(fd); return -2; }
   if (content_type && *content_type)
     esp_http_client_set_header(cli, "Content-Type", content_type);
+  set_auth(cli, bearer);
 
   /* Opened with the length up front, then streamed a kilobyte at a time. The
    * whole point of this function is that the body never exists in memory: a
