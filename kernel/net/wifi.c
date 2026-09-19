@@ -1,6 +1,8 @@
 /* WiFi station. See wifi.h. */
 
 #include "kernel/net/wifi.h"
+#include "kernel/sys/conf.h"
+#include "kernel/app/capp.h"   /* CAPP_CONFIG */
 
 #include <string.h>
 #include <stdio.h>
@@ -178,13 +180,27 @@ void wifi_stop(void) {
   snprintf(s_detail, sizeof s_detail, "off");
 }
 
+/* NVS for the runtime, and the same two lines in /config/wifi.txt so a flash
+ * that wipes NVS does not cost the network. See kernel/sys/conf.h. */
+#define WIFI_CONF CAPP_CONFIG "/wifi.txt"
+
 static void save(const char *ssid, const char *pass) {
   nvs_handle_t h;
+  const char *lines[2] = { ssid, pass };
   if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
   nvs_set_str(h, NVS_SSID, ssid);
   nvs_set_str(h, NVS_PASS, pass);
   nvs_commit(h);
   nvs_close(h);
+  conf_write(WIFI_CONF, lines, 2);
+}
+
+int wifi_restore_from_card(void) {
+  char lines[2][WIFI_PASS_MAX];
+  if (wifi_saved_ssid()[0]) return 0;            /* NVS has one: it wins */
+  if (conf_read(WIFI_CONF, &lines[0][0], 2, WIFI_PASS_MAX) < 1 || !lines[0][0]) return 0;
+  save(lines[0], lines[1]);
+  return 1;
 }
 
 int wifi_connect(const char *ssid, const char *pass, int timeout_ms) {
@@ -361,6 +377,7 @@ const char *wifi_saved_ssid(void) {
 
 void wifi_forget(void) {
   nvs_handle_t h;
+  conf_remove(WIFI_CONF);
   if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
   nvs_erase_key(h, NVS_SSID);
   nvs_erase_key(h, NVS_PASS);

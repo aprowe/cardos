@@ -237,6 +237,17 @@ and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it).
 
+**Credentials survive a reflash** (2026-09-19). WiFi and Google credentials
+live in NVS at runtime, and a full-table flash wipes NVS -- one day it cost the
+network, the hotkeys and the Google login in a row. Each is now mirrored to a
+file on the card, written whenever it is set: `/config/wifi.txt` (SSID, then
+password) and `/config/google.txt` (client id, secret, refresh token), one
+value per line. At boot, after the card mounts, a file is read back only when
+NVS has nothing, so NVS wins where both exist and `wifi forget` / `google
+forget` delete the file too. A hand-written `/config/wifi.txt` is also the
+way to give a fresh device its network without a keyboard. `kernel/sys/conf.c`
+holds the line format (host-tested); `conf_file.c` is the fs glue.
+
 **`CAPP_PROXY_DEFAULT` in `capp.h` is the one place the PC's address is
 written.** Kernel and apps both include that header; the kernel prefers
 `env PROXY` over it. It used to be spelled out in five files, which is a bug

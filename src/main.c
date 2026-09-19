@@ -33,6 +33,7 @@
 #include "kernel/app/capprun.h"
 #include "kernel/app/capp.h"
 #include "kernel/net/wifi.h"
+#include "kernel/net/gauth.h"
 #include "kernel/ui/shell.h"
 #include "kernel/sys/env.h"
 #include "kernel/sys/sio.h"
@@ -1117,6 +1118,11 @@ void app_main(void) {
     fs_ensure_layout();
     if (moved) con_printf("card layout: moved %d into /apps /sys /config /cache /home /var\n", moved);
     hotkeys_init(&FILE_STORE);   /* after the mount: the table is on the card */
+    /* Credentials NVS lost -- a full-table flash wipes it -- come back from
+     * their /config mirrors, so a reflash never means retyping a password
+     * or repeating the Google consent dance. */
+    if (wifi_restore_from_card())  con_write("wifi: network restored from /config/wifi.txt\n");
+    if (gauth_restore_from_card()) con_write("google: credentials restored from /config/google.txt\n");
     fs_space(&total, &freeb);
     con_printf("sd %u MB, %u MB free\n",
                (unsigned)(total / (1024 * 1024)),

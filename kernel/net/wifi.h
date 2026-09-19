@@ -43,6 +43,11 @@ int wifi_connect(const char *ssid, const char *pass, int timeout_ms);
 /* Connect using whatever was saved. Returns -1 if nothing was. */
 int wifi_connect_saved(int timeout_ms);
 
+/* When NVS has no network but /config/wifi.txt (SSID, then password, one per
+ * line) does, take the file's. Called once at boot after the card mounts.
+ * Returns 1 if it did. */
+int wifi_restore_from_card(void);
+
 /* Blocking scan. Fills `out` with up to `max` networks, strongest first, and
  * returns how many. */
 int wifi_scan(WifiAp *out, int max);

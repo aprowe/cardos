@@ -43,6 +43,8 @@ idf_component_register(
     "../kernel/sys/power.c"
     "../kernel/sys/clock.c"
     "../kernel/sys/hotkeys.c"
+    "../kernel/sys/conf.c"
+    "../kernel/sys/conf_file.c"
     "../kernel/drv/mic.c"
     "../kernel/net/wifi.c"
     "../kernel/net/http.c"

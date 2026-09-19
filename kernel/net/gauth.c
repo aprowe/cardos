@@ -2,6 +2,8 @@
 
 #include "kernel/net/gauth.h"
 #include "kernel/net/http.h"
+#include "kernel/sys/conf.h"
+#include "kernel/app/capp.h"   /* CAPP_CONFIG */
 
 #include <stdio.h>
 #include <string.h>
@@ -45,11 +47,38 @@ static void store(const char *key, const char *value) {
   nvs_close(h);
 }
 
+/* The three values mirrored to the card, in this order, one per line, so a
+ * flash that wipes NVS does not mean the browser dance again. */
+#define GOOGLE_CONF CAPP_CONFIG "/google.txt"
+
+static void mirror_to_card(void) {
+  char id[GAUTH_ID_MAX], secret[GAUTH_SECRET_MAX], refresh[GAUTH_REFRESH_MAX];
+  const char *lines[3] = { id, secret, refresh };
+  load(KEY_ID, id, sizeof id);
+  load(KEY_SECRET, secret, sizeof secret);
+  load(KEY_REFRESH, refresh, sizeof refresh);
+  if (!id[0] && !secret[0] && !refresh[0]) { conf_remove(GOOGLE_CONF); return; }
+  conf_write(GOOGLE_CONF, lines, 3);
+}
+
+int gauth_restore_from_card(void) {
+  char lines[3][GAUTH_REFRESH_MAX];
+  if (gauth_configured()) return 0;               /* NVS has it: it wins */
+  if (conf_read(GOOGLE_CONF, &lines[0][0], 3, GAUTH_REFRESH_MAX) < 3) return 0;
+  if (!lines[0][0] || !lines[1][0] || !lines[2][0]) return 0;
+  store(KEY_ID, lines[0]);
+  store(KEY_SECRET, lines[1]);
+  store(KEY_REFRESH, lines[2]);
+  snprintf(s_detail, sizeof s_detail, "%s", "configured from card");
+  return 1;
+}
+
 int gauth_set(const char *client_id, const char *client_secret,
               const char *refresh_token) {
   if (client_id)     store(KEY_ID, client_id);
   if (client_secret) store(KEY_SECRET, client_secret);
   if (refresh_token) store(KEY_REFRESH, refresh_token);
+  mirror_to_card();
 
   /* Any change invalidates whatever was cached: the old access token belongs
    * to the old credentials. */
@@ -64,6 +93,7 @@ void gauth_forget(void) {
   store(KEY_ID, NULL);
   store(KEY_SECRET, NULL);
   store(KEY_REFRESH, NULL);
+  conf_remove(GOOGLE_CONF);
   s_token[0] = 0;
   s_expires_at_ms = 0;
   snprintf(s_detail, sizeof s_detail, "%s", "forgotten");
