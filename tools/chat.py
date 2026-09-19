@@ -11,7 +11,7 @@ running *in this repository*, with permission to edit it. Asking the device to
 whole point of building it, and it is also the reason for the warning the
 server prints on startup: anything on the network that can reach the port can
 drive an agent with write access to this folder. Pass --token to require a
-shared secret, which the device reads from /claude.token on its card.
+shared secret, which the device reads from /config/claude.token on its card.
 
 Three calls rather than one because a reply takes anywhere from five seconds to
 two minutes, and the device's shell is a single cooperative loop: a blocking

@@ -1,6 +1,7 @@
 /* See env.h. */
 
 #include "kernel/sys/env.h"
+#include "kernel/app/capp.h"   /* the card layout */
 
 #include <stdio.h>
 #include <string.h>
@@ -30,12 +31,12 @@ static int s_n;
  * next. A PATH entry that does not exist costs one failed open.
  *
  * The graphical apps live in folders and the CLI ones do not, which is why
- * /desktop still comes first: `grep` and `cat` are found without walking any
+ * /apps still comes first: `grep` and `cat` are found without walking any
  * of the rest. Nothing here is load-bearing -- the launcher's own list is
  * searched after PATH, so an app resolves by name even on a card whose saved
  * PATH predates the folders. */
 static const char *DEFAULT_PATH =
-    "/desktop:/desktop/Tools:/desktop/Net:/desktop/Games:/bin";
+    CAPP_APPS ":" CAPP_APPS "/Tools:" CAPP_APPS "/Net:" CAPP_APPS "/Games:/bin";
 
 static int find(const char *name) {
   int i;
@@ -112,9 +113,13 @@ void env_init(void) {
     if (k) load_one(name, NULL);
   }
 
-  /* The ones CardOS itself relies on, filled in if they were never set. */
+  /* The ones CardOS itself relies on, filled in if they were never set. A
+   * saved PATH that still names /desktop, or HOME at the root, predates the
+   * card layout of 2026-09-19 and would point at nothing: take the default. */
   if (!env_get("PATH")) load_one("PATH", DEFAULT_PATH);
-  if (!env_get("HOME")) load_one("HOME", "/");
+  else if (strstr(env_get("PATH"), "/desktop")) env_set("PATH", DEFAULT_PATH);
+  if (!env_get("HOME")) load_one("HOME", CAPP_HOME);
+  else if (!strcmp(env_get("HOME"), "/")) env_set("HOME", CAPP_HOME);
   if (!env_get("EDITOR")) load_one("EDITOR", "edit");
 }
 

@@ -31,6 +31,7 @@
 #include "kernel/ui/pins.h"
 #include "kernel/ui/launchui.h"
 #include "kernel/app/capprun.h"
+#include "kernel/app/capp.h"
 #include "kernel/net/wifi.h"
 #include "kernel/ui/shell.h"
 #include "kernel/sys/env.h"
@@ -381,7 +382,7 @@ static int common(const char *a, const char *b) {
 }
 
 /* Split the path being typed into the directory to list and the stem to match
- * inside it. "/desk" -> "/" and "desk"; "/desktop/mi" -> "/desktop" and "mi". */
+ * inside it. "/desk" -> "/" and "desk"; "/apps/mi" -> "/apps" and "mi". */
 static void split_path(const char *word, char *dir, size_t dirn, const char **stem) {
   const char *slash = strrchr(word, '/');
   if (!slash) {
@@ -781,26 +782,31 @@ static int sink_wants_text(void) {
   return desktop_wants_text();
 }
 
-/* The hotkey table lives in the same NVS namespace as the environment, as one
- * blob: it is a setting, and `defaults` should wipe it with the others. */
-#define HOTKEY_NVS_NS  "cardosenv"
-#define HOTKEY_NVS_KEY "hotkeys"
+/* The hotkey table is a text file on the card, /config/hotkeys.txt, so it
+ * can be read and edited by hand and survives a flash that wipes NVS. No card
+ * means no hotkeys, which is also what a fresh card has. */
+#define HOTKEY_PATH CAPP_CONFIG "/hotkeys.txt"
 
-static int hotkey_nvs_load(char *buf, int size) {
-  nvs_handle_t h;
-  size_t n = (size_t)size;
-  if (nvs_open(HOTKEY_NVS_NS, NVS_READONLY, &h) != ESP_OK) return 0;
-  if (nvs_get_blob(h, HOTKEY_NVS_KEY, buf, &n) != ESP_OK) n = 0;
-  nvs_close(h);
-  return (int)n;
+static int hotkey_file_load(char *buf, int size) {
+  int fd, n;
+  if (!fs_mounted()) return 0;
+  fd = fs_open(HOTKEY_PATH, FS_O_READ);
+  if (fd < 0) return 0;
+  n = fs_read(fd, buf, (size_t)(size - 1));
+  fs_close(fd);
+  if (n < 0) n = 0;
+  buf[n] = 0;
+  return n;
 }
 
-static void hotkey_nvs_save(const char *buf, int len) {
-  nvs_handle_t h;
-  if (nvs_open(HOTKEY_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-  nvs_set_blob(h, HOTKEY_NVS_KEY, buf, (size_t)len);
-  nvs_commit(h);
-  nvs_close(h);
+static void hotkey_file_save(const char *text) {
+  int fd;
+  if (!fs_mounted()) return;
+  fs_mkdir(CAPP_CONFIG);
+  fd = fs_open(HOTKEY_PATH, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+  if (fd < 0) return;
+  fs_write(fd, text, strlen(text));
+  fs_close(fd);
 }
 
 static int global_key(uint8_t k) {
@@ -1097,10 +1103,6 @@ void app_main(void) {
   }
 
   env_init();
-  {
-    static const HotkeyStore NVS_STORE = { hotkey_nvs_load, hotkey_nvs_save };
-    hotkeys_init(&NVS_STORE);
-  }
   sched_init(clock_ms, NULL);
   sched_create("shell");
   sched_next();                  /* mark it running, so it owns its locks */
@@ -1110,12 +1112,17 @@ void app_main(void) {
    * the user to guess why `ls` is empty. */
   if (fs_mount() == 0) {
     uint64_t total = 0, freeb = 0;
+    static const HotkeyStore FILE_STORE = { hotkey_file_load, hotkey_file_save };
+    int moved = fs_migrate_layout();   /* an old card into the new folders; before ensure, so the trees can rename */
     fs_ensure_layout();
+    if (moved) con_printf("card layout: moved %d into /apps /sys /config /cache /home /var\n", moved);
+    hotkeys_init(&FILE_STORE);   /* after the mount: the table is on the card */
     fs_space(&total, &freeb);
     con_printf("sd %u MB, %u MB free\n",
                (unsigned)(total / (1024 * 1024)),
                (unsigned)(freeb / (1024 * 1024)));
   } else {
+    hotkeys_init(NULL);          /* nothing to bind to, and nowhere to keep it */
     con_set_color(COLOR_GREY);
     con_write("no sd card: no apps, no swap\n");
     con_set_color(COLOR_GREEN);

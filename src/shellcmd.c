@@ -7,6 +7,7 @@
  */
 
 #include "shellcmd.h"
+#include "kernel/app/capp.h"   /* the card layout */
 #include "kernel/net/wifi.h"
 #include "kernel/net/http.h"
 #include "kernel/net/update.h"
@@ -208,7 +209,7 @@ void cmd_apps(void) {
   /* CardLaunch keeps its firmware in /firmware. Look there as well as in the
    * layout this spec fixes, rather than making the user rearrange a card full
    * of working apps. */
-  a = list_apps_in("/cardos/apps");
+  a = list_apps_in(CAPP_SYS "/apps");
   b = list_apps_in("/firmware");
   if (a <= 0 && b <= 0) con_write("no .bin in /cardos/apps or /firmware\n");
 }
@@ -217,7 +218,7 @@ void cmd_apps(void) {
 
 /* Find an app by bare name or path, in either directory. */
 static int find_app(const char *name, char *out) {
-  static const char *dirs[] = { "/cardos/apps", "/firmware" };
+  static const char *dirs[] = { CAPP_SYS "/apps", "/firmware" };
   FsStat st;
   size_t i;
 

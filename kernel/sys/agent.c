@@ -2,6 +2,7 @@
  * app, and kernel/sys/chatlog.h for why the conversation is on the card. */
 
 #include "kernel/sys/agent.h"
+#include "kernel/app/capp.h"   /* the card layout */
 
 #include "kernel/app/capprun.h"
 #include "kernel/drv/display.h"
@@ -21,8 +22,8 @@
 
 static const char *TAG = "agent";
 
-#define KEY_PATH    "/claude.key"
-#define DIR         "/cache/claude"
+#define KEY_PATH    CAPP_CONFIG "/claude.key"
+#define DIR         CAPP_CACHE "/claude"
 #define REQUEST     "request.json"
 #define REPLY       "reply.json"
 #define URL         "https://api.anthropic.com/v1/messages"
@@ -108,7 +109,7 @@ void agent_init(void) {
 }
 
 static void ensure_dir(void) {
-  if (fs_mkdir("/cache") != 0) { /* already there */ }
+  if (fs_mkdir(CAPP_CACHE) != 0) { /* already there */ }
   if (fs_mkdir(DIR) != 0) { /* already there */ }
 }
 

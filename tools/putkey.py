@@ -1,4 +1,4 @@
-"""Put an API key on the Cardputer's card, as /claude.key, over serial.
+"""Put an API key on the Cardputer's card, as /config/claude.key, over serial.
 
     python tools/putkey.py ANTHROPIC_API_KEY        # from that environment variable
     python tools/putkey.py --file key.txt           # from a file
@@ -7,7 +7,7 @@ An API key from console.anthropic.com. Not a Claude Code login token: this
 tool used to offer that, and the API refused it (rate_limit_error, "Error")
 and then revoked the login -- those tokens are for Claude Code alone.
 
-The key is typed into the device console as `echo KEY > /claude.key`, one
+The key is typed into the device console as `echo KEY > /config/claude.key`, one
 character at a time, the way tools/shots.py types anything. It is never
 printed here, and on the device it goes to the card and from there only to
 api.anthropic.com (see kernel/sys/agent.c). The console line that carried it
@@ -45,10 +45,10 @@ def main(argv):
 
     dev = shots.Device(a.port, out_dir=os.environ.get("TEMP", "."))
     shots.home(dev)
-    dev.line("echo %s > /claude.key" % key, 1.0)
+    dev.line("echo %s > /config/claude.key" % key, 1.0)
     dev.line("clear", 0.3)
     dev.s.reset_input_buffer()
-    dev.line("ls /", 1.5)
+    dev.line("ls /config", 1.5)
     listing = dev.drain()
     ok = "claude.key" in listing
     print("claude.key is on the card" if ok else "did not see claude.key in ls / -- check the console")

@@ -11,6 +11,7 @@
 
 #include "kernel/fs/fs.h"
 #include "kernel/fs/path.h"
+#include "kernel/app/capp.h"   /* the card layout */
 
 #include <dirent.h>
 #include <errno.h>
@@ -308,11 +309,60 @@ int fs_rename(const char *from, const char *to) {
 }
 
 int fs_ensure_layout(void) {
-  static const char *dirs[] = { "/cardos", "/cardos/apps", "/cardos/src", "/home" };
+  static const char *dirs[] = {
+    CAPP_SYS, CAPP_SYS "/apps", CAPP_SYS "/src", CAPP_SYS "/update",
+    CAPP_CONFIG, CAPP_CACHE, CAPP_HOME, CAPP_APPS, CAPP_VAR
+  };
   size_t i;
   int bad = 0;
   if (!s_mounted) return -1;
   for (i = 0; i < sizeof dirs / sizeof dirs[0]; i++)
     if (fs_mkdir(dirs[i]) != 0) bad++;
   return bad ? -1 : 0;
+}
+
+static int exists(const char *path) {
+  FsStat st;
+  return fs_stat(path, &st) == 0;
+}
+
+/* One old path to its new home. A rename on FAT is a directory-entry edit,
+ * so a whole folder moves in one call and a failure leaves the old one where
+ * it was. Only when the destination is free: a card that has both is one
+ * someone already sorted by hand, and their copy wins. */
+static int move_if(const char *from, const char *to) {
+  if (!exists(from) || exists(to)) return 0;
+  return fs_rename(from, to) == 0 ? 1 : 0;
+}
+
+int fs_migrate_layout(void) {
+  int n = 0;
+  if (!s_mounted) return 0;
+
+  /* Whole trees first, while their new parents do not exist yet. */
+  n += move_if("/desktop", CAPP_APPS);
+  n += move_if("/cardos",  CAPP_SYS);
+  fs_mkdir(CAPP_SYS);
+  n += move_if("/update",  CAPP_SYS "/update");
+
+  fs_mkdir(CAPP_CONFIG);
+  n += move_if("/claude.key",            CAPP_CONFIG "/claude.key");
+  n += move_if("/claude.token",          CAPP_CONFIG "/claude.token");
+  n += move_if("/settings/hotkeys.txt",  CAPP_CONFIG "/hotkeys.txt");
+  n += move_if(CAPP_APPS "/stocks.txt",  CAPP_CONFIG "/stocks.txt");
+  fs_remove("/settings");                /* only if it is empty now */
+
+  fs_mkdir(CAPP_CACHE);
+  n += move_if("/calendar.cache", CAPP_CACHE "/calendar.cache");
+  /* /todo held the list index and the per-list caches together: the tree goes
+   * to /cache, then the one file in it that is state moves on to /var. */
+  n += move_if("/todo", CAPP_CACHE "/todo");
+  fs_mkdir(CAPP_VAR);
+  fs_mkdir(CAPP_VAR "/todo");
+  n += move_if(CAPP_CACHE "/todo/lists", CAPP_VAR "/todo/lists");
+
+  fs_mkdir(CAPP_HOME);
+  n += move_if("/shots", CAPP_HOME "/shots");
+  n += move_if("/asm",   CAPP_HOME "/asm");
+  return n;
 }

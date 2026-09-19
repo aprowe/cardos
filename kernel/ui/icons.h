@@ -20,8 +20,9 @@
 #include <stdint.h>
 
 #include "kernel/ui/app.h"
+#include "kernel/app/capp.h"
 
-#define ICONS_DIR "/desktop"
+#define ICONS_DIR CAPP_APPS
 
 /* Firmware images are scanned from here too. They were already living in
  * /firmware before CardOS existed -- put there by the tools that built them --
@@ -32,7 +33,7 @@
 #define FIRMWARE_DIR "/firmware"
 
 /* Where the IDE keeps assembly source, and where its example is seeded. */
-#define ASM_DIR "/asm"
+#define ASM_DIR CAPP_HOME "/asm"
 /* Everything the scan can hold: top-level entries, folders, and what is
  * inside them, all in one flat table.
  *

@@ -677,7 +677,7 @@ def main():
         print("  to edit it, and asks nothing of whoever connects. Anything that")
         print("  can reach this port can change that folder. --token SECRET")
         print("  requires a shared string, which the device reads from")
-        print("  /claude.token on its card.")
+        print("  /config/claude.token on its card.")
     srv.serve_forever()
 
 

@@ -23,6 +23,8 @@
 #include "apps/asmvm.h"
 
 
+/* The IDE opens where the kernel seeds its example (ASM_DIR in icons.h). */
+#define ASM_HOME  CAPP_HOME "/asm"
 #define MAXLINES  96
 #define MAXCOL    64
 #define ROWH      9
@@ -920,7 +922,7 @@ static int app_wants_text(void *st) {
 
 static void app_open(void *st) {
   (void)st;
-  if (!E.dir[0]) api->fmt(E.dir, sizeof E.dir, "%s", "/");
+  if (!E.dir[0]) api->fmt(E.dir, sizeof E.dir, "%s", ASM_HOME);
   E.view = VIEW_BROWSE;
   rescan();
 }
@@ -956,7 +958,7 @@ static void load_stdin(void) {
   int n;
 
   blank();
-  if (!E.dir[0]) api->fmt(E.dir, sizeof E.dir, "%s", "/");
+  if (!E.dir[0]) api->fmt(E.dir, sizeof E.dir, "%s", ASM_HOME);
   E.path[0] = 0;
   while (E.nlines < MAXLINES && (n = api->in_line(line, sizeof line)) >= 0) {
     if (n > MAXCOL) n = MAXCOL;

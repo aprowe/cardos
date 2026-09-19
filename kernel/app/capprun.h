@@ -23,7 +23,13 @@
  * A slot costs a name, a help string and some pointers -- about 250 bytes --
  * whether or not anything is in it. The memory that matters is the per-program
  * allocation, and that is only paid by programs that exist. */
-#define CAPPRUN_MAX 16
+/* One more than the apps that exist, so adding one does not silently cost
+ * another its slot. It was 16 with sixteen apps: merging the Share app made
+ * seventeen, the scan ran out on the last one it found, and the only sign was
+ * a line in the log nobody reads -- the app simply was not in the launcher.
+ * A slot is about 300 bytes of .bss, so headroom is cheap and running out is
+ * not. */
+#define CAPPRUN_MAX 20
 
 /* Load and read the descriptor. Nothing runs. Returns a slot index, or -1. */
 int capprun_load(const char *path);

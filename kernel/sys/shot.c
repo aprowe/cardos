@@ -1,6 +1,7 @@
 /* Screenshots. See shot.h for why it works the way it does. */
 
 #include "kernel/sys/shot.h"
+#include "kernel/app/capp.h"   /* the card layout */
 
 #include "kernel/drv/display.h"
 #include "kernel/fs/fs.h"
@@ -10,7 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define SHOT_DIR "/shots"
+#define SHOT_DIR CAPP_HOME "/shots"
 
 static int  s_fd = -1;
 static char s_path[48];

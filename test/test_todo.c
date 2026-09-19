@@ -1,6 +1,6 @@
 /* The todo list's offline cache, on the host.
  *
- * Between syncs the list lives in /todo.cache, and what is written there has
+ * Between syncs the list lives in /cache/todo/<id>.cache, and what is written there has
  * to come back exactly: a tick made offline is a `dirty` flag and nothing
  * else, and a delete made offline is a `deleted` flag on an item that must
  * survive a restart so the delete can still be pushed. The saver and the
@@ -90,8 +90,8 @@ static void host_write(const char *path, const char *text) {
   fclose(f);
 }
 static void host_clean(void) {
-  static const char *paths[] = { CACHE_OLD, LISTS_PATH, "/todo/_.cache",
-    "/todo/listA.cache", "/todo/listB.cache", "/todo/listC.cache" };
+  static const char *paths[] = { LISTS_PATH, "/cache/todo/_.cache",
+    "/cache/todo/listA.cache", "/cache/todo/listB.cache", "/cache/todo/listC.cache" };
   size_t i;
   for (i = 0; i < sizeof paths / sizeof paths[0]; i++) fake_remove(paths[i]);
 }
@@ -254,25 +254,6 @@ void test_todo_the_lists_and_the_choice_survive_a_restart_offline(void) {
   CHECK(!strcmp(T.list_id, "listC"));
   CHECK_EQ(T.n, 1);
   CHECK(!strcmp(T.item[0].title, "Ship it"));
-  host_clean();
-}
-
-void test_todo_the_old_single_cache_lands_in_the_first_list(void) {
-  use_fake_api();
-  host_write(CACHE_OLD, "0 0 1 - Bought before the upgrade\n");
-
-  cache_migrate();
-  lists_load();
-  cache_load();
-  CHECK_EQ(T.n, 1);                            /* readable before any sync */
-  CHECK(!host_exists(CACHE_OLD));
-
-  snprintf(T.reply, sizeof T.reply, "%s", LISTS_REPLY);
-  absorb_lists();                              /* first sync: lists arrive */
-  CHECK_EQ(T.cur, 0);
-  CHECK_EQ(T.n, 1);                            /* the pending item is kept */
-  CHECK_EQ(T.item[0].dirty, 1);
-  CHECK(host_exists("/todo/listA.cache"));    /* and now filed under listA */
   host_clean();
 }
 
@@ -516,8 +497,8 @@ void test_todo_a_list_off_screen_is_fetched_into_its_own_cache(void) {
   CHECK(!strcmp(T.item[0].title, "Fix the bike"));
 
   /* And the others are on the card. */
-  CHECK(host_exists("/todo/listB.cache"));
-  CHECK(host_exists("/todo/listC.cache"));
+  CHECK(host_exists("/cache/todo/listB.cache"));
+  CHECK(host_exists("/cache/todo/listC.cache"));
   select_list(1);
   CHECK_EQ(T.n, 2);
   CHECK(!strcmp(T.item[0].title, "Eggs"));
@@ -538,7 +519,7 @@ void test_todo_one_list_failing_does_not_abandon_the_rest(void) {
 
   CHECK_EQ(S.asked, 4);
   CHECK(url_has(3, "lists/listC/tasks"));
-  CHECK(host_exists("/todo/listC.cache"));
+  CHECK(host_exists("/cache/todo/listC.cache"));
   host_clean();
 }
 

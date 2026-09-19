@@ -58,7 +58,7 @@
 #define ID_MAX      56
 #define REPLY_MAX   6000
 #define URL_MAX     320
-#define CACHE_PATH  "/calendar.cache"
+#define CACHE_PATH  CAPP_CACHE "/calendar.cache"
 
 #define ROW_H       11
 #define SCREEN_W    240

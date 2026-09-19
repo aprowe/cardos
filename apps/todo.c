@@ -47,13 +47,13 @@
 #define NAME_MAX   24
 
 /* One file per list, named by the list's id, so switching lists is a file
- * swap rather than a bigger array. Before lists, there was one file at the
- * root; cache_migrate moves it under the directory as "_", the id of "no list
- * known yet", and the first lists reply files it under the first list. */
-#define CACHE_DIR  "/todo"
-#define CACHE_FMT  "/todo/%s.cache"
-#define CACHE_OLD  "/todo.cache"
-#define LISTS_PATH "/todo/lists"
+ * swap rather than a bigger array. The caches are caches -- /cache/todo can
+ * be wiped and the next sync rebuilds them -- but the list index is state:
+ * lose /var/todo/lists and the lists are gone until Google is asked again. */
+#define CACHE_DIR  CAPP_CACHE "/todo"
+#define CACHE_FMT  CAPP_CACHE "/todo/%s.cache"
+#define STATE_DIR  CAPP_VAR "/todo"
+#define LISTS_PATH CAPP_VAR "/todo/lists"
 
 /* `fields=` is not an optimisation here, it is the difference between a list
  * that syncs and one that silently loses tasks.
@@ -296,15 +296,6 @@ static void cache_load(void) {
     }
   }
   api->close(fd);
-}
-
-/* The one file from before there were lists. Moved, not copied: a rename is
- * atomic on the card and the old path is then plainly gone. */
-static void cache_migrate(void) {
-  int fd = api->open(CACHE_OLD, CAPP_O_READ);
-  if (fd < 0) return;
-  api->close(fd);
-  api->rename(CACHE_OLD, "/todo/_.cache");
 }
 
 /* ---- the lists -----------------------------------------------------------
@@ -1445,8 +1436,8 @@ int capp_main(const CardApi *a, int argc, char **argv) {
    * thinking about it. A todo list that shows nothing until it is online is a
    * todo list you cannot use on a train. */
   api->mkdir(CACHE_DIR);
+  api->mkdir(STATE_DIR);
   T.sweep = -1;
-  cache_migrate();
   lists_load();
   cache_load();
   /* From the cache files, so `o` shows everything the last sweep left even

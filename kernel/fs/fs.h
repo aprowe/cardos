@@ -84,8 +84,15 @@ int  fs_mkdir(const char *path);
 int  fs_remove(const char *path);
 int  fs_rename(const char *from, const char *to);
 
-/* Create the directory layout the spec fixes: /cardos, /cardos/apps,
- * /cardos/src, /home. Idempotent. */
+/* Create the directory layout (capp.h: /sys, /config, /cache, /home, /apps,
+ * /var). Idempotent. */
 int  fs_ensure_layout(void);
+
+/* Move a card laid out the old way into the new one: /desktop to /apps,
+ * /cardos to /sys, the keys into /config, the caches into /cache, and so on.
+ * Each move happens only when the old path exists and the new one does not,
+ * so it is safe to run every boot and does nothing on a card already moved.
+ * Returns how many paths it moved. */
+int  fs_migrate_layout(void);
 
 #endif /* CARDOS_FS_H */

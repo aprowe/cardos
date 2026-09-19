@@ -18,7 +18,8 @@
 static const char *TAG = "update";
 
 #define DEFAULT_BASE  CAPP_PROXY_DEFAULT
-#define FIRMWARE_PATH "/update/firmware.bin"
+#define UPDATE_DIR    CAPP_SYS "/update"
+#define FIRMWARE_PATH UPDATE_DIR "/firmware.bin"
 #define MANIFEST_MAX  2048                   /* 24 apps at ~40 bytes a line */
 
 static char s_error[96];
@@ -39,7 +40,7 @@ const char *update_token(void) {
   if (s_token_read) return s_token;
   s_token_read = 1;
   s_token[0] = 0;
-  fd = fs_open("/claude.token", FS_O_READ);
+  fd = fs_open(CAPP_CONFIG "/claude.token", FS_O_READ);
   if (fd < 0) return s_token;
   n = fs_read(fd, s_token, sizeof s_token - 1);
   fs_close(fd);
@@ -251,7 +252,7 @@ int update_firmware(UpdateLog log, void *ctx) {
   int n;
 
   s_error[0] = 0;
-  fs_mkdir("/update");
+  fs_mkdir(UPDATE_DIR);
   snprintf(url, sizeof url, "%s/update/firmware", update_base());
   n = http_download_ex(url, FIRMWARE_PATH, bearer(), dl_progress, &pr, 120000);
   if (n < 0) {

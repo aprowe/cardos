@@ -170,7 +170,7 @@ static void note(const char *s) { push_wrapped(s, WHO_NOTE); }
 /* ---- talking to the server ------------------------------------------------ */
 
 static void read_token(void) {
-  int fd = api->open("/claude.token", CAPP_O_READ);
+  int fd = api->open(CAPP_CONFIG "/claude.token", CAPP_O_READ);
   int n;
   if (fd < 0) return;
   n = api->read(fd, C.token, sizeof C.token - 1);

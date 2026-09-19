@@ -198,7 +198,7 @@ static void paint_carousel(void) {
     }
     draw_text_scaled(28, 46, "no apps", 2, C_TITLE_FG, C_DESKTOP);
     draw_text(28, 74, "put .capp or .bin files", C_DESK_DIM, C_DESKTOP);
-    draw_text(28, 86, "in /desktop, then press r", C_DESK_DIM, C_DESKTOP);
+    draw_text(28, 86, "in /apps, then press r", C_DESK_DIM, C_DESKTOP);
     return;
   }
 

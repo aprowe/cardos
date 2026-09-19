@@ -94,6 +94,23 @@ typedef struct {
  * of being told: `/url` in Claude, an argument to Web. */
 #define CAPP_PROXY_DEFAULT "http://192.168.1.74:8080"
 
+/* The card layout. In the contract header for the same reason as the proxy:
+ * an app cannot read the environment, and every app and the kernel have to
+ * agree on where things are. See docs/superpowers/specs/2026-09-19-card-layout-design.md.
+ *
+ *   /sys     the firmware's own: OTA staging, compiler sources, boot images
+ *   /config  what a person edits: hotkeys.txt, claude.token, claude.key
+ *   /cache   rebuildable: logs, renders, transcripts, *.cache -- safe to wipe
+ *   /home    the user's files; where Edit, Files and the IDE open
+ *   /apps    the .capp binaries, in the folders the launcher shows
+ *   /var     app state that is neither config nor cache: todo/lists */
+#define CAPP_SYS    "/sys"
+#define CAPP_CONFIG "/config"
+#define CAPP_CACHE  "/cache"
+#define CAPP_HOME   "/home"
+#define CAPP_APPS   "/apps"
+#define CAPP_VAR    "/var"
+
 typedef struct { int16_t x, y, w, h; } CRect;
 
 /* One thing an app can be asked to do. See CappUi.actions. */

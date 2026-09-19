@@ -16,9 +16,10 @@ The kernel core works on hardware. Three shells over it, all switchable:
 
 - **launcher** (`launch`) -- fullscreen icon grid, apps run fullscreen, Escape
   leaves. Boots into this, because it is the one that is actually useful.
-  Subdirectories of `/desktop` are folders (one level); Enter goes in, Escape
+  Subdirectories of `/apps` are folders (one level); Enter goes in, Escape
   comes out. `k` then a letter binds `Opt+letter` to the highlighted app;
-  `hotkey` in the console does the same, and the table is in NVS
+  `hotkey` in the console does the same. The table is `/config/hotkeys.txt`
+  on the card, one `t=Todo` line per binding, hand-editable; it starts empty
   (`kernel/sys/hotkeys.c`, host-tested).
 - **desktop** (`desk`) -- windows, taskbar, Start menu, pointer. Proof the
   window system works more than a daily driver.
@@ -28,12 +29,12 @@ Apps come in two kinds. Built-ins are now only **Memory, About and Settings** â€
 what cannot sensibly be loaded, being reports on the kernel that would load
 them. Everything else, Files included, is a `.capp`: ELF, linked complete,
 relocated at load.
-They live in `/desktop` on the card, carry their own name and 16x16 icon, and
+They live in `/apps` on the card, carry their own name and 16x16 icon, and
 are embedded in the firmware so first boot writes them out. See
 `kernel/app/elfload.h` for why the loader is short, and `apps/capp.ld` for the
 one hardware fact that shapes all of it.
 
-The console runs apps like a shell would: `grep TODO /desktop` finds
+The console runs apps like a shell would: `grep TODO /apps` finds
 grep.capp on PATH, `./grep` runs one by path, `run NAME args` is the explicit
 form, and tab completes commands and paths. PATH and a few other variables live
 in NVS -- see `env` and `set`. The launcher's app list is searched last, after
@@ -51,7 +52,7 @@ throughout. Conversation state is one resumed Claude Code session.
 
 The obvious warning applies and the server prints it: anything that can reach
 that port can edit this folder. `--token SECRET` requires a shared string,
-which the device reads from `/claude.token` on its card and sends as a bearer
+which the device reads from `/config/claude.token` on its card and sends as a bearer
 token. `python tools/test_chat.py` exercises the protocol against a stubbed
 agent.
 

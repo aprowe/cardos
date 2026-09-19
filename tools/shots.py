@@ -2,7 +2,7 @@
 
 The panel is write-only and there is no framebuffer, so a screenshot is made
 the only way it can be: the device repaints the whole screen while
-display_blit mirrors every row it sends into /shots/NAME.565 on the card --
+display_blit mirrors every row it sends into /home/shots/NAME.565 on the card --
 64,800 bytes of raw RGB565, the card standing in for the framebuffer -- and
 then posts that file to webproxy.py, which calls decode_rgb565 below and
 writes docs/shots/NAME.png and NAME@3x.png.
@@ -162,10 +162,10 @@ TOUR = [
     ("calendar", "run calendar",                     b"",       0),
     ("todo",     "run todo",                         b"",       0),
     ("edit",     "run edit /notes.txt",              b"",       0),
-    ("ide",      "run ide /asm/sum.s",               b"",       0),
+    ("ide",      "run ide /home/asm/sum.s",               b"",       0),
     ("files",    "run files",                        b"",       0),
     ("explorer", "run explorer",                     b"",       0),
-    ("photos",   "run photos /shots/",              b"",       0),   # its own screenshots; the slash means folder
+    ("photos",   "run photos /home/shots/",              b"",       0),   # its own screenshots; the slash means folder
     ("web",      "run web https://news.ycombinator.com", b"",   12),
     ("claude",   "run claude",                       b"",       0),
     ("build",    "run build",                        b"",       0),

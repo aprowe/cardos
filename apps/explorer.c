@@ -641,7 +641,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api->mem_set(&X, 0, sizeof X);
   X.sel = -1;
 
-  api->fmt(X.cwd, sizeof X.cwd, "%s", "/");
+  api->fmt(X.cwd, sizeof X.cwd, "%s", CAPP_HOME);
   if (argc > 1 && argv[1][0]) {
     CappStat st;
     if (api->stat(argv[1], &st) == 0 && st.is_dir)

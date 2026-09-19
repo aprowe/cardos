@@ -110,7 +110,7 @@ def check_image(elf, name):
                          % (name, ", ".join(sorted(set(undef)))))
 
 
-# Which folder of /desktop each app is seeded into.
+# Which folder of /apps each app is seeded into.
 #
 # The launcher reads one level of subdirectory, and `update apps` finds an app
 # wherever it already sits (see capp_path in kernel/net/update.c), so grouping
@@ -118,7 +118,7 @@ def check_image(elf, name):
 #
 # CLI-only apps are deliberately absent: they never appear as an icon, and
 # leaving them at the top level keeps them on the default PATH, so `grep TODO
-# /desktop` still resolves from the console with nothing to configure.
+# /apps` still resolves from the console with nothing to configure.
 FOLDERS = {
     "mines":    "Games",
     "pinball":  "Games",
@@ -141,7 +141,7 @@ FOLDERS = {
 
 
 def seed_name(stem):
-    """Where this app's .capp is written, relative to /desktop."""
+    """Where this app's .capp is written, relative to /apps."""
     folder = FOLDERS.get(stem)
     return "%s/%s.capp" % (folder, stem) if folder else "%s.capp" % stem
 
@@ -186,7 +186,7 @@ def emit_header(built):
         lines.append("")
 
     lines.append("typedef struct {")
-    lines.append("  const char    *name;      /* path under /desktop, folder included */")
+    lines.append("  const char    *name;      /* path under /apps, folder included */")
     lines.append("  const uint8_t *data;")
     lines.append("  size_t         size;")
     lines.append("} CappBlob;")

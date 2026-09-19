@@ -5,7 +5,7 @@
  * current price -- the number you actually want, rather than a price you then
  * do arithmetic on.
  *
- * Edit /desktop/stocks.txt to change the list. One per line:
+ * Edit /config/stocks.txt to change the list. One per line:
  *
  *     SPCX 10800 SpaceX
  *     RKLB Rocket Lab
@@ -122,7 +122,7 @@ static void load_list(void) {
   int fd, n, i, len = 0;
 
   S.n = 0;
-  fd = api->open("/desktop/stocks.txt", CAPP_O_READ);
+  fd = api->open(CAPP_CONFIG "/stocks.txt", CAPP_O_READ);
   if (fd < 0) {
     add("SPCX", 10800, "SpaceX");
     add("RKLB", 0, "Rocket Lab");
