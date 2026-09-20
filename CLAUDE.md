@@ -135,6 +135,22 @@ marks nothing gets its whole rectangle exactly as before**, so this cost the
 existing apps nothing; `apps/files.c` shows the pattern, and Mines, Claude and
 Pinball can drop their hand-rolled versions whenever someone is in there.
 
+**Voice memos, and a speaker** (2026-09-20). `kernel/drv/speaker.c` is the
+first speaker driver: I2S standard mode to the NS4168 on BCLK 41 / DATA 42 /
+LRCLK 43, streaming a PCM WAV (16-bit, mono or stereo, 8-48 kHz, chunk
+walk rather than a fixed header) from the card a block at a time, with a
+volume in 8.8 fixed point. It closes the mic before taking the pins -- G43
+is both the mic's clock and LRCLK, which mic.h always said. `kernel/sys/audio.c`
+runs a recording or a playback on a task and an app polls state, level and
+position from tick; `api->audio()` (API 28) is that behind a table. The
+mic's ceiling is ten minutes now (`MIC_HARD_MAX_MS`); the voice button still
+asks for fifteen seconds. `apps/memo.c` records into `/home/memos` (named by
+the clock, `0920-1142.wav`, or by count when there is no clock), lists with
+lengths, plays back with a bar, deletes after asking. The strip with the
+meter is drawn in place and repainted only when it would look different, at
+most fifteen times a second -- clearing and redrawing it every tick was a
+visible flicker.
+
 **There is an OS file picker** (2026-09-20). `api->pick(&req)` puts a
 dialog over the app -- open a file, save (a name field, asks before
 replacing), or choose a folder (a "use this folder" row) -- and the app
@@ -270,7 +286,7 @@ paint used to clear the active slot for the rest of the tick — so `damage()`
 marks were dropped and the request had no owner. Apps now say "busy" when a
 start is refused instead of returning silently.
 
-**API version 27** (`CAPP_API_VERSION` in `capp.h` is the truth; this
+**API version 28** (`CAPP_API_VERSION` in `capp.h` is the truth; this
 paragraph is history). It moved six times in one day — 11 to 17 — and has
 kept moving since; each move means every `.capp` must be rebuilt, because the
 loader refuses a binary built against a different table. `python
@@ -283,7 +299,7 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27).
+`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28).
 
 **Credentials survive a reflash** (2026-09-19). WiFi and Google credentials
 live in NVS at runtime, and a full-table flash wipes NVS -- one day it cost the

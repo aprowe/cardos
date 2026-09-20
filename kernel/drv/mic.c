@@ -114,7 +114,8 @@ int mic_record_wav(const char *path, int max_ms,
   int64_t started;
   int fd;
 
-  if (max_ms <= 0 || max_ms > MIC_MAX_MS) max_ms = MIC_MAX_MS;
+  if (max_ms <= 0) max_ms = MIC_MAX_MS;
+  if (max_ms > MIC_HARD_MAX_MS) max_ms = MIC_HARD_MAX_MS;
   if (mic_open() != 0) return -1;
 
   fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);

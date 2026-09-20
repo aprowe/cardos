@@ -9,9 +9,8 @@
  * that has no reason to own that code.
  *
  * G43 is shared with the speaker's LRCLK, so recording and playback are
- * mutually exclusive on this hardware. There is no speaker driver yet; when
- * there is, one of them has to release the pin, and this header is where that
- * fact should stay written down.
+ * mutually exclusive on this hardware. kernel/drv/speaker.c calls mic_close
+ * before it takes the pins, and kernel/sys/audio.c runs one or the other.
  */
 #ifndef CARDOS_MIC_H
 #define CARDOS_MIC_H
@@ -19,7 +18,8 @@
 #include <stdint.h>
 
 #define MIC_RATE     16000
-#define MIC_MAX_MS   15000     /* a sentence, not a lecture: 480 KB at most */
+#define MIC_MAX_MS   15000     /* the voice button: a sentence, 480 KB at most */
+#define MIC_HARD_MAX_MS (10 * 60 * 1000)   /* a memo: ten minutes, 19 MB, on the card */
 
 /* Take the pins and start the converter. Cheap to call repeatedly; the second
  * call is a no-op. Returns 0, or -1 if the I2S channel could not be opened. */

@@ -137,6 +137,7 @@ FOLDERS = {
     "edit":     "Tools",
     "photo":    "Tools",
     "todo":     "Tools",
+    "memo":     "Tools",
 }
 
 

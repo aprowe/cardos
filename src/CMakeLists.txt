@@ -52,6 +52,8 @@ idf_component_register(
     "../kernel/sys/printdoc.c"
     "../kernel/sys/printq.c"
     "../kernel/drv/mic.c"
+    "../kernel/drv/speaker.c"
+    "../kernel/sys/audio.c"
     "../kernel/net/wifi.c"
     "../kernel/net/http.c"
     "../kernel/net/gauth.c"

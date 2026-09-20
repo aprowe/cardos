@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 27
+#define CAPP_API_VERSION 28
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -286,6 +286,31 @@ typedef struct {
   uint8_t           nactions;
   int (*action)(void *state, int action);
 } CappUi;
+
+/* ---- sound ----
+ *
+ * Recording (16 kHz mono 16-bit WAV, straight to the card) and playback
+ * (any PCM WAV, 16-bit, mono or stereo) run on a task of their own; start
+ * one, return, and watch it from tick. The mic and the speaker share a pin,
+ * so one at a time. Holding the voice button while an app records is
+ * refused by the hardware in the same way. */
+#define CAPP_AUDIO_IDLE      0
+#define CAPP_AUDIO_RECORDING 1
+#define CAPP_AUDIO_PLAYING   2
+
+typedef struct {
+  int      (*record)(const char *path, int max_ms);  /* 0; -1 busy; -2 refused */
+  int      (*play)(const char *path);                /* 0; -1 busy; -2 unplayable */
+  void     (*stop)(void);
+  int      (*state)(void);                           /* CAPP_AUDIO_* */
+  int      (*level)(void);          /* 0..100 while recording, else -1 */
+  uint32_t (*pos_ms)(void);         /* while playing */
+  uint32_t (*total_ms)(void);
+  int      (*last_bytes)(void);     /* the last recording's audio bytes, or -1 */
+  const char *(*error)(void);       /* why the last start or job failed */
+  void     (*set_volume)(int pct);  /* 0..100 */
+  int      (*volume)(void);
+} CappAudio;
 
 /* What the Claude terminal needs of the agent. See kernel/sys/agent.h for
  * the semantics; the names are the same. */
@@ -584,6 +609,9 @@ typedef struct {
    * full path in `out`, or 0 for cancelled. */
   int (*pick)(const CappPick *req);
   int (*pick_poll)(char *out, size_t n);
+
+  /* Sound: kernel/sys/audio.h behind a table, like the agent. */
+  const CappAudio *(*audio)(void);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

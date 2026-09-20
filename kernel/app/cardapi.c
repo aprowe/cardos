@@ -18,6 +18,8 @@
 #include "kernel/sys/printq.h"
 #include "kernel/sys/input.h"
 #include "kernel/ui/picker.h"
+#include "kernel/sys/audio.h"
+#include "kernel/drv/speaker.h"
 #include "kernel/sys/sio.h"
 #include "kernel/app/capprun.h"
 #include "kernel/sys/applog.h"
@@ -358,6 +360,13 @@ static int api_pick(const CappPick *p) {
 }
 static int api_pick_poll(char *out, size_t n) { return picker_poll(out, n); }
 
+static const CappAudio AUDIO = {
+  audio_record, audio_play, audio_stop, audio_state, audio_level,
+  audio_pos_ms, audio_total_ms, audio_last_bytes, audio_error,
+  speaker_set_volume, speaker_volume,
+};
+static const CappAudio *api_audio(void) { return &AUDIO; }
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -382,6 +391,7 @@ static const CardApi API = {
   api_print, api_print_status,
   api_key_repeat,
   api_pick, api_pick_poll,
+  api_audio,
 };
 
 const CardApi *cardos_api(void) { return &API; }
