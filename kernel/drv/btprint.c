@@ -37,6 +37,9 @@ static struct {
   int      reply_len;
 } s;
 
+/* s.conn starts at 0, which is a valid handle; the `st != ST_OFF` guard in
+ * btprint_disconnect is what stops a never-connected client from
+ * terminating somebody else's link 0. */
 static BtPrintSeen s_seen[BTPRINT_SCAN_MAX];
 static int         s_nseen;
 static uint8_t     s_own_addr_type;
@@ -262,9 +265,14 @@ int btprint_connect(const uint8_t addr[6], uint8_t addr_type, int timeout_ms) {
   a.type = addr_type;
   memcpy(a.val, addr, 6);
 
-  if (ble_gap_connect(s_own_addr_type, &a, timeout_ms, NULL, gap_event, NULL) != 0) {
-    fail("connect refused");
-    return -1;
+  {
+    int rc = ble_gap_connect(s_own_addr_type, &a, timeout_ms, NULL, gap_event, NULL);
+    if (rc != 0) {
+      char why[48];
+      snprintf(why, sizeof why, "connect refused (%d)", rc);   /* BLE_HS_E* */
+      fail(why);
+      return -1;
+    }
   }
   while ((s.state == ST_CONNECTING || s.state == ST_DISCOVERING) &&
          waited < timeout_ms + 3000) {
@@ -283,7 +291,10 @@ int btprint_connect(const uint8_t addr[6], uint8_t addr_type, int timeout_ms) {
 void btprint_disconnect(void) {
   int st = s.state;
   s.state = ST_OFF;
-  if (s.conn != BLE_HS_CONN_HANDLE_NONE && s.conn != 0) {
+  /* Handle 0 is a real connection -- the first one NimBLE opens, when no
+   * mouse or keyboard got there first. Treating it as "none" left the link
+   * up, and every print after the first was refused as already connected. */
+  if (st != ST_OFF && s.conn != BLE_HS_CONN_HANDLE_NONE) {
     int waited = 0;
     ble_gap_terminate(s.conn, BLE_ERR_REM_USER_CONN_TERM);
     while (s.conn != BLE_HS_CONN_HANDLE_NONE && waited < 1000) {
