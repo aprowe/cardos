@@ -43,6 +43,7 @@ uint8_t kbd_hid_translate(uint8_t usage, uint8_t mods) {
    * "leave the app", and the switch would otherwise have answered Escape
    * and never reached the fn block at all. */
   if (fn && usage == 0x29) return KBD_KEY_QUIT;
+  if (opt && usage == 0x2A) return KBD_KEY_QUIT;   /* alt-backspace: the same */
 
   switch (usage) {
   case 0x28: return 0x0D;        /* enter */

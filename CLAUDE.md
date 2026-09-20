@@ -181,7 +181,9 @@ outside an app it closes an open folder or menu. That is all. An app that
 declines it at its top level keeps it -- the 2026-09-18 version left the app
 when it declined, which is the same surprise one level down: back out of a
 subview once too often and the app is gone. `fn` + the ` key (`KEY_QUIT`,
-`KBD_KEY_QUIT` over Bluetooth) is the one way out: of an app in the launcher,
+`KBD_KEY_QUIT` over Bluetooth), or **opt-backspace** (alt-backspace over
+Bluetooth), which is the same code from the other corner of the keyboard, is
+the one way out: of an app in the launcher,
 of a fullscreen app or a focused window on the desktop, and of the launcher to
 the console. `CAPP_KEY_ESC` in `capp.h` is the constant an app matches.
 

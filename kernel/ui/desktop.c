@@ -1032,8 +1032,8 @@ int desktop_key(uint8_t key) {
     help_paint(a ? a->name : "Desktop", a ? a->help : NULL,
                s_full
                ? "escape\tback a level, inside the app\nfn-b\tmenu bar, by keyboard\n"
-                 "fn-`\tleave fullscreen\nfn-f\twindowed\nfn-h\tclose this\n"
-               : "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nfn-s\tstart menu\nfn-f\tfullscreen / window\nfn-`\tclose window\nfn-w\tclose window\nfn-m\tminimise\nfn-k\tkeyboard mouse\nfn-p\tprint (apps that can)\nescape\tout of a folder or menu\nopt-3\tthe console\nfn-h\tclose this\n");
+                 "fn-`\tleave fullscreen (or opt-backspace)\nfn-f\twindowed\nfn-h\tclose this\n"
+               : "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nfn-s\tstart menu\nfn-f\tfullscreen / window\nfn-`\tclose window (or opt-backspace)\nfn-w\tclose window\nfn-m\tminimise\nfn-k\tkeyboard mouse\nfn-p\tprint (apps that can)\nescape\tout of a folder or menu\nopt-3\tthe console\nfn-h\tclose this\n");
     return 0;
   }
 

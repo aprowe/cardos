@@ -57,7 +57,8 @@
 #define KEY_FN_LETTER(c)  ((uint8_t)(0xE0 + ((c) - 'a')))
 #define KEY_IS_FN(k)      ((k) >= 0xE0)
 
-/* Fn plus the ` key: leave the app, whatever it thinks about it.
+/* Fn plus the ` key, or opt plus backspace: leave the app, whatever it
+ * thinks about it.
  *
  * Escape alone used to do this, unconditionally, in the launcher and over a
  * fullscreen app -- so the same key went back inside a windowed app and quit

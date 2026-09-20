@@ -231,6 +231,9 @@ void test_repeat_survives_the_millisecond_counter_wrapping(void) {
 void test_fn_escape_is_the_quit_chord_on_both_keyboards(void) {
   CHECK_EQ(kbd_hid_translate(0x29, KBD_MOD_LGUI), KBD_KEY_QUIT);
   CHECK_EQ(kbd_hid_translate(0x29, KBD_MOD_RGUI), KBD_KEY_QUIT);
+  /* alt-backspace is the same chord from the other corner of the keyboard */
+  CHECK_EQ(kbd_hid_translate(0x2A, KBD_MOD_LALT), KBD_KEY_QUIT);
+  CHECK_EQ(kbd_hid_translate(0x2A, 0), 0x08);
   CHECK_EQ(KBD_KEY_QUIT, KEY_QUIT);
   /* Escape on its own still reaches the app as Escape. */
   CHECK_EQ(kbd_hid_translate(0x29, 0), KEY_ESC);

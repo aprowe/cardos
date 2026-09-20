@@ -196,6 +196,9 @@ uint8_t keyboard_poll(void) {
           char base = KEYMAP[y][x];
           if (base >= '0' && base <= '9') c = (char)KEY_OPT_DIGIT(base - '0');
           else if (base >= 'a' && base <= 'z') c = (char)KEY_OPT_LETTER(base);
+          /* opt-backspace leaves the app, the same as fn-`: the two keys sit
+           * on opposite corners and either hand finds one of them. */
+          else if (base == (char)KEY_BACKSPACE) c = (char)KEY_QUIT;
           else c = 0;
         }
         else if (s_ctrl && c >= 'a' && c <= 'z') c = (char)(c - 'a' + 1);
