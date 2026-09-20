@@ -187,23 +187,42 @@ def push(port, client_id, client_secret, refresh_token):
     s.write(b"\xa3")
     time.sleep(0.8)
     s.read(65536)
+    # Make sure a console is listening before typing secrets at it: an empty
+    # line gets a prompt back, and nothing else does.
+    s.write(b"\r")
+    time.sleep(0.8)
+    hello = s.read(65536).decode("utf-8", "replace")
+    if "> " not in hello:
+        s.close()
+        raise SystemExit("no console prompt on %s (got %r). Is the device on "
+                         "and nothing else holding the port?" % (port, hello[-80:]))
     out = ""
     for cmd in ("google id %s" % client_id,
                 "google secret %s" % client_secret,
                 "google token %s" % refresh_token,
                 "google"):
         s.write(cmd.encode() + b"\r")
-        time.sleep(1.5)
-        out += s.read(65536).decode("utf-8", "replace")
+        # The console takes one character per pass of its loop, so a
+        # hundred-character token is typed over a couple of seconds. A fixed
+        # wait reported the token as lost while the device was still reading
+        # it; wait for the prompt that follows the reply instead.
+        got = ""
+        deadline = time.time() + 10
+        while time.time() < deadline and not got.rstrip().endswith(">"):
+            got += s.read(65536).decode("utf-8", "replace")
+        out += got
     s.close()
     # Echo only what the device said about itself, never the values back.
-    for line in out.splitlines():
+    redacted = out
+    for secret in (client_id, client_secret, refresh_token):
+        redacted = redacted.replace(secret, "<value>")
+    for line in redacted.splitlines():
         if line.startswith(("google", "not configured", "configured",
                             "stored", "signed in", "status")):
             print("  device: " + line)
     if "all three present" not in out and "credentials stored" not in out:
-        raise SystemExit("the device did not confirm all three values. Is it "
-                         "on %s and awake? Run again." % port)
+        raise SystemExit("the device did not confirm all three values. It said:\n"
+                         + redacted + "\nRun again.")
     print("  mirrored to /config/google.txt on the card; a reflash keeps it.")
 
 

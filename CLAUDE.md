@@ -268,19 +268,22 @@ way to give a fresh device its network without a keyboard. `kernel/sys/conf.c`
 holds the line format (host-tested); `conf_file.c` is the fs glue.
 
 **"Google: not configured" came back over and over** (2026-09-20), and the
-cause was the push, not the device. `tools/google_auth.py` opened the serial
-port with pyserial's defaults, which pull DTR/RTS and reset the board, waited
-half a second, and typed the three `google` commands into a device that was
-still booting -- some landed, some did not, NVS said "incomplete", Todo said
-"not configured". It also used Escape to reach the console, which was never
-reliable and now does nothing. It holds DTR/RTS low before opening, sends
-opt-3, and refuses to report success unless the device says "all three
-present". Two more guards: boot now writes `/config/google.txt` whenever NVS
-has credentials and the card does not (a login older than the mirror had no
-file, so the day NVS went it was gone for good), and a boot that erases NVS
+cause was the push, not the device. `tools/google_auth.py` typed the three
+`google` commands with a fixed 1.5 s wait after each -- but the console takes
+one character per pass of its loop, so the hundred-character refresh token
+is still being read when the wait ends, and the tool declared the push
+failed, printed nothing useful, and was run again, and again. (It also
+reached the console by Escape, which was never reliable and now does
+nothing.) The tool now checks for a prompt before typing, waits for the
+prompt after each command, sends opt-3 rather than Escape, and on failure
+prints what the device said with the values redacted. Two more guards on the
+device: boot writes `/config/google.txt` whenever NVS has credentials and
+the card does not (a login older than the mirror had no file, so the day NVS
+went it was gone for good), and a boot that erases NVS
 (`ESP_ERR_NVS_NO_FREE_PAGES`, or a version change) says so in red and puts a
-line in `log`. `mem` shows NVS entries used, because the erase-on-full path
-is the other way credentials vanish; 142 of 630 after a fresh WiFi join.
+line in `log`. `mem` shows NVS entries used; 142 of 630 after a WiFi join.
+Opening the port with pyserial does not reset this board (checked), so that
+was not it.
 
 **`CAPP_PROXY_DEFAULT` in `capp.h` is the one place the PC's address is
 written.** Kernel and apps both include that header; the kernel prefers
