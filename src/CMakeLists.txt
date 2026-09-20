@@ -24,6 +24,8 @@ idf_component_register(
     "../kernel/ui/launchui.c"
     "../kernel/ui/shell.c"
     "../kernel/ui/help.c"
+    "../kernel/ui/pickmodel.c"
+    "../kernel/ui/picker.c"
     "../kernel/ui/overlay.c"
     "../kernel/sys/env.c"
     "../kernel/sys/sio.c"

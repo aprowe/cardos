@@ -135,6 +135,20 @@ marks nothing gets its whole rectangle exactly as before**, so this cost the
 existing apps nothing; `apps/files.c` shows the pattern, and Mines, Claude and
 Pinball can drop their hand-rolled versions whenever someone is in there.
 
+**There is an OS file picker** (2026-09-20). `api->pick(&req)` puts a
+dialog over the app -- open a file, save (a name field, asks before
+replacing), or choose a folder (a "use this folder" row) -- and the app
+polls `api->pick_poll` from tick, the shape `http_start`/`http_poll` has and
+for the same reason. In every mode ctrl-n makes a folder, ctrl-r renames,
+delete deletes (asks; refuses a full folder), ctrl-a shows dotfiles, typing
+jumps to a name, backspace goes up, escape cancels. The behaviour is
+`kernel/ui/pickmodel.c` (portable, 23 host tests over a fake card);
+`kernel/ui/picker.c` paints it and gives it the card; both shells route
+keys, clicks and paint to it while it is up and repaint themselves when it
+closes. Edit was the first user: its own browser and name prompt (about 150
+lines) are gone, ctrl-o and ctrl-r go through the picker, and an Edit with
+no file opens the picker at once. API 27.
+
 **Held keys repeat** (2026-09-20). Both keyboards: 400 ms, then every
 60 ms, for letters, digits, punctuation, space, backspace, delete, tab and
 the arrows -- never enter, escape, fn-` or any opt/fn chord. The policy and
@@ -256,7 +270,7 @@ paint used to clear the active slot for the rest of the tick — so `damage()`
 marks were dropped and the request had no owner. Apps now say "busy" when a
 start is refused instead of returning silently.
 
-**API version 26** (`CAPP_API_VERSION` in `capp.h` is the truth; this
+**API version 27** (`CAPP_API_VERSION` in `capp.h` is the truth; this
 paragraph is history). It moved six times in one day — 11 to 17 — and has
 kept moving since; each move means every `.capp` must be rebuilt, because the
 loader refuses a binary built against a different table. `python
@@ -269,7 +283,7 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25), `key_repeat` (26).
+`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27).
 
 **Credentials survive a reflash** (2026-09-19). WiFi and Google credentials
 live in NVS at runtime, and a full-table flash wipes NVS -- one day it cost the

@@ -17,6 +17,7 @@
 #include "kernel/net/share.h"
 #include "kernel/sys/printq.h"
 #include "kernel/sys/input.h"
+#include "kernel/ui/picker.h"
 #include "kernel/sys/sio.h"
 #include "kernel/app/capprun.h"
 #include "kernel/sys/applog.h"
@@ -351,6 +352,11 @@ static const char *api_share_take_log(void) { return share_take_log(); }
 static int api_print(const char *doc) { return printq_print_doc(doc); }
 static const char *api_print_status(void) { return printq_status(); }
 static int api_key_repeat(void) { return input_is_repeat(); }
+static int api_pick(const CappPick *p) {
+  if (!p) return -1;
+  return picker_open(p->mode, p->title, p->dir, p->filter, p->name);
+}
+static int api_pick_poll(char *out, size_t n) { return picker_poll(out, n); }
 
 static const CardApi API = {
   CAPP_API_VERSION,
@@ -375,6 +381,7 @@ static const CardApi API = {
   api_share_start, api_share_stop, api_share_status, api_share_take_log,
   api_print, api_print_status,
   api_key_repeat,
+  api_pick, api_pick_poll,
 };
 
 const CardApi *cardos_api(void) { return &API; }

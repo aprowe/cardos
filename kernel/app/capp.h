@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 26
+#define CAPP_API_VERSION 27
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -185,6 +185,24 @@ typedef struct {
 #define CAPP_KEY_PRINT 0xEF
 
 /* File open flags, matching the kernel's. */
+/* ---- the file picker ----
+ *
+ * The OS's file dialog, drawn over the app. Ask from a key or action
+ * handler, return, and poll from tick; the app gets no keys while it is up.
+ * Every mode lets the user make folders, rename and delete as they go. */
+#define CAPP_PICK_OPEN   0     /* an existing file */
+#define CAPP_PICK_SAVE   1     /* a name, typed or chosen; asks before replacing */
+#define CAPP_PICK_FOLDER 2     /* a folder */
+#define CAPP_PICK_PENDING (-1000)
+
+typedef struct {
+  int         mode;      /* CAPP_PICK_* */
+  const char *title;     /* "Open", "Save as"; NULL for a default */
+  const char *dir;       /* where to start; NULL or missing means /home */
+  const char *filter;    /* "txt,md": extensions shown; NULL for everything */
+  const char *name;      /* SAVE: the name to offer; NULL for none */
+} CappPick;
+
 /* http_poll while the request is still running. */
 #define CAPP_HTTP_PENDING (-1000)
 
@@ -552,6 +570,20 @@ typedef struct {
    * a held space does not keep toggling. An app that wants no repeats at
    * all sets CAPP_NO_REPEAT in its flags and never sees them. */
   int (*key_repeat)(void);
+
+  /* ---- the file picker ---- (see CappPick above)
+   *
+   *   CappPick p = { CAPP_PICK_OPEN, "Open", 0, "txt,md", 0 };
+   *   if (api->pick(&p) == 0) waiting = 1;
+   *   ...in tick:
+   *   int r = api->pick_poll(path, sizeof path);
+   *   if (r != CAPP_PICK_PENDING) { waiting = 0; if (r == 1) open(path); }
+   *
+   * pick returns 0, or -1 if a picker is already up. pick_poll returns
+   * CAPP_PICK_PENDING until there is an answer, then once: 1 with the
+   * full path in `out`, or 0 for cancelled. */
+  int (*pick)(const CappPick *req);
+  int (*pick_poll)(char *out, size_t n);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

@@ -5,11 +5,10 @@
  * a gutter, the current line marked, a status bar that says what file and
  * whether it is saved.
  *
- * Two views: a file browser and the editor. It opens in the browser, because an
- * editor with no file is an editor with nothing to do -- and because the
- * previous version was handed a path by the launcher and opened its own
- * binary, which is how you learn that "open a file" and "here is your icon's
- * path" are different questions.
+ * Opening and saving go through the OS file picker (api->pick), which is
+ * also where folders get made and files renamed. This editor used to carry a
+ * browser and a name prompt of its own; the picker replaced about a hundred
+ * and fifty lines of them, and every other app gets the same dialog.
  *
  * The buffer is a flat array of fixed-width lines rather than a gap buffer: a
  * file this thing is for is a few kilobytes, and a flat array is the version
@@ -24,9 +23,6 @@
 #define ROWH      9
 #define GUTTER    18      /* three digits and a separator */
 #define CHARW     6
-
-#define DIRMAX    28
-#define NAMELEN   32
 
 /* A dark palette that keeps syntax-free text readable at this size. Comment
  * green is used for the gutter, not for comments -- there is no parser here,
@@ -55,23 +51,17 @@
 #define CLR_PG_LINK CAPP_RGB(24, 82, 170)
 #define CLR_PG_QUOT CAPP_RGB(150, 154, 160)
 
-typedef enum { VIEW_BROWSE = 0, VIEW_EDIT, VIEW_NAME, VIEW_PREVIEW } View;
-
-/* What the filename prompt is for. One view serves both, because "what shall
- * it be called" is the same question either way -- only what happens after the
- * answer differs. */
-typedef enum { NAME_NEW = 0, NAME_SAVE_AS } NameFor;
+typedef enum { VIEW_EDIT = 0, VIEW_PREVIEW } View;
 
 static const CardApi *api;
+
+enum { PICK_NONE = 0, PICK_OPEN, PICK_SAVE };
 
 static struct {
   View view;
 
-  /* browser */
-  char dir[64];
-  char names[DIRMAX][NAMELEN];
-  int  ndir;
-  int  bsel;
+  /* The OS file picker is up, and what for. The answer arrives in tick. */
+  int  picking;                 /* 0, or PICK_* */
 
   /* buffer */
   char line[MAXLINES][MAXCOL + 1];
@@ -87,11 +77,6 @@ static struct {
   /* markdown preview */
   int   ptop;                 /* first rendered row on screen */
   int   prows;                /* how many rows the document rendered to */
-
-  /* the filename prompt */
-  NameFor name_for;
-  char    name[40];
-  int     name_len;
 
   /* paper: the buffer joined with newlines, and whether the strip is
    * showing the job's progress */
@@ -164,11 +149,46 @@ out:
   }
 }
 
-static void begin_name(NameFor why, const char *initial) {
-  E.name_for = why;
-  api->fmt(E.name, sizeof E.name, "%s", initial ? initial : "");
-  E.name_len = (int)api->str_len(E.name);
-  E.view = VIEW_NAME;
+/* The folder of the current file, for the picker to start in. */
+static const char *own_dir(char *buf, size_t n) {
+  int i, cut = 0;
+  if (!E.path[0]) return NULL;
+  for (i = 0; E.path[i]; i++) if (E.path[i] == '/') cut = i;
+  if (cut == 0) return NULL;
+  api->mem_cpy(buf, E.path, (size_t)cut);
+  buf[cut < (int)n ? cut : (int)n - 1] = 0;
+  return buf;
+}
+
+static const char *own_name(void) {
+  const char *slash = NULL, *p;
+  for (p = E.path; *p; p++) if (*p == '/') slash = p;
+  return slash ? slash + 1 : E.path;
+}
+
+/* The OS picker, for a place to save. The answer comes back in tick. */
+static void ask_save(void) {
+  char dir[96];
+  CappPick req;
+  req.mode = CAPP_PICK_SAVE;
+  req.title = "Save as";
+  req.dir = own_dir(dir, sizeof dir);
+  req.filter = NULL;
+  req.name = E.path[0] ? own_name() : "untitled.txt";
+  if (api->pick(&req) == 0) E.picking = PICK_SAVE;
+  else say("a picker is already open");
+}
+
+static void ask_open(void) {
+  char dir[96];
+  CappPick req;
+  req.mode = CAPP_PICK_OPEN;
+  req.title = "Open";
+  req.dir = own_dir(dir, sizeof dir);
+  req.filter = NULL;
+  req.name = NULL;
+  if (api->pick(&req) == 0) E.picking = PICK_OPEN;
+  else say("a picker is already open");
 }
 
 static void save(void) {
@@ -178,7 +198,7 @@ static void save(void) {
   /* Empty rather than pre-filled: a buffer with no name came from a pipe or a
    * new file, and the first thing typed should be the name rather than the
    * end of a name you have to delete first. */
-  if (!E.path[0]) { begin_name(NAME_SAVE_AS, ""); return; }
+  if (!E.path[0]) { ask_save(); return; }
   fd = api->open(E.path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
   if (fd < 0) { say("cannot write"); return; }
   for (i = 0; i < E.nlines; i++) {
@@ -188,53 +208,6 @@ static void save(void) {
   api->close(fd);
   E.dirty = 0;
   say("saved");
-}
-
-/* ------------------------------------------------------------ browser ---- */
-
-static void rescan(void) {
-  static char raw[DIRMAX][NAMELEN];
-  int n, i;
-
-  E.ndir = 0;
-  E.bsel = 0;
-  n = api->list(E.dir, &raw[0][0], DIRMAX, NAMELEN);
-  if (n < 0) { say("cannot read folder"); return; }
-  for (i = 0; i < n && E.ndir < DIRMAX; i++) {
-    api->fmt(E.names[E.ndir], NAMELEN, "%s", raw[i]);
-    E.ndir++;
-  }
-  api->fmt(E.status, sizeof E.status, "%s  %d items", E.dir, E.ndir);
-}
-
-static void go_up(void) {
-  int i, cut = 0;
-  for (i = 0; E.dir[i]; i++) if (E.dir[i] == '/') cut = i;
-  E.dir[cut ? cut : 1] = 0;
-  rescan();
-}
-
-static void open_selected(void) {
-  char path[96];
-  int fd;
-
-  if (E.bsel < 0 || E.bsel >= E.ndir) return;
-
-  api->fmt(path, sizeof path, "%s%s%s", E.dir,
-           E.dir[1] == 0 ? "" : "/", E.names[E.bsel]);
-
-  /* A folder cannot be opened for reading, which is how this tells the two
-   * apart -- there is no is_dir in the API an app is given. */
-  fd = api->open(path, CAPP_O_READ);
-  if (fd < 0) {
-    api->fmt(E.dir, sizeof E.dir, "%s", path);
-    rescan();
-    return;
-  }
-  api->close(fd);
-
-  load(path);
-  E.view = VIEW_EDIT;
 }
 
 /* ------------------------------------------------------------- editing --- */
@@ -317,51 +290,8 @@ static void backspace(void) {
   E.dirty = 1;
 }
 
-/* The name is joined to the folder being browsed, so "notes.txt" lands where
- * you were looking rather than at the root. */
-static void finish_name(void) {
-  char path[96];
-
-  if (E.name_len == 0) { E.view = VIEW_EDIT; return; }
-  api->fmt(path, sizeof path, "%s%s%s", E.dir, E.dir[1] == 0 ? "" : "/", E.name);
-
-  if (E.name_for == NAME_NEW) {
-    blank();
-    api->fmt(E.path, sizeof E.path, "%s", path);
-    say("new file, ctrl-s saves");
-  } else {
-    api->fmt(E.path, sizeof E.path, "%s", path);
-    E.view = VIEW_EDIT;
-    save();
-    return;
-  }
-  E.view = VIEW_EDIT;
-}
-
 /* ------------------------------------------------------------ painting --- */
 
-static void paint_browse(CRect c) {
-  int rows = (c.h - ROWH) / ROWH;
-  int top = 0, i;
-
-  api->fill(c, CLR_BG);
-  if (E.bsel >= rows) top = E.bsel - rows + 1;
-
-  for (i = 0; i < rows && top + i < E.ndir; i++) {
-    int idx = top + i;
-    short y = (short)(c.y + i * ROWH);
-    int sel = (idx == E.bsel);
-    api->fill(rect(c.x, y, c.w, ROWH), sel ? CLR_SEL : CLR_BG);
-    api->text((short)(c.x + 3), y, E.names[idx],
-              sel ? CLR_BAR_FG : CLR_TEXT, sel ? CLR_SEL : CLR_BG);
-  }
-  if (E.ndir == 0)
-    api->text((short)(c.x + 3), c.y, "empty", CLR_DIM, CLR_BG);
-
-  api->fill(rect(c.x, c.y + c.h - ROWH, c.w, ROWH), CLR_BAR);
-  api->text((short)(c.x + 2), (short)(c.y + c.h - ROWH + 1), E.status,
-            CLR_BAR_FG, CLR_BAR);
-}
 
 /* ------------------------------------------------------- markdown ---- */
 
@@ -685,27 +615,6 @@ static void paint_edit(CRect c) {
             CLR_BAR_FG, CLR_BAR);
 }
 
-static void paint_name(CRect c) {
-  char shown[sizeof E.name + 2];
-  short y = (short)(c.y + c.h / 2 - 18);
-
-  api->fill(c, CLR_BG);
-  api->text((short)(c.x + 8), y,
-            E.name_for == NAME_NEW ? "New file" : "Save as", CLR_BAR_FG, CLR_BG);
-  api->text((short)(c.x + 8), (short)(y + 11), E.dir, CLR_DIM, CLR_BG);
-
-  api->fill(rect(c.x + 6, y + 24, c.w - 12, 13), CLR_CUR_BG);
-  api->fill(rect(c.x + 6, y + 24, c.w - 12, 1), CLR_SEL);
-  api->mem_cpy(shown, E.name, (size_t)E.name_len);
-  shown[E.name_len] = '_';
-  shown[E.name_len + 1] = 0;
-  api->text((short)(c.x + 9), (short)(y + 27), shown, CLR_TEXT, CLR_CUR_BG);
-
-  api->fill(rect(c.x, c.y + c.h - ROWH, c.w, ROWH), CLR_BAR);
-  api->text((short)(c.x + 3), (short)(c.y + c.h - ROWH + 1),
-            "enter confirms   backspace cancels when empty", CLR_BAR_FG, CLR_BAR);
-}
-
 /* What this editor can be asked to do. Keys map onto these and so do menu
  * items; see apps/toolbar.h for why a menu item is never a keystroke. */
 enum { ACT_NEW = 1, ACT_SAVE, ACT_SAVEAS, ACT_OPEN, ACT_PREVIEW, ACT_PRINT };
@@ -714,7 +623,7 @@ static const CappAction EDIT_ACTIONS[] = {
   { "new",     "New",     "File", 0x0E, ACT_NEW },      /* ctrl-n */
   { "save",    "Save",    "File", 0x13, ACT_SAVE },     /* ctrl-s */
   { "saveas",  "Save as", "File", 0x12, ACT_SAVEAS },   /* ctrl-r */
-  { "close",   "Close",   "File", 0x0F, ACT_OPEN },     /* ctrl-o */
+  { "open",    "Open...", "File", 0x0F, ACT_OPEN },     /* ctrl-o */
   { "preview", "Preview", "View", 0x10, ACT_PREVIEW },  /* ctrl-p */
   { "print",   "Print",   "File", CAPP_KEY_PRINT, ACT_PRINT },  /* fn-p */
 };
@@ -744,10 +653,17 @@ static void print_buffer(void) {
 
 static int do_action(int a) {
   switch (a) {
-  case ACT_NEW:     begin_name(NAME_NEW, ""); return 1;
+  case ACT_NEW:
+    /* An empty, unnamed buffer: the name is asked for at the first save,
+     * by the picker, in the folder you choose. */
+    blank();
+    E.path[0] = 0;
+    E.view = VIEW_EDIT;
+    say("new file, ctrl-s saves");
+    return 1;
   case ACT_SAVE:    save(); return 1;
-  case ACT_SAVEAS:  begin_name(NAME_SAVE_AS, E.path[0] ? E.path : "untitled.txt"); return 1;
-  case ACT_OPEN:    E.view = VIEW_BROWSE; rescan(); return 1;
+  case ACT_SAVEAS:  ask_save(); return 1;
+  case ACT_OPEN:    ask_open(); return 1;
   case ACT_PREVIEW: E.view = VIEW_PREVIEW; E.ptop = 0; return 1;
   case ACT_PRINT:   print_buffer(); return 1;
   default: return 0;
@@ -759,6 +675,23 @@ static int do_action(int a) {
 static int app_tick(void *st, uint32_t now_ms) {
   const char *ps;
   (void)st; (void)now_ms;
+
+  if (E.picking) {
+    char path[96];
+    int r = api->pick_poll(path, sizeof path);
+    if (r != CAPP_PICK_PENDING) {
+      int what = E.picking;
+      E.picking = PICK_NONE;
+      if (r == 1) {
+        if (what == PICK_OPEN) { load(path); E.view = VIEW_EDIT; }
+        else { api->fmt(E.path, sizeof E.path, "%s", path); save(); }
+      } else if (what == PICK_OPEN && !E.path[0]) {
+        say("new file, ctrl-s saves");
+      }
+      return 1;
+    }
+  }
+
   if (!E.printing) return 0;
   ps = api->print_status();
   if (!(ps[0] == 's' || ps[0] == 'c' || (ps[0] == 'p' && ps[5] == 'i')))
@@ -776,8 +709,6 @@ static void app_paint(void *st, CRect c) {
   (void)st;
   /* The bar belongs to the editor. The browser and the name prompt are
    * whole screens of their own and have nothing to put on it. */
-  if (E.view == VIEW_BROWSE) { paint_browse(c); return; }
-  if (E.view == VIEW_NAME) { paint_name(c); return; }
   if (E.view == VIEW_PREVIEW) { paint_preview(c); return; }
   {
     CRect full = c;
@@ -792,22 +723,6 @@ static void app_paint(void *st, CRect c) {
 
 
 /* --------------------------------------------------------------- input --- */
-
-static int key_browse(unsigned char k) {
-  switch (k) {
-  case CAPP_KEY_UP:   if (E.bsel > 0) E.bsel--; return 1;
-  case CAPP_KEY_DOWN: if (E.bsel + 1 < E.ndir) E.bsel++; return 1;
-  case CAPP_KEY_LEFT:
-  case CAPP_KEY_BACK: go_up(); return 1;
-  case CAPP_KEY_RIGHT:
-  case CAPP_KEY_ENTER: open_selected(); return 1;
-  case 'n': case 'N':
-    begin_name(NAME_NEW, "");
-    return 1;
-  case 'r': case 'R': rescan(); return 1;
-  default: return 0;
-  }
-}
 
 static int key_edit(unsigned char k) {
   switch (k) {
@@ -852,30 +767,10 @@ static int key_preview(unsigned char k) {
   case CAPP_KEY_RIGHT:
   case ' ':            E.ptop += 12; return 1;
   case 'g':            E.ptop = 0; return 1;
-  case 0x0F:                                      /* ctrl-o, the file list */
-    E.view = VIEW_BROWSE;
-    rescan();
-    return 1;
+  case 0x0F: ask_open(); return 1;                /* ctrl-o, the file list */
   case 0x13: save(); return 1;                    /* ctrl-s still saves */
   default: return 0;
   }
-}
-
-static int key_name(unsigned char k) {
-  if (k == CAPP_KEY_ENTER) { finish_name(); return 1; }
-  if (k == CAPP_KEY_BACK) {
-    if (E.name_len > 0) E.name[--E.name_len] = 0;
-    else E.view = (E.name_for == NAME_NEW) ? VIEW_BROWSE : VIEW_EDIT;
-    return 1;
-  }
-  /* No slashes: this names a file in the folder being browsed, and a path
-   * typed here would silently land somewhere else. */
-  if (k >= 32 && k < 127 && k != '/' && E.name_len < (int)sizeof E.name - 1) {
-    E.name[E.name_len++] = (char)k;
-    E.name[E.name_len] = 0;
-    return 1;
-  }
-  return 0;
 }
 
 /* What the shell calls for a chord out of the table, and what the menu bar
@@ -902,22 +797,12 @@ static int app_key(void *st, unsigned char k) {
   (void)st;
   r = menu_key(k, &handled);
   if (handled) return r;
-  if (E.view == VIEW_BROWSE) return key_browse(k);
-  if (E.view == VIEW_NAME) return key_name(k);
   if (E.view == VIEW_PREVIEW) return key_preview(k);
   return key_edit(k);
 }
 
 static int app_click(void *st, short x, short y, int button) {
   (void)st; (void)button;
-
-  if (E.view == VIEW_BROWSE) {
-    int i = y / ROWH;
-    if (i < 0 || i >= E.ndir) return 0;
-    if (i == E.bsel) open_selected();
-    else E.bsel = i;
-    return 1;
-  }
 
   {
     int a = toolbar_click(x, y);
@@ -950,12 +835,6 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
   if (toolbar_hover(x, y)) changed = 1;
   if (!wheel) return changed;
 
-  if (E.view == VIEW_BROWSE) {
-    E.bsel -= wheel * 2;
-    if (E.bsel < 0) E.bsel = 0;
-    if (E.bsel >= E.ndir) E.bsel = E.ndir - 1;
-    return 1;
-  }
   if (E.view == VIEW_PREVIEW) { E.ptop -= wheel * 3; return 1; }
   if (E.view != VIEW_EDIT) return 0;
 
@@ -965,22 +844,26 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
   return 1;
 }
 
-/* Only while editing. In the browser the arrows move a selection, and a
- * machine whose arrow keys are ; . , / needs those back. */
+/* Only while editing: the preview scrolls with the arrows, and a machine
+ * whose arrow keys are ; . , / needs those back. */
 static int app_wants_text(void *st) {
   (void)st;
   /* Not while previewing: nothing there takes typing, and saying otherwise
    * would cost the arrow keys, which are how you scroll it. Nor while the
    * menu has the keyboard. */
   if (toolbar_has_keys()) return 0;
-  return E.view == VIEW_EDIT || E.view == VIEW_NAME;
+  return E.view == VIEW_EDIT;
 }
 
+/* Opened with nothing: an empty buffer, and the picker straight away --
+ * an editor with no file is an editor with nothing to do. Cancel it and
+ * the empty buffer is yours. */
 static void app_open(void *st) {
   (void)st;
-  if (!E.dir[0]) api->fmt(E.dir, sizeof E.dir, "%s", CAPP_HOME);
-  E.view = VIEW_BROWSE;
-  rescan();
+  blank();
+  E.path[0] = 0;
+  E.view = VIEW_EDIT;
+  ask_open();
 }
 
 static void app_set_args(void *st, const char *path) {
@@ -998,7 +881,7 @@ const CappInfo capp_info = {
     0x10, 0x12, 0x10, 0x1F, 0x13, 0xC1, 0x10, 0x01,
     0x13, 0xE1, 0x10, 0x01, 0x13, 0xC1, 0x10, 0x01,
     0x11, 0xE1, 0x10, 0x01, 0x1F, 0xFF, 0x00, 0x00 },
-  "arrows\tmove\nenter\topen, or split the line\nbackspace\tup a folder, or delete\nn\tnew file\nctrl-n\tnew file\nctrl-s\tsave\nctrl-r\tsave as\nctrl-p\tmarkdown preview\nfn-p\tprint\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n",
+  "arrows\tmove\nenter\tsplit the line\nbackspace\tdelete\nctrl-n\tnew file\nctrl-s\tsave\nctrl-r\tsave as\nctrl-o\topen a file\nctrl-p\tmarkdown preview\nfn-p\tprint\nctrl-a\tstart of line\nctrl-e\tend of line\n",
 };
 
 /* Static, not a local: the shell keeps calling into this long after
@@ -1014,7 +897,6 @@ static void load_stdin(void) {
   int n;
 
   blank();
-  if (!E.dir[0]) api->fmt(E.dir, sizeof E.dir, "%s", CAPP_HOME);
   E.path[0] = 0;
   while (E.nlines < MAXLINES && (n = api->in_line(line, sizeof line)) >= 0) {
     if (n > MAXCOL) n = MAXCOL;
@@ -1032,7 +914,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api = a;
   blank();
   /* Three ways in, in the order a shell would expect: something piped in, a
-     named file, or nothing -- and nothing means the browser, because an editor
+     named file, or nothing -- and nothing means the picker, because an editor
      with no file has nothing to do. */
   if (api->has_input()) load_stdin();
   else if (argc > 1) app_set_args(0, argv[1]);

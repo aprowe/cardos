@@ -13,6 +13,7 @@
 #include "kernel/ui/pins.h"
 #include "kernel/ui/shell.h"
 #include "kernel/ui/help.h"
+#include "kernel/ui/picker.h"
 #include "kernel/drv/bthid.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -659,6 +660,19 @@ static void paint_fullscreen(void) {
 }
 
 void desktop_flush(void) {
+  /* The file picker is over everything, windowed or not, until it answers.
+   * A full repaint asked for underneath it (help closing, say) repaints the
+   * panel; the windows come back when it goes. */
+  if (picker_active()) {
+    if (s_full_dirty || wm_damage_count()) {
+      s_full_dirty = 0;
+      picker_paint_now();
+    } else {
+      picker_paint();
+    }
+    draw_pointer();
+    return;
+  }
   if (s_full) {
     paint_fullscreen();
     /* The pointer too. This used to return here, so any repaint a fullscreen
@@ -697,6 +711,7 @@ static int open_def_ex(const AppDef *a, int fresh);
 static void leave_fullscreen(void) {
   const AppDef *a = s_full;
   if (!a) return;
+  picker_close();
   /* Back into a window, not into nothing. This used to just drop the app: the
    * screen came back to the desktop and whatever had been running was no
    * longer anywhere, because a fullscreen app has no window to return to
@@ -954,6 +969,7 @@ static void close_focused_ex(int release) {
   WinId f = wm_focus();
   int i, j;
   if (f == WIN_NONE) return;
+  picker_close();                 /* a picker the app was waiting on goes with it */
   /* Before the bookkeeping below forgets which app this was. */
   if (release) capprun_release(app_of(f));
   wm_destroy(f);
@@ -1029,12 +1045,28 @@ int desktop_key(uint8_t key) {
     const AppDef *a = s_full ? s_full
                     : (wm_focus() != WIN_NONE ? app_of(wm_focus()) : NULL);
     s_help = 1;
+    if (picker_active()) {
+      help_paint("Files", picker_help(), "fn-`\tcancel and leave the app\nfn-h\tclose this\n");
+      return 0;
+    }
     help_paint(a ? a->name : "Desktop", a ? a->help : NULL,
                s_full
                ? "escape\tback a level, inside the app\nfn-b\tmenu bar, by keyboard\n"
                  "fn-`\tleave fullscreen (or opt-backspace)\nfn-f\twindowed\nfn-h\tclose this\n"
                : "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nfn-s\tstart menu\nfn-f\tfullscreen / window\nfn-`\tclose window (or opt-backspace)\nfn-w\tclose window\nfn-m\tminimise\nfn-k\tkeyboard mouse\nfn-p\tprint (apps that can)\nescape\tout of a folder or menu\nopt-3\tthe console\nfn-h\tclose this\n");
     return 0;
+  }
+
+  /* The file picker has every key while it is up, except the ones that
+   * leave the app -- those close it on the way out and fall through. */
+  if (picker_active()) {
+    if (key == KEY_QUIT) {
+      picker_close();
+    } else {
+      if (picker_key(key, s_now_ms)) desktop_repaint();
+      else desktop_flush();
+      return 0;
+    }
   }
 
   /* ; . , / stand in for the arrow cluster unless something is taking text.
@@ -1411,6 +1443,31 @@ void desktop_mouse_apply(const MouseReport *r) {
    * is -- so the old cursor square is handed back to the app as a clip, and
    * the cursor is drawn again on top. Every app therefore has a mouse without
    * knowing anything about one. */
+  if (picker_active()) {
+    int pl = mouse_pressed(MOUSE_LEFT);
+    int pr = mouse_pressed(MOUSE_RIGHT);
+    int btn = pl ? MOUSE_LEFT : pr ? MOUSE_RIGHT : 0;
+    int wheel = mouse_take_wheel();
+    int moved = mouse_take_moved();
+    s_cursor_on = 1;
+    if (btn && picker_click((int16_t)mouse_x(), (int16_t)mouse_y(), btn)) {
+      desktop_repaint();
+    } else {
+      if (wheel) picker_wheel(wheel > 0 ? -1 : 1);
+      if (moved) {
+        Rect after = cursor_rect();
+        draw_set_clip(rect_union(before, after));
+        picker_paint_now();
+      }
+      desktop_flush();
+      draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+      draw_pointer();
+    }
+    mouse_released(MOUSE_LEFT);
+    mouse_released(MOUSE_RIGHT);
+    return;
+  }
+
   if (s_full) {
     /* Read each edge ONCE. mouse_pressed is a take -- it returns 1 exactly
      * once per press -- so the old code, which asked for it while building

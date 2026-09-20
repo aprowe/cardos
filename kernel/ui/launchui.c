@@ -28,6 +28,7 @@
 #include "kernel/drv/bthid.h"
 #include "kernel/net/wifi.h"
 #include "kernel/ui/help.h"
+#include "kernel/ui/picker.h"
 #include "kernel/ui/icons_builtin.h"
 #include "kernel/sys/hotkeys.h"
 #include "kernel/sys/clock.h"
@@ -321,8 +322,22 @@ static const char *shell_keys(void) {
 static void flush(void) {
   if (s_help) {
     const Icon *ic = icon_at(s_sel);
-    help_paint(s_app ? s_app->name : (ic ? ic->name : "CardOS"),
-               s_app ? s_app->help : NULL, shell_keys());
+    if (picker_active())
+      help_paint("Files", picker_help(), "fn-`\tcancel and leave the app\nfn-h\tclose this\n");
+    else
+      help_paint(s_app ? s_app->name : (ic ? ic->name : "CardOS"),
+                 s_app ? s_app->help : NULL, shell_keys());
+    return;
+  }
+  /* The picker over an app: it owns the screen until it answers, and the
+   * app underneath is repainted only once it has gone. */
+  if (picker_active()) {
+    if (s_app_dirty) { s_app_dirty = 0; picker_paint_now(); }
+    else picker_paint();
+    if (s_pointer_on) {
+      draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+      draw_cursor((int16_t)mouse_x(), (int16_t)mouse_y());
+    }
     return;
   }
   if (s_app) {
@@ -385,6 +400,7 @@ void launchui_repaint(void) {
 }
 
 static void leave_app(void) {
+  picker_close();                 /* a picker the app was waiting on goes with it */
   /* Hand the image back: an app the launcher is no longer showing is not
    * going to be called into, and its code is 4 KB of a small pool. Starting
    * it again reloads it, which costs a card read nobody notices. */
@@ -618,6 +634,15 @@ int launchui_key(uint8_t key) {
    * closing the app is the only frame operation there is. */
   if (key == KEY_FN_LETTER('w') && s_app) { leave_app(); return 0; }
 
+  /* The file picker has every key while it is up, except the ones that
+   * leave the app -- those close it on the way out. */
+  if (picker_active() && s_app) {
+    if (key == KEY_QUIT) { leave_app(); return 0; }
+    if (picker_key(key, s_now_ms)) { s_app_dirty = 1; s_app_clear = 1; }
+    flush();
+    return 0;
+  }
+
   /* Bind mode: `k` on an app, then the letter. Two keys rather than a chord,
    * because every Opt chord already means "open" -- including here. */
   if (s_binding) {
@@ -805,6 +830,24 @@ void launchui_mouse_apply(const MouseReport *r) {
   moved = mouse_take_moved();
   mouse_released(MOUSE_LEFT);
   mouse_released(MOUSE_RIGHT);
+
+  if (s_app && picker_active()) {
+    s_pointer_on = 1;
+    if (btn && picker_click((int16_t)mouse_x(), (int16_t)mouse_y(), btn)) {
+      s_app_dirty = 1; s_app_clear = 1;
+    }
+    if (wheel) picker_wheel(wheel > 0 ? -1 : 1);
+    flush();
+    if (moved && picker_active()) {
+      /* The pointer moved over the panel: repaint what it left, then it. */
+      Rect after = draw_cursor_bounds((int16_t)mouse_x(), (int16_t)mouse_y());
+      draw_set_clip(rect_union(before, after));
+      picker_paint_now();
+      draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+      draw_cursor((int16_t)mouse_x(), (int16_t)mouse_y());
+    }
+    return;
+  }
 
   if (s_app) {
     int16_t lx = (int16_t)(mouse_x() - s_app_rect.x);
