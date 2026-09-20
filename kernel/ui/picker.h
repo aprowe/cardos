@@ -35,6 +35,9 @@ int  picker_poll(char *out, size_t n);
 void picker_paint(void);         /* only when something changed */
 void picker_paint_now(void);     /* everything, unconditionally */
 int  picker_key(uint8_t k, uint32_t now_ms);
+/* Is a name being typed? Otherwise ; , . / are the arrows, unmodified, as
+ * they are everywhere a list has the keys. */
+int  picker_wants_text(void);
 int  picker_click(int16_t x, int16_t y, int button);
 void picker_wheel(int dy);
 

@@ -234,6 +234,11 @@ int picker_key(uint8_t k, uint32_t now_ms) {
   return 0;
 }
 
+int picker_wants_text(void) {
+  return s_active && (s_m.ask == PM_ASK_NAME || s_m.ask == PM_ASK_MKDIR ||
+                      s_m.ask == PM_ASK_RENAME);
+}
+
 int picker_click(int16_t x, int16_t y, int button) {
   (void)x; (void)button;
   if (!s_active) return 0;

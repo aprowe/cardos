@@ -1063,6 +1063,10 @@ int desktop_key(uint8_t key) {
     if (key == KEY_QUIT) {
       picker_close();
     } else {
+      if (!picker_wants_text()) {
+        uint8_t arrow = keyboard_arrow_for(key);
+        if (arrow) key = arrow;
+      }
       if (picker_key(key, s_now_ms)) desktop_repaint();
       else desktop_flush();
       return 0;
@@ -1253,6 +1257,7 @@ int desktop_key(uint8_t key) {
 int desktop_wants_text(void) {
   const AppDef *a = s_full ? s_full
                   : (wm_focus() != WIN_NONE ? app_of(wm_focus()) : NULL);
+  if (picker_active()) return picker_wants_text();
   if (!a || !a->wants_text) return 0;
   return a->wants_text(a->state);
 }

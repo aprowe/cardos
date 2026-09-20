@@ -638,6 +638,10 @@ int launchui_key(uint8_t key) {
    * leave the app -- those close it on the way out. */
   if (picker_active() && s_app) {
     if (key == KEY_QUIT) { leave_app(); return 0; }
+    if (!picker_wants_text()) {
+      uint8_t arrow = keyboard_arrow_for(key);
+      if (arrow) key = arrow;
+    }
     if (picker_key(key, s_now_ms)) { s_app_dirty = 1; s_app_clear = 1; }
     flush();
     return 0;
@@ -743,6 +747,7 @@ int launchui_key(uint8_t key) {
  * asks, exposed because voice needs the same answer and two callers working it
  * out separately would eventually disagree. */
 int launchui_wants_text(void) {
+  if (picker_active()) return picker_wants_text();
   if (!s_app || !s_app->wants_text) return 0;
   return s_app->wants_text(s_app->state);
 }
