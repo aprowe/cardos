@@ -175,14 +175,15 @@ NTP sync, so `set TZ=...` listed the new value and changed nothing until a
 reboot; and `time` printed an hour with no indication of which zone it was in.
 `time` now names the zone and says when there is none.
 
-**Escape belongs to the app; fn-` is the way out** (2026-09-18). The shell
-offers Escape to the focused app first and only leaves when the app declines
-it, so a subview goes back a level and the top level falls through to
-"leave". The launcher and the fullscreen path used to take Escape
-unconditionally while a windowed app got it first, which is why the same key
-went back in one place and quit in another. `fn` + the ` key (`KEY_QUIT`,
-`KBD_KEY_QUIT` over Bluetooth) always leaves, so an app that keeps Escape
-cannot trap anyone. `CAPP_KEY_ESC` in `capp.h` is the constant an app matches.
+**Escape never leaves anything; fn-` does** (2026-09-20). Escape is
+interior: it goes to the focused app first (a subview goes back a level), and
+outside an app it closes an open folder or menu. That is all. An app that
+declines it at its top level keeps it -- the 2026-09-18 version left the app
+when it declined, which is the same surprise one level down: back out of a
+subview once too often and the app is gone. `fn` + the ` key (`KEY_QUIT`,
+`KBD_KEY_QUIT` over Bluetooth) is the one way out: of an app in the launcher,
+of a fullscreen app or a focused window on the desktop, and of the launcher to
+the console. `CAPP_KEY_ESC` in `capp.h` is the constant an app matches.
 
 **The help panel is fn-h, and for a while it was nothing at all.** Help moved
 off ctrl-h because ctrl-h is 0x08, the byte Backspace sends. The header and
@@ -265,6 +266,21 @@ NVS has nothing, so NVS wins where both exist and `wifi forget` / `google
 forget` delete the file too. A hand-written `/config/wifi.txt` is also the
 way to give a fresh device its network without a keyboard. `kernel/sys/conf.c`
 holds the line format (host-tested); `conf_file.c` is the fs glue.
+
+**"Google: not configured" came back over and over** (2026-09-20), and the
+cause was the push, not the device. `tools/google_auth.py` opened the serial
+port with pyserial's defaults, which pull DTR/RTS and reset the board, waited
+half a second, and typed the three `google` commands into a device that was
+still booting -- some landed, some did not, NVS said "incomplete", Todo said
+"not configured". It also used Escape to reach the console, which was never
+reliable and now does nothing. It holds DTR/RTS low before opening, sends
+opt-3, and refuses to report success unless the device says "all three
+present". Two more guards: boot now writes `/config/google.txt` whenever NVS
+has credentials and the card does not (a login older than the mirror had no
+file, so the day NVS went it was gone for good), and a boot that erases NVS
+(`ESP_ERR_NVS_NO_FREE_PAGES`, or a version change) says so in red and puts a
+line in `log`. `mem` shows NVS entries used, because the erase-on-full path
+is the other way credentials vanish; 142 of 630 after a fresh WiFi join.
 
 **`CAPP_PROXY_DEFAULT` in `capp.h` is the one place the PC's address is
 written.** Kernel and apps both include that header; the kernel prefers

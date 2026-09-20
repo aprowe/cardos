@@ -1511,7 +1511,7 @@ const CappInfo capp_info = {
     0x30, 0x6C, 0x3F, 0xFC, 0x00, 0x00, 0x00, 0x00 },
   "arrows\tmove\nenter\ttick it off\na\tadd a task\nd\tdelete / undo\n"
   "s\tsync every list\nleft/right\tnext list\nl\tchoose a list\n"
-  "o\tall lists at once\np\tprint it\nescape\tback, then out\n",
+  "o\tall lists at once\np\tprint it\nescape\tback a level\nfn-`\tleave\n",
 };
 
 static CappUi UI;

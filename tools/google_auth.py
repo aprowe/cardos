@@ -167,19 +167,26 @@ def push(port, client_id, client_secret, refresh_token):
         import serial
     except ImportError:
         raise SystemExit("pyserial is not installed: python -m pip install pyserial")
-
     import time
-    s = serial.Serial(port, 115200, timeout=0.5)
-    time.sleep(0.5)
+    # DTR and RTS low BEFORE opening: with pyserial's defaults, opening the
+    # port resets the board, and the commands below were typed into a device
+    # that was still booting. Some of the three landed and some did not, the
+    # device said "incomplete", and Todo said "not configured" -- and so it
+    # went, every time this was run.
+    s = serial.Serial()
+    s.port = port
+    s.baudrate = 115200
+    s.timeout = 0.5
+    s.dtr = False
+    s.rts = False
+    s.open()
+    time.sleep(0.3)
     s.reset_input_buffer()
-
-    # Escape out of whatever shell is up, so the commands reach the console.
-    s.write(b"\x1b")
-    time.sleep(1.2)
-    s.write(b"\x1b")
-    time.sleep(1.2)
+    # opt-3 is "the console" from any shell. Escape is not: it is the app's
+    # key, and it never leaves anything.
+    s.write(b"\xa3")
+    time.sleep(0.8)
     s.read(65536)
-
     out = ""
     for cmd in ("google id %s" % client_id,
                 "google secret %s" % client_secret,
@@ -189,12 +196,15 @@ def push(port, client_id, client_secret, refresh_token):
         time.sleep(1.5)
         out += s.read(65536).decode("utf-8", "replace")
     s.close()
-
     # Echo only what the device said about itself, never the values back.
     for line in out.splitlines():
         if line.startswith(("google", "not configured", "configured",
-                            "stored", "signed in")):
+                            "stored", "signed in", "status")):
             print("  device: " + line)
+    if "all three present" not in out and "credentials stored" not in out:
+        raise SystemExit("the device did not confirm all three values. Is it "
+                         "on %s and awake? Run again." % port)
+    print("  mirrored to /config/google.txt on the card; a reflash keeps it.")
 
 
 def main():

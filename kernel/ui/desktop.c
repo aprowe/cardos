@@ -1031,9 +1031,9 @@ int desktop_key(uint8_t key) {
     s_help = 1;
     help_paint(a ? a->name : "Desktop", a ? a->help : NULL,
                s_full
-               ? "escape\tback, or leave fullscreen\nfn-b\tmenu bar, by keyboard\n"
-                 "fn-`\tleave fullscreen always\nfn-f\twindowed\nfn-h\tclose this\n"
-               : "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nfn-s\tstart menu\nfn-f\tfullscreen / window\nfn-w\tclose window\nfn-m\tminimise\nfn-k\tkeyboard mouse\nfn-p\tprint (apps that can)\nescape\tthe console\nfn-h\tclose this\n");
+               ? "escape\tback a level, inside the app\nfn-b\tmenu bar, by keyboard\n"
+                 "fn-`\tleave fullscreen\nfn-f\twindowed\nfn-h\tclose this\n"
+               : "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nfn-s\tstart menu\nfn-f\tfullscreen / window\nfn-`\tclose window\nfn-w\tclose window\nfn-m\tminimise\nfn-k\tkeyboard mouse\nfn-p\tprint (apps that can)\nescape\tout of a folder or menu\nopt-3\tthe console\nfn-h\tclose this\n");
     return 0;
   }
 
@@ -1048,8 +1048,8 @@ int desktop_key(uint8_t key) {
     }
   }
 
-  /* A fullscreen app has the keyboard as well as the panel. Escape reaches it
-   * first and means "back" if it has anywhere to go back to; fn-` and fn-w
+  /* A fullscreen app has the keyboard as well as the panel. Escape is the
+   * app's and never leaves it, even when the app declines it; fn-` and fn-w
    * bring the desktop back whatever it thinks. */
   if (s_full) {
     if (key == KEY_QUIT) { leave_fullscreen(); return 0; }
@@ -1058,9 +1058,7 @@ int desktop_key(uint8_t key) {
     if (s_full->key && s_full->key(s_full->state, key)) {
       s_full_dirty = 1;
       desktop_flush();
-      return 0;
     }
-    if (key == KEY_ESC) { leave_fullscreen(); return 0; }
     return 0;
   }
 
@@ -1177,18 +1175,18 @@ int desktop_key(uint8_t key) {
    * It used to leave the desktop for the console from anywhere, which made it
    * the one key you could not press while exploring: it did not close the
    * thing in front of you, it threw the whole shell away. Now it works
-   * outwards -- the app first, then the open folder, then the focused window
-   * -- and when there is nothing left to dismiss it does nothing at all.
-   * Leaving the desktop on purpose is opt-3, the same way you got here. */
+   * outwards -- the app first, then the open folder -- and stops there: it
+   * never closes a window and never leaves the desktop. fn-` closes the
+   * window; leaving the desktop on purpose is opt-3, the way you got here. */
   if (key == KEY_ESC) {
     if (s_folder >= 0) {
       s_folder = -1;
       rebuild_desk();
       s_sel_icon = desk_count() ? 0 : -1;
       desktop_repaint();
-      return 0;
     }
-    if (wm_focus() != WIN_NONE) { close_focused(); desktop_repaint(); return 0; }
+    /* A focused window that declined Escape keeps it: closing the window
+     * is fn-` or fn-w, never a key the app was merely not interested in. */
     return 0;
   }
 

@@ -34,8 +34,9 @@ void gauth_forget(void);
 int  gauth_configured(void);
 
 /* When NVS has no credentials but /config/google.txt (client id, secret,
- * refresh token, one per line) does, take the file's. Once at boot, after
- * the card mounts. Returns 1 if it did. */
+ * refresh token, one per line) does, take the file's; when NVS has them and
+ * the card does not, write the file. Once at boot, after the card mounts.
+ * Returns 1 if it restored from the card. */
 int  gauth_restore_from_card(void);
 
 /* A valid access token, refreshing if the cached one has expired or is about

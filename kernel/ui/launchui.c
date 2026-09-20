@@ -300,15 +300,15 @@ static const char *shell_keys(void) {
   char c;
   size_t n;
 
-  if (s_app) return "escape\tback, or leave the app\nfn-b\tmenu bar, by keyboard\n"
-                    "fn-`\tleave the app always\nfn-h\tclose this\n";
+  if (s_app) return "escape\tback a level, inside the app\nfn-b\tmenu bar, by keyboard\n"
+                    "fn-`\tleave the app\nfn-h\tclose this\n";
 
   /* The bindings are listed here rather than on a screen of their own: the
    * key list is where someone looks to find out what opt-p does. */
   snprintf(buf, sizeof buf,
            "arrows\tmove along the row\nenter\topen\nk\tbind opt-letter to this app\n"
            "r\treload the app list\nd\tswitch to the desktop\n"
-           "escape\tup a level, or the console\nfn-h\tclose this\n");
+           "escape\tout of a folder\nfn-`\tout of a folder, or the console\nfn-h\tclose this\n");
   n = strlen(buf);
   for (c = 'a'; c <= 'z' && n < sizeof buf - 40; c++) {
     const char *name = hotkey_get(c);
@@ -646,23 +646,25 @@ int launchui_key(uint8_t key) {
   }
 
   if (s_app) {
-    /* Escape goes to the app first, exactly as it does to a windowed app on
-     * the desktop. It used to leave from here unconditionally, so the same
-     * key closed a dialog in a window and threw the app away fullscreen.
-     * An app that has nothing to go back to declines it and it leaves;
-     * fn-` leaves whatever the app says. */
+    /* Escape belongs to the app and never leaves it. It went through two
+     * versions: leaving unconditionally, so a dialog's Escape threw the app
+     * away; then leaving when the app declined it, which is the same
+     * surprise one level down -- back out of a subview once too often and
+     * the app is gone. fn-` (KEY_QUIT) is the way out, and the only one. */
     if (key == KEY_QUIT) { leave_app(); return 0; }
     if (s_app->key && s_app->key(s_app->state, key)) {
       s_app_dirty = 1;
       flush();
-      return 0;
     }
-    if (key == KEY_ESC) { leave_app(); return 0; }
     return 0;
   }
 
   switch (key) {
   case KEY_ESC:
+    /* Interior only: out of a folder. Never out of the shell. */
+    if (s_folder >= 0) close_folder();
+    return 0;
+  case KEY_QUIT:
     if (s_folder >= 0) { close_folder(); return 0; }
     desktop_set_autostart(0); return 1;     /* to the console */
 

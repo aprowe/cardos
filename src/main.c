@@ -149,6 +149,16 @@ static void cmd_mem(void) {
                (unsigned)(CARDOS_HEAP_BYTES / 1024));
   con_printf("bluetooth        %6u B\n", (unsigned)bthid_heap_cost());
   con_printf("wifi             %6u B\n", (unsigned)wifi_heap_cost());
+  /* The settings store, because when it fills up the next boot erases it
+   * and every credential with it -- which looks like Google forgetting you
+   * for no reason. Entries are 32 bytes; a page holds 126 of them. */
+  {
+    nvs_stats_t st;
+    if (nvs_get_stats(NULL, &st) == ESP_OK)
+      con_printf("nvs              %6u of %u entries used, %u free\n",
+                 (unsigned)st.used_entries, (unsigned)st.total_entries,
+                 (unsigned)st.free_entries);
+  }
 }
 
 static const char *state_name(TaskState st) {
@@ -1012,6 +1022,7 @@ void app_main(void) {
   int64_t last_blink = 0;
   int blink = 0;
   size_t heap_at_boot;
+  const char *nvs_erased = NULL;    /* why, if this boot wiped the settings */
 
   /* Tell the bootloader this image is good, so an OTA-updated CardOS does not
    * roll itself back on the next reset -- see the app launcher spec. Only
@@ -1072,6 +1083,15 @@ void app_main(void) {
   {
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      /* Loudly, and later to the card: this is every credential going at
+       * once, and until it was written down it looked like Google forgetting
+       * the device for no reason, over and over. */
+      con_set_color(COLOR_RED);
+      con_printf("nvs %s: erasing it. wifi, google and settings are gone;\n"
+                 "whatever /config mirrors comes back below.\n",
+                 err == ESP_ERR_NVS_NO_FREE_PAGES ? "is full" : "is another version");
+      con_set_color(COLOR_GREEN);
+      nvs_erased = err == ESP_ERR_NVS_NO_FREE_PAGES ? "no free pages" : "version changed";
       nvs_flash_erase();
       err = nvs_flash_init();
     }
@@ -1123,6 +1143,7 @@ void app_main(void) {
     /* Credentials NVS lost -- a full-table flash wipes it -- come back from
      * their /config mirrors, so a reflash never means retyping a password
      * or repeating the Google consent dance. */
+    if (nvs_erased) applogf("nvs", "erased at boot: %s", nvs_erased);
     if (wifi_restore_from_card())  con_write("wifi: network restored from /config/wifi.txt\n");
     if (gauth_restore_from_card()) con_write("google: credentials restored from /config/google.txt\n");
     fs_space(&total, &freeb);

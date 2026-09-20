@@ -63,7 +63,15 @@ static void mirror_to_card(void) {
 
 int gauth_restore_from_card(void) {
   char lines[3][GAUTH_REFRESH_MAX];
-  if (gauth_configured()) return 0;               /* NVS has it: it wins */
+  if (gauth_configured()) {
+    /* NVS has it: it wins. But a login older than the mirror (2026-09-19)
+     * has no file on the card, and the day NVS goes it is gone for good --
+     * which is how "not configured" kept coming back. Write the mirror now
+     * if it is missing, so every login is covered, not only new ones. */
+    if (conf_read(GOOGLE_CONF, &lines[0][0], 3, GAUTH_REFRESH_MAX) < 3)
+      mirror_to_card();
+    return 0;
+  }
   if (conf_read(GOOGLE_CONF, &lines[0][0], 3, GAUTH_REFRESH_MAX) < 3) return 0;
   if (!lines[0][0] || !lines[1][0] || !lines[2][0]) return 0;
   store(KEY_ID, lines[0]);
