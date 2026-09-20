@@ -8,6 +8,7 @@
 
 #include "driver/i2s_std.h"
 #include "esp_log.h"
+#include "nvs.h"
 
 static const char *TAG = "speaker";
 
@@ -19,7 +20,23 @@ static const char *TAG = "speaker";
 
 static i2s_chan_handle_t s_tx;
 static char s_error[48];
+
+/* Remembered like the brightness: same NVS namespace, read once on the first
+ * ask. 60 is the default because the NS4168 is loud. */
+#define NVS_NS     "cardos"
+#define NVS_VOLUME "volume"
 static int  s_volume = 60;
+static int  s_volume_loaded;
+
+static void load_volume(void) {
+  nvs_handle_t h;
+  uint8_t v;
+  if (s_volume_loaded) return;
+  s_volume_loaded = 1;
+  if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+  if (nvs_get_u8(h, NVS_VOLUME, &v) == ESP_OK && v <= 100) s_volume = v;
+  nvs_close(h);
+}
 
 static void fail(const char *why) {
   snprintf(s_error, sizeof s_error, "%s", why);
@@ -27,8 +44,16 @@ static void fail(const char *why) {
 }
 
 const char *speaker_error(void) { return s_error; }
-void speaker_set_volume(int pct) { s_volume = pct < 0 ? 0 : pct > 100 ? 100 : pct; }
-int  speaker_volume(void) { return s_volume; }
+void speaker_set_volume(int pct) {
+  nvs_handle_t h;
+  load_volume();
+  s_volume = pct < 0 ? 0 : pct > 100 ? 100 : pct;
+  if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_set_u8(h, NVS_VOLUME, (uint8_t)s_volume);
+  nvs_commit(h);
+  nvs_close(h);
+}
+int  speaker_volume(void) { load_volume(); return s_volume; }
 
 /* ---- the file ------------------------------------------------------------ */
 
@@ -130,7 +155,6 @@ int speaker_play_wav(const char *path, int (*stop)(void),
   const char *why = "";
   int fd, n;
   uint32_t left, played = 0;
-  int gain = s_volume * 256 / 100;             /* 8.8 fixed point */
 
   s_error[0] = 0;
   if (speaker_wav_info(path, &w, &why) != 0) { fail(why); return -1; }
@@ -143,6 +167,8 @@ int speaker_play_wav(const char *path, int (*stop)(void),
   while (left > 0) {
     size_t want = left < sizeof block ? (size_t)left : sizeof block, wrote = 0;
     int i;
+    int gain = speaker_volume() * 256 / 100;   /* 8.8; read per block so a
+                                                  change lands mid-playback */
     n = fs_read(fd, block, want);
     if (n <= 0) break;
     for (i = 0; i < n / 2; i++) block[i] = (int16_t)((block[i] * gain) >> 8);

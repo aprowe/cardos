@@ -31,7 +31,8 @@ int  speaker_play_wav(const char *path, int (*stop)(void),
                       void (*progress)(uint32_t bytes));
 const char *speaker_error(void);
 
-/* Volume, 0..100. 60 by default; the NS4168 is loud. */
+/* Volume, 0..100, remembered across reboots. 60 by default; the NS4168 is
+ * loud. Takes effect on the next block, so mid-playback too. */
 void speaker_set_volume(int pct);
 int  speaker_volume(void);
 

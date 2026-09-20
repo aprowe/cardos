@@ -266,8 +266,14 @@ static void paint_strip(CRect c) {
     api->text((short)(s.x + 4), (short)(s.y + 8), q, CLR_REC, CLR_BAR);
     return;
   }
-  api->text((short)(s.x + 4), (short)(s.y + 3), M.status, CLR_BAR_FG, CLR_BAR);
-  api->text((short)(s.x + 4), (short)(s.y + 13), "r record  enter play  d delete", CLR_DIM, CLR_BAR);
+  {
+    char vol[16];
+    if (au->volume()) api->fmt(vol, sizeof vol, "vol %d%%", au->volume());
+    else api->fmt(vol, sizeof vol, "%s", "muted");
+    api->text((short)(s.x + 4), (short)(s.y + 3), M.status, CLR_BAR_FG, CLR_BAR);
+    api->text((short)(s.x + c.w - 4 - 6 * (short)api->str_len(vol)), (short)(s.y + 3), vol, CLR_BAR_FG, CLR_BAR);
+    api->text((short)(s.x + 4), (short)(s.y + 13), "r rec  enter play  d del  < > vol", CLR_DIM, CLR_BAR);
+  }
 }
 
 static void app_paint(void *st, CRect c) {
@@ -351,8 +357,10 @@ static int app_key(void *st, unsigned char k) {
   case CAPP_KEY_ENTER: return do_action(ACT_PLAY);
   case 'd': case 'D':
   case 0x7F:           return do_action(ACT_DELETE);
-  case '+': case '=':  return do_action(ACT_LOUDER);
-  case '-':            return do_action(ACT_QUIETER);
+  case '+': case '=':
+  case CAPP_KEY_RIGHT: return do_action(ACT_LOUDER);
+  case '-':
+  case CAPP_KEY_LEFT:  return do_action(ACT_QUIETER);
   case CAPP_KEY_ESC:
     /* Escape stops whatever is running; with nothing running it declines,
      * which is the top level saying it has nowhere to go back to. */
@@ -453,7 +461,7 @@ const CappInfo capp_info = {
     0x33, 0xCC, 0x1C, 0x38, 0x0F, 0xF0, 0x01, 0x80,
     0x01, 0x80, 0x01, 0x80, 0x07, 0xE0, 0x00, 0x00 },
   "arrows\tmove\nr\trecord, and stop\nenter\tplay, and stop\nd\tdelete\n"
-  "+ -\tvolume\nescape\tstop\n",
+  "left/right\tvolume (also + -; opt-8 / opt-7 anywhere)\nescape\tstop\n",
 };
 
 static CappUi UI;

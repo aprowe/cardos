@@ -17,6 +17,7 @@
 #include "kernel/sys/bg.h"
 #include "kernel/drv/keyboard.h"
 #include "kernel/drv/display.h"
+#include "kernel/drv/speaker.h"
 #include "kernel/app/capprun.h"
 #include "kernel/net/wifi.h"
 
@@ -167,6 +168,18 @@ static void bright_step(SettingsState *st, int dir) {
 
 static void act_bright(SettingsState *st) { bright_step(st, +1); }
 
+#define VOLUME_STEP 10
+
+static void volume_step(SettingsState *st, int dir) {
+  int pct = speaker_volume() + dir * VOLUME_STEP;
+  if (pct > 100) pct = 0;
+  if (pct < 0) pct = 100;
+  speaker_set_volume(pct);
+  snprintf(st->note, sizeof st->note, "%d%%, saved", speaker_volume());
+}
+
+static void act_volume(SettingsState *st) { volume_step(st, +1); }
+
 static void act_reboot(SettingsState *st) {
   (void)st;
   esp_restart();
@@ -193,6 +206,10 @@ static void v_btboot(char *b, size_t n) {
   snprintf(b, n, "%s", bthid_autostart() ? "on" : "off");
 }
 static void v_bright(char *b, size_t n) { snprintf(b, n, "%d%%", display_brightness()); }
+static void v_volume(char *b, size_t n) {
+  if (!speaker_volume()) snprintf(b, n, "%s", "muted");
+  else snprintf(b, n, "%d%%", speaker_volume());
+}
 
 /* One line rather than four. Free heap is the number that decides whether the
  * next radio will start; the rest is what the mem command is for. */
@@ -218,6 +235,8 @@ static const Row ROWS[] = {
   { NULL,        "Radio off",    NULL,     act_radio_off,  0 },
 
   { "Display",   "Brightness",   v_bright, act_bright,     0 },
+
+  { "Sound",     "Volume",       v_volume, act_volume,     0 },
 
   { "System",    "Memory",       v_ram,    NULL,           0 },
   { NULL,        "Forget all",   NULL,     act_forget,     0 },
@@ -426,9 +445,9 @@ static int key_rows(SettingsState *st, uint8_t k) {
     return 1;
   case KEY_LEFT:
   case KEY_RIGHT:
-    if (ROWS[st->sel].action != act_bright) return 0;
-    bright_step(st, k == KEY_RIGHT ? +1 : -1);
-    return 1;
+    if (ROWS[st->sel].action == act_bright) { bright_step(st, k == KEY_RIGHT ? +1 : -1); return 1; }
+    if (ROWS[st->sel].action == act_volume) { volume_step(st, k == KEY_RIGHT ? +1 : -1); return 1; }
+    return 0;
   default: return 0;
   }
 }
@@ -545,7 +564,7 @@ const AppDef *settings_app(void) {
     .mouse = settings_mouse,
     .height = settings_height, .wants_text = settings_wants_text,
     .help = "arrows\tmove the selection\nenter\trun the selected row\n"
-            "left/right\tstep the brightness\n"
+            "left/right\tstep the brightness or volume\n"
             "backspace\tback out of a list\n"
   };
   return &def;

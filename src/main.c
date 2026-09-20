@@ -54,6 +54,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "kernel/drv/bthid.h"
+#include "kernel/drv/speaker.h"
 
 /* Long enough for the lines a tool sends rather than the ones a person types.
  * At 63 a Google client ID -- 72 characters on its own, 81 with the command in
@@ -288,6 +289,11 @@ static void run_builtin(const char *line, char *arg) {
   }
   else if (!strcmp(line, "share")) cmd_share(arg);
   else if (!strcmp(line, "print")) cmd_print(arg);
+  else if (!strcmp(line, "volume")) {
+    if (arg && *arg) speaker_set_volume(atoi(arg));
+    if (speaker_volume()) con_printf("volume %d%%\n", speaker_volume());
+    else con_write("muted\n");
+  }
   else if (!strcmp(line, "env"))  cmd_env();
   else if (!strcmp(line, "set"))  cmd_set(arg);
   else if (!strcmp(line, "hotkey")) cmd_hotkey(arg);
@@ -383,7 +389,7 @@ static const char *const COMMANDS[] = {
   "battery", "defaults", "listen", "mouse", "ps", "pwd", "reboot", "rm",
   "run", "time",
   "safe",
-  "print", "share", "shot", "taskcost", "update", "wifi",
+  "print", "share", "shot", "taskcost", "update", "volume", "wifi",
 };
 #define NCOMMANDS ((int)(sizeof COMMANDS / sizeof COMMANDS[0]))
 
@@ -761,7 +767,7 @@ static int s_opt_help;
 
 static void show_opt_help(void) {
   s_opt_help = 1;
-  help_paint("Shortcuts", "opt-1\tlauncher\nopt-2\tdesktop\nopt-3\tconsole\nopt-0\tbacklight to full\nopt-9\tbacklight down a step\nopt-t\ttodo\nopt-s\tstocks\nopt-e\tedit\nopt-m\tmines\nopt-b\treconnect bluetooth\nopt-w\treconnect wifi\n",
+  help_paint("Shortcuts", "opt-1\tlauncher\nopt-2\tdesktop\nopt-3\tconsole\nopt-0\tbacklight to full\nopt-9\tbacklight down a step\nopt-8\tlouder\nopt-7\tquieter\nopt-t\ttodo\nopt-s\tstocks\nopt-e\tedit\nopt-m\tmines\nopt-b\treconnect bluetooth\nopt-w\treconnect wifi\n",
              "fn-h\tthe keys of whatever is running\nany key\tclose this\n");
 }
 
@@ -859,6 +865,14 @@ static int global_key(uint8_t k) {
     return 1;
   case KEY_OPT_DIGIT(9):
     display_set_brightness(display_brightness() - 25);
+    return 1;
+  /* The speaker, on the next two digits down: opt-8 louder, opt-7 quieter.
+   * Ten percent a step, remembered, and it takes effect mid-playback. */
+  case KEY_OPT_DIGIT(8):
+    speaker_set_volume(speaker_volume() + 10);
+    return 1;
+  case KEY_OPT_DIGIT(7):
+    speaker_set_volume(speaker_volume() - 10);
     return 1;
 
   /* Reconnect the radios. Both, because "get me back to where I was" is one
