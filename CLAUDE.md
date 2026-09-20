@@ -135,6 +135,19 @@ marks nothing gets its whole rectangle exactly as before**, so this cost the
 existing apps nothing; `apps/files.c` shows the pattern, and Mines, Claude and
 Pinball can drop their hand-rolled versions whenever someone is in there.
 
+**Held keys repeat** (2026-09-20). Both keyboards: 400 ms, then every
+60 ms, for letters, digits, punctuation, space, backspace, delete, tab and
+the arrows -- never enter, escape, fn-` or any opt/fn chord. The policy and
+the timer are `kernel/input/keyrepeat.c` (host-tested); the matrix driver
+re-translates the held position on each repeat so a modifier pressed
+mid-hold takes effect, and the Bluetooth decoder, which already repeated,
+now asks the same policy (it used to repeat fn-w). The shell records
+whether the key it is delivering is a repeat (`input_set_repeat`), and two
+things read that: `capprun` drops repeats for an app whose flags include
+`CAPP_NO_REPEAT` (Pinball -- a flicked flipper must not become a held one),
+and `api->key_repeat()` (API 26) answers inside a key handler, which is how
+Todo lets a held arrow keep moving while a held space toggles once.
+
 **There is a printer, and fn-p prints** (2026-09-20). A Bluetooth thermal
 printer (an X6h "cat printer", the TinyPrint one) is driven straight from
 the device: `kernel/drv/btprint.c` is the NimBLE client beside the HID one,
@@ -243,7 +256,7 @@ paint used to clear the active slot for the rest of the tick — so `damage()`
 marks were dropped and the request had no owner. Apps now say "busy" when a
 start is refused instead of returning silently.
 
-**API version 25** (`CAPP_API_VERSION` in `capp.h` is the truth; this
+**API version 26** (`CAPP_API_VERSION` in `capp.h` is the truth; this
 paragraph is history). It moved six times in one day — 11 to 17 — and has
 kept moving since; each move means every `.capp` must be rebuilt, because the
 loader refuses a binary built against a different table. `python
@@ -256,7 +269,7 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25).
+`print`/`print_status` (25), `key_repeat` (26).
 
 **Credentials survive a reflash** (2026-09-19). WiFi and Google credentials
 live in NVS at runtime, and a full-table flash wipes NVS -- one day it cost the

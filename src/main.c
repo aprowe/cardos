@@ -1227,9 +1227,17 @@ void app_main(void) {
     /* A Bluetooth keyboard is the same keyboard as the built-in one from here
      * on: the decoder emits the same byte alphabet, so nothing downstream
      * needs to know which one a key came from. */
-    if (!k) {
-      bthid_tick((uint32_t)(esp_timer_get_time() / 1000));
-      bthid_poll_key(&k);
+    /* Whether this key is a held key repeating, from whichever keyboard it
+     * came; the serial line never repeats. Recorded once here so every app
+     * can ask (api->key_repeat) and capprun can drop it for those that
+     * asked not to be told. */
+    {
+      int repeat = k ? keyboard_last_repeat() : 0;
+      if (!k) {
+        bthid_tick((uint32_t)(esp_timer_get_time() / 1000));
+        if (bthid_poll_key(&k)) repeat = bthid_last_repeat();
+      }
+      input_set_repeat(k ? repeat : 0);
     }
 
     if (!k) {

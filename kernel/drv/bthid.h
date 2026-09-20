@@ -80,6 +80,9 @@ const char *bthid_status(BtHidKind kind);   /* human-readable, one line */
 /* Next report, or 0 if none is waiting. Never blocks. */
 int bthid_poll_mouse(MouseReport *out);
 int bthid_poll_key(uint8_t *out);
+/* Was the key bthid_poll_key just returned an auto-repeat? As
+ * keyboard_last_repeat() for the matrix. */
+int bthid_last_repeat(void);
 
 /* Drives key auto-repeat, which the keyboard does not generate itself. Call
  * once per pass of whatever loop is draining the queues. */

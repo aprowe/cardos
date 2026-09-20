@@ -80,6 +80,11 @@ int keyboard_init(void);
  * Call from the main loop; it debounces by edge, so a held key reports once. */
 uint8_t keyboard_poll(void);
 
+/* Was the key keyboard_poll just returned an auto-repeat rather than a
+ * press? Held keys repeat after 400 ms, every 60 (kernel/input/keyrepeat.h
+ * says which ones); the shell records this so apps can ask. */
+int keyboard_last_repeat(void);
+
 /* Whether a key is held at this moment, sampled for up to settle_ms. For the
  * boot-time question "is someone holding escape", which has no edge to catch:
  * the key went down before the matrix was powered. */

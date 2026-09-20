@@ -7,6 +7,7 @@ idf_component_register(
     "../kernel/drv/bthid.c"
     "../kernel/drv/btprint.c"
     "../kernel/input/kbd_hid.c"
+    "../kernel/input/keyrepeat.c"
     "../kernel/drv/vendor/esp_hid_gap.c"
     "../kernel/console/console.c"
     "../kernel/task/sched.c"

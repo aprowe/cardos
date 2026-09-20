@@ -15,6 +15,8 @@
  */
 
 #include "kernel/drv/keyboard.h"
+#include "kernel/input/keyrepeat.h"
+#include "esp_timer.h"
 
 #include "driver/gpio.h"
 #include "esp_rom_sys.h"   /* esp_rom_delay_us */
@@ -166,69 +168,100 @@ int keyboard_any_down(void) {
   return 0;
 }
 
+/* One matrix position to a key byte, under the modifiers held right now.
+ * 0 when it means nothing (a chord with no meaning, a bare modifier). */
+static uint8_t translate(int x, int y) {
+  char c = s_shift ? KEYMAP_SHIFT[y][x] : KEYMAP[y][x];
+
+  /* The ` key is labelled ESC on the case and is the universal escape,
+   * so it never reaches anyone as a backtick. */
+  if (KEYMAP[y][x] == '`') c = (char)KEY_ESC;
+
+  /* Ctrl plus a letter gives the usual control character, so desktop
+   * chords work identically from this keyboard and from a serial
+   * terminal -- and so ordinary letters stay free for whatever has
+   * focus. */
+  /* Opt first: a global shortcut outranks whatever the key would
+   * otherwise mean, which is the point of having one. */
+  if (s_opt) {
+    char base = KEYMAP[y][x];
+    if (base >= '0' && base <= '9') c = (char)KEY_OPT_DIGIT(base - '0');
+    else if (base >= 'a' && base <= 'z') c = (char)KEY_OPT_LETTER(base);
+    /* opt-backspace leaves the app, the same as fn-`: the two keys sit
+     * on opposite corners and either hand finds one of them. */
+    else if (base == (char)KEY_BACKSPACE) c = (char)KEY_QUIT;
+    else c = 0;
+  }
+  else if (s_ctrl && c >= 'a' && c <= 'z') c = (char)(c - 'a' + 1);
+  else if (s_ctrl && c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 1);
+
+  /* Fn is the window modifier: ; , . / are the arrow cluster, and a
+   * letter is a chord of its own. Like opt's, those get codes above the
+   * ASCII range so they survive being typed inside a text field -- fn-w
+   * has to close a window while an editor is swallowing every letter.
+   * See the convention in keyboard.h. */
+  if (s_fn) {
+    char base = KEYMAP[y][x];
+    switch (base) {
+    case ';': c = (char)KEY_UP;    break;
+    case '.': c = (char)KEY_DOWN;  break;
+    case ',': c = (char)KEY_LEFT;  break;
+    case '/': c = (char)KEY_RIGHT; break;
+    /* The key labelled ESC. Alone it is Escape, which an app may keep
+     * for going back a level; with fn it always leaves. */
+    case '`': c = (char)KEY_QUIT;  break;
+    default:
+      if (base >= 'a' && base <= 'z') c = (char)KEY_FN_LETTER(base);
+      break;
+    }
+  }
+  return (uint8_t)c;
+}
+
+/* Auto-repeat: the last key delivered and when it repeats. The policy and
+ * the schedule are kernel/input/keyrepeat.c, shared with the Bluetooth
+ * keyboard so the two agree. */
+static KeyRepeat s_repeat;
+static int       s_last_repeat;
+
+static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
 uint8_t keyboard_poll(void) {
   uint8_t now[4][14];
   uint8_t out = 0;
   int x, y;
 
   scan(now);
+  s_last_repeat = 0;
 
   for (y = 0; y < 4 && !out; y++) {
     for (x = 0; x < 14; x++) {
+      uint8_t c;
       if (!now[y][x] || s_down[y][x]) continue;    /* only rising edges */
       if (IS_SHIFT(x, y) || IS_CTRL(x, y) || IS_FN(x, y) || IS_OPT(x, y) ||
           IS_ALT(x, y)) continue;                  /* modifiers are not keys */
 
-      {
-        char c = s_shift ? KEYMAP_SHIFT[y][x] : KEYMAP[y][x];
-
-        /* The ` key is labelled ESC on the case and is the universal escape,
-         * so it never reaches anyone as a backtick. */
-        if (KEYMAP[y][x] == '`') c = (char)KEY_ESC;
-
-        /* Ctrl plus a letter gives the usual control character, so desktop
-         * chords work identically from this keyboard and from a serial
-         * terminal -- and so ordinary letters stay free for whatever has
-         * focus. */
-        /* Opt first: a global shortcut outranks whatever the key would
-         * otherwise mean, which is the point of having one. */
-        if (s_opt) {
-          char base = KEYMAP[y][x];
-          if (base >= '0' && base <= '9') c = (char)KEY_OPT_DIGIT(base - '0');
-          else if (base >= 'a' && base <= 'z') c = (char)KEY_OPT_LETTER(base);
-          /* opt-backspace leaves the app, the same as fn-`: the two keys sit
-           * on opposite corners and either hand finds one of them. */
-          else if (base == (char)KEY_BACKSPACE) c = (char)KEY_QUIT;
-          else c = 0;
-        }
-        else if (s_ctrl && c >= 'a' && c <= 'z') c = (char)(c - 'a' + 1);
-        else if (s_ctrl && c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 1);
-
-        /* Fn is the window modifier: ; , . / are the arrow cluster, and a
-         * letter is a chord of its own. Like opt's, those get codes above the
-         * ASCII range so they survive being typed inside a text field -- fn-w
-         * has to close a window while an editor is swallowing every letter.
-         * See the convention in keyboard.h. */
-        if (s_fn) {
-          char base = KEYMAP[y][x];
-          switch (base) {
-          case ';': c = (char)KEY_UP;    break;
-          case '.': c = (char)KEY_DOWN;  break;
-          case ',': c = (char)KEY_LEFT;  break;
-          case '/': c = (char)KEY_RIGHT; break;
-          /* The key labelled ESC. Alone it is Escape, which an app may keep
-           * for going back a level; with fn it always leaves. */
-          case '`': c = (char)KEY_QUIT;  break;
-          default:
-            if (base >= 'a' && base <= 'z') c = (char)KEY_FN_LETTER(base);
-            break;
-          }
-        }
-        /* Taken, whether or not it meant anything: a chord with no meaning
-         * is consumed, not retried every scan for as long as it is held. */
-        s_down[y][x] = 1;
-        if (c) { out = (uint8_t)c; break; }
+      c = translate(x, y);
+      /* Taken, whether or not it meant anything: a chord with no meaning
+       * is consumed, not retried every scan for as long as it is held. */
+      s_down[y][x] = 1;
+      if (c) {
+        keyrepeat_press(&s_repeat, c, x, y, now_ms());
+        out = c;
+        break;
       }
+    }
+  }
+
+  /* Nothing new pressed: is the last key still held long enough to repeat?
+   * It is translated afresh, so shift pressed mid-hold starts repeating the
+   * capital, and a modifier that turns it into a chord stops it. */
+  if (!out && s_repeat.active) {
+    int still = now[s_repeat.y][s_repeat.x];
+    if (keyrepeat_due(&s_repeat, still, now_ms())) {
+      uint8_t c = translate(s_repeat.x, s_repeat.y);
+      if (c && keyrepeat_wanted(c)) { out = c; s_last_repeat = 1; }
+      else keyrepeat_clear(&s_repeat);
     }
   }
 
@@ -246,6 +279,8 @@ uint8_t keyboard_poll(void) {
 
   return out;
 }
+
+int keyboard_last_repeat(void) { return s_last_repeat; }
 
 int keyboard_shift_down(void) { return s_shift; }
 int keyboard_ctrl_down(void)  { return s_ctrl; }

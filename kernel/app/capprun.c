@@ -1,6 +1,7 @@
 /* Running loaded programs. See capprun.h. */
 
 #include "kernel/app/capprun.h"
+#include "kernel/sys/input.h"
 #include "kernel/app/elfload.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/http.h"
@@ -128,6 +129,10 @@ static int tr_key(void *state, uint8_t k) {
   int r, i;
 
   if (IMAGE_GONE(s)) return 0;
+  /* An app that asked for no auto-repeat never sees one. Consumed rather
+   * than declined: a declined key goes on to the shell, and a repeat the
+   * app did not want is not the shell's either. */
+  if ((s->flags & CAPP_NO_REPEAT) && input_is_repeat()) return 1;
   prev = s_active;
   s_active = s;
   for (i = 0; i < (int)s->ui.nactions; i++) {

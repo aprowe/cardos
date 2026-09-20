@@ -96,6 +96,9 @@ static void host_clean(void) {
   for (i = 0; i < sizeof paths / sizeof paths[0]; i++) fake_remove(paths[i]);
 }
 
+static int fake_repeat;
+static int fake_key_repeat(void) { return fake_repeat; }
+
 static CardApi FAKE;
 
 static void use_fake_api(void) {
@@ -112,6 +115,7 @@ static void use_fake_api(void) {
   FAKE.remove = fake_remove;
   FAKE.rename = fake_rename;
   FAKE.log = fake_log;
+  FAKE.key_repeat = fake_key_repeat;
   api = &FAKE;
   memset(&T, 0, sizeof T);
   host_clean();
@@ -948,4 +952,19 @@ void test_todo_page_stops_short_rather_than_overflowing(void) {
   print_page();
   CHECK((int)strlen(fake_printed) < PAGE_MAX);
   CHECK(strstr(fake_printed, "[ ] A task") != NULL);
+}
+
+void test_todo_held_arrow_moves_but_held_space_does_not_toggle(void) {
+  use_fake_api();
+  add_item("a", "One", 0, 0, 0);
+  add_item("b", "Two", 0, 0, 0);
+  T.view = VIEW_LIST;
+  fake_repeat = 1;
+  key_list(CAPP_KEY_DOWN);
+  CHECK_EQ(T.sel, 1);
+  key_list(' ');
+  CHECK_EQ(T.item[1].done, 0);          /* a repeat of space is ignored */
+  fake_repeat = 0;
+  key_list(' ');
+  CHECK_EQ(T.item[1].done, 1);          /* a real press toggles */
 }

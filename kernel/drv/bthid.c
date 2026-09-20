@@ -135,7 +135,9 @@ static volatile uint8_t s_mhead, s_mtail;
 
 #define KRING 32
 static uint8_t s_kring[KRING];
+static uint8_t s_krep[KRING];         /* 1 if that key was an auto-repeat */
 static volatile uint8_t s_khead, s_ktail;
+static int s_last_repeat;
 
 static KbdHid s_kbd;
 
@@ -179,10 +181,11 @@ static void mouse_push(const MouseReport *r) {
  * dropped from the front, because the order is the whole content. A full queue
  * drops the newest, which is the one the user has not seen yet and will notice
  * least. */
-static void key_push(uint8_t c) {
+static void key_push(uint8_t c, int repeat) {
   uint8_t next = (uint8_t)((s_khead + 1) % KRING);
   if (next == s_ktail) return;
   s_kring[s_khead] = c;
+  s_krep[s_khead] = (uint8_t)repeat;
   s_khead = next;
 }
 
@@ -196,13 +199,16 @@ int bthid_poll_mouse(MouseReport *out) {
 int bthid_poll_key(uint8_t *out) {
   if (s_ktail == s_khead) return 0;
   *out = s_kring[s_ktail];
+  s_last_repeat = s_krep[s_ktail];
   s_ktail = (uint8_t)((s_ktail + 1) % KRING);
   return 1;
 }
 
+int bthid_last_repeat(void) { return s_last_repeat; }
+
 void bthid_tick(uint32_t now_ms) {
   uint8_t c;
-  while (kbd_hid_repeat(&s_kbd, now_ms, &c, 1) == 1) key_push(c);
+  while (kbd_hid_repeat(&s_kbd, now_ms, &c, 1) == 1) key_push(c, 1);
 }
 
 /* ---------------------------------------------------------- discovery -- */
@@ -411,7 +417,7 @@ static void dispatch_report(const uint8_t *buf, uint16_t len) {
                            (uint32_t)(esp_timer_get_time() / 1000), out,
                            (int)sizeof out);
     int i;
-    for (i = 0; i < n; i++) key_push(out[i]);
+    for (i = 0; i < n; i++) key_push(out[i], 0);
     return;
   }
   {

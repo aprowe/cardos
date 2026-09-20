@@ -47,4 +47,12 @@ typedef struct {
 
 void input_set_sink(const InputSink *sink);
 
+/* Is the key being delivered right now an auto-repeat of a held key? The
+ * shell sets this before handing each key down and clears it after, so an
+ * app's key handler can ask (api->key_repeat) and treat a held Enter
+ * differently from a held arrow. Keys from voice or the serial line are
+ * never repeats. */
+void input_set_repeat(int repeat);
+int  input_is_repeat(void);
+
 #endif /* CARDOS_INPUT_H */

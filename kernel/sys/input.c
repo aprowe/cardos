@@ -21,6 +21,10 @@ int input_wants_text(void) {
   return s_sink.wants_text ? s_sink.wants_text() : 0;
 }
 
+static int s_repeat;
+void input_set_repeat(int repeat) { s_repeat = repeat; }
+int  input_is_repeat(void) { return s_repeat; }
+
 void input_key(uint8_t k) {
   if (s_sink.key) s_sink.key(k);
 }

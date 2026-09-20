@@ -82,7 +82,10 @@ int kbd_hid_repeat(KbdHid *k, uint32_t now_ms, uint8_t *out, int max_out);
 /* One usage code to a CardOS key byte, or 0 for keys with no character. */
 uint8_t kbd_hid_translate(uint8_t usage, uint8_t mods);
 
-#define KBD_REPEAT_DELAY_MS 400
-#define KBD_REPEAT_RATE_MS  60
+/* The schedule and the policy live in keyrepeat.h, shared with the matrix
+ * keyboard; these names are kept for the tests that use them. */
+#include "kernel/input/keyrepeat.h"
+#define KBD_REPEAT_DELAY_MS KEYREPEAT_DELAY_MS
+#define KBD_REPEAT_RATE_MS  KEYREPEAT_RATE_MS
 
 #endif /* CARDOS_KBD_HID_H */

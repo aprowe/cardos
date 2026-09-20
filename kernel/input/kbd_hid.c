@@ -1,6 +1,7 @@
 /* HID boot-keyboard decoding. See kbd_hid.h. */
 
 #include "kernel/input/kbd_hid.h"
+#include "kernel/input/keyrepeat.h"
 
 /* Usage codes 0x04..0x38, which is every printable key on a boot keyboard, in
  * order. Two tables because shift is not a transformation of ASCII: shift-2 is
@@ -149,9 +150,11 @@ int kbd_hid_decode(KbdHid *k, const uint8_t *report, size_t len,
         /* The most recent press is the one that repeats, which is what every
          * keyboard does and what makes holding a key while another is down
          * behave sensibly. */
-        k->repeat_code = u;
+        /* Only if the shared policy says so: a held fn-w closed windows
+         * for as long as it was held, before both keyboards agreed. */
+        k->repeat_code = keyrepeat_wanted(c) ? u : 0;
         k->repeat_mods = mods;
-        k->repeat_at_ms = now_ms + KBD_REPEAT_DELAY_MS;
+        k->repeat_at_ms = now_ms + KEYREPEAT_DELAY_MS;
       }
     }
   }
@@ -180,9 +183,9 @@ int kbd_hid_repeat(KbdHid *k, uint32_t now_ms, uint8_t *out, int max_out) {
   if ((int32_t)(now_ms - k->repeat_at_ms) < 0) return 0;
 
   c = kbd_hid_translate(k->repeat_code, k->repeat_mods);
-  if (!c) { k->repeat_code = 0; return 0; }
+  if (!c || !keyrepeat_wanted(c)) { k->repeat_code = 0; return 0; }
 
-  k->repeat_at_ms = now_ms + KBD_REPEAT_RATE_MS;
+  k->repeat_at_ms = now_ms + KEYREPEAT_RATE_MS;
   out[0] = c;
   return 1;
 }

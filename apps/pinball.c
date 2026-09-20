@@ -816,7 +816,9 @@ static int app_click(void *st, int16_t x, int16_t y, int button) {
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
-  CAPP_FULLSCREEN,
+  /* No auto-repeat: a flipper flicks on a press, and a held key repeating
+   * sixteen times a second would make it a held flipper by accident. */
+  CAPP_FULLSCREEN | CAPP_NO_REPEAT,
   "Pinball",
   /* 16x16: a ball on a table with two flippers. */
   { 0x0F, 0xF0, 0x30, 0x0C, 0x40, 0x02, 0x47, 0x02,

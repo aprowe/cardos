@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 25
+#define CAPP_API_VERSION 26
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -74,6 +74,7 @@ typedef struct {
  * negotiates. It does not refuse to start an app whose needs are unmet: Web
  * still has its cached page and Claude still has its log. api->caps_ok() says
  * what was actually found, so an app can explain itself in its own words. */
+#define CAPP_NO_REPEAT  0x0010   /* never deliver auto-repeated keys; see key_repeat */
 #define CAPP_NEEDS_NET   0x0004  /* the internet, over WiFi */
 #define CAPP_NEEDS_PROXY 0x0008  /* tools/webproxy.py on a PC; implies NET */
 
@@ -541,6 +542,16 @@ typedef struct {
    * failed: out of paper", or "" if nothing has happened yet. */
   int         (*print)(const char *doc);
   const char *(*print_status)(void);
+
+  /* ---- held keys ----
+   *
+   * A key held for 400 ms repeats every 60 ms, on both keyboards, for
+   * letters, arrows, backspace, delete, space and tab -- never enter,
+   * escape or a chord. Inside a key handler this says whether the key being
+   * delivered is one of those repeats, so an arrow can keep scrolling while
+   * a held space does not keep toggling. An app that wants no repeats at
+   * all sets CAPP_NO_REPEAT in its flags and never sees them. */
+  int (*key_repeat)(void);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

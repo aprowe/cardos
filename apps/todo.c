@@ -1264,6 +1264,9 @@ static int do_action(int a) {
  * list has always answered to. The ctrl chords never reach here -- the shell
  * matches them against the table first. */
 static int key_list(unsigned char k) {
+  /* A held arrow keeps moving; a held space or `d` must not keep toggling
+   * or deleting. Everything below the arrows is a decision, not a step. */
+  if (api->key_repeat() && k != CAPP_KEY_UP && k != CAPP_KEY_DOWN) return 0;
   switch (k) {
   case CAPP_KEY_UP:   if (T.sel > 0) T.sel--; return 1;
   case CAPP_KEY_DOWN: if (T.sel + 1 < T.n) T.sel++; return 1;
@@ -1320,6 +1323,7 @@ static int key_pick(unsigned char k) {
 }
 
 static int key_all(unsigned char k) {
+  if (api->key_repeat() && k != CAPP_KEY_UP && k != CAPP_KEY_DOWN) return 0;
   switch (k) {
   case CAPP_KEY_UP:   if (T.osel > 0) T.osel--; return 1;
   case CAPP_KEY_DOWN: if (T.osel + 1 < T.nover) T.osel++; return 1;
