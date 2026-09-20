@@ -880,3 +880,72 @@ void test_todo_the_app_gets_no_keys_while_the_menu_is_up(void) {
   CHECK_EQ(app_wants_text(0), 0);           /* and voice must not type */
   host_clean();
 }
+
+/* ---- the printed page ---------------------------------------------------- */
+
+static char fake_printed[PAGE_MAX];
+static int fake_print(const char *doc) { snprintf(fake_printed, sizeof fake_printed, "%s", doc); return 0; }
+static void fake_now(CappTime *t) { memset(t, 0, sizeof *t); t->synced = 2; t->year = 2026; t->month = 9; t->day = 20; t->hour = 10; t->min = 5; }
+static const char *fake_print_status(void) { return "printed"; }
+
+void test_todo_prints_open_tasks_as_boxes_and_done_ones_ticked(void) {
+  use_fake_api();
+  FAKE.print = fake_print;
+  FAKE.now = fake_now;
+  FAKE.print_status = fake_print_status;
+  T.nlists = 1; T.cur = 0;
+  snprintf(T.lists[0].name, sizeof T.lists[0].name, "%s", "Groceries");
+  add_item("a", "Milk", 0, 0, 0);
+  add_item("b", "Eggs", 1, 0, 0);
+  add_item("c", "Gone", 0, 0, 1);
+  add_item("d", "Bread", 0, 0, 0);
+  T.view = VIEW_LIST;
+  print_page();
+  CHECK(!strcmp(fake_printed,
+    "# Groceries\n[ ] Milk\n[ ] Bread\n---\n[x] Eggs\n---\nprinted 20 Sep 10:05\n"));
+  CHECK_EQ(T.printing, 1);
+  CHECK(!strcmp(T.status, "printing..."));
+}
+
+void test_todo_prints_the_overview_with_a_heading_per_list(void) {
+  use_fake_api();
+  FAKE.print = fake_print;
+  FAKE.now = fake_now;
+  T.nlists = 2;
+  snprintf(T.lists[0].name, sizeof T.lists[0].name, "%s", "Home");
+  snprintf(T.lists[1].name, sizeof T.lists[1].name, "%s", "Work");
+  T.nover = 3;
+  snprintf(T.over[0].title, sizeof T.over[0].title, "%s", "Bins"); T.over[0].list = 0; T.over[0].head = 1;
+  snprintf(T.over[1].title, sizeof T.over[1].title, "%s", "Report"); T.over[1].list = 1; T.over[1].head = 1;
+  snprintf(T.over[2].title, sizeof T.over[2].title, "%s", "Slides"); T.over[2].list = 1; T.over[2].head = 0;
+  T.view = VIEW_ALL;
+  print_page();
+  CHECK(!strcmp(fake_printed,
+    "# All lists\n## Home\n[ ] Bins\n## Work\n[ ] Report\n[ ] Slides\n---\nprinted 20 Sep 10:05\n"));
+}
+
+static int fake_print_busy(const char *doc) { (void)doc; return -1; }
+
+void test_todo_says_so_when_the_printer_is_busy_or_missing(void) {
+  use_fake_api();
+  FAKE.print = fake_print_busy;
+  FAKE.now = fake_now;
+  T.view = VIEW_LIST;
+  print_page();
+  CHECK_EQ(T.printing, 0);
+  CHECK(strstr(T.status, "still printing") != NULL);
+}
+
+void test_todo_page_stops_short_rather_than_overflowing(void) {
+  int i;
+  use_fake_api();
+  FAKE.print = fake_print;
+  FAKE.now = fake_now;
+  T.nlists = 1; T.cur = 0;
+  for (i = 0; i < MAX_ITEMS; i++)
+    add_item("x", "A task title that is as long as the app allows", 0, 0, 0);
+  T.view = VIEW_LIST;
+  print_page();
+  CHECK((int)strlen(fake_printed) < PAGE_MAX);
+  CHECK(strstr(fake_printed, "[ ] A task") != NULL);
+}

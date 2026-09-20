@@ -58,6 +58,12 @@ void bthid_set_autostart(int on);
 void bthid_stop(BtHidKind kind);
 void bthid_stop_all(void);
 
+/* Bring the radio up if it is not: NimBLE, the host task, the bond store.
+ * Shared with the printer client (btprint.c), which is the other thing that
+ * opens a link. Returns 0 when the stack is synced, -1 when the heap will
+ * not take it. */
+int bt_radio_up(void);
+
 /* Is the Bluetooth radio up? Distinct from "nothing is connected": a link
  * that was never claimed reads as BTH_OFF, so this is what says whether
  * reconnecting is even possible. */

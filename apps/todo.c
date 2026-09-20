@@ -96,6 +96,7 @@ enum { SYNC_IDLE = 0, SYNC_LIST, SYNC_PUSH, SYNC_PULL, SYNC_SWEEP };
  * over -- and this array is charged to an app that already holds forty items
  * and a six-kilobyte reply. What does not fit says so on the last line. */
 #define OVER_MAX   48
+#define PAGE_MAX   3072   /* 40 tasks or 48 overview rows, with headings */
 
 /* When a sync could not even be attempted -- no radio yet, no token yet --
  * try again soon rather than in ten minutes. Opening the app during the few
@@ -170,6 +171,12 @@ static struct {
 
   char reply[REPLY_MAX];
   int shown_top, shown_rows;  /* what the last paint put on screen */
+
+  /* Paper. The page is built here rather than in reply[] because a sync may
+   * be filling that at the same moment; printing copies it at once, so it
+   * is only busy for the length of one call. */
+  char page[PAGE_MAX];
+  int  printing;              /* mirror the job's status into the strip */
 } T;
 
 static CRect rect(int x, int y, int w, int h) {
@@ -1053,7 +1060,7 @@ static void paint_add(CRect c) {
  * chords are safe to claim: the desktop used to take ctrl-S for its Start
  * menu, which is why an editor's save did nothing in a window. */
 enum { ACT_ADD = 1, ACT_TICK, ACT_DELETE, ACT_SYNC, ACT_LISTS, ACT_ALL,
-       ACT_SAVE, ACT_CANCEL, ACT_OPEN, ACT_GOTO };
+       ACT_SAVE, ACT_CANCEL, ACT_OPEN, ACT_GOTO, ACT_PRINT };
 
 static const CappAction LIST_ACTIONS[] = {
   { "add",    "Add",      "Task", 0x01, ACT_ADD },     /* ctrl-a */
@@ -1062,11 +1069,13 @@ static const CappAction LIST_ACTIONS[] = {
   { "sync",   "Sync now", "List", 0x13, ACT_SYNC },    /* ctrl-s */
   { "lists",  "Lists...", "List", 0x0C, ACT_LISTS },   /* ctrl-l */
   { "all",    "All lists", "List", 0x0F, ACT_ALL },   /* ctrl-o */
+  { "print",  "Print",    "List", CAPP_KEY_PRINT, ACT_PRINT },  /* fn-p */
 };
 
 /* The overview. Reading, and a way into the list a row belongs to. */
 static const CappAction ALL_ACTIONS[] = {
   { "goto",   "Open list", "All", 0, ACT_GOTO },
+  { "print",  "Print",     "All", CAPP_KEY_PRINT, ACT_PRINT },  /* fn-p */
   { "cancel", "Back",      "All", 0, ACT_CANCEL },
 };
 
@@ -1095,6 +1104,76 @@ static void use_pick_menus(void) { toolbar_set(PICK_ACTIONS, NPICK, 0, 0); }
 static void use_all_menus(void)  { toolbar_set(ALL_ACTIONS, NALL, 0, 0); }
 
 static int do_action(int a);
+
+/* ---- paper --------------------------------------------------------------- */
+
+/* One line onto the page: a prefix ("# ", "[ ] ", "") and the text. Refuses
+ * quietly at the end, so a page that stops short is still a page. */
+static int page_line(int at, const char *prefix, const char *text) {
+  int n;
+  if (at >= PAGE_MAX - 1) return at;
+  n = api->fmt(T.page + at, (size_t)(PAGE_MAX - at), "%s%s\n", prefix, text);
+  if (n < 0) return at;
+  if (at + n > PAGE_MAX - 1) { T.page[at] = 0; return at; }
+  return at + n;
+}
+
+static int page_footer(int at) {
+  CappTime t;
+  char when[32];
+  static const char *const MON[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+  api->now(&t);
+  if (t.synced && t.month >= 1 && t.month <= 12)
+    api->fmt(when, sizeof when, "%d %s %02d:%02d", t.day, MON[t.month - 1], t.hour, t.min);
+  else
+    api->fmt(when, sizeof when, "%s", "undated");
+  at = page_line(at, "---", "");
+  at = page_line(at, "printed ", when);
+  return at;
+}
+
+/* The list on screen: open tasks as boxes to tick on paper, then the done
+ * ones under a rule, ticked -- they are part of the list's story, and paper
+ * has no grey to fade them into. */
+static void page_list(void) {
+  int i, at = 0, done = 0;
+  at = page_line(at, "# ", T.cur >= 0 ? T.lists[T.cur].name : "Todo");
+  for (i = 0; i < T.n; i++) {
+    if (T.item[i].deleted || T.item[i].done) { done += T.item[i].done; continue; }
+    at = page_line(at, "[ ] ", T.item[i].title);
+  }
+  if (done) {
+    at = page_line(at, "---", "");
+    for (i = 0; i < T.n; i++)
+      if (T.item[i].done && !T.item[i].deleted)
+        at = page_line(at, "[x] ", T.item[i].title);
+  }
+  page_footer(at);
+}
+
+/* Every list's open tasks under its own heading, as the overview shows. */
+static void page_all(void) {
+  int i, at = 0;
+  at = page_line(at, "# ", "All lists");
+  for (i = 0; i < T.nover; i++) {
+    if (T.over[i].head)
+      at = page_line(at, "## ", T.lists[T.over[i].list].name);
+    at = page_line(at, "[ ] ", T.over[i].title);
+  }
+  if (T.over_full) at = page_line(at, "...", "");
+  page_footer(at);
+}
+
+static void print_page(void) {
+  int rc;
+  if (T.view == VIEW_ALL) page_all(); else page_list();
+  rc = api->print(T.page);
+  if (rc == 0)       { T.printing = 1; say("printing..."); }
+  else if (rc == -1) say("still printing the last one");
+  else if (rc == -2) say("no printer: print scan in the console");
+  else               say("could not print: no memory");
+}
 
 static void app_paint(void *st, CRect c) {
   char bar[64];
@@ -1168,6 +1247,7 @@ static int do_action(int a) {
     T.view = VIEW_LIST;
     use_list_menus();
     return 1;
+  case ACT_PRINT:  print_page(); return 1;
   case ACT_SAVE:
     add_draft();                       /* returns to the list itself */
     use_list_menus();
@@ -1195,6 +1275,7 @@ static int key_list(unsigned char k) {
   case 's': case 'S': return do_action(ACT_SYNC);
   case 'l': case 'L': return do_action(ACT_LISTS);
   case 'o': case 'O': return do_action(ACT_ALL);
+  case 'p': case 'P': return do_action(ACT_PRINT);
   case 'd': case 'D':
   case 0x7F:          return do_action(ACT_DELETE);
   default: return 0;
@@ -1247,6 +1328,7 @@ static int key_all(unsigned char k) {
   case CAPP_KEY_BACK:
   case 'o': case 'O':  return do_action(ACT_CANCEL);
   case 's': case 'S':  return do_action(ACT_SYNC);
+  case 'p': case 'P':  return do_action(ACT_PRINT);
   default: return 0;
   }
 }
@@ -1368,6 +1450,15 @@ static int app_tick(void *st, uint32_t now_ms) {
   sync_tick();
   toolbar_busy(T.stage != SYNC_IDLE);
 
+  /* While a page is printing its progress is the strip; the last word --
+   * "printed", or why not -- stays until the next sync writes over it. */
+  if (T.printing) {
+    const char *ps = api->print_status();
+    say(ps);
+    if (!(ps[0] == 's' || ps[0] == 'c' || (ps[0] == 'p' && ps[5] == 'i')))
+      T.printing = 0;                 /* not starting/connecting/printing */
+  }
+
   /* One sweep, at open. Everything the app is going to fetch, it fetches
    * now: the lists, the list on screen, then the rest into their files. What
    * used to happen instead was a pull of the current list every ten minutes,
@@ -1420,7 +1511,7 @@ const CappInfo capp_info = {
     0x30, 0x6C, 0x3F, 0xFC, 0x00, 0x00, 0x00, 0x00 },
   "arrows\tmove\nenter\ttick it off\na\tadd a task\nd\tdelete / undo\n"
   "s\tsync every list\nleft/right\tnext list\nl\tchoose a list\n"
-  "o\tall lists at once\nescape\tback, then out\n",
+  "o\tall lists at once\np\tprint it\nescape\tback, then out\n",
 };
 
 static CappUi UI;

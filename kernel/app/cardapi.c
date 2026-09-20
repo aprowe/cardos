@@ -15,6 +15,7 @@
 #include "kernel/net/gauth.h"
 #include "kernel/net/update.h"
 #include "kernel/net/share.h"
+#include "kernel/sys/printq.h"
 #include "kernel/sys/sio.h"
 #include "kernel/app/capprun.h"
 #include "kernel/sys/applog.h"
@@ -346,6 +347,8 @@ static const char *api_share_status(void) {
   return share_running() ? share_url() : share_error();
 }
 static const char *api_share_take_log(void) { return share_take_log(); }
+static int api_print(const char *doc) { return printq_print_doc(doc); }
+static const char *api_print_status(void) { return printq_status(); }
 
 static const CardApi API = {
   CAPP_API_VERSION,
@@ -368,6 +371,7 @@ static const CardApi API = {
   api_http_start, api_http_poll,
   api_agent,
   api_share_start, api_share_stop, api_share_status, api_share_take_log,
+  api_print, api_print_status,
 };
 
 const CardApi *cardos_api(void) { return &API; }

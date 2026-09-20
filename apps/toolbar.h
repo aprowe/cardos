@@ -200,10 +200,12 @@ static const CappAction *tb_menu_item(int m, int want) {
   return 0;
 }
 
-/* "Save  ^s" -- the label, and the chord it answers to. */
+/* "Save  ^s", "Print  fn-p" -- the label, and the chord it answers to. */
 static void tb_item_text(const CappAction *a, char *out, int n) {
   if (a->key >= 1 && a->key <= 26)
     TB.api->fmt(out, (size_t)n, "%s  ^%c", a->label, 'a' + a->key - 1);
+  else if (a->key >= 0xE0 && a->key <= 0xF9)
+    TB.api->fmt(out, (size_t)n, "%s  fn-%c", a->label, 'a' + a->key - 0xE0);
   else
     TB.api->fmt(out, (size_t)n, "%s", a->label);
 }

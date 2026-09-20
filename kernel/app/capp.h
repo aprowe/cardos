@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 24
+#define CAPP_API_VERSION 25
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -175,6 +175,13 @@ typedef struct {
  * of them, and it survives being typed into a text field for the same reason
  * fn-w does. */
 #define CAPP_KEY_MENU  0xE1
+
+/* fn-p: print. Paper is a window operation like the rest of fn, so every app
+ * that can print answers to the same chord. An app opts in by giving an
+ * action this key in its CappAction table -- the shell hands the chord to
+ * the app, the table matches it, and the menu and the help panel show it as
+ * "fn-p". See `print` below. */
+#define CAPP_KEY_PRINT 0xEF
 
 /* File open flags, matching the kernel's. */
 /* http_poll while the request is still running. */
@@ -521,6 +528,19 @@ typedef struct {
   void        (*share_stop)(void);
   const char *(*share_status)(void);
   const char *(*share_take_log)(void);
+
+  /* ---- paper ----
+   *
+   * A Bluetooth thermal printer (the "cat printer" family; see
+   * kernel/sys/printdoc.h). `print` takes a small markdown-shaped text --
+   * `# heading`, `## subheading`, `[ ] task`, `[x] done`, `---`, plain
+   * lines -- and prints it on a task of its own; the call returns at once.
+   * 0 started, -1 a job is already printing, -2 no printer has been set up
+   * (`print scan` in the console), -3 no memory. print_status is one line
+   * for a status strip: "connecting", "printing 40%", "printed", "print
+   * failed: out of paper", or "" if nothing has happened yet. */
+  int         (*print)(const char *doc);
+  const char *(*print_status)(void);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

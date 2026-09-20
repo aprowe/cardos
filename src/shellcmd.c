@@ -21,6 +21,7 @@
 #include "kernel/net/gauth.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "kernel/app/appimage.h"
@@ -32,6 +33,9 @@
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
 #include "kernel/drv/bthid.h"
+#include "kernel/drv/btprint.h"
+#include "kernel/sys/printq.h"
+#include "kernel/sys/printdoc.h"
 #include "kernel/fs/path.h"
 
 static char s_cwd[FS_PATH_MAX] = "/";
@@ -721,4 +725,93 @@ void cmd_google(const char *arg) {
 
   con_printf("stored, %s\n",
              gauth_configured() ? "all three present" : "waiting for the rest");
+}
+
+/* ---------------------------------------------------------------- print -- */
+
+static void print_show_status(void) {
+  uint8_t addr[6], type;
+  char name[24];
+  if (printq_printer(addr, &type, name, sizeof name) == 0) {
+    char a[20];
+    btprint_format_addr(addr, a, sizeof a);
+    con_printf("printer: %s %s\n", a, name);
+  } else {
+    con_write("no printer set: print scan, then print use N\n");
+  }
+  if (*printq_status()) con_printf("%s\n", printq_status());
+}
+
+/* One text file, as the document it is: the markup is line-oriented and
+ * markdown-shaped, so a note prints as written. 6 KB is a long receipt. */
+static void print_file(const char *path) {
+  char full[FS_PATH_MAX];
+  char *text;
+  int fd, got, rc;
+  if (resolve(path, full) != 0) return;
+  fd = fs_open(full, FS_O_READ);
+  if (fd < 0) { con_printf("print: no such file %s\n", full); return; }
+  text = malloc(6 * 1024);
+  if (!text) { fs_close(fd); con_write("print: no memory\n"); return; }
+  got = fs_read(fd, text, 6 * 1024 - 1);
+  fs_close(fd);
+  if (got < 0) got = 0;
+  text[got] = 0;
+  rc = printq_print_doc(text);
+  free(text);
+  if (rc == 0) con_printf("printing %s (%d bytes)\n", full, got);
+  else if (rc == -1) con_write("print: a job is already printing\n");
+  else if (rc == -2) con_write("print: no printer set: print scan, then print use N\n");
+  else con_write("print: no memory\n");
+}
+
+/* print          -- which printer, and what the last job did
+ * print scan     -- look for printers for a few seconds
+ * print use N    -- remember the Nth one from the scan
+ * print forget   -- forget it
+ * print test     -- a short page that exercises every style
+ * print FILE     -- print a text file */
+void cmd_print(const char *arg) {
+  if (!arg || !*arg) { print_show_status(); return; }
+
+  if (!strcmp(arg, "scan")) {
+    int n, i;
+    con_write("looking for printers (8s)...\n");
+    n = btprint_scan(8);
+    if (n < 0) { con_write("bluetooth would not start\n"); return; }
+    if (n == 0) { con_write("none found. is it on?\n"); return; }
+    for (i = 0; i < n; i++) {
+      const BtPrintSeen *p = btprint_scan_result(i);
+      char a[20];
+      btprint_format_addr(p->addr, a, sizeof a);
+      con_printf("  %d  %s  rssi %d  %s\n", i + 1, a, p->rssi,
+                 p->name[0] ? p->name : "(no name)");
+    }
+    con_write("print use N to pick one\n");
+    return;
+  }
+  if (!strncmp(arg, "use", 3)) {
+    int n = atoi(arg + 3);
+    const BtPrintSeen *p = btprint_scan_result(n - 1);
+    if (!p) { con_write("print use N, where N is from print scan\n"); return; }
+    if (printq_set_printer(p->addr, p->addr_type, p->name) != 0) {
+      con_write("could not write " PRINTQ_CONFIG "\n");
+      return;
+    }
+    print_show_status();
+    return;
+  }
+  if (!strcmp(arg, "forget")) { printq_forget_printer(); con_write("forgotten\n"); return; }
+  if (!strcmp(arg, "test")) {
+    int rc = printq_print_doc(
+      "# CardOS\n## a test page\n[ ] an open task\n[x] a finished one\n"
+      "---\nPlain text wraps at the margin when the line runs long enough to need it.\n"
+      "\nthe end\n");
+    if (rc == 0) con_write("printing a test page\n");
+    else if (rc == -1) con_write("a job is already printing\n");
+    else if (rc == -2) con_write("no printer set: print scan, then print use N\n");
+    else con_write("no memory\n");
+    return;
+  }
+  print_file(arg);
 }

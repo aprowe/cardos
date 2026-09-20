@@ -1033,7 +1033,7 @@ int desktop_key(uint8_t key) {
                s_full
                ? "escape\tback, or leave fullscreen\nfn-b\tmenu bar, by keyboard\n"
                  "fn-`\tleave fullscreen always\nfn-f\twindowed\nfn-h\tclose this\n"
-               : "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nfn-s\tstart menu\nfn-f\tfullscreen / window\nfn-w\tclose window\nfn-m\tminimise\nfn-p\tkeyboard mouse\nescape\tthe console\nfn-h\tclose this\n");
+               : "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nfn-s\tstart menu\nfn-f\tfullscreen / window\nfn-w\tclose window\nfn-m\tminimise\nfn-k\tkeyboard mouse\nfn-p\tprint (apps that can)\nescape\tthe console\nfn-h\tclose this\n");
     return 0;
   }
 
@@ -1198,7 +1198,7 @@ int desktop_key(uint8_t key) {
    * frame around it answers to fn. See kernel/drv/keyboard.h. */
   switch (key) {
   case KEY_QUIT: close_focused(); desktop_repaint(); return 0;
-  case KEY_FN_LETTER('p'): desktop_set_kbd_mouse(!s_kbd_mouse); return 0;
+  case KEY_FN_LETTER('k'): desktop_set_kbd_mouse(!s_kbd_mouse); return 0;   /* fn-p is print, in apps */
   case KEY_FN_LETTER('s'): s_start_open = 1; s_start_sel = 0; menu_touch();
                            desktop_flush(); return 0;
   case KEY_FN_LETTER('w'): close_focused(); desktop_repaint(); return 0;

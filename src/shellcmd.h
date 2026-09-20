@@ -35,6 +35,13 @@ void cmd_update(const char *arg);
  * share log    -- what has been asked for since last time */
 void cmd_share(const char *arg);
 
+/* print          -- which printer, and what the last job did
+ * print scan     -- look for printers
+ * print use N    -- remember the Nth one from the scan
+ * print test     -- a page that exercises every style
+ * print FILE     -- print a text file */
+void cmd_print(const char *arg);
+
 /* run          -- what there is to run
  * run NAME     -- start it fullscreen; escape returns to the launcher */
 void cmd_run(const char *arg);

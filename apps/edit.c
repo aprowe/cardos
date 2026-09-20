@@ -92,6 +92,11 @@ static struct {
   NameFor name_for;
   char    name[40];
   int     name_len;
+
+  /* paper: the buffer joined with newlines, and whether the strip is
+   * showing the job's progress */
+  char page[MAXLINES * (MAXCOL + 1) + 1];
+  int  printing;
 } E;
 
 static CRect rect(int x, int y, int w, int h) {
@@ -703,7 +708,7 @@ static void paint_name(CRect c) {
 
 /* What this editor can be asked to do. Keys map onto these and so do menu
  * items; see apps/toolbar.h for why a menu item is never a keystroke. */
-enum { ACT_NEW = 1, ACT_SAVE, ACT_SAVEAS, ACT_OPEN, ACT_PREVIEW };
+enum { ACT_NEW = 1, ACT_SAVE, ACT_SAVEAS, ACT_OPEN, ACT_PREVIEW, ACT_PRINT };
 
 static const CappAction EDIT_ACTIONS[] = {
   { "new",     "New",     "File", 0x0E, ACT_NEW },      /* ctrl-n */
@@ -711,10 +716,31 @@ static const CappAction EDIT_ACTIONS[] = {
   { "saveas",  "Save as", "File", 0x12, ACT_SAVEAS },   /* ctrl-r */
   { "close",   "Close",   "File", 0x0F, ACT_OPEN },     /* ctrl-o */
   { "preview", "Preview", "View", 0x10, ACT_PREVIEW },  /* ctrl-p */
+  { "print",   "Print",   "File", CAPP_KEY_PRINT, ACT_PRINT },  /* fn-p */
 };
 static const TbIcon EDIT_ICONS[] = { { "S", ACT_SAVE } };
 
 #define NEDIT ((int)(sizeof EDIT_ACTIONS / sizeof EDIT_ACTIONS[0]))
+
+/* The buffer, as the printer's markup: it is markdown-shaped already, so a
+ * note with `# headings` and `[ ] tasks` prints as the preview shows it.
+ * Joined here rather than sent line by line because print() copies once. */
+static void print_buffer(void) {
+  int i, at = 0, rc;
+  for (i = 0; i < E.nlines; i++) {
+    int n = E.len[i];
+    if (at + n + 1 >= (int)sizeof E.page) break;
+    api->mem_cpy(E.page + at, E.line[i], (size_t)n);
+    at += n;
+    E.page[at++] = 10;
+  }
+  E.page[at] = 0;
+  rc = api->print(E.page);
+  if (rc == 0)       { E.printing = 1; say("printing..."); }
+  else if (rc == -1) say("still printing the last one");
+  else if (rc == -2) say("no printer: print scan in the console");
+  else               say("could not print: no memory");
+}
 
 static int do_action(int a) {
   switch (a) {
@@ -723,8 +749,27 @@ static int do_action(int a) {
   case ACT_SAVEAS:  begin_name(NAME_SAVE_AS, E.path[0] ? E.path : "untitled.txt"); return 1;
   case ACT_OPEN:    E.view = VIEW_BROWSE; rescan(); return 1;
   case ACT_PREVIEW: E.view = VIEW_PREVIEW; E.ptop = 0; return 1;
+  case ACT_PRINT:   print_buffer(); return 1;
   default: return 0;
   }
+}
+
+/* Only while a page is printing: its progress is the strip, and the last
+ * word -- "printed", or why not -- stays until something else is said. */
+static int app_tick(void *st, uint32_t now_ms) {
+  const char *ps;
+  (void)st; (void)now_ms;
+  if (!E.printing) return 0;
+  ps = api->print_status();
+  if (!(ps[0] == 's' || ps[0] == 'c' || (ps[0] == 'p' && ps[5] == 'i')))
+    E.printing = 0;                   /* not starting/connecting/printing */
+  {
+    const char *a = ps, *b = E.status;
+    while (*a && *a == *b) { a++; b++; }
+    if (!*a && !*b) return 0;         /* the strip already says this */
+  }
+  say(ps);
+  return 1;
 }
 
 static void app_paint(void *st, CRect c) {
@@ -953,7 +998,7 @@ const CappInfo capp_info = {
     0x10, 0x12, 0x10, 0x1F, 0x13, 0xC1, 0x10, 0x01,
     0x13, 0xE1, 0x10, 0x01, 0x13, 0xC1, 0x10, 0x01,
     0x11, 0xE1, 0x10, 0x01, 0x1F, 0xFF, 0x00, 0x00 },
-  "arrows\tmove\nenter\topen, or split the line\nbackspace\tup a folder, or delete\nn\tnew file\nctrl-n\tnew file\nctrl-s\tsave\nctrl-r\tsave as\nctrl-p\tmarkdown preview\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n",
+  "arrows\tmove\nenter\topen, or split the line\nbackspace\tup a folder, or delete\nn\tnew file\nctrl-n\tnew file\nctrl-s\tsave\nctrl-r\tsave as\nctrl-p\tmarkdown preview\nfn-p\tprint\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n",
 };
 
 /* Static, not a local: the shell keeps calling into this long after
@@ -995,6 +1040,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   toolbar_init(api, EDIT_ACTIONS, NEDIT, EDIT_ICONS, 1);
 
   UI.paint = app_paint;
+  UI.tick = app_tick;
   UI.key = app_key;
   UI.click = app_click;
   UI.mouse = app_mouse;

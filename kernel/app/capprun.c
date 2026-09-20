@@ -281,9 +281,13 @@ void capprun_install_ui(const CappUi *ui) {
     for (i = 0; i < (int)ui->nactions && n < sizeof s->help - 1; i++) {
       const CappAction *a = &ui->actions[i];
       int w;
-      if (!a->key || a->key < 1 || a->key > 26) continue;    /* menu-only */
-      w = snprintf(s->help + n, sizeof s->help - n, "ctrl-%c\t%s\n",
-                   'a' + a->key - 1, a->label);
+      if (a->key >= 1 && a->key <= 26)
+        w = snprintf(s->help + n, sizeof s->help - n, "ctrl-%c\t%s\n",
+                     'a' + a->key - 1, a->label);
+      else if (a->key >= 0xE0 && a->key <= 0xF9)         /* fn-p: print */
+        w = snprintf(s->help + n, sizeof s->help - n, "fn-%c\t%s\n",
+                     'a' + a->key - 0xE0, a->label);
+      else continue;                                          /* menu-only */
       /* snprintf says how long the line would have been, not how much it
        * wrote; a label that did not fit is dropped whole rather than
        * counted, so n never runs past the buffer into the icon. */

@@ -520,7 +520,7 @@ static void nimble_host_task(void *param) {
  * as a link that never completes rather than as an error. */
 #define BT_MIN_HEAP (80 * 1024)
 
-static int radio_up(void) {
+int bt_radio_up(void) {
   size_t heap_before = esp_get_free_heap_size();
 
   if (s_inited) return 0;
@@ -594,7 +594,7 @@ int bthid_start(int scan_seconds, BtHidKind want) {
   l = link_for_kind(want);
   if (l && l->state == BTH_CONNECTED) return 0;
 
-  if (radio_up() != 0) {
+  if (bt_radio_up() != 0) {
     l = link_claim(want);
     if (l) {
       l->state = BTH_FAILED;
@@ -694,7 +694,7 @@ void bthid_scan_dump(int scan_seconds, void (*say)(const char *line)) {
   int n = 0;
 
   if (!say) return;
-  if (radio_up() != 0) { say("bluetooth is off"); return; }
+  if (bt_radio_up() != 0) { say("bluetooth is off"); return; }
 
   say("scanning...");
   if (esp_hid_scan((uint32_t)scan_seconds, &count, &results) != ESP_OK) {
@@ -728,7 +728,7 @@ int bthid_autoconnect(int scan_seconds) {
   size_t count = 0;
   int opened = 0;
 
-  if (radio_up() != 0) return 0;
+  if (bt_radio_up() != 0) return 0;
   if (esp_hid_scan((uint32_t)scan_seconds, &count, &results) != ESP_OK) return 0;
 
   for (r = results; r && opened < MAX_LINKS; r = r->next) {

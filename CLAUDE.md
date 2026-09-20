@@ -135,6 +135,23 @@ marks nothing gets its whole rectangle exactly as before**, so this cost the
 existing apps nothing; `apps/files.c` shows the pattern, and Mines, Claude and
 Pinball can drop their hand-rolled versions whenever someone is in there.
 
+**There is a printer, and fn-p prints** (2026-09-20). A Bluetooth thermal
+printer (an X6h "cat printer", the TinyPrint one) is driven straight from
+the device: `kernel/drv/btprint.c` is the NimBLE client beside the HID one,
+`kernel/sys/printdoc.c` is the wire format and a renderer for a tiny
+markdown-shaped markup (`# heading`, `[ ] task`, `---`, text; nothing under
+2x of the 6x8 font, since 1x is unreadable on paper), and
+`kernel/sys/printq.c` runs one job at a time on its own task. `api->print(doc)`
+and `api->print_status()` are API 25. **fn-p is the print chord in every app
+that can**: an action with key `CAPP_KEY_PRINT` in the table is all it takes,
+and the menu and help show it. Todo and Edit print; the console has `print
+scan`, `print use N`, `print test`, `print FILE`. The printer's address is in
+`/config/printer.txt`. The desktop's keyboard-mouse toggle moved to fn-k. The
+job takes a row source, so a pre-rendered bitmap is the next step, not a
+rewrite. Design and the measured numbers in
+`docs/specs/2026-09-20-print-design.md`; the protocol notes and the PC probe
+that verified it are in `~/Projects/printer`.
+
 **The toolbar is a keyboard menu too** (2026-09-18). `fn-b` shows the bar and
 puts the keyboard in it: left/right walk the menu names, down opens one,
 up/down walk its items, Enter runs the highlighted one as an action, Escape
@@ -223,7 +240,7 @@ paint used to clear the active slot for the rest of the tick — so `damage()`
 marks were dropped and the request had no owner. Apps now say "busy" when a
 start is refused instead of returning silently.
 
-**API version 24** (`CAPP_API_VERSION` in `capp.h` is the truth; this
+**API version 25** (`CAPP_API_VERSION` in `capp.h` is the truth; this
 paragraph is history). It moved six times in one day — 11 to 17 — and has
 kept moving since; each move means every `.capp` must be rebuilt, because the
 loader refuses a binary built against a different table. `python
@@ -235,7 +252,8 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 `http_stream`, `key_pending`, `now`, the `exec_*` memory the IDE compiles into
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
-branch and master both called themselves 23, so the merge bumped it).
+branch and master both called themselves 23, so the merge bumped it), and
+`print`/`print_status` (25).
 
 **Credentials survive a reflash** (2026-09-19). WiFi and Google credentials
 live in NVS at runtime, and a full-table flash wipes NVS -- one day it cost the

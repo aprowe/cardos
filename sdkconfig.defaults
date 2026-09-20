@@ -31,10 +31,10 @@ CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
-# Two, so a mouse and a keyboard can be connected at the same time. Each one
-# costs a little static RAM for its connection state; one was chosen back when
-# only a mouse existed.
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
+# Three: a mouse, a keyboard, and the thermal printer (kernel/drv/btprint.c)
+# at the same time. Each one costs a little static RAM for its connection
+# state; one was chosen back when only a mouse existed.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
 CONFIG_BT_NIMBLE_NVS_PERSIST=y
 # Three is the default and it fills up fast: a mouse re-paired a few times
 # leaves several identities behind, and once the store is full NimBLE returns
