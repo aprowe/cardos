@@ -78,9 +78,12 @@ static int enough_memory(const char *url) {
   free_now = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   if (free_now >= TLS_HEADROOM && largest >= 17000) return 1;
+  /* Both numbers, because either can be the one that failed: 45 KB free in
+   * pieces no bigger than 12 is a different problem from 20 KB free. */
   snprintf(s_why, sizeof s_why,
-           "not enough memory: %u KB free, TLS needs about %u",
-           (unsigned)(free_now / 1024), (unsigned)(TLS_HEADROOM / 1024));
+           "not enough memory: %u KB free (largest %u), TLS needs %u",
+           (unsigned)(free_now / 1024), (unsigned)(largest / 1024),
+           (unsigned)(TLS_HEADROOM / 1024));
   ESP_LOGW(TAG, "%s (largest block %u)", s_why, (unsigned)largest);
   return 0;
 }

@@ -659,7 +659,13 @@ static void sync_failed(int n) {
      * close an app, which is the thing that actually works. And it is
      * transient, so it is worth trying again shortly rather than at the next
      * ten-minute mark. */
+    char m[120];
     api->fmt(C.status, sizeof C.status, "%s", api->net_status());
+    /* The log line too: "push returned -4" alone was all there was to read
+     * after three failures in a row, and it does not say which number was
+     * short or what else was holding the memory. */
+    api->fmt(m, sizeof m, "sync: refused: %s", api->net_status());
+    logline(m);
     C.next_auto = api->ticks_ms() + RETRY_MS;
   }
   else api->fmt(C.status, sizeof C.status, "sync failed (%d)", n);
