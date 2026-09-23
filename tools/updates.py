@@ -55,7 +55,8 @@ def app_files(apps_dir=None):
     apps_dir = apps_dir or APPS_DIR
     if not os.path.isdir(apps_dir):
         return []
-    return sorted(f for f in os.listdir(apps_dir) if f.endswith(".capp"))
+    return sorted(f for f in os.listdir(apps_dir)
+                  if f.endswith(".capp") and os.path.isfile(os.path.join(apps_dir, f)))
 
 
 def manifest(firmware=None, apps_dir=None):
@@ -77,10 +78,51 @@ def manifest(firmware=None, apps_dir=None):
     return "".join(l + "\n" for l in lines)
 
 
+def valid_name(name):
+    """A name is letters, digits and the odd dash -- never a path, whatever
+    the request says."""
+    return bool(name) and len(name) <= 32 and \
+        all(c.isalnum() or c in "-_" for c in name)
+
+
 def app_path(name, apps_dir=None):
-    """The file for `name`, or None. A name is letters, digits and the odd
-    dash -- never a path, whatever the request says."""
-    if not name or not all(c.isalnum() or c in "-_" for c in name):
+    """The file for `name`, or None."""
+    if not valid_name(name):
         return None
     p = os.path.join(apps_dir or APPS_DIR, name + ".capp")
     return p if os.path.isfile(p) else None
+
+
+# ---- the store: what a server with no build tree serves -------------------
+#
+# On the droplet nothing is built. tools/buildagent.py builds on the laptop and
+# PUTs the results here, and the device's /update reads from here exactly as
+# it would read a build tree -- same manifest, same hashes.
+
+def store_paths(store):
+    """(firmware, apps_dir) inside a store directory."""
+    return os.path.join(store, "firmware.bin"), os.path.join(store, "apps")
+
+
+def check_artifact(kind, data):
+    """None if `data` could plausibly be a `kind` ("firmware" or "app"), or a
+    sentence saying why not. Not a verification -- the device does that --
+    only a refusal of what is obviously not the thing, such as an HTML error
+    page uploaded by a script that did not check its status."""
+    if kind == "firmware":
+        return None if firmware_sha(data) else "not an ESP-IDF image"
+    if kind == "app":
+        return None if data[:4] == b"\x7fELF" else "not an ELF file"
+    return "unknown kind"
+
+
+def put_artifact(path, data):
+    """Write `data` to `path` so that a reader sees the old file or the new
+    one and never a half: a temporary file beside it, then a rename over it."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".part"
+    with open(tmp, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)

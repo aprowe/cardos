@@ -69,6 +69,11 @@ class ChatService:
     lock, because two Claude sessions editing the same repository at once is a
     merge conflict with no one to resolve it."""
 
+    # What the agent may use. A subclass on a public host narrows this; see
+    # tools/buildstep.py.
+    allowed_tools = ALLOWED_TOOLS
+    disallowed_tools = None
+
     def __init__(self, claude=None, cwd=ROOT, token=None, model=None,
                  use_api_key=False):
         self.claude = claude or _find_claude()
@@ -118,7 +123,9 @@ class ChatService:
 
     # ---- running the agent ------------------------------------------------
 
-    def _run(self, jid, text):
+    def run_turn(self, text):
+        """One turn, here and now: (state, reply). What a job thread runs, and
+        what tools/buildagent.py calls directly, having its own queue."""
         state, reply = "done", ""
         try:
             reply = self._claude(text)
@@ -129,6 +136,10 @@ class ChatService:
 
         if len(reply) > MAX_REPLY:
             reply = reply[:MAX_REPLY] + "\n\n[cut: reply was %d characters]" % len(reply)
+        return state, reply
+
+    def _run(self, jid, text):
+        state, reply = self.run_turn(text)
         with self.lock:
             if jid in self.jobs:
                 self.jobs[jid] = {"state": state, "reply": reply, "at": time.time()}
@@ -171,8 +182,10 @@ class ChatService:
                # a request that silently does nothing is worse than one that
                # does what it was told.
                "--permission-mode", "acceptEdits",
-               "--allowed-tools", ALLOWED_TOOLS,
+               "--allowed-tools", self.allowed_tools,
                "--add-dir", self.cwd]
+        if self.disallowed_tools:
+            cmd += ["--disallowed-tools", self.disallowed_tools]
         if self.model:
             cmd += ["--model", self.model]
         if self.session_id:

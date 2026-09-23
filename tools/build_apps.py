@@ -31,9 +31,11 @@ HEADER = os.path.join(ROOT, "kernel", "app", "capp_blobs.h")
 TOOLCHAIN = os.path.join(
     os.path.expanduser("~"), ".platformio", "packages",
     "toolchain-xtensa-esp-elf", "bin")
-GCC = os.path.join(TOOLCHAIN, "xtensa-esp32s3-elf-gcc.exe")
-LD = os.path.join(TOOLCHAIN, "xtensa-esp32s3-elf-ld.exe")
-READELF = os.path.join(TOOLCHAIN, "xtensa-esp32s3-elf-readelf.exe")
+# The droplet builds too (see tools/buildstep.py), and Linux has no .exe.
+EXE = ".exe" if os.name == "nt" else ""
+GCC = os.path.join(TOOLCHAIN, "xtensa-esp32s3-elf-gcc" + EXE)
+LD = os.path.join(TOOLCHAIN, "xtensa-esp32s3-elf-ld" + EXE)
+READELF = os.path.join(TOOLCHAIN, "xtensa-esp32s3-elf-readelf" + EXE)
 
 CFLAGS = [
     "-std=gnu99",

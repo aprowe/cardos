@@ -277,6 +277,14 @@ class Handler(BaseHTTPRequestHandler):
     chrome = None
     chat = None
     voice = None
+    # --store DIR: /update serves what tools/buildstep.py published there,
+    # never the build tree itself, which is half-written while a build runs.
+    store = None
+
+    def _update_files(self):
+        if self.store:
+            return updates.store_paths(self.store)
+        return updates.FIRMWARE, updates.APPS_DIR
 
     # ---- small helpers ----------------------------------------------------
 
@@ -525,21 +533,24 @@ class Handler(BaseHTTPRequestHandler):
         if q.path == "/update":
             if not self._authorised():
                 return
-            self._text(updates.manifest())
+            firmware, apps_dir = self._update_files()
+            self._text(updates.manifest(firmware=firmware, apps_dir=apps_dir))
             return
         if q.path == "/update/firmware":
             if not self._authorised():
                 return
-            if not os.path.isfile(updates.FIRMWARE):
+            firmware, _ = self._update_files()
+            if not os.path.isfile(firmware):
                 self._text("no firmware built\n", 404)
                 return
-            self._file(updates.FIRMWARE)
+            self._file(firmware)
             sys.stderr.write("update: sent firmware\n")
             return
         if q.path.startswith("/update/app/"):
             if not self._authorised():
                 return
-            path = updates.app_path(q.path[len("/update/app/"):])
+            _, apps_dir = self._update_files()
+            path = updates.app_path(q.path[len("/update/app/"):], apps_dir)
             if not path:
                 self._text("no such app\n", 404)
                 return
@@ -637,11 +648,27 @@ def main():
     ap.add_argument("--api-key", action="store_true",
                     help="let the agent use ANTHROPIC_API_KEY from the environment "
                          "instead of the login this machine already has")
+    ap.add_argument("--store", default=None,
+                    help="serve /update from this directory rather than the "
+                         "build tree")
+    ap.add_argument("--build", action="store_true",
+                    help="after a chat turn that changed the code, build it, "
+                         "publish to --store and commit; see tools/buildstep.py")
     args = ap.parse_args()
+    if args.build and not args.store:
+        raise SystemExit("--build publishes into --store; give it one")
 
     Handler.chrome = args.chrome or find_chrome()
-    Handler.chat = ChatService(claude=args.claude_cli, token=args.token,
-                               model=args.model, use_api_key=args.api_key)
+    kw = dict(claude=args.claude_cli, token=args.token,
+              model=args.model, use_api_key=args.api_key)
+    if args.build:
+        from buildstep import BuildingChat
+        Handler.chat = BuildingChat(store=args.store, **kw)
+    else:
+        Handler.chat = ChatService(**kw)
+    if args.store:
+        os.makedirs(args.store, exist_ok=True)
+        Handler.store = args.store
     Handler.voice = Voice(whisper_dir=args.whisper)
 
     if args.test:
