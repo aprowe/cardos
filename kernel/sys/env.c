@@ -2,6 +2,7 @@
 
 #include "kernel/sys/env.h"
 #include "kernel/app/capp.h"   /* the card layout */
+#include "kernel/sys/conf.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -10,6 +11,14 @@
 #include "nvs_flash.h"
 
 #define NVS_NS "cardosenv"
+
+/* NVS is what a full-table reflash wipes -- the same reason WiFi and Google
+ * credentials are mirrored to /config/wifi.txt and /config/google.txt. Those
+ * are positional (a fixed field per line); env has no fixed fields, so the
+ * name rides along in the line instead: "PATH=/apps:/bin" rather than a bare
+ * value. conf_join/conf_split do not care what is in a line, so the same
+ * reader and writer work unchanged. */
+#define ENV_CONF CAPP_CONFIG "/env.txt"
 
 /* The names that have been set, comma-separated, so they can be read back.
  * NVS can enumerate keys, but only by walking every namespace on the partition
@@ -51,6 +60,21 @@ static void save(const char *name, const char *value) {
   else nvs_erase_key(h, name);
   nvs_commit(h);
   nvs_close(h);
+}
+
+/* Every var currently in memory, one "NAME=VALUE" per line. Rewritten whole
+ * rather than patched in place: ENV_MAX is 8, so that is at most 8 lines, and
+ * "write them all back" is one function instead of a second file format for
+ * editing a line in the middle of an existing one. */
+static void mirror_to_card(void) {
+  char line[ENV_MAX][ENV_NAME_MAX + ENV_VALUE_MAX + 2];
+  const char *rows[ENV_MAX];
+  int i;
+  for (i = 0; i < s_n; i++) {
+    snprintf(line[i], sizeof line[i], "%s=%s", s_var[i].name, s_var[i].value);
+    rows[i] = line[i];
+  }
+  conf_write(ENV_CONF, rows, s_n);
 }
 
 static void load_one(const char *name, const char *fallback) {
@@ -140,6 +164,7 @@ int env_set(const char *name, const char *value) {
     s_n--;
     save(name, NULL);
     save_names();
+    mirror_to_card();
     return 0;
   }
 
@@ -151,7 +176,29 @@ int env_set(const char *name, const char *value) {
   snprintf(s_var[i].value, ENV_VALUE_MAX, "%s", value);
   save(s_var[i].name, s_var[i].value);
   save_names();
+  mirror_to_card();
   return 0;
+}
+
+/* NVS wins where both exist -- a key already loaded by env_init is left
+ * alone, the same fallback wifi.c and gauth.c use for their own mirrors.
+ * Blank lines (conf_split keeps them positional) and a line with no '=' are
+ * skipped rather than treated as a name with no value. */
+int env_restore_from_card(void) {
+  char lines[ENV_MAX][ENV_NAME_MAX + ENV_VALUE_MAX + 2];
+  int n, i, restored = 0;
+
+  n = conf_read(ENV_CONF, &lines[0][0], ENV_MAX, sizeof lines[0]);
+  for (i = 0; i < n; i++) {
+    char *eq = strchr(lines[i], '=');
+    if (!eq || eq == lines[i]) continue;
+    *eq = 0;
+    if (!env_get(lines[i])) {
+      env_set(lines[i], eq + 1);
+      restored = 1;
+    }
+  }
+  return restored;
 }
 
 int env_count(void) { return s_n; }
