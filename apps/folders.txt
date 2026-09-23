@@ -12,6 +12,7 @@ build     Net
 calendar  Tools
 cat       -
 claude    Net
+counter   Tools
 edit      Tools
 explorer  Tools
 files     Tools

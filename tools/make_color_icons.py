@@ -402,6 +402,25 @@ ICONS = {
         ".KKKKKKKKKKKKKK.",
         "................",
     ],
+    # A rounded badge with a plus in it: one more.
+    "Counter": [
+        "................",
+        "................",
+        "...KKKKKKKKKK...",
+        "..KbbbbbbbbbbK..",
+        "..KbbbbWWbbbbK..",
+        "..KbbbbWWbbbbK..",
+        "..KbbbbWWbbbbK..",
+        "..KbWWWWWWWWbK..",
+        "..KbWWWWWWWWbK..",
+        "..KbbbbWWbbbbK..",
+        "..KbbbbWWbbbbK..",
+        "..KbbbbWWbbbbK..",
+        "..KbbbbbbbbbbK..",
+        "...KKKKKKKKKK...",
+        "................",
+        "................",
+    ],
     # The card, and something going each way: the card as a network drive.
     "Share": [
         "................",
