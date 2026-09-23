@@ -48,6 +48,8 @@ static struct {
   uint32_t flash_at;
   uint32_t last_beep_ms;
   int      beep_ready;          /* the wav file exists on the card */
+  CRect    at;                  /* the app's rect, cached from paint for tick's damage() */
+  int      have_at;
 } T;
 
 static CRect rect(int x, int y, int w, int h) {
@@ -305,6 +307,20 @@ static void draw_bar(int cx, int y) {
   if (fill_w > 0) api->fill(rect(x, y, fill_w, BAR_H), colour);
 }
 
+/* The digit block and the bar beneath it -- the only pixels a running
+ * countdown changes once a second; the label above and the hint below stay
+ * put between ticks. api->fill(c, CLR_BG) at the top of app_paint still runs
+ * across the whole app rect, but the shell clips it to whatever tick last
+ * damaged, so scoping that to just this saves the label and the hint from
+ * being cleared and redrawn alongside the digits. Without it every tick
+ * flashed the whole screen to CLR_BG first -- there is no framebuffer here,
+ * writes go straight to the panel, so that flash was visible. */
+static CRect time_bar_rect(void) {
+  int cx = T.at.x + T.at.w / 2;
+  int y  = T.at.y + T.at.h / 2 - DIG_H / 2 - 6;
+  return rect(cx - TIME_BLOCK_W / 2, y, TIME_BLOCK_W, DIG_H + BAR_GAP + BAR_H);
+}
+
 static void paint_running(CRect c, const char *label, uint16_t colour) {
   int mm, ss, cx = c.x + c.w / 2, y = c.y + c.h / 2 - DIG_H / 2 - 6;
   int bar_y = y + DIG_H + BAR_GAP;
@@ -327,6 +343,8 @@ static void paint_done(CRect c) {
 
 static void app_paint(void *st, CRect c) {
   (void)st;
+  T.at = c;
+  T.have_at = 1;
   if (T.state != ST_DONE) api->fill(c, CLR_BG);
   switch (T.state) {
   case ST_SET:     paint_set(c); break;
@@ -395,6 +413,7 @@ static int app_tick(void *st, uint32_t now_ms) {
     if (!remain) { go_off(now_ms); return 1; }
     if ((remain + 999) / 1000 != (T.remain_ms + 999) / 1000) {
       T.remain_ms = remain;
+      if (T.have_at) api->damage(time_bar_rect());
       return 1;
     }
     T.remain_ms = remain;
