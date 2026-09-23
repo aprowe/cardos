@@ -499,7 +499,11 @@ int http_request(const char *method, const char *url,
                  const char *bearer,
                  char *out, size_t out_size, int timeout_ms) {
   int n;
-  busy_begin(bearer ? "signing in" : "fetching");
+  /* Not "signing in" when there is a bearer: a bearer is a token already
+   * held, and Build's poll carries one every 1.2 s, so the badge said
+   * "signing in" for as long as an answer took. The one real sign-in,
+   * gauth's refresh, sends none and labels itself. */
+  busy_begin("fetching");
   n = http_request_quiet(method, url, body, content_type, bearer,
                          out, out_size, timeout_ms);
   busy_end();

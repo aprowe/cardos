@@ -2,6 +2,7 @@
 
 #include "kernel/net/gauth.h"
 #include "kernel/net/http.h"
+#include "kernel/sys/busy.h"
 #include "kernel/sys/conf.h"
 #include "kernel/app/capp.h"   /* CAPP_CONFIG */
 
@@ -204,9 +205,11 @@ const char *gauth_token(void) {
   if (form_encode(refresh, enc, sizeof enc) == 0)
     snprintf(body + n, sizeof body - n, "&refresh_token=%s", enc);
 
-  n = http_request("POST", TOKEN_URL, body,
-                   "application/x-www-form-urlencoded", NULL,
-                   reply, sizeof reply, 15000);
+  busy_begin("signing in");
+  n = http_request_quiet("POST", TOKEN_URL, body,
+                         "application/x-www-form-urlencoded", NULL,
+                         reply, sizeof reply, 15000);
+  busy_end();
   if (n < 0) {
     char why[48];
     /* Google answers a rejected refresh with a JSON error, and that error is
