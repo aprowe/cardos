@@ -140,6 +140,7 @@ FOLDERS = {
     "photo":    "Tools",
     "todo":     "Tools",
     "memo":     "Tools",
+    "timer":    "Tools",
 }
 
 
