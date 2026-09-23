@@ -24,3 +24,6 @@ server/render/cardos6x8.ttf
 # throwaway audio that happens to land where the tool was run.
 *.wav
 chatlog_test*/
+
+# written by the Todo host tests in the working directory
+todo_test_cache_*.cache

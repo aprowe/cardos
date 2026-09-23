@@ -19,6 +19,8 @@
  *     say TEXT         put TEXT into the focused app, as if typed
  *     key NAME         escape enter up down left right
  *     action ID        run one entry of the focused app's action table
+ *     do APP CMD ARGS  an app's declared command, open or not
+ *     ask QUESTION     wants an answer, not an action: opens Claude with it
  *     none REASON      nothing matched; REASON is shown to the user
  */
 #ifndef CARDOS_RPC_H
@@ -34,7 +36,8 @@ typedef enum {
   RPC_KEY,
   RPC_ACTION,
   RPC_NONE,           /* the model declined, and said why */
-  RPC_DO              /* do APP COMMAND ARGS: an app's command, open or not */
+  RPC_DO,             /* do APP COMMAND ARGS: an app's command, open or not */
+  RPC_ASK             /* ask QUESTION: open Claude and put it the question */
 } RpcVerb;
 
 #define RPC_ARG_MAX 160

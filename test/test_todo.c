@@ -384,6 +384,10 @@ static void   script_text(short x, short y, const char *s, uint16_t f, uint16_t 
 }
 static CRect  script_area(void) { CRect r; r.x = r.y = r.w = r.h = 0; return r; }
 static void   script_log(const char *m) { (void)m; }
+/* On screen, not started for a command: the tick's first sync depends on it. */
+static int    script_headless(void) { return 0; }
+/* No card behind it: every stat misses, so the menu bar setting is off. */
+static int    script_stat(const char *path, CappStat *st) { (void)path; (void)st; return -1; }
 
 static void use_script_api(void) {
   use_fake_api();
@@ -400,6 +404,8 @@ static void use_script_api(void) {
   FAKE.frame = script_frame;
   FAKE.text = script_text;
   FAKE.log = script_log;
+  FAKE.headless = script_headless;
+  FAKE.stat = script_stat;
   toolbar_init(&FAKE, LIST_ACTIONS, NLIST, LIST_ICONS, 1);
 }
 

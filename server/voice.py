@@ -8,12 +8,13 @@ of speech recognition either, which is the same reason page layout happens on
 this machine: the Cardputer has 120 KB of heap.
 
 The command half is a Claude session with a fixed system prompt whose entire
-job is to turn a sentence into one line of a seven-verb vocabulary. It is
+job is to turn a sentence into one line of a small vocabulary. It is
 deliberately not the agent that edits the repository -- that one is thoughtful
 and slow and has file access, and neither of those is wanted when someone says
 "turn the brightness down". This one answers in under a second with one line,
-and the device validates that line against the same seven verbs before doing
-anything.
+and the device validates that line against the same verbs before doing
+anything. `do` names an app's declared command and `ask` hands a question to
+the on-device Claude, so the prompt carries this build's command catalog.
 """
 
 import json
@@ -28,14 +29,30 @@ import tempfile
 DEFAULT_WHISPER_DIR = os.path.expanduser(
     r"~\Projects\cardputer\projects\cardlet\server\whisper")
 
-SYSTEM = """\
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CATALOG = os.path.join(ROOT, "build", "apps", "commands.json")
+FOLDERS = os.path.join(ROOT, "apps", "folders.txt")
+
+# Built into the kernel rather than loaded, so on no list the build writes.
+BUILTINS = ("notes", "settings", "memory", "about")
+
+HEAD = """\
 You turn one spoken sentence into exactly one line of a command language, and
 output nothing else -- no explanation, no punctuation around it, no code fence.
 
 The language, in full:
 
-  open NAME        launch an app. Names: notes, edit, web, todo, stocks, mines,
-                   pinball, photos, claude, files, settings, memory, about
+  open NAME        launch an app. Names: %s
+
+  do APP COMMAND ARGS
+                   run one of an app's commands, listed below. It runs
+                   without opening the app and the device shows one line
+                   saying whether it worked. Quote an argument with spaces
+                   only when it is not the last one.
+  ask QUESTION     the sentence wants an answer to read, not an action: a
+                   question, "what's...", "how many...", "tell me...".
+                   The device opens Claude, which has the same commands and
+                   answers. QUESTION is the sentence, cleaned up.
   shell WHICH      one of: launcher, desktop, console
   bright N         backlight, N from 0 to 100
   wifi on|off
@@ -44,13 +61,65 @@ The language, in full:
   none REASON      the sentence is not one of the above; REASON is one short
                    phrase shown to the user
 
+The commands (APP COMMAND name:type ..., "net" means it needs the network):
+
+%s
+
 Rules:
 - Exactly one line. If the sentence asks for two things, do the first.
+- An action a command covers is `do`, and nothing opens:
+  "add milk to my todo list" -> do todo add milk
+- Anything that wants an answer is `ask`, even when a command could fetch it:
+  "what's on my calendar today" -> ask what's on my calendar today?
 - Relative requests become absolute: "turn it down" is bright 40, "dim" is
   bright 25, "brighter" is bright 100.
 - "notes" means the edit app.
 - Prefer `none` over a guess. A wrong command is worse than a shrug.
 """
+
+
+def _catalog_line(app, c):
+    """The same text kernel/app/cmdline.c's cmdline_catalog_line makes, and
+    tools/build_apps.py's catalog_line: one form everywhere a model reads."""
+    words = [app, c["id"]]
+    for p in c.get("params", []):
+        words.append("%s:%s" % (p["name"], p["about"] if p["type"] == "choice"
+                                else p["type"]))
+    if c.get("net"):
+        words.append("net")
+    line = " ".join(words)
+    return line + (" # " + c["about"] if c.get("about") else "")
+
+
+def _app_names(catalog, folders_path):
+    names = set(catalog)
+    try:
+        with open(folders_path, encoding="utf-8") as f:
+            for line in f:
+                w = line.split("#", 1)[0].split()
+                if len(w) == 2 and w[1] != "-":      # "-" is a CLI tool
+                    names.add(w[0])
+    except OSError:
+        pass
+    return sorted(names) + list(BUILTINS)
+
+
+def system_prompt(catalog_path=CATALOG, folders_path=FOLDERS):
+    """The translator's instructions, with this build's commands in them.
+
+    Read on every call: Build adds apps while the server runs, and a stale
+    list is a model that refuses a command the device would take. A missing
+    catalog (apps never built here) leaves `do` with nothing to name, and the
+    rest still works."""
+    try:
+        with open(catalog_path, encoding="utf-8") as f:
+            catalog = json.load(f)
+    except (OSError, ValueError):
+        catalog = {}
+    lines = [_catalog_line(app, c) for app in sorted(catalog)
+             for c in catalog[app]]
+    return HEAD % (", ".join(_app_names(catalog, folders_path)),
+                   "\n".join("  " + l for l in lines) or "  (none on this server)")
 
 
 class Voice:
@@ -123,7 +192,7 @@ class Voice:
             return "none no claude on this machine"
 
         cmd = [cli, "-p", text,
-               "--append-system-prompt", SYSTEM,
+               "--append-system-prompt", system_prompt(),
                "--output-format", "json",
                # Nothing to read, nothing to write: this turn is a translation.
                "--allowed-tools", "",

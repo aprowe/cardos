@@ -136,6 +136,15 @@ int rpc_parse(const char *line, RpcCmd *cmd) {
       while (*q && is_space(*q)) q++;
       return *q ? 1 : (cmd->verb = RPC_BAD, 0);
     }
+    if ((rest = word_is(p, "ask")) != NULL) {
+      /* A question for Claude, which has the commands too and can go and
+       * find out -- "what's on my calendar today" wants a reply read, not a
+       * two-second toast. One line, like `say`: it becomes the user's turn. */
+      cmd->verb = RPC_ASK;
+      copy_arg(cmd, rest);
+      rpc_one_line(cmd->arg);
+      return cmd->arg[0] ? 1 : (cmd->verb = RPC_BAD, 0);
+    }
     if ((rest = word_is(p, "none")) != NULL) {
       cmd->verb = RPC_NONE;
       copy_arg(cmd, rest);

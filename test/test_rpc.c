@@ -35,6 +35,26 @@ void test_rpc_do_keeps_the_line_for_the_app_to_check(void) {
   CHECK(!ok);
 }
 
+/* `ask QUESTION`: something that wants an answer, not an action -- "what's
+ * on my calendar today". The device opens Claude and hands it the question,
+ * so the reply has somewhere to be read. One line, like `say`, and never
+ * empty: an ask with no question is a model with nothing to add. */
+void test_rpc_ask_keeps_the_question(void) {
+  int ok;
+  RpcCmd c;
+  c = parse("ask what's on my calendar today?", &ok);
+  CHECK(ok); CHECK_EQ(c.verb, RPC_ASK);
+  CHECK(!strcmp(c.arg, "what's on my calendar today?"));
+  c = parse("Ask how many tasks\nare left.", &ok);
+  CHECK(ok); CHECK(!strcmp(c.arg, "how many tasks are left"));
+  c = parse("ask", &ok);
+  CHECK(!ok);
+  c = parse("ask   ", &ok);
+  CHECK(!ok);
+  c = parse("asking something", &ok);             /* not the word */
+  CHECK(!ok);
+}
+
 void test_rpc_the_verbs_parse(void) {
   int ok;
   RpcCmd c;

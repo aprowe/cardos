@@ -265,6 +265,24 @@ void agent_execute(const RpcCmd *c, char *result, size_t cap) {
       snprintf(result, cap, "done");
     return;
   }
+  case RPC_ASK: {
+    /* Voice only: "Carlos, what's on my calendar today" wants a reply read,
+     * so Claude opens and the question is its turn -- the agent has `do`
+     * and the catalog, and goes and finds out. Opened first, so the answer
+     * lands in the terminal rather than in an overlay over something else.
+     * The model never sees this verb: it has no tool that asks itself. */
+    int rc;
+    if (shell_open_app("claude") != 0) {
+      snprintf(result, cap, "could not open Claude");
+      return;
+    }
+    rc = agent_ask(c->arg);
+    if (rc == 0) snprintf(result, cap, "asking Claude");
+    else if (rc == -1) snprintf(result, cap, "Claude is busy with something else");
+    else if (rc == -2) snprintf(result, cap, "no Claude key on the card");
+    else snprintf(result, cap, "could not ask Claude (%d)", rc);
+    return;
+  }
   default:
     snprintf(result, cap, "not a command");
     return;
