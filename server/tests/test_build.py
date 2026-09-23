@@ -114,7 +114,8 @@ class Turn(unittest.TestCase):
             return True, "ok"
         c.build = fake_build
         c.commit = lambda msg: (self.commits.append(msg) or "abc1234")
-        c._claude = lambda text: "made it so"
+        c._claude = lambda text, **kw: "made it so"
+        c._plan = lambda text: [text]
         self.c = c
 
     def tearDown(self):

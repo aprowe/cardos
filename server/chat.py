@@ -31,8 +31,9 @@ runs in this directory, it reads CLAUDE.md like any other session here.
 
 import json
 import os
-import sys
 import queue
+import re
+import sys
 import shutil
 import subprocess
 import threading
@@ -50,8 +51,148 @@ ALLOWED_TOOLS = "Read,Edit,Write,Glob,Grep,Bash,TodoWrite,WebFetch,WebSearch"
 # to have been cut, rather than silently truncated somewhere less obvious.
 MAX_REPLY = 3500
 
-# One turn should not run for ten minutes with a device polling at it.
-TURN_TIMEOUT = 300
+# A turn is stopped when it goes quiet, not when it gets long. The 300-second
+# wall clock this replaced killed a new-app request that had read the right
+# files and spent 2 min 20 s thinking before writing: indistinguishable, from
+# outside, from a hang. Silence past IDLE_TIMEOUT is a hang; STEP_TIMEOUT is
+# the backstop for one step that is busy and getting nowhere. Thinking emits
+# nothing, so IDLE_TIMEOUT has to cover the longest think (140 s measured).
+IDLE_TIMEOUT = 240
+STEP_TIMEOUT = 900
+PLAN_TIMEOUT = 180
+TURN_TIMEOUT = STEP_TIMEOUT        # old name; the test stubs still read it
+
+# A request becomes at most this many steps, each its own turn.
+MAX_STEPS = 6
+
+PLAN_PROMPT = """\
+Split the request below into steps for a coding agent working in this
+repository (CardOS; CLAUDE.md describes it). Each step must be small enough to
+finish in a few minutes: one file written, one feature added, one fix. A small
+request, or a question, is one step -- do not pad it. At most %d steps.
+
+Plan exactly what was asked, the simplest version of it: no features the
+request did not mention. No step to build, compile, test or install -- that
+happens by itself after the last step, and the agent cannot run commands.
+
+Reply with the numbered steps only, one line each, and nothing else.
+
+Request: %s"""
+
+STEP_PROMPT = """\
+%s
+
+That request has been split into steps:
+%s
+
+Do step %d now, and only step %d. Later steps come as their own messages.
+End with one short sentence saying what you did."""
+
+
+class TurnTimeout(Exception):
+    """A turn stopped for taking too long; the message says which way."""
+
+
+def describe(event):
+    """What a stream-json event says the agent is doing, in a few words for a
+    40-column status bar, or None if it is not worth saying."""
+    if event.get("type") != "assistant":
+        return None
+    for block in (event.get("message") or {}).get("content") or []:
+        if block.get("type") != "tool_use":
+            continue
+        name = block.get("name", "")
+        inp = block.get("input") or {}
+        path = os.path.basename(str(inp.get("file_path") or inp.get("path") or ""))
+        if name == "Read":
+            return "reading " + path if path else "reading"
+        if name == "Edit" or name == "MultiEdit":
+            return "editing " + path if path else "editing"
+        if name == "Write":
+            return "writing " + path if path else "writing"
+        if name in ("Grep", "Glob"):
+            return "searching"
+        return name.lower()
+    return None
+
+
+def run_stream(cmd, env, cwd, on_status, idle, cap):
+    """Run `claude ... --output-format stream-json` and return (result text,
+    session id). Reads events as they come, reports what the agent is doing,
+    and kills it on `idle` seconds of silence or `cap` seconds in all -- the
+    reason this streams at all: a single JSON blob at the end says nothing
+    until it is too late to say anything."""
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True,
+                            encoding="utf-8", errors="replace")
+    lines = queue.Queue()
+    err = []
+
+    def pump_out():
+        for line in proc.stdout:
+            lines.put(line)
+        lines.put(None)                                 # end of stream
+
+    def pump_err():                  # drained so a chatty stderr cannot block
+        for line in proc.stderr:
+            err.append(line)
+
+    threading.Thread(target=pump_out, daemon=True).start()
+    threading.Thread(target=pump_err, daemon=True).start()
+
+    started = last = time.time()
+    text, sid, final = None, None, None
+    try:
+        while True:
+            now = time.time()
+            why = ("took longer than %d s" % cap if now - started > cap else
+                   "went quiet for %d s" % idle if now - last > idle else None)
+            if why:
+                e = TurnTimeout(why)
+                e.session_id = sid                      # see ChatService._claude
+                raise e
+            try:
+                line = lines.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if line is None:
+                break                                   # the agent finished
+            last = time.time()
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            sid = event.get("session_id") or sid
+            if event.get("type") == "result":
+                final = event
+                continue
+            what = describe(event)
+            if what and on_status:
+                on_status(what)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+
+    if final is not None:
+        text = final.get("result")
+        if not (isinstance(text, str) and text.strip()) and final.get("is_error"):
+            text = "error: %s" % json.dumps(final)[:MAX_REPLY]
+    if not (isinstance(text, str) and text.strip()):
+        tail = "".join(err).strip()
+        text = tail[-MAX_REPLY:] if tail else "(no output)"
+    return text.strip(), sid
+
+
+def parse_plan(text, request):
+    """The numbered lines of a planner's reply, at most MAX_STEPS of them. A
+    reply with no list is one step: the request itself."""
+    steps = []
+    for line in (text or "").splitlines():
+        m = re.match(r"\s*(\d+)[.)]\s+(.+)", line)
+        if m:
+            steps.append(m.group(2).strip())
+    return steps[:MAX_STEPS] or [request]
 
 
 def _find_claude():
@@ -95,7 +236,8 @@ class ChatService:
         with self.lock:
             jid = self.next_id
             self.next_id += 1
-            self.jobs[jid] = {"state": "pending", "reply": "", "at": time.time()}
+            self.jobs[jid] = {"state": "pending", "reply": "", "status": "",
+                              "at": time.time()}
         t = threading.Thread(target=self._run, args=(jid, text), daemon=True)
         t.start()
         return jid
@@ -106,7 +248,7 @@ class ChatService:
             if not job:
                 return "error", "no such request"
             if job["state"] == "pending":
-                return "pending", ""
+                return "pending", job.get("status", "")
             # Answers are read once and dropped: the device has them now, and
             # holding every reply of every conversation is a leak with a very
             # slow fuse.
@@ -124,26 +266,80 @@ class ChatService:
 
     # ---- running the agent ------------------------------------------------
 
-    def run_turn(self, text):
-        """One turn, here and now: (state, reply). What a job thread runs, and
-        what BuildingChat wraps in a build."""
-        state, reply = "done", ""
-        try:
-            reply = self._claude(text)
-        except subprocess.TimeoutExpired:
-            state, reply = "error", "timed out after %d seconds" % TURN_TIMEOUT
-        except Exception as e:                       # noqa: BLE001 - reported
-            state, reply = "error", "%s: %s" % (type(e).__name__, e)
+    def run_turn(self, text, report=None):
+        """A request, here and now: (state, reply). What a job thread runs,
+        and what BuildingChat wraps in a build.
 
+        Planned first, then one turn per step in the same session, so each
+        step has its own timeout and the device can be told which one is
+        running. `report(line)` hears the status as it changes."""
+        report = report or (lambda line: None)
+        generation = self.generation
+        report("planning")
+        try:
+            steps = self._plan(text)
+        except Exception as e:                       # noqa: BLE001 - reported
+            sys.stderr.write("chat: planning failed (%s); one step\n" % e)
+            steps = [text]
+        n = len(steps)
+
+        state, results, failed = "done", [], None
+        for k, step in enumerate(steps, 1):
+            if self.generation != generation:
+                break                    # /chat/new: this job is not wanted now
+            prefix = "step %d/%d" % (k, n) if n > 1 else ""
+            report(prefix or "working")
+            prompt = text if n == 1 else STEP_PROMPT % (
+                text, "\n".join("%d. %s" % (i, s) for i, s in enumerate(steps, 1)), k, k)
+
+            def on_status(what, prefix=prefix):
+                report("%s: %s" % (prefix, what) if prefix else what)
+            try:
+                results.append(self._claude(prompt, on_status=on_status))
+            except Exception as e:                   # noqa: BLE001 - reported
+                state, failed = "error", (k, str(e) if isinstance(e, TurnTimeout)
+                                          else "%s: %s" % (type(e).__name__, e))
+                break
+
+        if n == 1:
+            reply = results[0] if results else "stopped: %s" % failed[1]
+        else:
+            ticks = "\n".join("[%s] %d. %s" % ("x" if i <= len(results) else " ", i, s)
+                              for i, s in enumerate(steps, 1))
+            last = results[-1] if results else ""
+            reply = ticks + ("\n\n" + last if last else "")
+            if failed:
+                reply += "\n\nstep %d stopped: %s" % failed
         if len(reply) > MAX_REPLY:
             reply = reply[:MAX_REPLY] + "\n\n[cut: reply was %d characters]" % len(reply)
         return state, reply
 
     def _run(self, jid, text):
-        state, reply = self.run_turn(text)
+        def report(line):
+            with self.lock:
+                if jid in self.jobs and self.jobs[jid]["state"] == "pending":
+                    self.jobs[jid]["status"] = line[:60]
+        state, reply = self.run_turn(text, report=report)
         with self.lock:
             if jid in self.jobs:
-                self.jobs[jid] = {"state": state, "reply": reply, "at": time.time()}
+                self.jobs[jid] = {"state": state, "reply": reply, "status": "",
+                                  "at": time.time()}
+
+    def _plan(self, text):
+        """The request as numbered steps: one planning call, no tools, no
+        session -- it must not become part of the conversation it plans."""
+        if not self.claude:
+            return [text]
+        cmd = [self.claude, "-p", PLAN_PROMPT % (MAX_STEPS, text),
+               "--output-format", "stream-json", "--verbose",
+               "--max-turns", "1", "--disallowed-tools", ALLOWED_TOOLS]
+        if self.model:
+            cmd += ["--model", self.model]
+        reply, _ = run_stream(cmd, self._child_env(), self.cwd, None,
+                              idle=PLAN_TIMEOUT, cap=PLAN_TIMEOUT)
+        steps = parse_plan(reply, text)
+        sys.stderr.write("chat: plan of %d: %s\n" % (len(steps), "; ".join(steps)[:200]))
+        return steps
 
     def _child_env(self):
         """The environment the agent runs in, minus two kinds of inheritance.
@@ -172,13 +368,17 @@ class ChatService:
                 env.pop(k, None)
         return env
 
-    def _claude(self, text):
+    def _claude(self, text, on_status=None):
+        """One turn of the agent in the conversation's session: its answer.
+        Raises TurnTimeout if it goes quiet or runs past the step cap."""
         if not self.claude:
             return ("no claude CLI on PATH. Install Claude Code, or start the "
                     "server with --claude <path>.")
 
         cmd = [self.claude, "-p", text,
-               "--output-format", "json",
+               # Streamed, so the device can be told what is happening and a
+               # silent agent can be told from a busy one.
+               "--output-format", "stream-json", "--verbose",
                # Edits without asking: there is nobody at this end to ask, and
                # a request that silently does nothing is worse than one that
                # does what it was told.
@@ -193,36 +393,24 @@ class ChatService:
             cmd += ["--resume", self.session_id]
         generation = self.generation
 
-        # Serialised: one agent in one working tree at a time.
-        with self.run_lock:
-            out = subprocess.run(cmd, cwd=self.cwd, capture_output=True,
-                                 text=True, encoding="utf-8", errors="replace",
-                                 timeout=TURN_TIMEOUT, env=self._child_env())
-
-        body = (out.stdout or "").strip()
-        if not body:
-            err = (out.stderr or "").strip()
-            return err[-MAX_REPLY:] if err else "(no output)"
-
-        # --output-format json gives one object with the answer and the id to
-        # resume next time. Parsed defensively: a future version that changes
-        # the shape should degrade to showing the text, not to an exception.
-        try:
-            obj = json.loads(body)
-        except ValueError:
-            return body
-
-        if isinstance(obj, dict):
-            sid = obj.get("session_id") or obj.get("sessionId")
+        def keep(sid):
+            # A turn already running belongs to the conversation it started
+            # in; after /chat/new its session id must not come back.
             if sid and generation == self.generation:
                 self.session_id = sid
-            for key in ("result", "text", "response", "content"):
-                v = obj.get(key)
-                if isinstance(v, str) and v.strip():
-                    return v.strip()
-            if obj.get("is_error"):
-                return "error: %s" % json.dumps(obj)[:MAX_REPLY]
-        return body
+
+        # Serialised: one agent in one working tree at a time.
+        with self.run_lock:
+            try:
+                text, sid = run_stream(cmd, self._child_env(), self.cwd, on_status,
+                                       idle=IDLE_TIMEOUT, cap=STEP_TIMEOUT)
+            except TurnTimeout as e:
+                # Kept even so: "finish it" should resume the session that
+                # got part of the way, not start from nothing.
+                keep(getattr(e, "session_id", None))
+                raise
+        keep(sid)
+        return text
 
 
 # ---- routes: the device's three calls --------------------------------------
@@ -246,7 +434,9 @@ def get_chat(h, path, args):
     jid = h.int_arg(args, "id", 0)
     state, reply = h.chat.poll(jid)
     if state == "pending":
-        h.text("pending\n")
+        # The status on the second line: "step 2/3: writing timer.c". A Build
+        # that predates it tests only the first two letters, and is unaffected.
+        h.text("pending\n" + reply)
         return
     # The state on its own line, so the device can tell an answer from a
     # failure without parsing anything.

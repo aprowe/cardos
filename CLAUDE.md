@@ -64,7 +64,12 @@ dispatch, the token, body limits; each service module declares its own
 `ROUTES` (`chat.py`, `updates.py`, `voice.py`, `shots.py`, `screen.py`,
 `render/render.py`), and `/` lists them. `server/build.py` is the droplet's
 build-after-turn (`--build --store`); tests are `server/tests/`. `tools/` is
-dev-time scripts only. The device still calls it the proxy (`env PROXY`,
+dev-time scripts only. A Build request is **planned, then run a step at a
+time** (`server/chat.py`): a quick no-tools call splits it into at most six
+steps, each is its own resumed turn, and each is streamed, so a poll answers
+`pending` plus "step 2/3: writing timer.c" and a turn is stopped when it goes
+quiet for 240 s rather than at a wall clock -- the old 300 s limit killed a
+new-app request that was still thinking. The device still calls it the proxy (`env PROXY`,
 `CAPP_PROXY_DEFAULT`), because renaming a setting stored on every device is
 not worth a word.
 

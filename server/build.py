@@ -176,10 +176,14 @@ class BuildingChat(ChatService):
         return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=self.cwd,
                               capture_output=True, text=True).stdout.strip()
 
-    def run_turn(self, text):
+    def run_turn(self, text, report=None):
+        report = report or (lambda line: None)
         with self.turn_lock:
             before = self.snapshot()
-            state, reply = super().run_turn(text)
+            # A step that stopped still leaves its edits, and they are built:
+            # whatever it managed is on disk, and the reply says where it
+            # stopped.
+            state, reply = super().run_turn(text, report=report)
             paths = changed(before, self.snapshot())
             if not paths:
                 return state, reply
@@ -188,11 +192,13 @@ class BuildingChat(ChatService):
             if not (apps or firmware):
                 self.commit(title + "\n\n" + text)
                 return state, reply
+            report("building firmware" if firmware else "building apps")
             ok, log = self.build(apps, firmware)
             if not ok:
                 self.commit(title + " (does not build)\n\n" + text)
                 return state, (reply + "\n\nbuild failed, nothing published:\n"
                                + errors_tail(log))
+            report("publishing")
             try:
                 sent = publish(self.store, self.firmware, self.apps_dir, firmware)
             except (OSError, ValueError) as e:

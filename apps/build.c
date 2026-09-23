@@ -75,6 +75,8 @@ static struct {
   uint32_t next_poll;
   uint32_t started;
   int   dots;
+  char  progress[31];             /* "step 2/3: writing timer.c"; the bar is
+                                     40 columns, less "Build  " and dots */
 
   char  reply[REPLY_MAX];
   char  status[40];
@@ -226,6 +228,7 @@ static void send_now(void) {
     C.status[0] = 0;
     return;
   }
+  C.progress[0] = 0;              /* nothing said yet about this one */
   C.started = api->ticks_ms();
   C.next_poll = C.started + POLL_MS;
 }
@@ -249,10 +252,22 @@ static void poll_now(void) {
   }
 
   if (C.reply[0] == 'p' && C.reply[1] == 'e') {      /* "pending" */
+    /* The second line, if the server sent one, is what it is doing: a
+     * two-minute wait with nothing but dots looks the same as a hang. */
+    const char *s = C.reply;
+    int i = 0;
+    while (*s && *s != '\n') s++;
+    if (*s == '\n') s++;
+    while (s[i] && s[i] != '\n' && i < (int)sizeof C.progress - 1) {
+      C.progress[i] = s[i];
+      i++;
+    }
+    C.progress[i] = 0;
     C.next_poll = api->ticks_ms() + POLL_MS;
     C.dots = (C.dots + 1) & 3;
     return;
   }
+  C.progress[0] = 0;
 
   /* First line is the outcome, the rest is the answer. */
   {
@@ -308,7 +323,8 @@ static void paint_bar(CRect c) {
   char bar[64];
   api->fill(rect(c.x, c.y, c.w, BAR_H), CLR_BAR);
   if (C.job)
-    api->fmt(bar, sizeof bar, "Build  thinking%s",
+    api->fmt(bar, sizeof bar, "Build  %s%s",
+             C.progress[0] ? C.progress : "thinking",
              C.dots == 0 ? "" : C.dots == 1 ? "." : C.dots == 2 ? ".." : "...");
   else if (C.status[0])
     api->fmt(bar, sizeof bar, "Build  %s", C.status);

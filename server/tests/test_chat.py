@@ -20,7 +20,10 @@ class StubService(chatmod.ChatService):
     def __init__(self, **kw):
         super().__init__(claude="stub", **kw)
 
-    def _claude(self, text):
+    def _plan(self, text):
+        return [text]                          # planning has its own tests
+
+    def _claude(self, text, **kw):
         time.sleep(FAKE_DELAY)                 # a turn takes a while
         if "boom" in text:
             raise RuntimeError("the agent fell over")
@@ -65,7 +68,8 @@ def main():
                        time.time() - t0 < FAKE_DELAY, True)
 
     r = get(base + "/chat?id=" + jid)
-    fails += not check("polling while it works says pending", r.strip(), "pending")
+    fails += not check("polling while it works says pending",
+                       r.split("\n")[0], "pending")
 
     deadline = time.time() + 10
     while time.time() < deadline:

@@ -89,6 +89,40 @@ void test_build_talks_to_the_server_the_os_uses(void) {
   CHECK(strcmp(C.base, CAPP_PROXY_DEFAULT) != 0);
 }
 
+/* While an answer is pending the server says what it is doing on the second
+ * line, and that is what the bar shows -- cut to fit, and gone once the
+ * answer lands. */
+static const char *HTTP_REPLY;
+static int fake_http(const char *m, const char *u, const char *b, const char *ct,
+                     const char *bearer, char *out, size_t n, int t) {
+  (void)m; (void)u; (void)b; (void)ct; (void)bearer; (void)t;
+  snprintf(out, n, "%s", HTTP_REPLY);
+  return (int)strlen(out);
+}
+
+void test_build_shows_what_the_server_is_doing(void) {
+  boot();
+  API.http = fake_http;
+  C.job = 7;
+  HTTP_REPLY = "pending\nstep 2/3: writing timer.c";
+  poll_now();
+  CHECK(strcmp(C.progress, "step 2/3: writing timer.c") == 0);
+  CHECK(C.job == 7);
+
+  HTTP_REPLY = "pending\nstep 2/3: reading a-file-with-a-very-long-name.c";
+  poll_now();
+  CHECK(strlen(C.progress) == sizeof C.progress - 1);    /* cut, not overrun */
+
+  HTTP_REPLY = "pending\n";                                /* an older server */
+  poll_now();
+  CHECK(C.progress[0] == 0);
+
+  HTTP_REPLY = "done\nall done";
+  poll_now();
+  CHECK(C.job == 0);
+  CHECK(C.progress[0] == 0);
+}
+
 void test_build_installs_a_ui(void) {
   boot();
   CHECK(INST.paint != NULL);
