@@ -33,7 +33,8 @@ typedef enum {
   RPC_SAY,
   RPC_KEY,
   RPC_ACTION,
-  RPC_NONE            /* the model declined, and said why */
+  RPC_NONE,           /* the model declined, and said why */
+  RPC_DO              /* do APP COMMAND ARGS: an app's command, open or not */
 } RpcVerb;
 
 #define RPC_ARG_MAX 160

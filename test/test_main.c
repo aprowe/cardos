@@ -386,6 +386,7 @@ void test_subtracting_a_disjoint_rect_changes_nothing(void);
 void test_subtracting_a_covering_rect_leaves_nothing(void);
 void test_subtracting_a_hole_leaves_four_pieces(void);
 void test_subtraction_is_exact_and_disjoint_everywhere(void);
+void test_rpc_do_keeps_the_line_for_the_app_to_check(void);
 void test_rpc_the_verbs_parse(void);
 void test_rpc_tolerates_what_a_recogniser_produces(void);
 void test_rpc_refuses_anything_else(void);
@@ -928,6 +929,7 @@ int main(void) {
   RUN(test_subtracting_a_hole_leaves_four_pieces);
   RUN(test_subtraction_is_exact_and_disjoint_everywhere);
   printf("-- rpc --\n");
+  RUN(test_rpc_do_keeps_the_line_for_the_app_to_check);
   RUN(test_rpc_the_verbs_parse);
   RUN(test_rpc_tolerates_what_a_recogniser_produces);
   RUN(test_rpc_refuses_anything_else);

@@ -5,6 +5,7 @@
 #include "kernel/app/capp.h"   /* the card layout */
 
 #include "kernel/app/capprun.h"
+#include "kernel/app/cmdline.h"
 #include "kernel/drv/display.h"
 #include "kernel/fs/fs.h"
 #include "kernel/net/httpq.h"
@@ -35,23 +36,35 @@ static const char *TAG = "agent";
 
 /* ---- the request, all but the conversation ---------------------------- */
 
-/* Constant, in flash. The conversation goes between HEAD and TAIL. The tools
- * are the vocabulary in kernel/sys/rpc.h, described for a model; every one
- * of them is something a keyboard could have done. */
-static const char HEAD[] =
+/* In flash, and put together per request: HEAD_SYSTEM, then the command
+ * catalog (/cache/commands.txt, which changes as apps come and go), then
+ * HEAD_TOOLS. The conversation goes between that and TAIL. The tools are the
+ * vocabulary in kernel/sys/rpc.h, described for a model; every one of them
+ * is something a keyboard could have done, and `do` is what an app declared
+ * it can do without one. */
+static const char HEAD_SYSTEM[] =
   "{\"model\":\"claude-opus-5\",\"max_tokens\":1024,"
   "\"output_config\":{\"effort\":\"low\"},"
   "\"system\":\"You are Claude, running on CardOS: a pocket computer with a keyboard "
   "and a 40 by 16 character screen. Answer briefly, in plain text: no markdown, no "
   "lists, no headings. You can act on the device with the tools. When asked to do "
   "something, do it with as few calls as you can, then say in a few words what you "
-  "did. The apps are Todo, Calendar, Edit (which is where notes go), IDE, Files, "
-  "Explorer, Photos, Web, Stocks, Screen, Mines, Pinball, Memory and Settings. Each "
-  "tool result says what happened and what the open app can do next; an app's "
-  "actions are run with the action tool, and text is typed with the type tool. To "
+  "did. Prefer the do tool: it runs an app's command directly, without opening the "
+  "app, and its result is the answer. The commands, one per line as APP COMMAND "
+  "then each argument as name:type, then what it does:\\n";
+static const char HEAD_TOOLS[] =
+  "\\nFor anything else, open the app with the open tool; its result lists the "
+  "app's actions, run with the action tool, and text is typed with the type tool. "
+  "The apps are Todo, Calendar, Edit (which is where notes go), IDE, Files, "
+  "Explorer, Photos, Web, Stocks, Screen, Mines, Pinball, Memory and Settings. To "
   "make a note: open edit, action new, type the text, action saveas, type a file "
   "name, key enter.\","
   "\"tools\":["
+  "{\"name\":\"do\",\"description\":\"Run one of the commands in the system prompt, "
+  "as one line: APP COMMAND then the arguments, text in double quotes, e.g. todo "
+  "add \\\"fix the car\\\". The result is the app's answer.\",\"input_schema\":{"
+  "\"type\":\"object\",\"properties\":{\"line\":{\"type\":\"string\"}},\"required\":"
+  "[\"line\"]}},"
   "{\"name\":\"open\",\"description\":\"Open an app by name. The result lists the "
   "actions it offers.\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"app\":"
   "{\"type\":\"string\"}},\"required\":[\"app\"]}},"
@@ -242,6 +255,17 @@ void agent_execute(const RpcCmd *c, char *result, size_t cap) {
   case RPC_NONE:
     snprintf(result, cap, "%.60s", c->arg[0] ? c->arg : "not understood");
     return;
+  case RPC_DO: {
+    /* An app's command, open or not: the same path the console's `do`
+     * takes, checked against what the app declared. */
+    char buf[RPC_ARG_MAX];
+    const char *w[2 + CAPP_CMD_ARGS_MAX + 8];
+    int n = cmdline_split(c->arg, buf, sizeof buf, w, (int)(sizeof w / sizeof w[0]));
+    if (n < 2) { snprintf(result, cap, "do needs an app and a command"); return; }
+    if (capprun_command(w[0], w[1], n - 2, w + 2, result, cap) == 0 && !result[0])
+      snprintf(result, cap, "done");
+    return;
+  }
   default:
     snprintf(result, cap, "not a command");
     return;
@@ -264,8 +288,45 @@ static int tool_to_cmd(const ChatToolCall *t, RpcCmd *c) {
     if (c->num < 0) c->num = 0;
   }
   else if (!strcmp(t->name, "wifi"))   c->verb = RPC_WIFI;
+  else if (!strcmp(t->name, "do"))     c->verb = RPC_DO;
   else return -1;
   return 0;
+}
+
+/* HEAD_SYSTEM + the catalog, JSON-escaped + HEAD_TOOLS, into one buffer.
+ * Static: a few kilobytes, and only one request is ever being written. A
+ * catalog too long for the room left is cut at a line, not mid-line. */
+static const char *build_head(void) {
+  static char head[sizeof HEAD_SYSTEM + sizeof HEAD_TOOLS + 2048];
+  static char cat[1536];
+  size_t o = 0, i;
+  int fd, n;
+
+  memcpy(head, HEAD_SYSTEM, sizeof HEAD_SYSTEM - 1);
+  o = sizeof HEAD_SYSTEM - 1;
+
+  fd = fs_open(CAPPRUN_CATALOG, FS_O_READ);
+  n = fd >= 0 ? fs_read(fd, cat, sizeof cat - 1) : 0;
+  if (fd >= 0) fs_close(fd);
+  if (n < 0) n = 0;
+  cat[n] = 0;
+  if (n == (int)sizeof cat - 1) {                  /* cut at the last line */
+    char *nl = strrchr(cat, '\n');
+    if (nl) nl[1] = 0;
+  }
+  for (i = 0; cat[i] && o + 8 < sizeof head - sizeof HEAD_TOOLS; i++) {
+    char ch = cat[i];
+    if (ch == '"' || ch == '\\') { head[o++] = '\\'; head[o++] = ch; }
+    else if (ch == '\n') { head[o++] = '\\'; head[o++] = 'n'; }
+    else if ((unsigned char)ch >= 0x20) head[o++] = ch;
+  }
+  if (!cat[0]) {
+    static const char NONE[] = "(no app has commands yet)";
+    memcpy(head + o, NONE, sizeof NONE - 1);
+    o += sizeof NONE - 1;
+  }
+  memcpy(head + o, HEAD_TOOLS, sizeof HEAD_TOOLS);  /* with its terminator */
+  return head;
 }
 
 /* ---- the loop --------------------------------------------------------- */
@@ -279,7 +340,7 @@ static int start_request(void) {
    * the history a second time, round after round, until ROUNDS_MAX. */
   fs_remove(DIR "/" REPLY);
   if (chatlog_trim(HISTORY_CAP) != 0) ESP_LOGW(TAG, "could not trim the history");
-  if (chatlog_write_request(REQUEST, HEAD, TAIL) != 0) return -4;
+  if (chatlog_write_request(REQUEST, build_head(), TAIL) != 0) return -4;
   if (httpq_start_files(&s_running, URL, DIR "/" REQUEST, "application/json",
                         s_auth, DIR "/" REPLY, TIMEOUT_MS) != 0)
     return -4;

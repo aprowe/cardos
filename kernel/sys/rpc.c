@@ -124,6 +124,18 @@ int rpc_parse(const char *line, RpcCmd *cmd) {
       copy_arg(cmd, rest);
       return cmd->arg[0] ? 1 : (cmd->verb = RPC_BAD, 0);
     }
+    if ((rest = word_is(p, "do")) != NULL) {
+      /* APP COMMAND ARGS, kept whole: kernel/app/cmdline.c splits it and
+       * checks it against the app's declared table, which is the check
+       * that matters. Here only: at least an app and a command. */
+      const char *q;
+      cmd->verb = RPC_DO;
+      copy_arg(cmd, rest);
+      q = cmd->arg;
+      while (*q && !is_space(*q)) q++;
+      while (*q && is_space(*q)) q++;
+      return *q ? 1 : (cmd->verb = RPC_BAD, 0);
+    }
     if ((rest = word_is(p, "none")) != NULL) {
       cmd->verb = RPC_NONE;
       copy_arg(cmd, rest);

@@ -17,6 +17,24 @@ static RpcCmd parse(const char *line, int *ok) {
   return c;
 }
 
+/* `do APP COMMAND ARGS`: an app's command, as the console types it. The line
+ * is kept whole -- quotes and all -- because kernel/app/cmdline.c splits it
+ * and checks it against what the app declared; this parser only has to know
+ * that it is a `do` and that there is something to do. */
+void test_rpc_do_keeps_the_line_for_the_app_to_check(void) {
+  int ok;
+  RpcCmd c;
+  c = parse("do todo add \"fix car\"", &ok);
+  CHECK(ok); CHECK_EQ(c.verb, RPC_DO);
+  CHECK(!strcmp(c.arg, "todo add \"fix car\""));
+  c = parse("Do todo add fix car.", &ok);         /* as a recogniser says it */
+  CHECK(ok); CHECK(!strcmp(c.arg, "todo add fix car"));
+  c = parse("do", &ok);
+  CHECK(!ok);
+  c = parse("do todo", &ok);                        /* an app and no command */
+  CHECK(!ok);
+}
+
 void test_rpc_the_verbs_parse(void) {
   int ok;
   RpcCmd c;
