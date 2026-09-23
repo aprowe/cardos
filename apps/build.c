@@ -18,7 +18,7 @@
  * Each of those is a short request. The screen stays alive between them, and
  * escape still works while Claude is thinking.
  *
- *     build                   the proxy compiled in
+ *     build                   the server the OS uses (env PROXY)
  *     build <base-url>        somewhere else, e.g. http://10.0.0.5:8080
  *
  * This used to be called Claude. It was renamed when a Claude of its own
@@ -510,7 +510,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api = a;
   api->mem_set(&C, 0, sizeof C);
 
-  api->fmt(C.base, sizeof C.base, "%s", CAPP_PROXY_DEFAULT);
+  api->fmt(C.base, sizeof C.base, "%s", api->proxy());
   if (argc > 1 && argv[1][0]) api->fmt(C.base, sizeof C.base, "%s", argv[1]);
   read_token();
 

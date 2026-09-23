@@ -66,10 +66,7 @@ setup() {
 
   echo "== 6. the store, filled from that build"
   ssh "$HOST" "install -d -m 750 -o cardos -g cardos /var/lib/cardos $STORE"
-  as_cardos "cd $CLONE && $VENV/bin/python -c '
-import sys; sys.path.insert(0, \".\")
-from server import build, updates
-print(\"   published:\", \", \".join(build.publish(\"$STORE\", updates.FIRMWARE, updates.APPS_DIR, True)) or \"nothing\")'"
+  build_and_publish
 
   echo "== 7. the service: run from the clone, with --build --store"
   unit_and_restart
@@ -96,10 +93,25 @@ unit_and_restart() {
     grep -E '^(WorkingDirectory|ExecStart)' $UNIT | sed 's/--token [^ \"]*/--token <hidden>/'"
 }
 
+# Rebuild the clone and publish whatever changed into the store. `update`
+# needs this as much as `setup` does: new master can move CAPP_API_VERSION,
+# and a store still holding the old apps would hand the device binaries its
+# new loader refuses.
+build_and_publish() {
+  as_cardos "set -e; cd $CLONE
+    $VENV/bin/python tools/build_apps.py | tail -1
+    $VENV/bin/python -m platformio run 2>&1 | grep -E 'Flash:|SUCCESS|FAILED|rror' | tail -4
+    $VENV/bin/python -c '
+import sys; sys.path.insert(0, \".\")
+from server import build, updates
+print(\"   published:\", \", \".join(build.publish(\"$STORE\", updates.FIRMWARE, updates.APPS_DIR, True)) or \"nothing\")'"
+}
+
 update() {
   git push -q droplet master
   ssh "$HOST" "chgrp -R cardos $BARE && chmod -R g+w $BARE"
   as_cardos "set -e; cd $CLONE; git fetch -q origin; git merge -q --no-edit origin/master; git log --oneline -1"
+  build_and_publish
   unit_and_restart
 }
 

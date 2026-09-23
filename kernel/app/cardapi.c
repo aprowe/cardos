@@ -367,6 +367,8 @@ static const CappAudio AUDIO = {
 };
 static const CappAudio *api_audio(void) { return &AUDIO; }
 
+static const char *api_proxy(void) { return update_base(); }
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -392,6 +394,7 @@ static const CardApi API = {
   api_key_repeat,
   api_pick, api_pick_poll,
   api_audio,
+  api_proxy,
 };
 
 const CardApi *cardos_api(void) { return &API; }

@@ -273,7 +273,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api = a;
   api->mem_set(&S, 0, sizeof S);
 
-  api->fmt(S.base, sizeof S.base, "%s", CAPP_PROXY_DEFAULT);
+  api->fmt(S.base, sizeof S.base, "%s", api->proxy());
   api->fmt(S.mode, sizeof S.mode, "%s", "follow");
   if (argc > 1 && argv[1][0]) api->fmt(S.base, sizeof S.base, "%s", argv[1]);
   api->fmt(S.status, sizeof S.status, "%s", "enter to connect");

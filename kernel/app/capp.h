@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 28
+#define CAPP_API_VERSION 29
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -86,13 +86,16 @@ typedef struct {
  *
  * In the contract header because both sides need it: the kernel reads it when
  * an app declares CAPP_NEEDS_PROXY and when the updater looks for a manifest,
- * and Web and Claude compile it in as their own default. It was written out
+ * and api->proxy() falls back to it. It was written out
  * five separate times, and the failure mode of that is a laptop whose address
  * changed and two of five places still pointing at the old one.
  *
- * The kernel prefers `env PROXY` over this. An app cannot read the environment
- * -- there is no API for it -- so an app that wants to move has its own way
- * of being told: `/url` in Claude, an argument to Web. */
+ * The kernel prefers `env PROXY` over this, and apps must too: they start
+ * from api->proxy(), which is that choice made once, never from this
+ * constant. (Build, Web and Screen used the constant until API 29, and
+ * talked to a laptop that was off while the OS talked to the droplet.) An
+ * app can still be pointed elsewhere for one run: `/url` in Build, an
+ * argument to Web. */
 #define CAPP_PROXY_DEFAULT "http://192.168.1.74:8080"
 
 /* The card layout. In the contract header for the same reason as the proxy:
@@ -612,6 +615,13 @@ typedef struct {
 
   /* Sound: kernel/sys/audio.h behind a table, like the agent. */
   const CappAudio *(*audio)(void);
+
+  /* The server's base URL, "http://host:port", as the kernel resolves it:
+   * `env PROXY` if set, else CAPP_PROXY_DEFAULT. An app that talks to the
+   * server starts here, not at the constant -- Build, Web and Screen used the
+   * constant, so with PROXY pointing at the droplet the OS's pre-flight
+   * reached the droplet and the app then posted to a laptop that was off. */
+  const char *(*proxy)(void);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

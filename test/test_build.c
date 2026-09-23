@@ -31,6 +31,9 @@ static size_t fake_strlen(const char *s) { return strlen(s); }
 static uint32_t fake_ticks(void) { return NOW; }
 static int fake_open(const char *p, int f) { (void)p; (void)f; return -1; }
 static void fake_ui(const CappUi *ui) { INST = *ui; }
+/* Somewhere that is not CAPP_PROXY_DEFAULT, as `env PROXY` is on a device
+ * pointed at the droplet. */
+static const char *fake_proxy(void) { return "http://arowe.example:8080"; }
 
 static int fake_fmt(char *buf, size_t n, const char *fmt, ...) {
   va_list ap;
@@ -60,6 +63,7 @@ static void boot(void) {
   API.ticks_ms = fake_ticks;
   API.open = fake_open;
   API.ui = fake_ui;
+  API.proxy = fake_proxy;
 
   NOW = 1000;
   FILLS = TEXTS = 0;
@@ -74,6 +78,15 @@ static int press(unsigned char k) {
   FILLS = TEXTS = 0;
   if (INST.key(INST.state, k)) INST.paint(INST.state, WIN);
   return FILLS + TEXTS;
+}
+
+/* Build posted to the compiled-in laptop address while the OS's pre-flight
+ * went to `env PROXY` -- the droplet -- so the check passed and every message
+ * went nowhere. It starts from what the kernel resolved. */
+void test_build_talks_to_the_server_the_os_uses(void) {
+  boot();
+  CHECK(strcmp(C.base, "http://arowe.example:8080") == 0);
+  CHECK(strcmp(C.base, CAPP_PROXY_DEFAULT) != 0);
 }
 
 void test_build_installs_a_ui(void) {
