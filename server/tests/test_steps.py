@@ -147,6 +147,19 @@ class Steps(unittest.TestCase):
         self.assertIn("[x] 3. add keys", reply)
         self.assertIn("did step 3", reply)
 
+    def test_the_plan_is_in_the_log_before_any_step_runs(self):
+        c = Stepped(["write skeleton", "add countdown"])
+        lines = []
+
+        def claude_sees_log(text, on_log=None, **kw):
+            lines.append("<turn>")
+            return "ok"
+        c._claude = claude_sees_log
+        c.run_turn("make a timer app", log=lines.append)
+        self.assertEqual(lines[:4], ["plan: 2 steps", "1. write skeleton",
+                                     "2. add countdown", "-- step 1/2: write skeleton"])
+        self.assertEqual(lines[4], "<turn>")
+
     def test_a_step_that_times_out_stops_the_rest_and_says_where(self):
         c = Stepped(["a", "b", "c"], fail_at=2)
         state, reply = c.run_turn("x")

@@ -338,7 +338,11 @@ class ChatService:
             steps = [text]
         n = len(steps)
         if n > 1:
+            # The whole plan, up front: seeing it only in the final answer
+            # was seeing it after it no longer mattered.
             log("plan: %d steps" % n)
+            for i, s in enumerate(steps, 1):
+                log(_one_line("%d. %s" % (i, s)))
 
         state, results, failed = "done", [], None
         for k, step in enumerate(steps, 1):
