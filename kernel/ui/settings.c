@@ -19,6 +19,8 @@
 #include "kernel/drv/display.h"
 #include "kernel/drv/speaker.h"
 #include "kernel/app/capprun.h"
+#include "kernel/app/capp.h"
+#include "kernel/fs/fs.h"
 #include "kernel/net/wifi.h"
 
 #include "esp_system.h"
@@ -206,6 +208,24 @@ static void v_btboot(char *b, size_t n) {
   snprintf(b, n, "%s", bthid_autostart() ? "on" : "off");
 }
 static void v_bright(char *b, size_t n) { snprintf(b, n, "%d%%", display_brightness()); }
+
+/* The menu bar in every app from the start, rather than only once a mouse
+ * moves or fn-b asks. A file every app can see (CAPP_MENUBAR_FILE), read as
+ * each app starts -- so it takes effect on the next app opened. */
+static int menubar_always(void) {
+  FsStat s;
+  return fs_stat(CAPP_MENUBAR_FILE, &s) == 0;
+}
+static void v_menubar(char *b, size_t n) { snprintf(b, n, "%s", menubar_always() ? "on" : "off"); }
+static void act_menubar(SettingsState *st) {
+  if (menubar_always()) fs_remove(CAPP_MENUBAR_FILE);
+  else {
+    int fd = fs_open(CAPP_MENUBAR_FILE, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    if (fd >= 0) fs_close(fd);
+  }
+  snprintf(st->note, sizeof st->note, menubar_always()
+           ? "on: every app opens with its menus" : "off: menus with a mouse, or fn-b");
+}
 static void v_volume(char *b, size_t n) {
   if (!speaker_volume()) snprintf(b, n, "%s", "muted");
   else snprintf(b, n, "%d%%", speaker_volume());
@@ -235,6 +255,7 @@ static const Row ROWS[] = {
   { NULL,        "Radio off",    NULL,     act_radio_off,  0 },
 
   { "Display",   "Brightness",   v_bright, act_bright,     0 },
+  { NULL,        "Menu bar",     v_menubar, act_menubar,   1 },
 
   { "Sound",     "Volume",       v_volume, act_volume,     0 },
 

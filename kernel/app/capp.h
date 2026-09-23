@@ -115,6 +115,12 @@ typedef struct {
 #define CAPP_APPS   "/apps"
 #define CAPP_VAR    "/var"
 
+/* Present: every app's menu bar starts shown, not only once a mouse moves or
+ * fn-b asks. Settings > Display > Menu bar makes and removes it; apps/toolbar.h
+ * reads it when an app starts. A file rather than an API so no app needs
+ * rebuilding against a new table to honour it. */
+#define CAPP_MENUBAR_FILE CAPP_CONFIG "/menubar.on"
+
 typedef struct { int16_t x, y, w, h; } CRect;
 
 /* One argument a command takes. See CappAction and

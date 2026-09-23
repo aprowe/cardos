@@ -147,9 +147,12 @@ static TB_OPT void toolbar_set(const CappAction *actions, int n,
 
 static TB_OPT void toolbar_init(const CardApi *a, const CappAction *actions,
                                 int n, const TbIcon *icons, int nicon) {
+  CappStat st;
   TB.api = a;
   TB.seen_mouse = 0;
-  TB.shown = 0;
+  /* Shown from the start when Settings says the bar is always there. Not
+   * focused: the keys stay the app's until fn-b, as they would with a mouse. */
+  TB.shown = a->stat(CAPP_MENUBAR_FILE, &st) == 0;
   TB.focus = 0;
   TB.busy = 0;
   toolbar_set(actions, n, icons, nicon);
