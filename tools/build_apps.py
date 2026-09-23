@@ -141,6 +141,7 @@ FOLDERS = {
     "todo":     "Tools",
     "memo":     "Tools",
     "timer":    "Tools",
+    "habits":   "Tools",
 }
 
 
