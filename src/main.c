@@ -1160,6 +1160,7 @@ void app_main(void) {
     if (nvs_erased) applogf("nvs", "erased at boot: %s", nvs_erased);
     if (wifi_restore_from_card())  con_write("wifi: network restored from /config/wifi.txt\n");
     if (gauth_restore_from_card()) con_write("google: credentials restored from /config/google.txt\n");
+    if (env_restore_from_card())   con_write("env: variables restored from /config/env.txt\n");
     fs_space(&total, &freeb);
     con_printf("sd %u MB, %u MB free\n",
                (unsigned)(total / (1024 * 1024)),

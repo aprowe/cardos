@@ -26,8 +26,8 @@
  * device; this one talks to Claude Code and can change it.
  *
  * Type /new to forget the conversation, /url <base> to move the server, and
- * /update to install whatever the PC has built since -- which, after "make
- * the flippers stronger", is the point.
+ * /update (or ctrl-u) to install whatever the PC has built since -- which,
+ * after "make the flippers stronger", is the point.
  */
 
 #include "kernel/app/capp.h"
@@ -507,6 +507,7 @@ static int app_key(void *st, unsigned char k) {
     mark_in();
     return 1;
   }
+  if (k == 0x15) { install_update(); return 1; }  /* ctrl-u: same as /update */
   /* With nothing typed the arrows are a scrollback, which is what they should
    * be on a screen this size. Mid-word they are characters, because ; . , /
    * are the arrow keys on this machine and an address needs full stops. */
@@ -575,7 +576,8 @@ const CappInfo capp_info = {
     0x81, 0x01, 0x81, 0x01, 0x40, 0x02, 0x60, 0x06,
     0x38, 0x1C, 0x1C, 0xF0, 0x07, 0x00, 0x03, 0x00 },
   "enter\tsend\narrows\tscrollback, when nothing is typed\n"
-  "/new\tforget the conversation\n/url X\tpoint at another server\n",
+  "/new\tforget the conversation\n/url X\tpoint at another server\n"
+  "/update, ctrl-u\tinstall whatever the PC has built\n",
 };
 
 static CappUi UI;

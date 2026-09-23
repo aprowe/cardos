@@ -15,6 +15,7 @@
 #include "kernel/ui/help.h"
 #include "kernel/ui/picker.h"
 #include "kernel/drv/bthid.h"
+#include "kernel/sys/clock.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "nvs.h"
@@ -401,14 +402,15 @@ static void paint_taskbar(Rect clip) {
     x = (int16_t)(x + 50);
   }
 
-  /* Clock, sunken, at the right. Uptime rather than time of day: there is no
-   * RTC on this board, so pretending to know the time would be a lie. */
+  /* Clock, sunken, at the right. The time, if the device has been told it --
+   * see clock_hm: "--:--" before NTP has ever synced, same as the launcher's
+   * status bar. This used to show uptime in minutes and seconds formatted as
+   * a clock, which read as the time of day and was wrong past the first hour
+   * after a reboot. */
   {
     Rect c = R(DISPLAY_W - 30, DESK_H + 2, 28, TASKBAR_H - 4);
-    unsigned mins = (unsigned)(s_now_ms / 60000u);
-    unsigned secs = (unsigned)((s_now_ms / 1000u) % 60u);
+    clock_hm(clock, sizeof clock);
     draw_bevel(c, C_FACE, C_SHADOW, C_LIGHT);
-    snprintf(clock, sizeof clock, "%u:%02u", mins % 100u, secs);
     draw_text((int16_t)(c.x + 2), (int16_t)(c.y + 1), clock, C_TEXT, C_FACE);
   }
 }

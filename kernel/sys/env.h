@@ -23,6 +23,13 @@ const char *env_get(const char *name);
 /* A NULL or empty value unsets. Saved immediately. */
 int env_set(const char *name, const char *value);
 
+/* Restore into NVS any key /config/env.txt has that NVS does not -- NVS wins
+ * where both exist, the same fallback wifi_restore_from_card and
+ * gauth_restore_from_card use. Call once at boot, after the card mounts and
+ * after env_init (which runs before the card is even mountable). Returns 1
+ * if anything came from the file. */
+int env_restore_from_card(void);
+
 int         env_count(void);
 const char *env_name_at(int i);
 const char *env_value_at(int i);
