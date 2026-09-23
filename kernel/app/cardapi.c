@@ -369,11 +369,9 @@ static const CappAudio *api_audio(void) { return &AUDIO; }
 
 static const char *api_proxy(void) { return update_base(); }
 
-/* Commands (API 30). Phase 1 declares them; running one headless is phase 2
- * (docs/superpowers/specs/2026-09-23-app-commands-design.md), and until then
- * nothing is ever headless and nothing waits on command_done. */
-static int  api_headless(void) { return 0; }
-static void api_command_done(int rc, const char *out) { (void)rc; (void)out; }
+/* Commands (API 30): see capprun_command. */
+static int  api_headless(void) { return capprun_headless(); }
+static void api_command_done(int rc, const char *out) { capprun_command_done(rc, out); }
 
 static const CardApi API = {
   CAPP_API_VERSION,

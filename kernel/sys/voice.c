@@ -14,9 +14,14 @@
 #include "kernel/net/wifi.h"
 #include "kernel/ui/shell.h"
 #include "kernel/ui/overlay.h"
+#include "kernel/sys/g0gesture.h"
+#include "kernel/sys/applog.h"
+#include "kernel/sys/clock.h"
+#include "kernel/fs/fs.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -62,12 +67,28 @@ const char *voice_status(void) { return s_status[0] ? s_status : "idle"; }
 
 static void say(const char *s) { snprintf(s_status, sizeof s_status, "%s", s); }
 
+/* Hold to talk; tap, then hold, for a memo. See kernel/sys/g0gesture.h. */
+static G0Gesture s_g0;
+static uint32_t  s_press_ms;         /* when this press went down */
+
+static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
 static void level_cb(int pct) {
   s_level = pct;
   /* Drawn from inside the recording loop, every 32 ms, because that loop is
    * where the machine is while someone is talking. A meter that only moved
-   * when the recording ended would be a picture of a meter. */
+   * when the recording ended would be a picture of a meter.
+   *
+   * Not for the first G0_TAP_MS of a press: until then it may be the tap
+   * before a memo, and a panel that flashed up and away on every tap would
+   * be noise. */
+  if (now_ms() - s_press_ms < G0_TAP_MS) return;
   overlay_listening(pct);
+}
+
+static void memo_level_cb(int pct) {
+  s_level = pct;
+  overlay_memo(pct, (int)((now_ms() - s_press_ms) / 1000));
 }
 
 static void send_cb(int sent, int total) {
@@ -151,23 +172,24 @@ static void send_and_act(void) {
 void voice_once(int max_ms, int hold) {
   int bytes;
 
-  if (!wifi_is_connected()) {
-    overlay_working("joining wifi");
-    if (wifi_connect_saved(20000) != 0) {
-      say(wifi_status());
-      overlay_result(s_status);
-      vTaskDelay(pdMS_TO_TICKS(2000));
-      overlay_close();
-      return;
-    }
-  }
-
+  /* Recording first, the network after. It used to join WiFi before
+   * listening, so a sentence waited up to twenty seconds for a radio -- and
+   * a tap, which is how a memo starts, would have too. */
   s_recording = 1;
   s_level = 0;
+  s_press_ms = now_ms();
   say(hold ? "listening" : "listening (timed)");
   bytes = mic_record_wav(WAV_PATH, max_ms, hold ? stop_cb : (int (*)(void))0,
                          level_cb);
   s_recording = 0;
+
+  /* A tap: the first half of tap-then-hold. Nothing to say and nothing to
+   * send; the next press decides. */
+  if (hold && g0_release(&s_g0, now_ms() - s_press_ms, now_ms())) {
+    say("tap");
+    overlay_close();
+    return;
+  }
 
   if (bytes < 0) {
     say("the microphone did not start");
@@ -184,6 +206,17 @@ void voice_once(int max_ms, int hold) {
     return;
   }
 
+  if (!wifi_is_connected()) {
+    overlay_working("joining wifi");
+    if (wifi_connect_saved(20000) != 0) {
+      say(wifi_status());
+      overlay_result(s_status);
+      vTaskDelay(pdMS_TO_TICKS(2000));
+      overlay_close();
+      return;
+    }
+  }
+
   ESP_LOGI(TAG, "%d bytes recorded", bytes);
   send_and_act();
 
@@ -192,6 +225,74 @@ void voice_once(int max_ms, int hold) {
    * you, and short enough not to be in the way. */
   overlay_result(voice_status());
   vTaskDelay(pdMS_TO_TICKS(2000));
+  overlay_close();
+}
+
+/* ---- memos: tap, then hold ------------------------------------------------ */
+
+#define MEMO_DIR "/home/memos"
+
+/* One past the highest mNNNN.wav in the folder, for a device that does not
+ * know the time -- the same rule apps/memo.c follows, so the two agree. */
+static int next_counter(void) {
+  FsDir d;
+  FsEntry e;
+  int high = 0;
+  if (fs_opendir(MEMO_DIR, &d) != 0) return 1;
+  while (fs_readdir(&d, &e) == 1) {
+    const char *p = e.name;
+    int v = 0;
+    if (p[0] != 'm') continue;
+    for (p++; *p >= '0' && *p <= '9'; p++) v = v * 10 + (*p - '0');
+    if (v > high) high = v;
+  }
+  fs_closedir(&d);
+  return high + 1;
+}
+
+/* Record straight to the card for as long as G0 is held. No network, no
+ * server, no app: it works in any shell, over any app, offline. */
+static void memo_once(void) {
+  char path[64], line[80];
+  const char *name;
+  FsStat st;
+  int bytes, secs;
+
+  if (fs_stat(MEMO_DIR, &st) != 0) fs_mkdir(MEMO_DIR);
+  if (clock_have_time()) {
+    time_t t = time(NULL);
+    struct tm tm;
+    localtime_r(&t, &tm);
+    memo_filename(path, sizeof path, MEMO_DIR, 1, tm.tm_mon + 1, tm.tm_mday,
+                  tm.tm_hour, tm.tm_min, tm.tm_sec, 0);
+  } else {
+    memo_filename(path, sizeof path, MEMO_DIR, 0, 0, 0, 0, 0, 0, next_counter());
+  }
+  name = strrchr(path, '/') + 1;
+
+  s_recording = 1;
+  s_level = 0;
+  s_press_ms = now_ms();
+  say("recording a memo");
+  overlay_memo(0, 0);
+  bytes = mic_record_wav(path, MIC_HARD_MAX_MS, stop_cb, memo_level_cb);
+  s_recording = 0;
+
+  if (bytes < 0) {
+    say("the microphone did not start");
+    overlay_memo_done(s_status);
+  } else if (bytes < MIC_RATE) {       /* under half a second: a slip */
+    fs_remove(path);
+    say("too short -- nothing saved");
+    overlay_memo_done(s_status);
+  } else {
+    secs = bytes / (MIC_RATE * 2);
+    snprintf(line, sizeof line, "saved %s (%d:%02d)", name, secs / 60, secs % 60);
+    say(line);
+    overlay_memo_done(line);
+    applogf("memo", "%s, %d s", name, secs);
+  }
+  vTaskDelay(pdMS_TO_TICKS(1500));
   overlay_close();
 }
 
@@ -214,6 +315,7 @@ int voice_tick(void) {
    * two. That is deliberate: while someone is talking to the machine, there
    * is nothing else for it to be doing, and the alternative is a state
    * machine spread across three subsystems for no gain. */
-  voice_once(MIC_MAX_MS, 1);
+  if (g0_press(&s_g0, now_ms()) == G0_MEMO) memo_once();
+  else voice_once(MIC_MAX_MS, 1);
   return 1;
 }

@@ -33,6 +33,11 @@ void overlay_working(const char *what);
 /* What happened, left up long enough to read. */
 void overlay_result(const char *text);
 
+/* A memo being recorded (tap, then hold G0): the meter and the elapsed time.
+ * And what became of it, under the same title. */
+void overlay_memo(int level, int secs);
+void overlay_memo_done(const char *text);
+
 /* Take it down and put back what it covered. */
 void overlay_close(void);
 

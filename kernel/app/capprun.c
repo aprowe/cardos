@@ -16,6 +16,9 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 typedef struct {
   LoadedApp la;
@@ -561,6 +564,169 @@ int capprun_start(int slot, const char *name, const char *args) {
    * installed nothing. Nothing will call into it again, so it goes straight
    * back to the pool. A graphical app installed handlers and has to stay. */
   if (!s->has_ui) release_slot(s);
+  return rc;
+}
+
+/* ---- commands --------------------------------------------------------------
+ *
+ * One instance per app. If the app is open, the command goes to that
+ * instance -- its login, its cache, its list already in memory, nothing
+ * loaded twice. If not, it is started headless: the same capp_main, with
+ * api->headless() true so it does the local part of starting and skips the
+ * screen and the sync, then the command, then the slot goes back. See
+ * docs/superpowers/specs/2026-09-23-app-commands-design.md. */
+
+#define CMD_WAIT_MS 20000
+
+static int   s_headless;             /* running an app only for a command */
+static int   s_cmd_waiting;          /* a PENDING command has not finished */
+static int   s_cmd_rc;
+static char *s_cmd_out;
+static size_t s_cmd_n;
+
+int capprun_headless(void) { return s_headless; }
+
+void capprun_command_done(int rc, const char *out) {
+  if (!s_cmd_waiting) return;
+  s_cmd_rc = rc;
+  if (s_cmd_out && s_cmd_n) snprintf(s_cmd_out, s_cmd_n, "%s", out ? out : "");
+  s_cmd_waiting = 0;
+}
+
+/* The slot whose file is APP.capp, in whichever folder. */
+static Slot *slot_for_app(const char *app) {
+  int i;
+  size_t n = strlen(app);
+  for (i = 0; i < CAPPRUN_MAX; i++) {
+    Slot *s = &s_slot[i];
+    const char *base;
+    if (!s->used || s->stale) continue;
+    base = strrchr(s->path, '/');
+    base = base ? base + 1 : s->path;
+    if (!strncmp(base, app, n) && !strcmp(base + n, ".capp")) return s;
+  }
+  return NULL;
+}
+
+/* APP.capp on the card: the top of /apps, then each folder in it. The slots
+ * only hold what the launcher's icon scan loaded, and outside the launcher
+ * -- at the console -- they are empty, so a command cannot count on them.
+ * 0 and the path, or -1. */
+static int find_capp(const char *app, char *out, size_t n) {
+  FsDir d;
+  FsEntry e;
+  FsStat st;
+  snprintf(out, n, "%s/%s.capp", CAPP_APPS, app);
+  if (fs_stat(out, &st) == 0 && !st.is_dir) return 0;
+  if (fs_opendir(CAPP_APPS, &d) != 0) return -1;
+  while (fs_readdir(&d, &e) == 1) {
+    if (!e.is_dir || e.name[0] == '.') continue;
+    snprintf(out, n, "%s/%s/%s.capp", CAPP_APPS, e.name, app);
+    if (fs_stat(out, &st) == 0 && !st.is_dir) { fs_closedir(&d); return 0; }
+  }
+  fs_closedir(&d);
+  return -1;
+}
+
+int capprun_command(const char *app, const char *cmd, int nwords,
+                    const char *const *words, char *out, size_t n) {
+  extern const CardApi *cardos_api(void);
+  static char join[CAPPRUN_CMD_TEXT];
+  const char *argv[CAPP_CMD_ARGS_MAX];
+  const CappAction *a;
+  Slot *s, *prev;
+  char why[96];
+  int headless, argc, rc, borrowed = 0;
+
+  out[0] = 0;
+  s = slot_for_app(app);
+  if (!s) {
+    /* Not in a slot: find it on the card and borrow one for the command. */
+    char path[80];
+    int i;
+    if (find_capp(app, path, sizeof path) != 0 || (i = capprun_load(path)) < 0) {
+      snprintf(out, n, "no app called %s", app);
+      return -1;
+    }
+    s = &s_slot[i];
+    borrowed = 1;
+  }
+  if (s == s_active || s == s_running) {
+    snprintf(out, n, "%s is busy", app);         /* its code is on the stack */
+    return -1;
+  }
+
+  headless = !(s->loaded && s->has_ui);
+  if (headless) {
+    char *mainargv[1];
+    mainargv[0] = s->name;
+    s->has_ui = 0;
+    if (ensure_loaded(s) != 0) {
+      if (borrowed) s->used = 0;
+      snprintf(out, n, "could not load %s: not enough memory for its code", app);
+      return -1;
+    }
+    s_headless = 1;
+    s_running = s;
+    s->la.main(cardos_api(), 1, mainargv);
+    s_running = NULL;
+    if (!s->has_ui) {
+      release_slot(s);
+      s_headless = 0;
+      if (borrowed) s->used = 0;
+      snprintf(out, n, "%s has no commands", app);
+      return -1;
+    }
+  }
+
+  a = cmdline_find(s->ui.actions, s->ui.nactions, cmd);
+  if (!a || !s->ui.command) {
+    snprintf(out, n, "%s has no command '%s'", app, cmd);
+    rc = -1;
+    goto finish;
+  }
+  argc = cmdline_bind(a, nwords, words, argv, join, sizeof join, why, sizeof why);
+  if (argc < 0) { snprintf(out, n, "%s", why); rc = -1; goto finish; }
+  if (a->cmd & CAPP_CMD_NET) s_caps_ok = meet_needs(s->flags | CAPP_NEEDS_NET);
+
+  prev = s_active;
+  s_active = s;
+  s_cmd_out = out;
+  s_cmd_n = n;
+  rc = s->ui.command(s->ui.state, a->action, argc, argv, out, n);
+  if (rc == CAPP_CMD_PENDING) {
+    /* It finishes from tick. Ticked here, on this task, as the shell would:
+     * a headless app has no shell doing it. The loop is the wait -- a
+     * command asked for from the console or by voice is waited on. */
+    uint32_t start = (uint32_t)(esp_timer_get_time() / 1000);
+    s_cmd_waiting = 1;
+    while (s_cmd_waiting) {
+      uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+      if (now - start > CMD_WAIT_MS) break;
+      if (s->ui.tick) s->ui.tick(s->ui.state, now);
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (s_cmd_waiting) {
+      s_cmd_waiting = 0;
+      snprintf(out, n, "%s %s: no answer in %d s", app, cmd, CMD_WAIT_MS / 1000);
+      rc = -1;
+    } else {
+      rc = s_cmd_rc;
+    }
+  }
+  s_cmd_out = NULL;
+  handler_done(s, prev);
+
+finish:
+  if (headless) {
+    release_slot(s);
+    s_headless = 0;
+    if (borrowed) s->used = 0;             /* the slot goes back too */
+  } else {
+    /* The open instance changed under its own screen. No marks means the
+     * whole rectangle at the next paint (see `damage` in Slot). */
+    s->has_damage = 0;
+  }
   return rc;
 }
 

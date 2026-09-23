@@ -6,6 +6,7 @@
 #include "kernel/ui/shell.h"
 #include "kernel/drv/display.h"
 
+#include <stdio.h>
 #include <string.h>
 
 /* Centred, and wide enough for forty characters of status at six pixels each.
@@ -122,6 +123,35 @@ void overlay_result(const char *text) {
   panel("Heard", C_SEND);
   /* The result gets the space the meter had: it is the only thing on this
    * panel anyone wants to read. */
+  draw_rect(R(PX + 10, PY + 24, PW - 20, 10), C_BACK);
+  draw_text_ellipsis((int16_t)(PX + 10), (int16_t)(PY + 24),
+                     (int16_t)(PW - 20), text ? text : "", C_TITLE_, C_BACK);
+  sub(NULL);
+  s_state = 4;
+}
+
+/* A memo recording: the same red meter, and how long it has been going, the
+ * one number a person recording something wants. The line under the meter
+ * is only rewritten when the second changes -- redrawing it every 32 ms
+ * block was the flicker apps/memo.c learned to avoid. */
+void overlay_memo(int level, int secs) {
+  static int shown = -1;
+  if (s_state != 5) {
+    panel("Memo", C_REC);
+    s_state = 5;
+    shown = -1;
+  }
+  bar(level, C_REC);
+  if (secs != shown) {
+    char line[32];
+    snprintf(line, sizeof line, "%d:%02d  release to save", secs / 60, secs % 60);
+    sub(line);
+    shown = secs;
+  }
+}
+
+void overlay_memo_done(const char *text) {
+  panel("Memo", C_REC);
   draw_rect(R(PX + 10, PY + 24, PW - 20, 10), C_BACK);
   draw_text_ellipsis((int16_t)(PX + 10), (int16_t)(PY + 24),
                      (int16_t)(PW - 20), text ? text : "", C_TITLE_, C_BACK);

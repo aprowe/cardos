@@ -31,6 +31,7 @@
 #include "kernel/ui/pins.h"
 #include "kernel/ui/launchui.h"
 #include "kernel/app/capprun.h"
+#include "kernel/app/cmdline.h"
 #include "kernel/app/capp.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/gauth.h"
@@ -262,6 +263,25 @@ static int do_catalog(const char *what) {
   return 1;
 }
 
+/* `do APP COMMAND ARGS...`: one of an app's commands, open or not, checked
+ * against what it declared (kernel/app/capprun.c). 0 when the first word is
+ * not an app with commands, so a lone `do ID` still reaches the focused
+ * app's action as before. */
+static int do_command(const char *rest) {
+  static char buf[CAPPRUN_CMD_TEXT], out[512];
+  const char *w[2 + CAPP_CMD_ARGS_MAX + 8];
+  int n, rc;
+  n = cmdline_split(rest, buf, sizeof buf, w, (int)(sizeof w / sizeof w[0]));
+  if (n < 2) {
+    if (n < 0) { con_write("do: an unclosed quote, or too long\n"); return 1; }
+    return 0;
+  }
+  rc = capprun_command(w[0], w[1], n - 2, w + 2, out, sizeof out);
+  if (out[0]) con_printf("%s%s", out, out[strlen(out) - 1] == '\n' ? "" : "\n");
+  else if (rc == 0) con_write("done\n");
+  return 1;
+}
+
 static void run_builtin(const char *line, char *arg) {
   if (!strcmp(line, "help"))        cmd_help();
   else if (!strcmp(line, "log"))    cmd_log(arg);
@@ -273,13 +293,18 @@ static void run_builtin(const char *line, char *arg) {
    * for by name. kernel/sys/rpc.c already argues it for voice -- an LLM
    * choosing between a few named verbs is useful, one handed a string to run
    * is not -- and this is that list, per app, written once by the app. */
-  else if (!strncmp(line, "do", 2) && (line[2] == 0 || line[2] == ' ') &&
-           do_catalog(line[2] ? line + 3 : "")) {
+  /* `line` is only the command word here -- run_stage splits at the first
+   * space and hands the rest over as `arg`. The `do ID` below used to read
+   * past "do" in `line`, found nothing, and so only ever listed. */
+  else if (!strcmp(line, "do") && do_catalog(arg)) {
     /* listed from the command catalog: `do`, `do todo` */
   }
-  else if (!strncmp(line, "do", 2) && (line[2] == 0 || line[2] == ' ')) {
+  else if (!strcmp(line, "do") && do_command(arg)) {
+    /* ran one: `do todo add "fix car"` */
+  }
+  else if (!strcmp(line, "do")) {
     const AppDef *a = launchui_running();
-    const char *what = line[2] ? line + 3 : NULL;
+    const char *what = arg;
     while (what && *what == ' ') what++;
     if (!a) con_write("no app is running\n");
     else if (!what || !*what) {

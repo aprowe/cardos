@@ -37,6 +37,16 @@ int capprun_load(const char *path);
 /* The command catalog: every app's commands, one line each, written by the
  * loads between begin and end (the icon scan). */
 #define CAPPRUN_CATALOG "/cache/commands.txt"
+
+/* Run APP's command CMD with `words` as its arguments -- checked against what
+ * the app declared first. The open instance if there is one, otherwise the
+ * app started headless and released after. Text for the caller in `out`.
+ * 0 done, <0 failed (out says why). Waits up to 20 s for a PENDING one. */
+#define CAPPRUN_CMD_TEXT 160
+int capprun_command(const char *app, const char *cmd, int nwords,
+                    const char *const *words, char *out, size_t n);
+int  capprun_headless(void);                 /* api->headless */
+void capprun_command_done(int rc, const char *out);   /* api->command_done */
 void capprun_catalog_begin(void);
 void capprun_catalog_end(void);
 

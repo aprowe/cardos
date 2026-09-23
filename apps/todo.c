@@ -144,6 +144,7 @@ static struct {
   int   sweep;                      /* the list being pulled off screen, or -1 */
   int   swept;                      /* how many the sweep has finished */
   int   synced_once;                /* the sweep has run; do not start another */
+  int   cmd_waiting;                /* a `sync` command wants to hear the end */
 
   OverRow over[OVER_MAX];
   int     nover;
@@ -877,11 +878,19 @@ static void toggle(void) {
   say("ticked -- s syncs");
 }
 
-static void add_draft(void) {
+/* A new task on top of the current list, saved and marked for the next
+ * sync to push. What Add does with its draft and what the `add` command
+ * does with its argument: one path, so the two cannot disagree. -1 if the
+ * list is full or there is nothing to add.
+ *
+ * A double quote or a backslash would break the JSON the push sends, which
+ * is why the draft's keyboard refuses them; text from a command gets the
+ * same rule by replacement instead. */
+static int add_text(const char *text) {
   Item *it;
-  int i;
+  int i, j;
 
-  if (!T.draft_len || T.n >= MAX_ITEMS) { T.view = VIEW_LIST; return; }
+  if (!text || !text[0] || T.n >= MAX_ITEMS) return -1;
   /* New items go on top, where you can see the one you just wrote.
    * api->mem_cpy rather than a struct assignment: GCC turns one of those into
    * a call to memcpy, and an app links against nothing that could provide
@@ -890,15 +899,21 @@ static void add_draft(void) {
     api->mem_cpy(&T.item[i], &T.item[i - 1], sizeof T.item[0]);
   it = &T.item[0];
   api->mem_set(it, 0, sizeof *it);
-  api->fmt(it->title, sizeof it->title, "%s", T.draft);
+  for (i = 0, j = 0; text[i] && j < TITLE_MAX; i++)
+    it->title[j++] = (text[i] == '"' || text[i] == '\\') ? '\'' : text[i];
+  it->title[j] = 0;
   it->dirty = 1;
   T.n++;
   T.sel = 0;
+  cache_save();
+  return 0;
+}
+
+static void add_draft(void) {
+  if (T.draft_len && add_text(T.draft) == 0) say("added -- s syncs");
   T.draft[0] = 0;
   T.draft_len = 0;
   T.view = VIEW_LIST;
-  cache_save();
-  say("added -- s syncs");
 }
 
 /* ---- painting ------------------------------------------------------------ */
@@ -1385,6 +1400,88 @@ static int app_action(void *st, int a) {
   return do_action(a);
 }
 
+/* Lower-case compare of `needle` somewhere in `hay`. */
+static int contains(const char *hay, const char *needle) {
+  int i, j;
+  for (i = 0; hay[i]; i++) {
+    for (j = 0; needle[j]; j++) {
+      char a = hay[i + j], b = needle[j];
+      if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+      if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+      if (a != b) break;
+    }
+    if (!needle[j]) return 1;
+    if (!hay[i + j]) return 0;
+  }
+  return 0;
+}
+
+static const char *list_name(void) {
+  return T.cur >= 0 ? T.lists[T.cur].name : "the list";
+}
+
+/* The commands (see LIST_ACTIONS): the same functions the screen uses, with
+ * arguments instead of a draft or a cursor. The OS has already checked the
+ * count and the types. Everything here is local -- the card is the truth and
+ * a dirty item is pushed by the next sync -- except `sync`, which is the one
+ * that needs the network and so answers PENDING and finishes from tick. */
+static int app_command(void *st, int action, int argc, const char *const *argv,
+                       char *out, size_t n) {
+  int i, hit = -1, hits = 0;
+  size_t o = 0;
+  (void)st;
+  (void)argc;
+
+  switch (action) {
+  case ACT_ADD:
+    if (add_text(argv[0]) != 0) {
+      api->fmt(out, n, "%s is full (%d tasks)", list_name(), MAX_ITEMS);
+      return -1;
+    }
+    api->fmt(out, n, "added \"%s\" to %s", T.item[0].title, list_name());
+    return 0;
+
+  case ACT_LIST:
+    for (i = 0; i < T.n && o + 4 < n; i++) {
+      if (T.item[i].done || T.item[i].deleted) continue;
+      o += (size_t)api->fmt(out + o, n - o, "- %s\n", T.item[i].title);
+    }
+    if (!o) api->fmt(out, n, "nothing left to do in %s", list_name());
+    return 0;
+
+  case ACT_DONE:
+    for (i = 0; i < T.n; i++) {
+      if (T.item[i].done || T.item[i].deleted) continue;
+      if (contains(T.item[i].title, argv[0])) { hit = i; hits++; }
+    }
+    if (!hits) {
+      api->fmt(out, n, "no open task matches \"%s\"", argv[0]);
+      return -1;
+    }
+    if (hits > 1) {
+      api->fmt(out, n, "%d tasks match \"%s\"; say more of it", hits, argv[0]);
+      return -1;
+    }
+    T.item[hit].done = 1;
+    T.item[hit].dirty = 1;
+    cache_save();
+    api->fmt(out, n, "ticked off \"%s\"", T.item[hit].title);
+    return 0;
+
+  case ACT_SYNC:
+    if (T.stage != SYNC_IDLE) { api->fmt(out, n, "already syncing"); return -1; }
+    sync_begin();
+    if (T.stage == SYNC_IDLE) {                 /* could not start: says why */
+      api->fmt(out, n, "%s", T.status);
+      return -1;
+    }
+    T.cmd_waiting = 1;
+    return CAPP_CMD_PENDING;
+  }
+  api->fmt(out, n, "todo has no command %d", action);
+  return -1;
+}
+
 static int app_click(void *st, short x, short y, int button) {
   int row;
   int i;
@@ -1469,6 +1566,13 @@ static int app_tick(void *st, uint32_t now_ms) {
   sync_tick();
   toolbar_busy(T.stage != SYNC_IDLE);
 
+  /* A `sync` command asked, and the sweep has ended: its status is the
+   * answer ("synced", or why not). */
+  if (T.cmd_waiting && T.stage == SYNC_IDLE) {
+    T.cmd_waiting = 0;
+    api->command_done(0, T.status);
+  }
+
   /* While a page is printing its progress is the strip; the last word --
    * "printed", or why not -- stays until the next sync writes over it. */
   if (T.printing) {
@@ -1486,7 +1590,10 @@ static int app_tick(void *st, uint32_t now_ms) {
    *
    * The exception is a sweep that could not start at all -- no radio yet, no
    * token yet -- which is not a sweep and is retried shortly. */
-  if (T.stage == SYNC_IDLE && !T.synced_once &&
+  /* Not when started only to run a command: `add` is local, and a headless
+   * instance that swept every list would be the slow thing commands exist to
+   * avoid. The `sync` command starts one itself. */
+  if (T.stage == SYNC_IDLE && !T.synced_once && !api->headless() &&
       (!T.tried_once || (int32_t)(now_ms - T.next_auto) >= 0))
     sync_begin();
 
@@ -1567,6 +1674,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.actions = LIST_ACTIONS;
   UI.nactions = NLIST;
   UI.action = app_action;
+  UI.command = app_command;
   UI.wants_text = app_wants_text;
   api->ui(&UI);
   return 0;
