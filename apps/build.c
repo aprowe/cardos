@@ -38,6 +38,7 @@
 #define BAR_H       10
 #define IN_H        11
 #define INPUT_MAX  200
+#define QUEUE_MAX    4           /* messages typed while one is running */
 #define REPLY_MAX 4000
 
 #define POLL_MS   1200
@@ -72,11 +73,14 @@ static struct {
   int   check_update;             /* an answer just landed: ask what is new */
   int   sending;                  /* a post is due on the next tick */
   char  pending[INPUT_MAX + 1];   /* what to post */
+  char  queued[QUEUE_MAX][INPUT_MAX + 1];  /* sent one at a time, in order */
+  int   nqueued;
   uint32_t next_poll;
   uint32_t started;
   int   dots;
   char  progress[31];             /* "step 2/3: writing timer.c"; the bar is
                                      40 columns, less "Build  " and dots */
+  int   log_seen;                 /* the server's log lines already shown */
 
   char  reply[REPLY_MAX];
   char  status[40];
@@ -229,8 +233,23 @@ static void send_now(void) {
     return;
   }
   C.progress[0] = 0;              /* nothing said yet about this one */
+  C.log_seen = 0;
   C.started = api->ticks_ms();
   C.next_poll = C.started + POLL_MS;
+}
+
+/* The next queued message into the send slot, if there is one. The send
+ * itself happens on the next tick, as it does for a message typed now. */
+static void send_next_queued(void) {
+  int i;
+  if (!C.nqueued) return;
+  api->fmt(C.pending, sizeof C.pending, "%s", C.queued[0]);
+  for (i = 1; i < C.nqueued; i++)
+    api->fmt(C.queued[i - 1], INPUT_MAX + 1, "%s", C.queued[i]);
+  C.nqueued--;
+  C.sending = 1;
+  api->fmt(C.status, sizeof C.status, "sending");
+  mark_bar();
 }
 
 /* Ask whether it is done. Also short -- the server replies "pending" straight
@@ -241,7 +260,7 @@ static void poll_now(void) {
   int n;
 
   mark_bar();                     /* the dots, the time, or an error */
-  api->fmt(url, sizeof url, "%s/chat?id=%d", C.base, C.job);
+  api->fmt(url, sizeof url, "%s/chat?id=%d&from=%d", C.base, C.job, C.log_seen);
   n = api->http("GET", url, (const char *)0, (const char *)0,
                 C.token[0] ? C.token : (const char *)0,
                 C.reply, sizeof C.reply, 20000);
@@ -263,6 +282,20 @@ static void poll_now(void) {
       i++;
     }
     C.progress[i] = 0;
+    /* Then the log lines past the ones already shown, one per line: what
+     * Claude read, searched, wrote and said. Dim, above where the answer
+     * will land, so the wait is something to watch rather than dots. */
+    while (*s && *s != '\n') s++;
+    while (*s == '\n') {
+      char line[COLS * 2 + 1];
+      s++;
+      for (i = 0; s[i] && s[i] != '\n' && i < (int)sizeof line - 1; i++) line[i] = s[i];
+      line[i] = 0;
+      while (*s && *s != '\n') s++;
+      if (!line[0]) continue;
+      push_wrapped(line, WHO_NOTE);
+      C.log_seen++;
+    }
     C.next_poll = api->ticks_ms() + POLL_MS;
     C.dots = (C.dots + 1) & 3;
     return;
@@ -282,6 +315,7 @@ static void poll_now(void) {
   api->fmt(C.status, sizeof C.status, "%lus",
            (unsigned long)((api->ticks_ms() - C.started) / 1000u));
   C.check_update = 1;               /* on the next tick, not in this one */
+  send_next_queued();
 }
 
 /* An answer may have ended with a build. Ask the proxy what it has that is
@@ -322,7 +356,10 @@ static uint16_t colour_of(int who) {
 static void paint_bar(CRect c) {
   char bar[64];
   api->fill(rect(c.x, c.y, c.w, BAR_H), CLR_BAR);
-  if (C.job)
+  if (C.job && C.nqueued)
+    api->fmt(bar, sizeof bar, "Build  %.24s +%d",
+             C.progress[0] ? C.progress : "thinking", C.nqueued);
+  else if (C.job)
     api->fmt(bar, sizeof bar, "Build  %s%s",
              C.progress[0] ? C.progress : "thinking",
              C.dots == 0 ? "" : C.dots == 1 ? "." : C.dots == 2 ? ".." : "...");
@@ -403,6 +440,8 @@ static void submit(void) {
               C.token[0] ? C.token : (const char *)0,
               C.reply, sizeof C.reply, 15000);
     note("-- new conversation --");
+    C.nqueued = 0;                  /* nothing typed for the old one carries over */
+    mark_bar();
     C.in_len = 0;
     C.input[0] = 0;
     return;
@@ -424,6 +463,25 @@ static void submit(void) {
     }
     C.in_len = 0;
     C.input[0] = 0;
+    return;
+  }
+
+  /* A request is running: hold this one rather than send it. Sending it
+   * started a second job and polled that one instead, so the first answer
+   * -- "published: timer" and all -- was never collected. */
+  if (C.job || C.sending) {
+    if (C.nqueued >= QUEUE_MAX) {
+      push_wrapped("the queue is full -- wait for an answer", WHO_ERR);
+      return;                       /* the text stays in the input line */
+    }
+    api->fmt(C.queued[C.nqueued++], INPUT_MAX + 1, "%s", C.input);
+    push_wrapped(C.input, WHO_YOU);
+    note(C.nqueued == 1 ? "queued: sent when this answer lands"
+                        : "queued behind the others");
+    C.in_len = 0;
+    C.input[0] = 0;
+    C.scroll = 0;
+    mark_bar();
     return;
   }
 

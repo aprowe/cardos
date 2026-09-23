@@ -147,6 +147,19 @@ class Steps(unittest.TestCase):
         self.assertIn("[x] 3. add keys", reply)
         self.assertIn("did step 3", reply)
 
+    def test_the_plan_is_in_the_log_before_any_step_runs(self):
+        c = Stepped(["write skeleton", "add countdown"])
+        lines = []
+
+        def claude_sees_log(text, on_log=None, **kw):
+            lines.append("<turn>")
+            return "ok"
+        c._claude = claude_sees_log
+        c.run_turn("make a timer app", log=lines.append)
+        self.assertEqual(lines[:4], ["plan: 2 steps", "1. write skeleton",
+                                     "2. add countdown", "-- step 1/2: write skeleton"])
+        self.assertEqual(lines[4], "<turn>")
+
     def test_a_step_that_times_out_stops_the_rest_and_says_where(self):
         c = Stepped(["a", "b", "c"], fail_at=2)
         state, reply = c.run_turn("x")
@@ -169,6 +182,37 @@ class Steps(unittest.TestCase):
         self.assertEqual(len(c.prompts), 1)
 
 
+def said(text):
+    return {"type": "assistant", "session_id": "s-1",
+            "message": {"content": [{"type": "text", "text": text}]}}
+
+
+class LogLines(unittest.TestCase):
+
+    def test_each_tool_call_and_each_remark_is_a_line(self):
+        L = chat.log_lines
+        self.assertEqual(L(tool("Read", file_path="/r/kernel/app/capp.h"), root="/r"),
+                         ["read kernel/app/capp.h"])
+        self.assertEqual(L(tool("Grep", pattern="toolbar", path="/r/apps/stocks.c"), root="/r"),
+                         ["grep 'toolbar' in apps/stocks.c"])
+        self.assertEqual(L(said("I'll base it on memo.c.\nThen the keys."), root="/r"),
+                         ["> I'll base it on memo.c."])
+        self.assertEqual(L(INIT, root="/r"), [])
+
+    def test_lines_are_one_line_and_short(self):
+        line = chat.log_lines(tool("Grep", pattern="a\nb" + "x" * 300), root="/r")[0]
+        self.assertNotIn("\n", line)
+        self.assertLessEqual(len(line), chat.LOG_LINE_MAX)
+
+    def test_the_stream_hands_them_over(self):
+        got = []
+        chat.run_stream(fake_claude([INIT, said("looking"), tool("Read", file_path="a.c"),
+                                     result("ok")]),
+                        env=None, cwd=None, on_status=None, idle=5, cap=10,
+                        on_log=got.append)
+        self.assertEqual(got, ["> looking", "read a.c"])
+
+
 class PollShowsStatus(unittest.TestCase):
 
     def setUp(self):
@@ -176,8 +220,10 @@ class PollShowsStatus(unittest.TestCase):
         gate = self.gate
 
         class Slow(chat.ChatService):
-            def run_turn(self, text, report=None):
+            def run_turn(self, text, report=None, log=None):
                 report("step 1/2: reading capp.h")
+                log("read kernel/app/capp.h")
+                log("> writing the timer now")
                 gate.wait(5)
                 return "done", "ok"
 
@@ -200,10 +246,22 @@ class PollShowsStatus(unittest.TestCase):
     def test_pending_carries_the_status_line(self):
         jid = self.get("/chat", b"make a timer app").split()[1]
         time.sleep(0.2)
+        # Without from=, exactly what an older Build expects: no log lines.
         self.assertEqual(self.get("/chat?id=" + jid), "pending\nstep 1/2: reading capp.h")
         self.gate.set()
         time.sleep(0.2)
         self.assertEqual(self.get("/chat?id=" + jid), "done\nok")
+
+    def test_from_asks_for_the_log_lines_not_yet_seen(self):
+        jid = self.get("/chat", b"make a timer app").split()[1]
+        time.sleep(0.2)
+        self.assertEqual(self.get("/chat?id=%s&from=0" % jid),
+                         "pending\nstep 1/2: reading capp.h\n"
+                         "read kernel/app/capp.h\n> writing the timer now")
+        self.assertEqual(self.get("/chat?id=%s&from=1" % jid),
+                         "pending\nstep 1/2: reading capp.h\n> writing the timer now")
+        self.assertEqual(self.get("/chat?id=%s&from=2" % jid),
+                         "pending\nstep 1/2: reading capp.h")
 
 
 if __name__ == "__main__":

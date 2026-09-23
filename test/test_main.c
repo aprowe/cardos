@@ -68,6 +68,7 @@ void test_a_program_too_big_for_the_buffer_reports_it(void);
 void test_the_two_passes_agree_on_where_everything_lands(void);
 void test_build_talks_to_the_server_the_os_uses(void);
 void test_build_shows_what_the_server_is_doing(void);
+void test_build_queues_what_is_typed_while_a_request_runs(void);
 void test_build_installs_a_ui(void);
 void test_build_typing_repaints_only_the_input_line(void);
 void test_build_backspace_repaints_only_the_input_line(void);
@@ -561,6 +562,7 @@ int main(void) {
   printf("-- build --\n");
   RUN(test_build_talks_to_the_server_the_os_uses);
   RUN(test_build_shows_what_the_server_is_doing);
+  RUN(test_build_queues_what_is_typed_while_a_request_runs);
   RUN(test_build_installs_a_ui);
   RUN(test_build_typing_repaints_only_the_input_line);
   RUN(test_build_backspace_repaints_only_the_input_line);

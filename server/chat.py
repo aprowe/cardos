@@ -116,7 +116,52 @@ def describe(event):
     return None
 
 
-def run_stream(cmd, env, cwd, on_status, idle, cap):
+# One log line fits two rows of the device's 40-column window.
+LOG_LINE_MAX = 76
+
+# Log bytes per poll: Build's reply buffer is 4000, less the status lines.
+POLL_LOG_BYTES = 3000
+
+
+def _one_line(s, n=LOG_LINE_MAX):
+    s = " ".join(str(s).split())
+    return s if len(s) <= n else s[:n - 3] + "..."
+
+
+def log_lines(event, root=None):
+    """The lines a stream-json event adds to the log Build shows while it
+    waits: one per tool call, with what it touched, and the first line of
+    anything the agent says. Paths are made relative to `root`, because the
+    repository's absolute path is 20 of the 40 columns there are."""
+    if event.get("type") != "assistant":
+        return []
+
+    def rel(p):
+        p = str(p or "")
+        if root and p.startswith(root):
+            p = p[len(root):].lstrip("/\\")
+        return p.replace("\\", "/")
+
+    out = []
+    for block in (event.get("message") or {}).get("content") or []:
+        kind = block.get("type")
+        if kind == "text":
+            first = (block.get("text") or "").strip().split("\n")[0]
+            if first:
+                out.append(_one_line("> " + first))
+        elif kind == "tool_use":
+            name = (block.get("name") or "").lower()
+            inp = block.get("input") or {}
+            path = rel(inp.get("file_path") or inp.get("path") or "")
+            if name in ("grep", "glob"):
+                what = "%s '%s'" % (name, " ".join(str(inp.get("pattern", "")).split()))
+                out.append(_one_line(what + (" in " + path if path else "")))
+            else:
+                out.append(_one_line(name + (" " + path if path else "")))
+    return out
+
+
+def run_stream(cmd, env, cwd, on_status, idle, cap, on_log=None):
     """Run `claude ... --output-format stream-json` and return (result text,
     session id). Reads events as they come, reports what the agent is doing,
     and kills it on `idle` seconds of silence or `cap` seconds in all -- the
@@ -169,6 +214,9 @@ def run_stream(cmd, env, cwd, on_status, idle, cap):
             what = describe(event)
             if what and on_status:
                 on_status(what)
+            if on_log:
+                for line in log_lines(event, cwd):
+                    on_log(line)
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -237,7 +285,7 @@ class ChatService:
             jid = self.next_id
             self.next_id += 1
             self.jobs[jid] = {"state": "pending", "reply": "", "status": "",
-                              "at": time.time()}
+                              "log": [], "at": time.time()}
         t = threading.Thread(target=self._run, args=(jid, text), daemon=True)
         t.start()
         return jid
@@ -255,6 +303,12 @@ class ChatService:
             self.jobs.pop(jid, None)
             return job["state"], job["reply"]
 
+    def progress(self, jid, since=0):
+        """(status, log lines from `since` on) for a job still pending."""
+        with self.lock:
+            job = self.jobs.get(jid) or {}
+            return job.get("status", ""), list(job.get("log", [])[max(0, since):])
+
     def reset(self):
         with self.lock:
             self.session_id = None
@@ -266,7 +320,7 @@ class ChatService:
 
     # ---- running the agent ------------------------------------------------
 
-    def run_turn(self, text, report=None):
+    def run_turn(self, text, report=None, log=None):
         """A request, here and now: (state, reply). What a job thread runs,
         and what BuildingChat wraps in a build.
 
@@ -274,6 +328,7 @@ class ChatService:
         step has its own timeout and the device can be told which one is
         running. `report(line)` hears the status as it changes."""
         report = report or (lambda line: None)
+        log = log or (lambda line: None)
         generation = self.generation
         report("planning")
         try:
@@ -282,6 +337,12 @@ class ChatService:
             sys.stderr.write("chat: planning failed (%s); one step\n" % e)
             steps = [text]
         n = len(steps)
+        if n > 1:
+            # The whole plan, up front: seeing it only in the final answer
+            # was seeing it after it no longer mattered.
+            log("plan: %d steps" % n)
+            for i, s in enumerate(steps, 1):
+                log(_one_line("%d. %s" % (i, s)))
 
         state, results, failed = "done", [], None
         for k, step in enumerate(steps, 1):
@@ -289,13 +350,15 @@ class ChatService:
                 break                    # /chat/new: this job is not wanted now
             prefix = "step %d/%d" % (k, n) if n > 1 else ""
             report(prefix or "working")
+            if n > 1:
+                log(_one_line("-- step %d/%d: %s" % (k, n, step)))
             prompt = text if n == 1 else STEP_PROMPT % (
                 text, "\n".join("%d. %s" % (i, s) for i, s in enumerate(steps, 1)), k, k)
 
             def on_status(what, prefix=prefix):
                 report("%s: %s" % (prefix, what) if prefix else what)
             try:
-                results.append(self._claude(prompt, on_status=on_status))
+                results.append(self._claude(prompt, on_status=on_status, on_log=log))
             except Exception as e:                   # noqa: BLE001 - reported
                 state, failed = "error", (k, str(e) if isinstance(e, TurnTimeout)
                                           else "%s: %s" % (type(e).__name__, e))
@@ -319,7 +382,11 @@ class ChatService:
             with self.lock:
                 if jid in self.jobs and self.jobs[jid]["state"] == "pending":
                     self.jobs[jid]["status"] = line[:60]
-        state, reply = self.run_turn(text, report=report)
+        def log(line):
+            with self.lock:
+                if jid in self.jobs and self.jobs[jid]["state"] == "pending":
+                    self.jobs[jid]["log"].append(line)
+        state, reply = self.run_turn(text, report=report, log=log)
         with self.lock:
             if jid in self.jobs:
                 self.jobs[jid] = {"state": state, "reply": reply, "status": "",
@@ -368,7 +435,7 @@ class ChatService:
                 env.pop(k, None)
         return env
 
-    def _claude(self, text, on_status=None):
+    def _claude(self, text, on_status=None, on_log=None):
         """One turn of the agent in the conversation's session: its answer.
         Raises TurnTimeout if it goes quiet or runs past the step cap."""
         if not self.claude:
@@ -403,7 +470,8 @@ class ChatService:
         with self.run_lock:
             try:
                 text, sid = run_stream(cmd, self._child_env(), self.cwd, on_status,
-                                       idle=IDLE_TIMEOUT, cap=STEP_TIMEOUT)
+                                       idle=IDLE_TIMEOUT, cap=STEP_TIMEOUT,
+                                       on_log=on_log)
             except TurnTimeout as e:
                 # Kept even so: "finish it" should resume the session that
                 # got part of the way, not start from nothing.
@@ -436,7 +504,19 @@ def get_chat(h, path, args):
     if state == "pending":
         # The status on the second line: "step 2/3: writing timer.c". A Build
         # that predates it tests only the first two letters, and is unaffected.
-        h.text("pending\n" + reply)
+        # With ?from=K, the log lines from K on follow, one per line: the
+        # device counts what it got and asks from there next time. Capped so a
+        # poll fits Build's 4 KB reply; the rest comes on the next one.
+        out = "pending\n" + reply
+        if "from" in args:
+            _, lines = h.chat.progress(jid, h.int_arg(args, "from", 0))
+            budget = POLL_LOG_BYTES
+            for line in lines:
+                if len(line) + 1 > budget:
+                    break
+                out += "\n" + line
+                budget -= len(line) + 1
+        h.text(out)
         return
     # The state on its own line, so the device can tell an answer from a
     # failure without parsing anything.
