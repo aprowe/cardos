@@ -443,6 +443,19 @@ hardware-specific. What it cost to learn:
 
 ## Working agreements
 
+- **Nothing that talks HTTPS runs on `cardos-bg`.** Its stack is 4 KB
+  (`BG_STACK`, `kernel/sys/bg.c`) and a TLS handshake does not fit. A Build
+  turn (2026-09-23) added a timezone lookup to `https://ipapi.co` there, right
+  after NTP; the device then overflowed that stack ~15 s after every boot --
+  a restart loop that also made `update os` impossible, since a 2 MB download
+  outlasts 15 s. Network requests go through `kernel/net/httpq.c` (its own
+  6 KB task) or run on the shell with the busy badge. Anything new on
+  `cardos-bg` should be measured with `uxTaskGetStackHighWaterMark` first.
+- **A kernel change can take the device off the air**, and then only USB
+  brings it back. Build on the droplet can make one; before asking for
+  `update os` after a Build turn touched `kernel/` or `src/`, run the
+  firmware somewhere it can be watched.
+
 - Test-first for anything with logic. The memory manager, swap allocator and
   scheduler queue are deliberately written as portable C so they run under a
   host test suite on the PC — use it, because there is no debugger on the
