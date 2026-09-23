@@ -67,30 +67,40 @@ setup() {
   echo "== 6. the store, filled from that build"
   ssh "$HOST" "install -d -m 750 -o cardos -g cardos /var/lib/cardos $STORE"
   as_cardos "cd $CLONE && $VENV/bin/python -c '
-import sys; sys.path.insert(0, \"tools\")
-import buildstep, updates
-print(\"   published:\", \", \".join(buildstep.publish(\"$STORE\", updates.FIRMWARE, updates.APPS_DIR, True)) or \"nothing\")'"
+import sys; sys.path.insert(0, \".\")
+from server import build, updates
+print(\"   published:\", \", \".join(build.publish(\"$STORE\", updates.FIRMWARE, updates.APPS_DIR, True)) or \"nothing\")'"
 
   echo "== 7. the service: run from the clone, with --build --store"
+  unit_and_restart
+  echo
+  echo "done. On the device: open Build, ask for a visible change, then /update."
+  echo "Remote commits: bash tools/deploy_droplet.sh pull"
+}
+
+# The unit as this version of the repository needs it, then a restart. Safe to
+# repeat, and run by `update` too: the server moved from tools/webproxy.py to
+# `python -m server` on 2026-09-22, and a droplet set up before that still
+# starts the old path, which no longer exists after the merge.
+unit_and_restart() {
   ssh "$HOST" "set -e
     sed -i 's|^WorkingDirectory=.*|WorkingDirectory=$CLONE|' $UNIT
+    sed -i 's| tools/webproxy.py | -m server |' $UNIT
     grep -q -- '--build' $UNIT || sed -i 's| --token | --build --store $STORE --token |' $UNIT
     grep -q -- '--build' $UNIT || { echo 'could not add --build to the unit'; exit 1; }
+    grep -q -- ' -m server ' $UNIT || { echo 'the unit does not start python -m server'; exit 1; }
     systemctl daemon-reload
     systemctl restart cardos-proxy
     sleep 3
     systemctl is-active cardos-proxy
     grep -E '^(WorkingDirectory|ExecStart)' $UNIT | sed 's/--token [^ \"]*/--token <hidden>/'"
-  echo
-  echo "done. On the device: open Build, ask for a visible change, then /update."
-  echo "Remote commits: bash tools/deploy_droplet.sh pull"
 }
 
 update() {
   git push -q droplet master
   ssh "$HOST" "chgrp -R cardos $BARE && chmod -R g+w $BARE"
   as_cardos "set -e; cd $CLONE; git fetch -q origin; git merge -q --no-edit origin/master; git log --oneline -1"
-  ssh "$HOST" "systemctl restart cardos-proxy && sleep 2 && systemctl is-active cardos-proxy"
+  unit_and_restart
 }
 
 pull() {

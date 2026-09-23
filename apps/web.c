@@ -4,7 +4,7 @@
  * solver over a box model and there is no small version of it. The layout
  * happens on a machine with a real browser, and this is sent pixels.
  *
- * tools/webproxy.py renders the page with Chrome at a 240-pixel viewport and
+ * The server (server/render/) renders the page with Chrome at a 240-pixel viewport and
  * re-typesets every run of text in this machine's own 6x8 font before taking
  * the shot -- which is the whole trick. A page rendered wide and scaled down
  * turns antialiased text into grey mush; a bitmap font laid out at its native

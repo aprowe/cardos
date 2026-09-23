@@ -1,6 +1,6 @@
 /* Screen -- the PC's desktop, live, on the Cardputer.
  *
- * tools/screen.py captures the machine that renders web pages and encodes it
+ * server/screen.py captures the machine that renders web pages and encodes it
  * as SCR1: a stream of rows rather than frames.
  *
  *     "SCR1" u16 w u16 h        once

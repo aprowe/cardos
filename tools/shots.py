@@ -1,16 +1,11 @@
-"""Screenshots of the Cardputer, driven from the PC.
+"""Screenshots of the Cardputer, driven from the PC over serial.
 
-The panel is write-only and there is no framebuffer, so a screenshot is made
-the only way it can be: the device repaints the whole screen while
-display_blit mirrors every row it sends into /home/shots/NAME.565 on the card --
-64,800 bytes of raw RGB565, the card standing in for the framebuffer -- and
-then posts that file to webproxy.py, which calls decode_rgb565 below and
-writes docs/shots/NAME.png and NAME@3x.png.
-
-This file is both the codec (imported by webproxy.py) and the remote control:
+The device takes the shot and posts it to the server's /shot (server/shots.py
+is the codec there, and writes docs/shots/NAME.png); this is the remote
+control that asks for one, and waits for the file to appear:
 
     python tools/shots.py tour             # every app, into docs/shots
-    python tools/shots.py keys "run mines\r" --wait 2 --shot mines
+    python tools/shots.py keys "run mines" --wait 2 --shot mines
     python tools/shots.py shot console     # just what is on screen now
 
 Keys go down the serial line as the raw key alphabet from kernel/drv/keyboard.h
@@ -20,55 +15,10 @@ would. One byte is not a key: 0xFF asks for a screenshot, and the loop takes
 it before any app can see it, so a shot can be taken inside anything.
 """
 
-import struct
 import sys
 import time
 
-from PIL import Image
-
-WIDTH = 240
-HEIGHT = 135
 SHOT_BYTE = 0xFF
-
-
-def decode_rgb565(raw, w=WIDTH, h=HEIGHT):
-    """RGB565 rows, as the ST7789 was sent them, to an RGB image.
-
-    Big-endian: display.h's RGB565 macro swaps every colour at compile time so
-    the DMA can send the high byte first, and the tap copies what was sent.
-    The 5/6/5 bits are replicated into the low bits rather than zero-padded,
-    so white comes back as (255,255,255) and not (248,252,248)."""
-    need = w * h * 2
-    if len(raw) != need:
-        raise ValueError("expected %d bytes for %dx%d, got %d" % (need, w, h, len(raw)))
-    img = Image.new("RGB", (w, h))
-    px = img.load()
-    vals = struct.unpack(">%dH" % (w * h), raw)
-    for i, v in enumerate(vals):
-        r = (v >> 11) & 0x1F
-        g = (v >> 5) & 0x3F
-        b = v & 0x1F
-        px[i % w, i // w] = ((r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2))
-    return img
-
-
-def scale(img, n):
-    """Blown up for a blog, every pixel still a crisp square."""
-    return img.resize((img.width * n, img.height * n), Image.NEAREST)
-
-
-def save(img, name, out_dir):
-    """NAME.png at one pixel per pixel, and NAME@3x.png for a page. Returns
-    the path of the first."""
-    import os
-    os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, name + ".png")
-    img.save(path)
-    scale(img, 3).save(os.path.join(out_dir, name + "@3x.png"))
-    return path
-
-
-# ---- the remote control ---------------------------------------------------
 
 ESC = b"\x1b"
 ENTER = b"\r"
@@ -143,7 +93,7 @@ class Device:
                 print("  %s.png" % name)
                 return True
             time.sleep(0.2)
-        print("  %s: no shot arrived -- is webproxy.py running?" % name)
+        print("  %s: no shot arrived -- is the server running?" % name)
         return False
 
     def drain(self):

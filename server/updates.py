@@ -1,6 +1,6 @@
 """What the device can pull from this PC: the firmware and the app binaries.
 
-Served by webproxy.py under /update. The manifest is one line per thing,
+Served under /update (the routes are at the bottom). The manifest is one line per thing,
 whitespace separated, because the device has no JSON parser:
 
     firmware <sha256 of the ELF, hex> <size>
@@ -17,6 +17,7 @@ Anything served here lands on the device and runs, so /update is behind the
 same token as /chat.
 """
 import os
+import sys
 import struct
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -95,9 +96,9 @@ def app_path(name, apps_dir=None):
 
 # ---- the store: what a server with no build tree serves -------------------
 #
-# On the droplet nothing is built. tools/buildagent.py builds on the laptop and
-# PUTs the results here, and the device's /update reads from here exactly as
-# it would read a build tree -- same manifest, same hashes.
+# With --store, server/build.py publishes finished builds here and /update
+# reads from here exactly as it would read a build tree -- same manifest,
+# same hashes -- but never a half-written one.
 
 def store_paths(store):
     """(firmware, apps_dir) inside a store directory."""
@@ -126,3 +127,42 @@ def put_artifact(path, data):
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)
+
+
+# ---- routes ---------------------------------------------------------------
+#
+# Anything served here lands on the device and runs, so all of it is behind
+# the token.
+
+def get_manifest(h, path, args):
+    """what can be installed: firmware sha, app hashes"""
+    firmware, apps_dir = h.update_files()
+    h.text(manifest(firmware=firmware, apps_dir=apps_dir))
+
+
+def get_firmware(h, path, args):
+    """the firmware image"""
+    firmware, _ = h.update_files()
+    if not os.path.isfile(firmware):
+        h.text("no firmware built\n", 404)
+        return
+    h.file(firmware)
+    sys.stderr.write("update: sent firmware\n")
+
+
+def get_app(h, path, args):
+    """one .capp"""
+    _, apps_dir = h.update_files()
+    p = app_path(path[len("/update/app/"):], apps_dir)
+    if not p:
+        h.text("no such app\n", 404)
+        return
+    h.file(p)
+    sys.stderr.write("update: sent %s\n" % os.path.basename(p))
+
+
+ROUTES = [
+    ("GET", "/update", get_manifest),
+    ("GET", "/update/firmware", get_firmware),
+    ("GET", "/update/app/*", get_app),
+]

@@ -31,6 +31,7 @@ runs in this directory, it reads CLAUDE.md like any other session here.
 
 import json
 import os
+import sys
 import queue
 import shutil
 import subprocess
@@ -70,7 +71,7 @@ class ChatService:
     merge conflict with no one to resolve it."""
 
     # What the agent may use. A subclass on a public host narrows this; see
-    # tools/buildstep.py.
+    # server/build.py.
     allowed_tools = ALLOWED_TOOLS
     disallowed_tools = None
 
@@ -125,7 +126,7 @@ class ChatService:
 
     def run_turn(self, text):
         """One turn, here and now: (state, reply). What a job thread runs, and
-        what tools/buildagent.py calls directly, having its own queue."""
+        what BuildingChat wraps in a build."""
         state, reply = "done", ""
         try:
             reply = self._claude(text)
@@ -222,3 +223,46 @@ class ChatService:
             if obj.get("is_error"):
                 return "error: %s" % json.dumps(obj)[:MAX_REPLY]
         return body
+
+
+# ---- routes: the device's three calls --------------------------------------
+#
+# Three short requests rather than one long one, because the device's shell is
+# a single cooperative loop and a two-minute request is a frozen machine.
+
+def post_chat(h, path, args):
+    """ask Claude; returns an id"""
+    text = h.body(64 << 10).decode("utf-8", "replace").strip()
+    if not text:
+        h.text("empty\n", 400)
+        return
+    jid = h.chat.start(text)
+    sys.stderr.write("chat #%d: %s\n" % (jid, text[:70]))
+    h.text("id %d\n" % jid)
+
+
+def get_chat(h, path, args):
+    """the answer to ?id=N, once it is ready"""
+    jid = h.int_arg(args, "id", 0)
+    state, reply = h.chat.poll(jid)
+    if state == "pending":
+        h.text("pending\n")
+        return
+    # The state on its own line, so the device can tell an answer from a
+    # failure without parsing anything.
+    h.text(state + "\n" + reply)
+    sys.stderr.write("chat #%d: %s, %d chars\n" % (jid, state, len(reply)))
+
+
+def get_chat_new(h, path, args):
+    """forget the conversation"""
+    h.chat.reset()
+    sys.stderr.write("chat: new conversation\n")
+    h.text("ok\n")
+
+
+ROUTES = [
+    ("POST", "/chat", post_chat),
+    ("GET", "/chat", get_chat),
+    ("GET", "/chat/new", get_chat_new),
+]

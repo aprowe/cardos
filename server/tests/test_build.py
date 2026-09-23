@@ -2,15 +2,14 @@
 and that /update serves the store. Claude, the compilers and git are stubbed:
 a real turn would edit this repository.
 
-    python tools/test_buildstep.py
+    python -m server.tests.test_build
 """
 import os, shutil, struct, sys, tempfile, threading, unittest, urllib.request
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))             # the repository root
 
-import buildstep
-import chat as chatmod
-import updates
-import webproxy
+from server import app, build, updates
+from server import chat as chatmod
 from http.server import ThreadingHTTPServer
 
 
@@ -29,17 +28,17 @@ def app_image(tag=b"x"):
 class Plan(unittest.TestCase):
 
     def test_changed(self):
-        self.assertEqual(buildstep.changed({"a": "1", "b": "2"},
+        self.assertEqual(build.changed({"a": "1", "b": "2"},
                                            {"a": "1", "b": "3", "c": "4"}),
                          {"b", "c"})
         # Reverted to clean, and deleted while clean, are both changes.
-        self.assertEqual(buildstep.changed({"a": "1"}, {}), {"a"})
-        self.assertEqual(buildstep.changed({}, {"a": None}), {"a"})
+        self.assertEqual(build.changed({"a": "1"}, {}), {"a"})
+        self.assertEqual(build.changed({}, {"a": None}), {"a"})
 
     def test_build_plan(self):
-        plan = buildstep.build_plan
+        plan = build.build_plan
         self.assertEqual(plan(set()), (False, False))
-        self.assertEqual(plan({"docs/x.md", "CLAUDE.md", "tools/webproxy.py",
+        self.assertEqual(plan({"docs/x.md", "CLAUDE.md", "tools/app.py",
                                "test/test_x.c"}), (False, False))
         self.assertEqual(plan({"apps/pinball.c"}), (True, False))
         self.assertEqual(plan({"kernel/drv/speaker.c"}), (True, True))
@@ -48,8 +47,8 @@ class Plan(unittest.TestCase):
     def test_errors_tail_prefers_errors(self):
         log = "\n".join(["noise %d" % i for i in range(50)] +
                         ["apps/p.c:3:1: error: expected ';'"] + ["more"] * 5)
-        self.assertIn("expected ';'", buildstep.errors_tail(log))
-        self.assertNotIn("noise 1\n", buildstep.errors_tail(log))
+        self.assertIn("expected ';'", build.errors_tail(log))
+        self.assertNotIn("noise 1\n", build.errors_tail(log))
 
 
 class Publish(unittest.TestCase):
@@ -73,7 +72,7 @@ class Publish(unittest.TestCase):
         self.put("fw.bin", firmware_image(b"1"))
         self.put("apps/a.capp", app_image(b"a"))
         self.put("apps/b.capp", app_image(b"b"))
-        pub = lambda fw: buildstep.publish(self.store, self.fw, self.apps, fw)
+        pub = lambda fw: build.publish(self.store, self.fw, self.apps, fw)
         self.assertEqual(sorted(pub(True)), ["a", "b", "firmware"])
         self.assertEqual(pub(True), [])
         self.put("apps/b.capp", app_image(b"B"))
@@ -82,15 +81,15 @@ class Publish(unittest.TestCase):
     def test_firmware_only_when_asked(self):
         self.put("fw.bin", firmware_image(b"1"))
         self.put("apps/a.capp", app_image())
-        self.assertEqual(buildstep.publish(self.store, self.fw, self.apps, False), ["a"])
+        self.assertEqual(build.publish(self.store, self.fw, self.apps, False), ["a"])
         self.assertFalse(os.path.exists(os.path.join(self.store, "firmware.bin")))
 
     def test_refuses_garbage_and_leaves_no_temp(self):
         self.put("apps/bad.capp", b"not an elf")
         with self.assertRaises(ValueError):
-            buildstep.publish(self.store, self.fw, self.apps, False)
+            build.publish(self.store, self.fw, self.apps, False)
         self.put("apps/bad.capp", app_image())
-        buildstep.publish(self.store, self.fw, self.apps, False)
+        build.publish(self.store, self.fw, self.apps, False)
         self.assertEqual(os.listdir(os.path.join(self.store, "apps")), ["bad.capp"])
 
 
@@ -101,19 +100,19 @@ class Turn(unittest.TestCase):
         self.store = tempfile.mkdtemp()
         self.out = tempfile.mkdtemp()
         os.makedirs(os.path.join(self.out, "apps"))
-        c = buildstep.BuildingChat(store=self.store, claude="stub",
-                                   firmware=os.path.join(self.out, "fw.bin"),
-                                   apps_dir=os.path.join(self.out, "apps"))
+        c = build.BuildingChat(store=self.store, claude="stub",
+                               firmware=os.path.join(self.out, "fw.bin"),
+                               apps_dir=os.path.join(self.out, "apps"))
         self.snaps = [{}, {"apps/p.c": "1"}]
         c.snapshot = lambda: self.snaps.pop(0)
         self.built, self.commits = [], []
 
-        def build(apps, fw):
+        def fake_build(apps, fw):
             self.built.append((apps, fw))
             with open(os.path.join(self.out, "apps", "p.capp"), "wb") as f:
                 f.write(app_image())
             return True, "ok"
-        c.build = build
+        c.build = fake_build
         c.commit = lambda msg: (self.commits.append(msg) or "abc1234")
         c._claude = lambda text: "made it so"
         self.c = c
@@ -167,16 +166,16 @@ class StoreServed(unittest.TestCase):
         os.makedirs(os.path.join(self.store, "apps"))
         with open(os.path.join(self.store, "apps", "p.capp"), "wb") as f:
             f.write(app_image())
-        webproxy.Handler.chat = chatmod.ChatService(claude="stub", token="t" * 32)
-        webproxy.Handler.store = self.store
-        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), webproxy.Handler)
+        app.Handler.chat = chatmod.ChatService(claude="stub", token="t" * 32)
+        app.Handler.store = self.store
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
         self.base = "http://127.0.0.1:%d" % self.srv.server_address[1]
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
 
     def tearDown(self):
         self.srv.shutdown()
         self.srv.server_close()
-        webproxy.Handler.store = None
+        app.Handler.store = None
         shutil.rmtree(self.store, ignore_errors=True)
 
     def get(self, path):

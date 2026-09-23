@@ -139,7 +139,7 @@ int update_check(UpdateCheck *out) {
     return -2;
   }
   if (manifest_parse(text, &out->m) < 0) {
-    snprintf(s_error, sizeof s_error, "that is not a manifest -- is webproxy.py current?");
+    snprintf(s_error, sizeof s_error, "that is not a manifest -- is the server current?");
     return -3;
   }
 

@@ -1,11 +1,12 @@
-"""Tests for the screenshot conversion. Run: python tools/test_shots.py"""
+"""Tests for the screenshot conversion. Run: python -m server.tests.test_shots"""
 
 import struct
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(__file__))
-import shots
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))             # the repository root
+from server import shots
 
 
 def rgb565(r, g, b):

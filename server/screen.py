@@ -27,6 +27,7 @@ channel uses on space, applied to time.
 """
 
 import struct
+import sys
 import time
 
 import mss
@@ -164,3 +165,35 @@ class Screen:
                 slack = period - (time.time() - started)
                 if slack > 0:
                     time.sleep(slack)
+
+
+# ---- route -----------------------------------------------------------------
+
+def get_screen(h, path, args):
+    """this PC's desktop, streamed
+
+    No Content-Length: this response has no end, and the socket closing is
+    how it finishes. Written straight to wfile so nothing buffers a frame
+    here either -- the encoder yields, this sends, and back pressure from a
+    device that cannot keep up arrives as a slow write, which paces the
+    capture for free."""
+    mode = (args.get("mode") or ["follow"])[0]
+    fps = h.int_arg(args, "fps", 12)
+
+    h.send_response(200)
+    h.send_header("Content-Type", "application/octet-stream")
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+    sys.stderr.write("screen: streaming, mode=%s fps=%d\n" % (mode, fps))
+
+    sent = 0
+    try:
+        for chunk in Screen(mode=mode, fps=fps).frames():
+            h.wfile.write(chunk)
+            sent += len(chunk)
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        pass          # the viewer quit, which is the normal ending
+    sys.stderr.write("screen: stopped after %d bytes\n" % sent)
+
+
+ROUTES = [("GET", "/screen", get_screen)]

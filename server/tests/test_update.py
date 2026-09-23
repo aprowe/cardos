@@ -5,11 +5,11 @@ checking against reality is that the ELF SHA is read from the right offset.
 The apps are made up, so this does not depend on build_apps.py having run.
 """
 import os, shutil, sys, tempfile, threading, urllib.request, urllib.error
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))             # the repository root
 
-import updates
-import webproxy
-import chat as chatmod
+from server import app, updates
+from server import chat as chatmod
 from http.server import ThreadingHTTPServer
 
 
@@ -67,8 +67,8 @@ def main():
     print("the routes:")
     updates.FIRMWARE = fw
     updates.APPS_DIR = apps
-    webproxy.Handler.chat = chatmod.ChatService(claude="stub")
-    srv = ThreadingHTTPServer(("127.0.0.1", 8138), webproxy.Handler)
+    app.Handler.chat = chatmod.ChatService(claude="stub")
+    srv = ThreadingHTTPServer(("127.0.0.1", 8138), app.Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = "http://127.0.0.1:8138"
 
@@ -91,7 +91,7 @@ def main():
         fails += not check("an unknown app is 404", e.code, 404)
 
     print("the shared secret:")
-    webproxy.Handler.chat.token = "swordfish"
+    app.Handler.chat.token = "swordfish"
     try:
         get(base + "/update")
         fails += not check("no token, no manifest", "allowed", "refused")

@@ -28,7 +28,7 @@ import urllib.request
 
 import websocket
 
-from pixelfont import ensure as ensure_font
+from .pixelfont import ensure as ensure_font
 
 # Body text becomes 8px, subheads 16, the page title 24. Snapping to multiples
 # of 8 is what keeps every baseline on the pixel grid; a 13px line would be

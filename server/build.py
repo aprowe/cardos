@@ -1,6 +1,6 @@
 """Build after the turn: what makes Build work with no PC in the loop.
 
-webproxy.py --build --store DIR uses BuildingChat in place of ChatService. A
+python -m server --build --store DIR uses BuildingChat in place of ChatService. A
 Build message is still a turn of Claude Code in this repository -- on the
 droplet, the repository is a git clone -- and then, if the turn changed
 anything that runs on the device:
@@ -27,9 +27,8 @@ import subprocess
 import sys
 import threading
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import updates                                              # noqa: E402
-from chat import ChatService, ROOT                          # noqa: E402
+from . import updates
+from .chat import ChatService, ROOT
 
 BUILD_TIMEOUT = 1800          # a first firmware build on one core is slow
 ERROR_TAIL = 1200

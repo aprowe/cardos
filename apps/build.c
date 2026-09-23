@@ -1,7 +1,7 @@
 /* Build -- talk to the machine that builds this one.
  *
  * The model does not run here and never could. What runs here is a terminal:
- * it posts what you typed to tools/webproxy.py on a PC, which hands it to
+ * it posts what you typed to the CardOS server (server/), which hands it to
  * Claude Code running *in the CardOS repository*, and prints what comes back.
  * So "make the flippers stronger" is not a chat message, it is an edit to
  * apps/pinball.c on the other end of the wire.
@@ -209,7 +209,7 @@ static void send_now(void) {
                 C.reply, sizeof C.reply, 20000);
   if (n < 0) {
     api->fmt(C.status, sizeof C.status, "send failed (%d)", n);
-    push_wrapped("could not reach the server -- is webproxy.py running?",
+    push_wrapped("could not reach the server -- is it running?",
                  WHO_ERR);
     return;
   }

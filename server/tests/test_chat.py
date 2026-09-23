@@ -5,11 +5,12 @@ depends on -- post returns an id immediately, polling says pending until it
 does not, an answer is delivered once and then forgotten -- not whether Claude
 can write C. Starting a real agent from a test would edit this repository.
 """
-import sys, threading, time, urllib.request, urllib.error
-sys.path.insert(0, r"C:\Users\alexr\Projects\cardos\tools")
+import os, sys, threading, time, urllib.request, urllib.error
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))             # the repository root
 
-import chat as chatmod
-import webproxy
+from server import app
+from server import chat as chatmod
 from http.server import ThreadingHTTPServer
 
 FAKE_DELAY = 1.5
@@ -48,8 +49,8 @@ def check(label, got, want):
 
 
 def main():
-    webproxy.Handler.chat = StubService()
-    srv = ThreadingHTTPServer(("127.0.0.1", 8137), webproxy.Handler)
+    app.Handler.chat = StubService()
+    srv = ThreadingHTTPServer(("127.0.0.1", 8137), app.Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = "http://127.0.0.1:8137"
     fails = 0
@@ -93,10 +94,10 @@ def main():
     fails += not check("new conversation is acknowledged",
                        get(base + "/chat/new").strip(), "ok")
     fails += not check("and forgets the session id",
-                       webproxy.Handler.chat.session_id, None)
+                       app.Handler.chat.session_id, None)
 
     print("the shared secret:")
-    webproxy.Handler.chat.token = "swordfish"
+    app.Handler.chat.token = "swordfish"
     try:
         post(base + "/chat", "hello")
         fails += not check("a request without one is refused", "allowed", "refused")

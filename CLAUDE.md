@@ -41,7 +41,7 @@ in NVS -- see `env` and `set`. The launcher's app list is searched last, after
 PATH, so `edit` works even when nothing on PATH is called that.
 
 **Claude runs on the device**, in the only sense it can: `apps/claude.c` is a
-terminal, and `tools/webproxy.py` — one process, one port, the same one that
+terminal, and the CardOS server — one process, one port, the same one that
 renders web pages — hands what you type to Claude Code running **in this
 repository, with permission to edit it**. Asking the device to change an app
 changes the source on the PC. Three short calls rather than one long one
@@ -53,13 +53,26 @@ throughout. Conversation state is one resumed Claude Code session.
 The obvious warning applies and the server prints it: anything that can reach
 that port can edit this folder. `--token SECRET` requires a shared string,
 which the device reads from `/config/claude.token` on its card and sends as a bearer
-token. `python tools/test_chat.py` exercises the protocol against a stubbed
-agent.
+token. `python -m server.tests.test_chat` exercises the protocol against a
+stubbed agent.
+
+**The server is `server/`, not a tool** (2026-09-22). It was
+`tools/webproxy.py`, which had stopped being a proxy long ago: one handler
+class held the routes for six services and the renderer's pixel pipeline.
+`python -m server` runs it. `server/app.py` is only the HTTP layer --
+dispatch, the token, body limits; each service module declares its own
+`ROUTES` (`chat.py`, `updates.py`, `voice.py`, `shots.py`, `screen.py`,
+`render/render.py`), and `/` lists them. `server/build.py` is the droplet's
+build-after-turn (`--build --store`); tests are `server/tests/`. `tools/` is
+dev-time scripts only. The device still calls it the proxy (`env PROXY`,
+`CAPP_PROXY_DEFAULT`), because renaming a setting stored on every device is
+not worth a word.
 
 There is a web browser, of a sort. The device has no HTML parser and no layout
-engine; `tools/webproxy.py` drives headless Chrome over the DevTools protocol at
-a **240px viewport**, re-typesets the page in **CardOS's own 6x8 font** (built
-into a TTF by `tools/pixelfont.py` from the same table the console draws from,
+engine; the server's `/render` (`server/render/`) drives headless Chrome over
+the DevTools protocol at a **240px viewport**, re-typesets the page in
+**CardOS's own 6x8 font** (built into a TTF by `server/render/pixelfont.py`
+from the same table the console draws from,
 so text lands on the pixel grid with nothing to antialias), and ships RLE'd
 RGB565 rows. Rendering wide and scaling down was tried first and is still there
 behind `?px=0`; it turns body text into grey mush, which is the whole reason for
@@ -71,7 +84,7 @@ client apps can call, SD card, and chain-booting third-party firmware with a
 one-shot rollback home.
 
 **The device updates itself from the PC.** `update` in the console asks
-`webproxy.py` for its manifest (`/update`: the firmware's ELF SHA and an FNV
+the server for its manifest (`/update`: the firmware's ELF SHA and an FNV
 hash per `.capp`), says what differs, and `update apps|os|all` installs it.
 The Claude terminal checks after every answer and offers `/update`. Apps land
 in `/desktop`; the firmware goes to the card and then through the same

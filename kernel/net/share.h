@@ -9,7 +9,7 @@
  * did through share_take_log, and the shell draws that.
  *
  * On while you want it and off otherwise. There is no authentication -- the
- * boundary is the LAN, the same one webproxy.py trusts -- which is why this
+ * boundary is the LAN, the same one the CardOS server trusts -- which is why this
  * is a thing you turn on rather than a service. */
 #ifndef CARDOS_SHARE_H
 #define CARDOS_SHARE_H

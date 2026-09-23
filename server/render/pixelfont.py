@@ -20,7 +20,7 @@ from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FONT_H_PATH = os.path.join(HERE, "..", "kernel", "console", "font6x8.h")
+FONT_H_PATH = os.path.join(HERE, "..", "..", "kernel", "console", "font6x8.h")
 CACHE = os.path.join(HERE, "cardos6x8.ttf")
 
 UPM = 800          # 8 rows to the em

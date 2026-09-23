@@ -1,7 +1,7 @@
 /* Pulling new builds from the PC. Device-only; the decisions live in
  * manifest.h, which is portable and tested.
  *
- * The proxy (tools/webproxy.py) serves what it last built under /update:
+ * The CardOS server (server/updates.py) serves what it last built under /update:
  * a manifest, the firmware, and each .capp. This fetches the manifest,
  * hashes what is on the card, reads the running firmware's own SHA, and says
  * what is stale; then installs it. Apps are downloaded beside the old one and

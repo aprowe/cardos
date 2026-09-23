@@ -76,7 +76,7 @@ typedef struct {
  * what was actually found, so an app can explain itself in its own words. */
 #define CAPP_NO_REPEAT  0x0010   /* never deliver auto-repeated keys; see key_repeat */
 #define CAPP_NEEDS_NET   0x0004  /* the internet, over WiFi */
-#define CAPP_NEEDS_PROXY 0x0008  /* tools/webproxy.py on a PC; implies NET */
+#define CAPP_NEEDS_PROXY 0x0008  /* the CardOS server (server/); implies NET */
 
 /* What caps_ok() returns: the same bits, set when that need was met. */
 #define CAPP_CAP_NET     CAPP_NEEDS_NET

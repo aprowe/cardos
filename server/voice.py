@@ -18,6 +18,7 @@ anything.
 
 import json
 import os
+import sys
 import shutil
 import subprocess
 import tempfile
@@ -150,3 +151,53 @@ class Voice:
         line = line.strip().splitlines()[0].strip() if line.strip() else ""
         line = line.strip("`").strip()
         return line or "none nothing came back"
+
+
+# ---- route -----------------------------------------------------------------
+
+WAKE_WORDS = ("carlos", "karlos", "carlus", "carlo")
+
+
+def post_voice(h, path, args):
+    """a WAV in; the words, or one command line, out
+
+    Both halves answer on this one request rather than through the job queue
+    the chat uses. Recognition of a ten-second clip takes about two seconds
+    and a command translation about one, which is inside what the device will
+    wait for -- and unlike a chat turn, there is nothing useful to show while
+    it happens."""
+    wav = h.body(4 << 20)           # 16 kHz mono: two minutes is 3.8 MB
+    if len(wav) <= 44:              # a header and no audio
+        h.text("error nothing recorded\n", 400)
+        return
+
+    text, err = h.voice.transcribe(wav)
+    if err:
+        sys.stderr.write("voice: %s\n" % err)
+        h.text("error %s\n" % err)
+        return
+    sys.stderr.write("voice: heard %r\n" % text[:80])
+
+    # The wake word is checked here as well as on the device: the device
+    # decides what to do, but the translation only happens if it is asked
+    # for, and asking costs a model call.
+    low = text.lstrip().lower()
+    wake = None
+    for name in WAKE_WORDS:
+        if low.startswith(name):
+            wake = text.lstrip()[len(name):].lstrip(" ,.:!?")
+            break
+
+    if wake is None:
+        h.text("text %s\n" % text)
+        return
+    if not wake:
+        h.text("error I heard my name and nothing after it\n")
+        return
+
+    line = h.voice.command(wake, h.chat)
+    sys.stderr.write("voice: %r -> %s\n" % (wake[:60], line))
+    h.text("cmd %s\n" % line)
+
+
+ROUTES = [("POST", "/voice", post_voice)]

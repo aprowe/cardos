@@ -31,7 +31,7 @@ HEADER = os.path.join(ROOT, "kernel", "app", "capp_blobs.h")
 TOOLCHAIN = os.path.join(
     os.path.expanduser("~"), ".platformio", "packages",
     "toolchain-xtensa-esp-elf", "bin")
-# The droplet builds too (see tools/buildstep.py), and Linux has no .exe.
+# The droplet builds too (see server/build.py), and Linux has no .exe.
 EXE = ".exe" if os.name == "nt" else ""
 GCC = os.path.join(TOOLCHAIN, "xtensa-esp32s3-elf-gcc" + EXE)
 LD = os.path.join(TOOLCHAIN, "xtensa-esp32s3-elf-ld" + EXE)

@@ -30,8 +30,8 @@ no credentials to anything else.
 builds with, rather than whatever is newest on the day the droplet installs it.
 `tools/build_apps.py` no longer assumes `.exe`.
 
-**A Build turn ends in a build** (`tools/buildstep.py`, `webproxy.py --build
---store DIR`). Around each turn the content of every changed file is hashed
+**A Build turn ends in a build** (`server/build.py`, `python -m server --build
+--store DIR`; the server moved out of `tools/` into `server/` the same day). Around each turn the content of every changed file is hashed
 before and after; the difference is what the turn did.
 
 - Nothing changed: the answer, as before.
@@ -74,7 +74,7 @@ update is never applied without `update apps|os|all` or `/update`.
 
 ## Tests
 
-`tools/test_buildstep.py`: change detection, what gets built for which paths,
+`server/tests/test_build.py`: change detection, what gets built for which paths,
 publish only-what-differs and atomic, garbage refused, a turn that builds /
 changes nothing / only changes docs / fails to build, no Bash in the tool
 list, `/update` served from the store. End to end on hardware: a visible
