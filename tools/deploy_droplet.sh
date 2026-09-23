@@ -5,6 +5,7 @@
 #     bash tools/deploy_droplet.sh setup     once: repo, toolchain, first build, service
 #     bash tools/deploy_droplet.sh update    after pushing new master: merge it in, restart
 #     bash tools/deploy_droplet.sh pull      bring the droplet's Build commits to this laptop
+#     bash tools/deploy_droplet.sh sync      all three -- here, droplet, GitHub -- the same
 #
 # Run from the repository root on the laptop. Uses the root ssh login that
 # already exists; adds no keys and no accounts. Everything on the droplet runs
@@ -50,8 +51,6 @@ setup() {
     [ -d $CLONE/.git ] || git clone -q $BARE $CLONE
     cd $CLONE
     git checkout -q -B remote origin/master
-    # Generated, gitignored, and only for the renderer this box does not run.
-    [ -f tools/cardos6x8.ttf ] || cp /opt/cardos/tools/cardos6x8.ttf tools/ 2>/dev/null || true
     git log --oneline -1"
 
   echo "== 4. PlatformIO in the service's venv"
@@ -130,9 +129,28 @@ pull() {
   echo "To take them:  git merge droplet/remote"
 }
 
+# The three copies -- this checkout, the droplet, GitHub -- made one again:
+# Build's commits come here, everything goes to the droplet (rebuilt and
+# republished) and to GitHub's main. Stops at the first thing that needs a
+# person: uncommitted work here, or a merge that does not go through clean.
+sync() {
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "uncommitted changes here; commit or stash them first"; exit 1
+  fi
+  [ "$(git rev-parse --abbrev-ref HEAD)" = master ] || { echo "not on master"; exit 1; }
+  pull
+  git merge --no-edit droplet/remote
+  git fetch -q origin
+  git merge --no-edit origin/main          # anything pushed to GitHub directly
+  update
+  git push -q origin master:main
+  echo "in sync: $(git log --oneline -1)"
+}
+
 case "${1:-}" in
   setup) setup ;;
   update) update ;;
   pull) pull ;;
-  *) sed -n '2,12p' "$0"; exit 2 ;;
+  sync) sync ;;
+  *) sed -n '2,13p' "$0"; exit 2 ;;
 esac

@@ -5,6 +5,7 @@
 #include "kernel/drv/bthid.h"
 #include "kernel/net/wifi.h"
 #include "kernel/sys/clock.h"
+#include "kernel/sys/tzlookup.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -89,6 +90,9 @@ static void run_job(BgJob job) {
       char when[40];
       clock_full(when, sizeof when);
       post("clock: %s", when);
+      /* And, if nobody has ever said, where. On a task of its own: a network
+       * request here overflowed this task's 4 KB on every boot. */
+      tzlookup_start();
     }
     break;
 

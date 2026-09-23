@@ -46,6 +46,8 @@ idf_component_register(
     "../kernel/drv/battery.c"
     "../kernel/sys/power.c"
     "../kernel/sys/clock.c"
+    "../kernel/sys/tzlookup.c"
+    "../kernel/sys/tzreply.c"
     "../kernel/sys/hotkeys.c"
     "../kernel/sys/conf.c"
     "../kernel/sys/conf_file.c"

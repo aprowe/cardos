@@ -43,6 +43,7 @@
 #include "kernel/sys/voice.h"
 #include "kernel/sys/bg.h"
 #include "kernel/sys/clock.h"
+#include "kernel/sys/tzlookup.h"
 #include "kernel/sys/busy.h"
 #include "kernel/sys/shot.h"
 #include "kernel/sys/agent.h"
@@ -1285,6 +1286,22 @@ void app_main(void) {
       if (done) {
         if (s_mode == MODE_CONSOLE) { con_printf("%s\n", done); prompt(); }
         else if (s_mode == MODE_LAUNCHER) launchui_note(done);
+      }
+    }
+
+    /* A time zone the server found (kernel/sys/tzlookup.c), applied here
+     * because this is the task that reads env and the clock. Saved like
+     * `set TZ=...`, so it is asked for once, not every boot. */
+    {
+      char zone[48], line[80];
+      const char *rule = tzlookup_take(zone, sizeof zone);
+      if (rule) {
+        env_set("TZ", rule);
+        clock_apply_zone();
+        snprintf(line, sizeof line, "timezone: %s", zone[0] ? zone : rule);
+        applogf("tz", "%s (%s)", zone, rule);
+        if (s_mode == MODE_CONSOLE) { con_printf("%s\n", line); prompt(); }
+        else if (s_mode == MODE_LAUNCHER) launchui_note(line);
       }
     }
 
