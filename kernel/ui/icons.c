@@ -392,7 +392,9 @@ void icons_reload(void) {
   if (!fs_mounted()) return;
 
   seed_dir();
+  capprun_catalog_begin();        /* every load in the scan adds its commands */
   scan(ICONS_DIR, 0, -1);
+  capprun_catalog_end();
   scan_firmware_folder();
   partition_cli();
 }

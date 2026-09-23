@@ -1060,16 +1060,31 @@ static void paint_add(CRect c) {
  * chords are safe to claim: the desktop used to take ctrl-S for its Start
  * menu, which is why an editor's save did nothing in a window. */
 enum { ACT_ADD = 1, ACT_TICK, ACT_DELETE, ACT_SYNC, ACT_LISTS, ACT_ALL,
-       ACT_SAVE, ACT_CANCEL, ACT_OPEN, ACT_GOTO, ACT_PRINT };
+       ACT_SAVE, ACT_CANCEL, ACT_OPEN, ACT_GOTO, ACT_PRINT,
+       ACT_DONE, ACT_LIST };
+
+/* Commands as well as actions (CAPP_CMD_YES): what `do todo ...`, voice and
+ * an AI can ask for, with no screen. `done` and `list` have no menu entry --
+ * Tick acts on the row under the cursor, which is not a thing a sentence can
+ * name, so the command takes the title. See app_command. */
+static const CappParam P_TEXT[]  = { { "text",  CAPP_ARG_TEXT, "what the task says" } };
+static const CappParam P_TITLE[] = { { "title", CAPP_ARG_TEXT,
+                                       "the task, or enough of it to match" } };
 
 static const CappAction LIST_ACTIONS[] = {
-  { "add",    "Add",      "Task", 0x01, ACT_ADD },     /* ctrl-a */
+  { "add",    "Add",      "Task", 0x01, ACT_ADD,       /* ctrl-a */
+    "add a task to the current list", P_TEXT, 1, CAPP_CMD_YES },
   { "tick",   "Tick",     "Task", 0x14, ACT_TICK },    /* ctrl-t */
   { "delete", "Delete",   "Task", 0x04, ACT_DELETE },  /* ctrl-d */
-  { "sync",   "Sync now", "List", 0x13, ACT_SYNC },    /* ctrl-s */
+  { "sync",   "Sync now", "List", 0x13, ACT_SYNC,      /* ctrl-s */
+    "sync every list with Google", 0, 0, CAPP_CMD_YES | CAPP_CMD_NET },
   { "lists",  "Lists...", "List", 0x0C, ACT_LISTS },   /* ctrl-l */
   { "all",    "All lists", "List", 0x0F, ACT_ALL },   /* ctrl-o */
   { "print",  "Print",    "List", CAPP_KEY_PRINT, ACT_PRINT },  /* fn-p */
+  { "done",   "Done",     0,      0,    ACT_DONE,
+    "tick off the task whose title matches", P_TITLE, 1, CAPP_CMD_YES },
+  { "list",   "List",     0,      0,    ACT_LIST,
+    "the open tasks in the current list", 0, 0, CAPP_CMD_YES },
 };
 
 /* The overview. Reading, and a way into the list a row belongs to. */
@@ -1516,6 +1531,8 @@ const CappInfo capp_info = {
   "arrows\tmove\nenter\ttick it off\na\tadd a task\nd\tdelete / undo\n"
   "s\tsync every list\nleft/right\tnext list\nl\tchoose a list\n"
   "o\tall lists at once\np\tprint it\nescape\tback a level\nfn-`\tleave\n",
+  LIST_ACTIONS,
+  sizeof LIST_ACTIONS / sizeof LIST_ACTIONS[0],
 };
 
 static CappUi UI;

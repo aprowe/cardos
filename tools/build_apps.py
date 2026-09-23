@@ -51,6 +51,11 @@ CFLAGS = [
     "-Wall",
     "-Wextra",
     "-Werror",
+    # The contract grows by adding fields at the end of CappInfo, CappAction
+    # and CappUi, and an app that has no use for them leaves them out: that is
+    # how Mines stays untouched when commands arrive (API 30). -Wextra would
+    # call every one of those initializers an error.
+    "-Wno-missing-field-initializers",
     "-I", ROOT,
 ]
 
@@ -162,6 +167,97 @@ def read_info(elf):
     raise SystemExit("%s: no .data section, so no capp_info" % elf)
 
 
+# The commands, followed out of capp_info the same way (CappInfo.commands and
+# CappAction/CappParam in kernel/app/capp.h, 32-bit Xtensa layout). Pointers
+# are link-time addresses: apps/capp.ld links .data at DATA_BASE, so an
+# address minus DATA_BASE is an offset into the .data section's bytes.
+DATA_BASE = 0x10000000
+INFO_COMMANDS, INFO_NCOMMANDS = 56, 60
+ACTION_SIZE, PARAM_SIZE = 28, 12
+ARG_TYPES = {1: "text", 2: "int", 3: "bool", 4: "choice"}
+CMD_YES, CMD_NET = 0x01, 0x02
+
+
+def _data_section(elf):
+    import struct
+    with open(elf, "rb") as f:
+        data = f.read()
+    shoff, = struct.unpack_from("<I", data, 0x20)
+    shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 0x2E)
+    sec = lambda i: struct.unpack_from("<IIIIIIIIII", data, shoff + i * shentsize)
+    names = sec(shstrndx)[4]
+    for i in range(shnum):
+        sh = sec(i)
+        end = data.index(bytes([0]), names + sh[0])
+        if data[names + sh[0]:end] == b".data":
+            return data[sh[4]:sh[4] + sh[5]]
+    raise SystemExit("%s: no .data section" % elf)
+
+
+def read_commands(elf):
+    """The app's commands: [{"id", "about", "net", "params": [{"name",
+    "type", "about"}]}], only entries marked CAPP_CMD_YES."""
+    import struct
+    d = _data_section(elf)
+
+    def ptr(off):
+        v, = struct.unpack_from("<I", d, off)
+        return None if v == 0 else v - DATA_BASE
+
+    def cstr(off):
+        if off is None:
+            return None
+        return d[off:d.index(bytes([0]), off)].decode("utf-8", "replace")
+
+    table = ptr(INFO_COMMANDS)
+    n = d[INFO_NCOMMANDS]
+    out = []
+    for i in range(n if table is not None else 0):
+        a = table + i * ACTION_SIZE
+        cmd = d[a + 25]
+        if not cmd & CMD_YES:
+            continue
+        params, np = ptr(a + 20), d[a + 24]
+        plist = []
+        for j in range(np if params is not None else 0):
+            p = params + j * PARAM_SIZE
+            plist.append({"name": cstr(ptr(p)),
+                          "type": ARG_TYPES.get(d[p + 4], "?"),
+                          "about": cstr(ptr(p + 8))})
+        out.append({"id": cstr(ptr(a)), "about": cstr(ptr(a + 16)),
+                    "net": bool(cmd & CMD_NET), "params": plist})
+    return out
+
+
+def catalog_line(app, c):
+    """The same text kernel/app/cmdline.c's cmdline_catalog_line makes."""
+    words = [app, c["id"]]
+    for p in c["params"]:
+        words.append("%s:%s" % (p["name"], p["about"] if p["type"] == "choice"
+                                else p["type"]))
+    if c["net"]:
+        words.append("net")
+    line = " ".join(words)
+    return line + (" # " + c["about"] if c["about"] else "")
+
+
+def emit_catalog(built):
+    """build/apps/commands.json: every app's commands, for the server's voice
+    prompt and anything else off the device that needs to know."""
+    import json
+    cat = {}
+    for name, elf in built:
+        cmds = read_commands(elf)
+        if cmds:
+            cat[name] = cmds
+    path = os.path.join(OUT, "commands.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cat, f, indent=1, sort_keys=True)
+    total = sum(len(v) for v in cat.values())
+    print("  %s (%d command%s in %d app%s)" % (os.path.relpath(path, ROOT), total,
+          "" if total == 1 else "s", len(cat), "" if len(cat) == 1 else "s"))
+
+
 def check_placement(stem, elf):
     """Refuse an app that nobody placed or that has no face. A Build turn that
     makes an app reads this when it fails, so the message says what to do."""
@@ -258,6 +354,7 @@ def main():
     print("building %d app(s):" % len(srcs))
     built = [build(s) for s in srcs]
     emit_header(built)
+    emit_catalog(built)
 
 
 if __name__ == "__main__":

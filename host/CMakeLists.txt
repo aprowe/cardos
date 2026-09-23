@@ -25,6 +25,7 @@ file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
   ${ROOT}/kernel/sys/hotkeys.c ${ROOT}/kernel/sys/chatlog.c ${ROOT}/kernel/sys/conf.c
   ${ROOT}/kernel/sys/logring.c   # applog.c is the device glue around it
   ${ROOT}/kernel/sys/tzreply.c   # tzlookup.c is the device glue around it
+  ${ROOT}/kernel/app/cmdline.c   # commands as words, checked against a table
   ${ROOT}/kernel/sys/printdoc.c  # printq.c/btprint.c are the task and radio around it
   ${ROOT}/kernel/ui/pickmodel.c  # picker.c is the paint and fs glue
   ${ROOT}/kernel/ui/rect.c ${ROOT}/kernel/ui/wm.c)  # draw/desktop are device-only   # task.c is device glue; sched.c is the policy

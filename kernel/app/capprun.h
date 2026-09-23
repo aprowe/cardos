@@ -34,6 +34,12 @@
 /* Load and read the descriptor. Nothing runs. Returns a slot index, or -1. */
 int capprun_load(const char *path);
 
+/* The command catalog: every app's commands, one line each, written by the
+ * loads between begin and end (the icon scan). */
+#define CAPPRUN_CATALOG "/cache/commands.txt"
+void capprun_catalog_begin(void);
+void capprun_catalog_end(void);
+
 void capprun_unload_all(void);
 
 /* Run it. `args` is split into argv here: splitting a command line is the

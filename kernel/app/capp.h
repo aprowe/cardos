@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 29
+#define CAPP_API_VERSION 30
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -117,14 +117,44 @@ typedef struct {
 
 typedef struct { int16_t x, y, w, h; } CRect;
 
-/* One thing an app can be asked to do. See CappUi.actions. */
+/* One argument a command takes. See CappAction and
+ * docs/superpowers/specs/2026-09-23-app-commands-design.md. */
+#define CAPP_ARG_TEXT   1
+#define CAPP_ARG_INT    2
+#define CAPP_ARG_BOOL   3      /* yes/no, true/false, on/off, 1/0 */
+#define CAPP_ARG_CHOICE 4      /* one of the words in `about`: "a|b|c" */
+typedef struct {
+  const char *name;    /* "text" */
+  uint8_t     type;    /* CAPP_ARG_* */
+  const char *about;   /* "what the task says"; for CHOICE, "list|all" */
+} CappParam;
+
+/* One thing an app can be asked to do. See CappUi.actions.
+ *
+ * With `cmd` set it is also a *command*: callable with typed arguments and
+ * no screen -- from the console (`do todo add "fix car"`), from voice, from
+ * an AI -- and listed in the catalog. The GUI runs the same one: a menu
+ * entry for a command that takes arguments gets them from an OS prompt. One
+ * table, so the GUI and the API cannot drift. The fields after `action` were
+ * added at API 30; a table that leaves them out is GUI-only, as before. */
+#define CAPP_CMD_YES 0x01      /* exposed as a command */
+#define CAPP_CMD_NET 0x02      /* may need the network: can answer PENDING */
 typedef struct {
   const char *id;      /* stable, machine-readable: "save", "run.vm" */
   const char *label;   /* shown to a person: "Save" */
   const char *menu;    /* the menu it hangs under, or NULL for no menu */
   uint8_t     key;     /* the ctrl chord that runs it, or 0 for none */
   uint8_t     action;  /* the app's own enum value, passed back to `action` */
+  const char *about;          /* one line for the catalog: "add a task" */
+  const CappParam *params;    /* NULL for none */
+  uint8_t     nparams;
+  uint8_t     cmd;            /* CAPP_CMD_*; 0 = a GUI action only */
 } CappAction;
+
+/* What a command handler returns while it waits on the network; it finishes
+ * from tick and says so with api->command_done. */
+#define CAPP_CMD_PENDING (-1000)
+#define CAPP_CMD_ARGS_MAX 4
 
 #define CAPP_NAME_MAX 63
 
@@ -288,6 +318,14 @@ typedef struct {
   const CappAction *actions;
   uint8_t           nactions;
   int (*action)(void *state, int action);
+
+  /* Run a command (an entry of `actions` with CAPP_CMD_YES) with arguments,
+   * no screen required. argv holds them in declaration order, already
+   * checked against the declared types. Text for the caller goes in `out`.
+   * 0 done, <0 failed (`out` says why), CAPP_CMD_PENDING to finish from
+   * tick with api->command_done. NULL for an app with no commands. */
+  int (*command)(void *state, int action, int argc, const char *const *argv,
+                 char *out, size_t n);
 } CappUi;
 
 /* ---- sound ----
@@ -622,6 +660,13 @@ typedef struct {
    * constant, so with PROXY pointing at the droplet the OS's pre-flight
    * reached the droplet and the app then posted to a laptop that was off. */
   const char *(*proxy)(void);
+
+  /* Commands (API 30). headless() is nonzero while the app was started only
+   * to run a command: do the local part of starting (read the cache) and
+   * skip the screen and the sync. command_done ends a command that
+   * answered CAPP_CMD_PENDING. */
+  int  (*headless)(void);
+  void (*command_done)(int rc, const char *out);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a
@@ -632,6 +677,11 @@ typedef struct {
   char     name[16];
   uint8_t  icon[CAPP_ICON_BYTES];        /* 16x16, 1bpp, bit 7 = leftmost */
   const char *help;                      /* "key<tab>meaning" per line */
+  /* The commands, readable without running the app: the same table the app
+   * installs as CappUi.actions, pointed at twice. The build reads it into
+   * build/apps/commands.json and the icon scan into /cache/commands.txt. */
+  const CappAction *commands;
+  uint8_t           ncommands;
 } CappInfo;
 
 /* The program. argv[0] is the name it was invoked as. */

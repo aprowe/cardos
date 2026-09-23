@@ -48,6 +48,7 @@ idf_component_register(
     "../kernel/sys/clock.c"
     "../kernel/sys/tzlookup.c"
     "../kernel/sys/tzreply.c"
+    "../kernel/app/cmdline.c"
     "../kernel/sys/hotkeys.c"
     "../kernel/sys/conf.c"
     "../kernel/sys/conf_file.c"

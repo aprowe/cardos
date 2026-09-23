@@ -9,6 +9,8 @@
 #include "kernel/net/share.h"
 #include "kernel/net/update.h"
 #include "kernel/sys/env.h"
+#include "kernel/app/cmdline.h"
+#include "kernel/fs/fs.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -305,6 +307,43 @@ void capprun_install_ui(const CappUi *ui) {
   s->def.set_args   = NULL;      /* argv was the arguments */
 }
 
+/* The command catalog, /cache/commands.txt: one line per command of every
+ * app, written during the icon scan while each image is loaded anyway -- the
+ * descriptor's pointers are only good then. On the card, not in RAM. See
+ * docs/superpowers/specs/2026-09-23-app-commands-design.md. */
+static int s_catalog_fd = -1;
+
+void capprun_catalog_begin(void) {
+  if (s_catalog_fd >= 0) fs_close(s_catalog_fd);
+  s_catalog_fd = fs_open(CAPPRUN_CATALOG, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+}
+
+void capprun_catalog_end(void) {
+  if (s_catalog_fd >= 0) fs_close(s_catalog_fd);
+  s_catalog_fd = -1;
+}
+
+/* The app's name in the catalog is its file's, "todo" for .../todo.capp --
+ * what `do todo` types and what the server's catalog, keyed by the same
+ * files, calls it. */
+static void catalog_add(const char *path, const CappInfo *info) {
+  char app[24], line[200];
+  const char *base = strrchr(path, '/');
+  size_t n;
+  int i;
+  if (s_catalog_fd < 0 || !info->commands || !info->ncommands) return;
+  base = base ? base + 1 : path;
+  n = strcspn(base, ".");
+  snprintf(app, sizeof app, "%.*s", (int)n, base);
+  for (i = 0; i < info->ncommands; i++) {
+    if (!cmdline_is_command(&info->commands[i])) continue;
+    cmdline_catalog_line(app, &info->commands[i], line, sizeof line - 1);
+    n = strlen(line);
+    line[n++] = '\n';
+    fs_write(s_catalog_fd, line, n);
+  }
+}
+
 int capprun_load(const char *path) {
   int i;
   Slot *s;
@@ -328,6 +367,7 @@ int capprun_load(const char *path) {
   memcpy(s->icon, s->la.info->icon, sizeof s->icon);
   s->flags = s->la.info->flags;
   snprintf(s->path, sizeof s->path, "%s", path);
+  catalog_add(path, s->la.info);
 
   /* And now give it back.
    *

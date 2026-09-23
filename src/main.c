@@ -227,6 +227,41 @@ static void cmd_log(const char *arg) {
 /* A stand-in for the real shell, which needs the context switch so it can run
  * as a task and block on the keyboard rather than polling it. */
 /* One command, already separated from its pipeline and redirections. */
+/* `do` with nothing, or with an app's name: that app's commands from the
+ * catalog (/cache/commands.txt, written by the icon scan). 1 if it listed
+ * something, 0 to fall through to the older `do ID` on the focused app. */
+static int do_catalog(const char *what) {
+  /* Whole, not line by line: a few lines per app, and 4 KB is dozens of
+   * apps' worth. Static because it is too big for the console's stack. */
+  static char buf[4096];
+  char app[24], *line, *next;
+  int fd, n, shown = 0;
+  size_t alen;
+
+  while (*what == ' ') what++;
+  alen = strcspn(what, " ");
+  if (what[alen] || alen >= sizeof app) return 0;   /* not a listing */
+  snprintf(app, sizeof app, "%.*s", (int)alen, what);
+
+  fd = fs_open(CAPPRUN_CATALOG, FS_O_READ);
+  if (fd < 0) return 0;
+  n = fs_read(fd, buf, sizeof buf - 1);
+  fs_close(fd);
+  buf[n > 0 ? n : 0] = 0;
+
+  for (line = buf; *line; line = next) {
+    next = strchr(line, '\n');
+    if (next) *next++ = 0; else next = line + strlen(line);
+    if (!alen || (!strncmp(line, app, alen) && line[alen] == ' ')) {
+      con_printf("  %s\n", line);
+      shown++;
+    }
+  }
+  if (!shown && alen) return 0;             /* not an app with commands */
+  if (!shown) con_write("no app has commands yet\n");
+  return 1;
+}
+
 static void run_builtin(const char *line, char *arg) {
   if (!strcmp(line, "help"))        cmd_help();
   else if (!strcmp(line, "log"))    cmd_log(arg);
@@ -238,6 +273,10 @@ static void run_builtin(const char *line, char *arg) {
    * for by name. kernel/sys/rpc.c already argues it for voice -- an LLM
    * choosing between a few named verbs is useful, one handed a string to run
    * is not -- and this is that list, per app, written once by the app. */
+  else if (!strncmp(line, "do", 2) && (line[2] == 0 || line[2] == ' ') &&
+           do_catalog(line[2] ? line + 3 : "")) {
+    /* listed from the command catalog: `do`, `do todo` */
+  }
   else if (!strncmp(line, "do", 2) && (line[2] == 0 || line[2] == ' ')) {
     const AppDef *a = launchui_running();
     const char *what = line[2] ? line + 3 : NULL;
