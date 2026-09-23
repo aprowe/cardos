@@ -81,6 +81,38 @@ static int app_key(void *st, unsigned char k) {
   return 0;
 }
 
+/* ---- commands ---------------------------------------------------------------
+ *
+ * Sharing is on while Share is on screen -- a thing you can see is on -- so
+ * `start` opens it (CAPP_CMD_OPEN) rather than starting a server a headless
+ * instance would stop again the moment the command ended. `status` is the
+ * kernel's own answer, the same with Share closed. */
+enum { ACT_START = 1, ACT_STATUS };
+
+static const CappAction ACTIONS[] = {
+  { "start",  "Start",  0, 0, ACT_START,
+    "open Share: the card becomes a network drive while it is on screen", 0, 0,
+    CAPP_CMD_YES | CAPP_CMD_OPEN },
+  { "status", "Status", 0, 0, ACT_STATUS,
+    "whether the card is shared, and the address to type on a PC", 0, 0, CAPP_CMD_YES },
+};
+#define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
+
+static int app_action(void *st, int a) { (void)st; (void)a; return 0; }
+
+static int app_command(void *st, int action, int argc, const char *const *argv,
+                       char *out, size_t n) {
+  (void)st;
+  (void)argc;
+  (void)argv;
+  if (action != ACT_STATUS) { api->fmt(out, n, "no command %d", action); return -1; }
+  {
+    const char *st = api->share_status();
+    api->fmt(out, n, "%s", st && st[0] ? st : "not shared -- share start opens it");
+  }
+  return 0;
+}
+
 const CappInfo capp_info = {
   CAPP_API_VERSION,
   CAPP_FULLSCREEN | CAPP_NEEDS_NET,
@@ -97,6 +129,8 @@ const CappInfo capp_info = {
   "windows refuses files over 50 MB by default (WebClient\n"
   "FileSizeLimitInBytes in the registry). copying a folder\n"
   "within the drive is not supported; copy its files.\n",
+  ACTIONS,
+  sizeof ACTIONS / sizeof ACTIONS[0],
 };
 
 static CappUi UI;
@@ -105,10 +139,16 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   (void)argc; (void)argv;
   api = a;
   api->mem_set(&S, 0, sizeof S);
-  start();
+  /* Not for a command: sharing is on while Share is on screen, and a
+   * headless instance is never on screen -- `status` only reads. */
+  if (!api->headless()) start();
   UI.paint = app_paint;
   UI.key = app_key;
   UI.tick = app_tick;
+  UI.actions = ACTIONS;
+  UI.nactions = NACT;
+  UI.action = app_action;
+  UI.command = app_command;
   api->ui(&UI);
   return 0;
 }

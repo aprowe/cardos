@@ -519,6 +519,43 @@ static void paint_and_remember(void *st, CRect c) {
   app_paint(st, c);
 }
 
+/* ---- commands ---------------------------------------------------------------
+ *
+ * `ls`: what is in a folder, for a sentence or an AI to read -- folders with a
+ * slash, files with their size. Read straight off the card, so it answers the
+ * same with this app closed. */
+enum { ACT_LS = 1 };
+
+static const CappParam P_PATH[] = { { "path", CAPP_ARG_TEXT, "a folder, like /home" } };
+
+static const CappAction ACTIONS[] = {
+  { "ls", "List", 0, 0, ACT_LS, "what is in a folder, with sizes", P_PATH, 1, CAPP_CMD_YES },
+};
+#define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
+
+static int app_action(void *st, int a) { (void)st; (void)a; return 0; }
+
+static int app_command(void *st, int action, int argc, const char *const *argv,
+                       char *out, size_t n) {
+  static CappEntry ent[48];
+  size_t o = 0;
+  int i, cnt;
+  (void)st;
+  (void)argc;
+  if (action != ACT_LS) { api->fmt(out, n, "no command %d", action); return -1; }
+  cnt = api->list_ex(argv[0], ent, 48);
+  if (cnt < 0) { api->fmt(out, n, "no folder %s", argv[0]); return -1; }
+  if (cnt == 0) { api->fmt(out, n, "%s is empty", argv[0]); return 0; }
+  for (i = 0; i < cnt && o + 8 < n; i++) {
+    if (ent[i].is_dir)
+      o += (size_t)api->fmt(out + o, n - o, "%s/\n", ent[i].name);
+    else
+      o += (size_t)api->fmt(out + o, n - o, "%s  %u\n", ent[i].name, (unsigned)ent[i].size);
+  }
+  if (i < cnt) api->fmt(out + o, n - o, "...and %d more", cnt - i);
+  return 0;
+}
+
 const CappInfo capp_info = {
   CAPP_API_VERSION,
   0,      /* a window on the desktop, fullscreen from the launcher */
@@ -531,6 +568,8 @@ const CappInfo capp_info = {
   "arrows\tmove, left is up a folder\nenter\topen\nn r\tnew folder, rename\n"
   "m p\tmark a file, then move it here\nd\tdelete\ne\topen in the editor\n"
   "g\tread the folder again\n",
+  ACTIONS,
+  sizeof ACTIONS / sizeof ACTIONS[0],
 };
 
 static CappUi UI;
@@ -554,6 +593,10 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.click = app_click;
   UI.mouse = app_mouse;
   UI.wants_text = app_wants_text;
+  UI.actions = ACTIONS;
+  UI.nactions = NACT;
+  UI.action = app_action;
+  UI.command = app_command;
   api->ui(&UI);
   return 0;
 }

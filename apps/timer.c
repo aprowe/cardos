@@ -437,6 +437,30 @@ static int app_tick(void *st, uint32_t now_ms) {
   return 0;
 }
 
+static CappUi UI;
+
+/* Minutes on the command line start it at once: `run timer 5`, and what the
+ * `start` command opens (CAPP_CMD_OPEN). A number only; anything else is the
+ * set screen as before. */
+static int parse_minutes(const char *s) {
+  int v = 0, any = 0;
+  if (!s) return 0;
+  for (; *s >= '0' && *s <= '9'; s++) { v = v * 10 + (*s - '0'); any = 1; }
+  return any && !*s && v > 0 && v < 100 ? v : 0;
+}
+
+enum { ACT_START = 1, ACT_RESET };
+
+static const CappParam P_MIN[] = { { "minutes", CAPP_ARG_INT, "how long, 1 to 99" } };
+
+static const CappAction ACTIONS[] = {
+  { "start", "Start / pause", "Timer", 0,    ACT_START,     /* space, in app_key */
+    "open Timer counting down from this many minutes", P_MIN, 1,
+    CAPP_CMD_YES | CAPP_CMD_OPEN },
+  { "reset", "Reset",         "Timer", 0x12, ACT_RESET },   /* ctrl-r */
+};
+#define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
+
 const CappInfo capp_info = {
   CAPP_API_VERSION,
   CAPP_FULLSCREEN,
@@ -448,21 +472,42 @@ const CappInfo capp_info = {
     0x30, 0x0C, 0x0C, 0x30, 0x03, 0xC0, 0x00, 0x00 },
   "digits\ttype minutes/seconds\nleft/right\tswitch field\nup/down\t+-1\n"
   "space\tstart, pause, resume\nr\treset\nany key\tstops the alarm\n",
+  ACTIONS,
+  sizeof ACTIONS / sizeof ACTIONS[0],
 };
 
-static CappUi UI;
+
+static int app_action(void *st, int a) {
+  (void)st;
+  if (a == ACT_START) {
+    if (T.state == ST_RUNNING) pause(api->ticks_ms());
+    else start_or_resume(api->ticks_ms());
+    return 1;
+  }
+  if (a == ACT_RESET) { reset(); return 1; }
+  return 0;
+}
 
 int capp_main(const CardApi *a, int argc, char **argv) {
+  int minutes;
   api = a;
   au = api->audio();
-  (void)argc; (void)argv;
   api->mem_set(&T, 0, sizeof T);
   ensure_beep();
+
+  minutes = argc > 1 ? parse_minutes(argv[1]) : 0;
+  if (minutes) {
+    T.set_min = minutes;
+    start_or_resume(api->ticks_ms());
+  }
 
   UI.paint = app_paint;
   UI.key = app_key;
   UI.tick = app_tick;
   UI.wants_text = app_wants_text;
+  UI.actions = ACTIONS;
+  UI.nactions = NACT;
+  UI.action = app_action;
   api->ui(&UI);
   return 0;
 }

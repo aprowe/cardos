@@ -46,6 +46,11 @@ int capprun_load(const char *path);
 int capprun_command(const char *app, const char *cmd, int nwords,
                     const char *const *words, char *out, size_t n);
 int  capprun_headless(void);                 /* api->headless */
+
+/* How a CAPP_CMD_OPEN command opens its app: the shell's runner, set once at
+ * boot (launchui_run). A hook rather than a call because the launcher is
+ * built on this file, not under it. */
+void capprun_set_opener(int (*open)(const char *app, const char *args));
 void capprun_command_done(int rc, const char *out);   /* api->command_done */
 void capprun_catalog_begin(void);
 void capprun_catalog_end(void);

@@ -295,11 +295,25 @@ static void app_paint(void *st, CRect c) {
 
 /* ---- input --------------------------------------------------------------- */
 
-enum { ACT_RECORD = 1, ACT_PLAY, ACT_DELETE, ACT_REFRESH, ACT_LOUDER, ACT_QUIETER };
+enum { ACT_RECORD = 1, ACT_PLAY, ACT_DELETE, ACT_REFRESH, ACT_LOUDER, ACT_QUIETER,
+       ACT_LIST, ACT_PLAY_NAMED, ACT_STOP };
+
+/* Commands (CAPP_CMD_YES). Playing by name is its own entry: Play in the GUI
+ * plays the highlighted row, a sentence names the memo. Recording is not a
+ * command -- a recording lasts as long as someone talks, which is the G0
+ * button's job (tap, then hold), not a 20-second command's. */
+static const CappParam P_MEMO[] = { { "memo", CAPP_ARG_TEXT,
+                                      "part of the memo's name, or latest" } };
 
 static const CappAction ACTIONS[] = {
   { "record",  "Record / stop", "Memo", 0x12, ACT_RECORD },   /* ctrl-r */
   { "play",    "Play / stop",   "Memo", 0x10, ACT_PLAY },     /* ctrl-p */
+  { "list",    "List",          0,      0,    ACT_LIST,
+    "the memos, newest first, with their lengths", 0, 0, CAPP_CMD_YES },
+  { "playmemo", "Play memo",    0,      0,    ACT_PLAY_NAMED,
+    "play a memo through the speaker", P_MEMO, 1, CAPP_CMD_YES },
+  { "stop",    "Stop",          0,      0,    ACT_STOP,
+    "stop whatever is playing", 0, 0, CAPP_CMD_YES },
   { "delete",  "Delete",        "Memo", 0x04, ACT_DELETE },   /* ctrl-d */
   { "refresh", "Refresh",       "Memo", 0x0C, ACT_REFRESH },  /* ctrl-l */
   { "louder",  "Louder",        "Volume", 0, ACT_LOUDER },
@@ -328,6 +342,69 @@ static int do_action(int a) {
 }
 
 static int app_action(void *st, int a) { (void)st; return do_action(a); }
+
+/* Lower-case: is `needle` somewhere in `hay`? */
+static int contains(const char *hay, const char *needle) {
+  int i, j;
+  for (i = 0; hay[i]; i++) {
+    for (j = 0; needle[j]; j++) {
+      char a = hay[i + j], b = needle[j];
+      if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+      if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+      if (a != b) break;
+    }
+    if (!needle[j]) return 1;
+    if (!hay[i + j]) return 0;
+  }
+  return 0;
+}
+
+/* The commands. Playback runs on the kernel's audio task, so it carries on
+ * after a headless instance is released; `stop` reaches it the same way. */
+static int app_command(void *st, int action, int argc, const char *const *argv,
+                       char *out, size_t n) {
+  char path[96], len[12];
+  size_t o = 0;
+  int i, hit = -1, hits = 0;
+  (void)st;
+  (void)argc;
+
+  rescan();
+  switch (action) {
+  case ACT_LIST:
+    if (!M.n) { api->fmt(out, n, "no memos yet"); return 0; }
+    for (i = 0; i < M.n && o + 8 < n; i++) {
+      mmss(M.memo[i].bytes / 32, len, sizeof len);    /* 16 kHz mono 16-bit */
+      o += (size_t)api->fmt(out + o, n - o, "- %s (%s)\n", M.memo[i].name, len);
+    }
+    return 0;
+
+  case ACT_PLAY_NAMED:
+    if (!M.n) { api->fmt(out, n, "no memos yet"); return -1; }
+    if (contains("latest", argv[0]) || contains("newest", argv[0]) ||
+        contains("last", argv[0])) { hit = 0; hits = 1; }
+    else
+      for (i = 0; i < M.n; i++) if (contains(M.memo[i].name, argv[0])) { hit = i; hits++; }
+    if (!hits) { api->fmt(out, n, "no memo matches \"%s\"", argv[0]); return -1; }
+    if (hits > 1) { api->fmt(out, n, "%d memos match \"%s\"; say more", hits, argv[0]); return -1; }
+    if (au->state() != CAPP_AUDIO_IDLE) au->stop();
+    path_of(&M.memo[hit], path, sizeof path);
+    if (au->play(path) != 0) {
+      api->fmt(out, n, "%s", au->error()[0] ? au->error() : "cannot play that");
+      return -1;
+    }
+    api->fmt(out, n, "playing %s", M.memo[hit].name);
+    return 0;
+
+  case ACT_STOP:
+    if (au->state() == CAPP_AUDIO_IDLE) { api->fmt(out, n, "nothing is playing"); return 0; }
+    au->stop();
+    api->fmt(out, n, "stopped");
+    return 0;
+  }
+  api->fmt(out, n, "memo has no command %d", action);
+  return -1;
+}
 
 static int app_key(void *st, unsigned char k) {
   (void)st;
@@ -462,6 +539,8 @@ const CappInfo capp_info = {
     0x01, 0x80, 0x01, 0x80, 0x07, 0xE0, 0x00, 0x00 },
   "arrows\tmove\nr\trecord, and stop\nenter\tplay, and stop\nd\tdelete\n"
   "left/right\tvolume (also + -; opt-8 / opt-7 anywhere)\nescape\tstop\n",
+  ACTIONS,
+  sizeof ACTIONS / sizeof ACTIONS[0],
 };
 
 static CappUi UI;
@@ -483,6 +562,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.actions = ACTIONS;
   UI.nactions = NACT;
   UI.action = app_action;
+  UI.command = app_command;
   api->ui(&UI);
   return 0;
 }

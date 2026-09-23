@@ -152,6 +152,7 @@ static struct {
   int      stage;                   /* SYNC_* below */
   uint32_t next_auto;               /* when to sync again, unprompted */
   int      tried_once;
+  int      cmd_waiting;             /* a `sync` command wants to hear the end */
 } C;
 
 enum { SYNC_IDLE = 0, SYNC_PUSH, SYNC_FETCH };
@@ -821,18 +822,22 @@ static void begin_add(void) {
   C.view = VIEW_ADD;
 }
 
-static void commit_add(void) {
+/* An hour-long event, marked for the next sync to push: what Save does with
+ * the add view's fields and what the `add` command does with its arguments.
+ * `day` is days since the epoch, local. -1 if the list is full. A quote or a
+ * backslash would break the push's JSON, so they become apostrophes. */
+static int add_event(const char *title, int32_t day, int hour, int min) {
   Event *e;
   int32_t local;
+  int i, j;
 
-  if (!C.draft_len) { C.view = VIEW_AGENDA; return; }
-  if (C.n >= MAX_EVENTS) { say("the list is full"); C.view = VIEW_AGENDA; return; }
-
+  if (C.n >= MAX_EVENTS) return -1;
   e = &C.ev[C.n];
   api->mem_set(e, 0, sizeof *e);
-  api->fmt(e->summary, sizeof e->summary, "%s", C.draft);
-  local = C.draft_day * (int32_t)DAY_SECS + (int32_t)C.draft_hour * 3600
-        + C.draft_min * 60;
+  for (i = 0, j = 0; title[i] && j < SUMMARY_MAX; i++)
+    e->summary[j++] = (title[i] == '"' || title[i] == '\\') ? '\'' : title[i];
+  e->summary[j] = 0;
+  local = day * (int32_t)DAY_SECS + (int32_t)hour * 3600 + min * 60;
   e->start = (uint32_t)(local - C.offset);
   e->end = e->start + 3600u;
   e->dirty = 1;
@@ -840,8 +845,16 @@ static void commit_add(void) {
 
   sort_events();
   cache_save();
+  return 0;
+}
+
+static void commit_add(void) {
+  if (!C.draft_len) { C.view = VIEW_AGENDA; return; }
+  if (add_event(C.draft, C.draft_day, C.draft_hour, C.draft_min) != 0)
+    say("the list is full");
+  else
+    say("added -- press s to sync");
   C.view = VIEW_AGENDA;
-  say("added -- press s to sync");
 }
 
 static void delete_selected(void) {
@@ -1094,10 +1107,23 @@ static void paint_add(CRect c) {
  * menu bar, the help panel and the names a script or a model would use all
  * come out of this table. See CappUi.actions. */
 enum { ACT_ADD = 1, ACT_DELETE, ACT_SYNC, ACT_AGENDA, ACT_MONTH, ACT_DAY,
-       ACT_SAVE, ACT_CANCEL };
+       ACT_SAVE, ACT_CANCEL, ACT_TODAY, ACT_UPCOMING };
+
+/* Commands (CAPP_CMD_YES). add's title comes last so a sentence needs no
+ * quotes: `add tomorrow 3pm dentist appointment`. */
+static const CappParam P_ADD[] = {
+  { "day",   CAPP_ARG_TEXT, "today, tomorrow, a weekday, or month/day like 9/30" },
+  { "time",  CAPP_ARG_TEXT, "like 15:00, 3pm, or 9" },
+  { "title", CAPP_ARG_TEXT, "what the event is" },
+};
 
 static const CappAction MAIN_ACTIONS[] = {
-  { "add",    "Add",      "Event", 0x01, ACT_ADD },     /* ctrl-a */
+  { "add",    "Add",      "Event", 0x01, ACT_ADD,       /* ctrl-a */
+    "add an hour-long event", P_ADD, 3, CAPP_CMD_YES },
+  { "today",  "Today",    0,       0,    ACT_TODAY,
+    "today's events", 0, 0, CAPP_CMD_YES },
+  { "upcoming", "Upcoming", 0,     0,    ACT_UPCOMING,
+    "the events of the next seven days", 0, 0, CAPP_CMD_YES },
   { "delete", "Delete",   "Event", 0x04, ACT_DELETE },  /* ctrl-d */
   { "agenda", "Agenda",   "View",  0x07, ACT_AGENDA },  /* ctrl-g */
   { "day",    "Day",      "View",  0x19, ACT_DAY },     /* ctrl-y: ctrl-d is
@@ -1110,7 +1136,8 @@ static const CappAction MAIN_ACTIONS[] = {
    * trap took the help key (ctrl-h is Backspace) -- see keyboard.h. Ctrl-n
    * is free and next to it on the keyboard. */
   { "month",  "Month",    "View",  0x0E, ACT_MONTH },   /* ctrl-n */
-  { "sync",   "Sync now", "View",  0x13, ACT_SYNC },    /* ctrl-s */
+  { "sync",   "Sync now", "View",  0x13, ACT_SYNC,      /* ctrl-s */
+    "sync with Google Calendar", 0, 0, CAPP_CMD_YES | CAPP_CMD_NET },
 };
 
 static const CappAction ADD_ACTIONS[] = {
@@ -1384,6 +1411,124 @@ static int app_action(void *st, int a) {
   return do_action(a);
 }
 
+/* ---- commands: words for a day and a time --------------------------------- */
+
+static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+
+static int starts_with(const char *s, const char *word) {
+  while (*word) if (lower(*s++) != *word++) return 0;
+  return 1;
+}
+
+/* "today", "tomorrow", a weekday (the next one; today counts), or "9/30" /
+ * "9-30" (this year, or next if that has passed). Days since the epoch, or
+ * -1. */
+static int32_t parse_day(const char *s, int32_t today) {
+  static const char *const DAYS[7] = { "sun", "mon", "tue", "wed", "thu", "fri", "sat" };
+  int i, m = 0, d = 0, y;
+  const char *p = s;
+  if (starts_with(s, "today")) return today;
+  if (starts_with(s, "tom")) return today + 1;
+  for (i = 0; i < 7; i++)
+    if (starts_with(s, DAYS[i])) return today + (i - weekday_of_day(today) + 7) % 7;
+  while (*p >= '0' && *p <= '9') m = m * 10 + (*p++ - '0');
+  if ((*p != '/' && *p != '-') || m < 1 || m > 12) return -1;
+  for (p++; *p >= '0' && *p <= '9'; p++) d = d * 10 + (*p - '0');
+  if (*p || d < 1 || d > 31) return -1;
+  y = C.today_y;
+  if (days_from_civil(y, m, d) < today) y++;
+  return days_from_civil(y, m, d);
+}
+
+/* "15:00", "3pm", "3:30pm", "9" (24-hour). 0 and the hour and minute, or -1. */
+static int parse_time(const char *s, int *hour, int *min) {
+  int h = 0, m = 0, any = 0;
+  while (*s >= '0' && *s <= '9') { h = h * 10 + (*s++ - '0'); any = 1; }
+  if (!any) return -1;
+  if (*s == ':' || *s == '.') {
+    s++;
+    if (!(*s >= '0' && *s <= '9')) return -1;
+    while (*s >= '0' && *s <= '9') m = m * 10 + (*s++ - '0');
+  }
+  if (lower(*s) == 'p') { if (h < 12) h += 12; s++; if (lower(*s) == 'm') s++; }
+  else if (lower(*s) == 'a') { if (h == 12) h = 0; s++; if (lower(*s) == 'm') s++; }
+  if (*s || h > 23 || m > 59) return -1;
+  *hour = h;
+  *min = m;
+  return 0;
+}
+
+/* The events on local days [from, to), one line each, into out. */
+static size_t list_days(int32_t from, int32_t to, int with_day, char *out, size_t n) {
+  size_t o = 0;
+  int i, h, m;
+  char label[24];
+  for (i = 0; i < C.n && o + 8 < n; i++) {
+    int32_t d;
+    if (C.ev[i].deleted) continue;
+    d = local_day(C.ev[i].start);
+    if (d < from || d >= to) continue;
+    local_hm(C.ev[i].start, &h, &m);
+    if (with_day) day_label(d, label, sizeof label);
+    else label[0] = 0;
+    o += (size_t)api->fmt(out + o, n - o, "%s%s%02d:%02d %s\n", label,
+                          with_day ? " " : "", h, m, C.ev[i].summary);
+  }
+  return o;
+}
+
+static int app_command(void *st, int action, int argc, const char *const *argv,
+                       char *out, size_t n) {
+  int32_t today, day;
+  int hour, min;
+  (void)st;
+  (void)argc;
+
+  refresh_clock();
+  if (!C.have_clock && action != ACT_SYNC) {
+    api->fmt(out, n, "the clock is not set, so which day is today?");
+    return -1;
+  }
+  today = today_day();
+
+  switch (action) {
+  case ACT_ADD:
+    day = parse_day(argv[0], today);
+    if (day < 0) { api->fmt(out, n, "not a day: %s", argv[0]); return -1; }
+    if (parse_time(argv[1], &hour, &min) != 0) {
+      api->fmt(out, n, "not a time: %s", argv[1]);
+      return -1;
+    }
+    if (add_event(argv[2], day, hour, min) != 0) {
+      api->fmt(out, n, "the calendar is full here (%d events)", MAX_EVENTS);
+      return -1;
+    }
+    {
+      char label[24];
+      day_label(day, label, sizeof label);
+      api->fmt(out, n, "added %s, %s %02d:%02d", argv[2], label, hour, min);
+    }
+    return 0;
+
+  case ACT_TODAY:
+    if (!list_days(today, today + 1, 0, out, n)) api->fmt(out, n, "nothing today");
+    return 0;
+
+  case ACT_UPCOMING:
+    if (!list_days(today, today + 7, 1, out, n)) api->fmt(out, n, "nothing in the next week");
+    return 0;
+
+  case ACT_SYNC:
+    if (C.stage != SYNC_IDLE) { api->fmt(out, n, "already syncing"); return -1; }
+    sync_begin("command");
+    if (C.stage == SYNC_IDLE) { api->fmt(out, n, "%s", C.status); return -1; }
+    C.cmd_waiting = 1;
+    return CAPP_CMD_PENDING;
+  }
+  api->fmt(out, n, "calendar has no command %d", action);
+  return -1;
+}
+
 static int app_click(void *st, short x, short y, int button) {
   (void)st; (void)button; (void)x;
   {
@@ -1437,7 +1582,15 @@ static int app_tick(void *st, uint32_t now_ms) {
 
   /* The first sync is on open rather than on a timer: the reason to open a
    * calendar is to find out what is in it. */
-  if (C.stage == SYNC_IDLE &&
+  /* A `sync` command asked, and it has ended: the status is the answer. */
+  if (C.cmd_waiting && C.stage == SYNC_IDLE) {
+    C.cmd_waiting = 0;
+    api->command_done(0, C.status);
+  }
+
+  /* Not when started only for a command -- `add` is local, and a sync is
+   * the slow thing commands exist to avoid. The `sync` command asks itself. */
+  if (C.stage == SYNC_IDLE && !api->headless() &&
       (!C.tried_once || (int32_t)(now_ms - C.next_auto) >= 0))
     sync_begin(C.tried_once ? "auto" : "opened");
 
@@ -1472,6 +1625,8 @@ const CappInfo capp_info = {
   "arrows\tmove\nenter\tthis day on its own\nm\tmonth view / agenda\n"
   "esc\tback, then out\na\tadd an event\n"
   "d / del\tdelete (unsynced only)\ns\tsync with Google\n",
+  MAIN_ACTIONS,
+  sizeof MAIN_ACTIONS / sizeof MAIN_ACTIONS[0],
 };
 
 static CappUi UI;
@@ -1509,6 +1664,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.actions = MAIN_ACTIONS;
   UI.nactions = NMAIN;
   UI.action = app_action;
+  UI.command = app_command;
   UI.wants_text = app_wants_text;
   api->ui(&UI);
   return 0;

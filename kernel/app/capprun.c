@@ -347,7 +347,12 @@ static void catalog_add(const char *path, const CappInfo *info) {
   }
 }
 
-int capprun_load(const char *path) {
+/* Load, read the descriptor, and -- unless `keep` -- give the image back.
+ * `keep` is for a command borrowing a slot: it is about to run the app, and
+ * loading it, freeing it and loading it again left a gap in the executable
+ * pool each time, until a command could not load Calendar with 44 KB free
+ * and no single block of 13.9 KB (2026-09-23). */
+static int load_slot(const char *path, int keep) {
   int i;
   Slot *s;
 
@@ -379,11 +384,17 @@ int capprun_load(const char *path) {
    * cost about 4 KB of executable RAM each, and with twelve apps on the card
    * the pool was down to 28 KB before anything had been run. The descriptor
    * is copied above; the code is not needed again until someone starts it. */
-  capp_unload(&s->la);
-  s->loaded = 0;
+  if (keep) {
+    s->loaded = 1;
+  } else {
+    capp_unload(&s->la);
+    s->loaded = 0;
+  }
   s->used = 1;
   return i;
 }
+
+int capprun_load(const char *path) { return load_slot(path, 0); }
 
 /* Bring the image back for a slot that is about to run. */
 static int ensure_loaded(Slot *s) {
@@ -586,6 +597,30 @@ static size_t s_cmd_n;
 
 int capprun_headless(void) { return s_headless; }
 
+static int (*s_opener)(const char *app, const char *args);
+void capprun_set_opener(int (*open)(const char *, const char *)) { s_opener = open; }
+
+/* A CAPP_CMD_OPEN command: its arguments, quoted where they have spaces, as
+ * the app's command line, and the app opened with it by the shell. */
+static int open_with(const char *app, int argc, const char *const *argv,
+                     char *out, size_t n) {
+  char args[CAPPRUN_CMD_TEXT];
+  size_t o = 0;
+  int i;
+  args[0] = 0;
+  for (i = 0; i < argc && o + 4 < sizeof args; i++) {
+    int space = strchr(argv[i], ' ') != NULL;
+    o += (size_t)snprintf(args + o, sizeof args - o, "%s%s%s%s", o ? " " : "",
+                          space ? "\"" : "", argv[i], space ? "\"" : "");
+  }
+  if (!s_opener || s_opener(app, args) < 0) {
+    snprintf(out, n, "could not open %s", app);
+    return -1;
+  }
+  snprintf(out, n, "opened %s%s%s", app, args[0] ? " " : "", args);
+  return 0;
+}
+
 void capprun_command_done(int rc, const char *out) {
   if (!s_cmd_waiting) return;
   s_cmd_rc = rc;
@@ -644,7 +679,7 @@ int capprun_command(const char *app, const char *cmd, int nwords,
     /* Not in a slot: find it on the card and borrow one for the command. */
     char path[80];
     int i;
-    if (find_capp(app, path, sizeof path) != 0 || (i = capprun_load(path)) < 0) {
+    if (find_capp(app, path, sizeof path) != 0 || (i = load_slot(path, 1)) < 0) {
       snprintf(out, n, "no app called %s", app);
       return -1;
     }
@@ -680,13 +715,25 @@ int capprun_command(const char *app, const char *cmd, int nwords,
   }
 
   a = cmdline_find(s->ui.actions, s->ui.nactions, cmd);
-  if (!a || !s->ui.command) {
+  /* An open-command has no handler -- the OS opens the app instead -- so
+   * only the others need one. */
+  if (!a || (!s->ui.command && !(a->cmd & CAPP_CMD_OPEN))) {
     snprintf(out, n, "%s has no command '%s'", app, cmd);
     rc = -1;
     goto finish;
   }
   argc = cmdline_bind(a, nwords, words, argv, join, sizeof join, why, sizeof why);
   if (argc < 0) { snprintf(out, n, "%s", why); rc = -1; goto finish; }
+  if (a->cmd & CAPP_CMD_OPEN) {
+    /* Not the handler: the app on screen with these arguments. The headless
+     * copy that read the table goes first, so the one that opens is fresh. */
+    if (headless) {
+      release_slot(s);
+      s_headless = 0;
+      if (borrowed) s->used = 0;
+    }
+    return open_with(app, argc, argv, out, n);
+  }
   if (a->cmd & CAPP_CMD_NET) s_caps_ok = meet_needs(s->flags | CAPP_NEEDS_NET);
 
   prev = s_active;

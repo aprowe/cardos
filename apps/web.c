@@ -407,6 +407,23 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
   return 1;
 }
 
+/* ---- commands ---------------------------------------------------------------
+ *
+ * `open`: a page on screen. A page is something to look at, so the OS opens
+ * Web with the address as its argument (CAPP_CMD_OPEN) -- the same as typing
+ * `web ADDRESS` -- rather than running anything here. */
+enum { ACT_OPEN = 1 };
+
+static const CappParam P_URL[] = { { "url", CAPP_ARG_TEXT, "an address, like news.ycombinator.com" } };
+
+static const CappAction ACTIONS[] = {
+  { "open", "Open", 0, 0, ACT_OPEN, "open a web page on screen", P_URL, 1,
+    CAPP_CMD_YES | CAPP_CMD_OPEN },
+};
+#define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
+
+static int app_action(void *st, int a) { (void)st; (void)a; return 0; }
+
 const CappInfo capp_info = {
   CAPP_API_VERSION,
   CAPP_NEEDS_PROXY,   /* a window by default; the title bar's box fills the screen */
@@ -417,6 +434,8 @@ const CappInfo capp_info = {
     0x9A, 0x59, 0xFF, 0xFF, 0x4A, 0x52, 0x4A, 0x52,
     0x24, 0x24, 0x18, 0x18, 0x07, 0xE0, 0x00, 0x00 },
   "u\ttype an address\nclick\tfollow a link\narrows\tscroll, left/right a page\nspace\tpage down\ng G\ttop, bottom\nr\treload\n",
+  ACTIONS,
+  sizeof ACTIONS / sizeof ACTIONS[0],
 };
 
 static CappUi UI;
@@ -444,6 +463,9 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.click = app_click;
   UI.mouse = app_mouse;
   UI.wants_text = app_wants_text;
+  UI.actions = ACTIONS;
+  UI.nactions = NACT;
+  UI.action = app_action;
   api->ui(&UI);
   return 0;
 }

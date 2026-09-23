@@ -466,6 +466,24 @@ static int app_click(void *st, short x, short y, int button) {
   return 0;
 }
 
+/* ---- actions and commands --------------------------------------------------
+ *
+ * Refresh is the GUI's `r`. The commands fetch as the screen does, one
+ * request per symbol through fetch_one, and answer in words: a price read
+ * aloud or shown to an AI wants "AAPL 187.23, up 1.2% today", not a graph. */
+enum { ACT_REFRESH = 1, ACT_QUOTE, ACT_PORTFOLIO };
+
+static const CappParam P_SYM[] = { { "symbol", CAPP_ARG_TEXT, "a ticker, like AAPL" } };
+
+static const CappAction ACTIONS[] = {
+  { "refresh",   "Refresh",   "Stocks", 0x12, ACT_REFRESH },   /* ctrl-r */
+  { "quote",     "Quote",     0,        0,    ACT_QUOTE,
+    "the price of any ticker and its move today", P_SYM, 1, CAPP_CMD_YES | CAPP_CMD_NET },
+  { "portfolio", "Portfolio", 0,        0,    ACT_PORTFOLIO,
+    "every holding in stocks.txt, priced, and the total", 0, 0, CAPP_CMD_YES | CAPP_CMD_NET },
+};
+#define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
+
 const CappInfo capp_info = {
   CAPP_API_VERSION,
   CAPP_FULLSCREEN | CAPP_NEEDS_NET,
@@ -476,7 +494,73 @@ const CappInfo capp_info = {
     0x43, 0x00, 0x4C, 0x00, 0x58, 0x00, 0x60, 0x00,
     0x40, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x00, 0x00 },
   "arrows\tchange symbol\nr\tfetch quotes\ne\tre-read stocks.txt\n",
+  ACTIONS,
+  sizeof ACTIONS / sizeof ACTIONS[0],
 };
+
+
+static int app_action(void *st, int a) {
+  (void)st;
+  if (a == ACT_REFRESH && !S.busy) { refresh(); return 1; }
+  return 0;
+}
+
+/* "187.23, up 1.20% today", or why not. */
+static void describe(const Quote *q, char *out, size_t n) {
+  char price[24];
+  long move = q->prev ? (q->price - q->prev) * 10000 / q->prev : 0;   /* hundredths of % */
+  long mag = move < 0 ? -move : move;
+  money(price, sizeof price, q->price, 1);
+  api->fmt(out, n, "%s %s, %s %ld.%02ld%% today", q->sym, price,
+           move < 0 ? "down" : "up", mag / 100, mag % 100);
+}
+
+static int app_command(void *st, int action, int argc, const char *const *argv,
+                       char *out, size_t n) {
+  Quote q;
+  size_t o = 0;
+  long total = 0;
+  int i, r;
+  char line[64], money_s[24];
+  (void)st;
+  (void)argc;
+
+  if (!api->net_ready() && api->net_connect(20000) != 0) {
+    api->fmt(out, n, "%s", api->net_status());
+    return -1;
+  }
+  switch (action) {
+  case ACT_QUOTE:
+    api->mem_set(&q, 0, sizeof q);
+    for (i = 0; argv[0][i] && i < SYM_LEN - 1; i++)
+      q.sym[i] = (argv[0][i] >= 'a' && argv[0][i] <= 'z') ? (char)(argv[0][i] - 32)
+                                                           : argv[0][i];
+    q.sym[i] = 0;
+    r = fetch_one(&q);
+    if (r < 0) { api->fmt(out, n, "network error %d", r); return -1; }
+    if (!r) { api->fmt(out, n, "no price for %s", q.sym); return -1; }
+    describe(&q, out, n);
+    return 0;
+
+  case ACT_PORTFOLIO:
+    if (!S.n) { api->fmt(out, n, "no holdings: stocks.txt is empty"); return 0; }
+    for (i = 0; i < S.n; i++) {
+      r = fetch_one(&S.q[i]);
+      if (r <= 0) {
+        o += (size_t)api->fmt(out + o, n - o, "%s: no price\n", S.q[i].sym);
+        continue;
+      }
+      describe(&S.q[i], line, sizeof line);
+      o += (size_t)api->fmt(out + o, n - o, "%s\n", line);
+      total += S.q[i].price * S.q[i].shares;
+    }
+    money(money_s, sizeof money_s, total, 0);
+    api->fmt(out + o, n - o, "total %s", money_s);
+    return 0;
+  }
+  api->fmt(out, n, "stocks has no command %d", action);
+  return -1;
+}
 
 static CappUi UI;
 
@@ -491,6 +575,10 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.paint = app_paint;
   UI.key = app_key;
   UI.click = app_click;
+  UI.actions = ACTIONS;
+  UI.nactions = NACT;
+  UI.action = app_action;
+  UI.command = app_command;
   api->ui(&UI);
   return 0;
 }

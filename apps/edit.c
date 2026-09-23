@@ -617,9 +617,20 @@ static void paint_edit(CRect c) {
 
 /* What this editor can be asked to do. Keys map onto these and so do menu
  * items; see apps/toolbar.h for why a menu item is never a keystroke. */
-enum { ACT_NEW = 1, ACT_SAVE, ACT_SAVEAS, ACT_OPEN, ACT_PREVIEW, ACT_PRINT };
+enum { ACT_NEW = 1, ACT_SAVE, ACT_SAVEAS, ACT_OPEN, ACT_PREVIEW, ACT_PRINT,
+       ACT_NOTE, ACT_NOTES };
+
+/* Commands (CAPP_CMD_YES): a note straight to the card, dated, without the
+ * buffer -- the one thing people ask a notes app for by voice. They used to
+ * take five steps from the Claude app: open, new, type, save as, a name. */
+#define NOTES_DIR CAPP_HOME "/notes"
+static const CappParam P_NOTE[] = { { "text", CAPP_ARG_TEXT, "what the note says" } };
 
 static const CappAction EDIT_ACTIONS[] = {
+  { "note",    "Note",    0,      0,    ACT_NOTE,
+    "save a new note, named by the time", P_NOTE, 1, CAPP_CMD_YES },
+  { "notes",   "Notes",   0,      0,    ACT_NOTES,
+    "the saved notes, newest first", 0, 0, CAPP_CMD_YES },
   { "new",     "New",     "File", 0x0E, ACT_NEW },      /* ctrl-n */
   { "save",    "Save",    "File", 0x13, ACT_SAVE },     /* ctrl-s */
   { "saveas",  "Save as", "File", 0x12, ACT_SAVEAS },   /* ctrl-r */
@@ -780,6 +791,61 @@ static int app_action(void *st, int a) {
   return do_action(a);
 }
 
+/* The commands: files in /home/notes, named by the clock so they sort by when
+ * (by a count when there is no clock), and left alone by the open buffer. */
+static int app_command(void *st, int action, int argc, const char *const *argv,
+                       char *out, size_t n) {
+  static CappEntry ent[40];
+  char path[64];
+  CappTime t;
+  size_t o = 0;
+  int fd, i, j, cnt;
+  (void)st;
+  (void)argc;
+
+  api->mkdir(NOTES_DIR);
+  switch (action) {
+  case ACT_NOTE:
+    api->now(&t);
+    if (t.synced)
+      api->fmt(path, sizeof path, "%s/%02u%02u-%02u%02u%02u.txt", NOTES_DIR,
+               t.month, t.day, t.hour, t.min, t.sec);
+    else {
+      cnt = api->list_ex(NOTES_DIR, ent, 40);
+      api->fmt(path, sizeof path, "%s/note%03d.txt", NOTES_DIR, cnt > 0 ? cnt + 1 : 1);
+    }
+    fd = api->open(path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
+    if (fd < 0) { api->fmt(out, n, "cannot write %s", path); return -1; }
+    api->write(fd, argv[0], api->str_len(argv[0]));
+    api->write(fd, "\n", 1);
+    api->close(fd);
+    api->fmt(out, n, "saved %s", path);
+    return 0;
+
+  case ACT_NOTES:
+    cnt = api->list_ex(NOTES_DIR, ent, 40);
+    if (cnt <= 0) { api->fmt(out, n, "no notes yet"); return 0; }
+    /* Newest first: the names sort by time, so the highest name first. */
+    for (i = 0; i < cnt && o + 4 < n; i++) {
+      int best = -1;
+      for (j = 0; j < cnt; j++) {
+        const char *a, *b;
+        if (ent[j].is_dir || !ent[j].name[0]) continue;
+        if (best < 0) { best = j; continue; }
+        a = ent[j].name; b = ent[best].name;
+        while (*a && *a == *b) { a++; b++; }
+        if ((unsigned char)*a > (unsigned char)*b) best = j;
+      }
+      if (best < 0) break;
+      o += (size_t)api->fmt(out + o, n - o, "- %s\n", ent[best].name);
+      ent[best].name[0] = 0;               /* taken */
+    }
+    return 0;
+  }
+  api->fmt(out, n, "edit has no command %d", action);
+  return -1;
+}
+
 /* The bar first, and it answers for every key while it has them. fn-b puts
  * the keyboard in it; an item chosen there becomes an action, the same one a
  * click would have produced. */
@@ -882,6 +948,8 @@ const CappInfo capp_info = {
     0x13, 0xE1, 0x10, 0x01, 0x13, 0xC1, 0x10, 0x01,
     0x11, 0xE1, 0x10, 0x01, 0x1F, 0xFF, 0x00, 0x00 },
   "arrows\tmove\nenter\tsplit the line\nbackspace\tdelete\nctrl-n\tnew file\nctrl-s\tsave\nctrl-r\tsave as\nctrl-o\topen a file\nctrl-p\tmarkdown preview\nfn-p\tprint\nctrl-a\tstart of line\nctrl-e\tend of line\n",
+  EDIT_ACTIONS,
+  sizeof EDIT_ACTIONS / sizeof EDIT_ACTIONS[0],
 };
 
 /* Static, not a local: the shell keeps calling into this long after
@@ -916,7 +984,10 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   /* Three ways in, in the order a shell would expect: something piped in, a
      named file, or nothing -- and nothing means the picker, because an editor
      with no file has nothing to do. */
-  if (api->has_input()) load_stdin();
+  /* None of them when started only for a command: there is no screen for
+   * the picker to be on, and a note does not need the buffer. */
+  if (api->headless()) { /* the command works on files, not the buffer */ }
+  else if (api->has_input()) load_stdin();
   else if (argc > 1) app_set_args(0, argv[1]);
   else app_open(0);
   toolbar_init(api, EDIT_ACTIONS, NEDIT, EDIT_ICONS, 1);
@@ -930,6 +1001,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.actions = EDIT_ACTIONS;
   UI.nactions = NEDIT;
   UI.action = app_action;
+  UI.command = app_command;
   api->ui(&UI);
   return 0;
 }

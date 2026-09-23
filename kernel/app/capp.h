@@ -145,6 +145,12 @@ typedef struct {
  * added at API 30; a table that leaves them out is GUI-only, as before. */
 #define CAPP_CMD_YES 0x01      /* exposed as a command */
 #define CAPP_CMD_NET 0x02      /* may need the network: can answer PENDING */
+/* Not run by the handler: the OS opens the app on screen with the arguments
+ * as its command line, as `run timer 5` would. For a command whose whole
+ * point is something to look at or something that keeps going -- a timer
+ * counting down, a page -- which a headless instance, released the moment
+ * the command returns, cannot be. The app reads them from argv. */
+#define CAPP_CMD_OPEN 0x04
 typedef struct {
   const char *id;      /* stable, machine-readable: "save", "run.vm" */
   const char *label;   /* shown to a person: "Save" */

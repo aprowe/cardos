@@ -16,6 +16,7 @@
 #include "kernel/ui/shell.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -56,9 +57,7 @@ static const char HEAD_TOOLS[] =
   "\\nFor anything else, open the app with the open tool; its result lists the "
   "app's actions, run with the action tool, and text is typed with the type tool. "
   "The apps are Todo, Calendar, Edit (which is where notes go), IDE, Files, "
-  "Explorer, Photos, Web, Stocks, Screen, Mines, Pinball, Memory and Settings. To "
-  "make a note: open edit, action new, type the text, action saveas, type a file "
-  "name, key enter.\","
+  "Explorer, Photos, Web, Stocks, Screen, Mines, Pinball, Memory and Settings.\","
   "\"tools\":["
   "{\"name\":\"do\",\"description\":\"Run one of the commands in the system prompt, "
   "as one line: APP COMMAND then the arguments, text in double quotes, e.g. todo "
@@ -296,25 +295,32 @@ static int tool_to_cmd(const ChatToolCall *t, RpcCmd *c) {
 /* HEAD_SYSTEM + the catalog, JSON-escaped + HEAD_TOOLS, into one buffer.
  * Static: a few kilobytes, and only one request is ever being written. A
  * catalog too long for the room left is cut at a line, not mid-line. */
-static const char *build_head(void) {
-  static char head[sizeof HEAD_SYSTEM + sizeof HEAD_TOOLS + 2048];
-  static char cat[1536];
-  size_t o = 0, i;
-  int fd, n;
+/* The catalog was 1.8 KB at 25 commands in 11 apps (2026-09-23), and 1.5 KB
+ * of room cut it off: room for about twice that. Allocated for the moment
+ * the request is written and freed after, not static -- as static buffers
+ * these held 12 KB of heap for good, on a machine where a TLS handshake is
+ * short of heap already. The caller frees what this returns. */
+#define CATALOG_MAX 4096
 
+static char *build_head(void) {
+  size_t cap = sizeof HEAD_SYSTEM + sizeof HEAD_TOOLS + 2 * CATALOG_MAX;
+  char *head = malloc(cap), *cat = malloc(CATALOG_MAX);
+  size_t o = 0, i;
+  int fd, n = 0;
+
+  if (!head || !cat) { free(head); free(cat); return NULL; }
   memcpy(head, HEAD_SYSTEM, sizeof HEAD_SYSTEM - 1);
   o = sizeof HEAD_SYSTEM - 1;
 
   fd = fs_open(CAPPRUN_CATALOG, FS_O_READ);
-  n = fd >= 0 ? fs_read(fd, cat, sizeof cat - 1) : 0;
-  if (fd >= 0) fs_close(fd);
+  if (fd >= 0) { n = fs_read(fd, cat, CATALOG_MAX - 1); fs_close(fd); }
   if (n < 0) n = 0;
   cat[n] = 0;
-  if (n == (int)sizeof cat - 1) {                  /* cut at the last line */
+  if (n == CATALOG_MAX - 1) {                      /* cut at the last line */
     char *nl = strrchr(cat, '\n');
     if (nl) nl[1] = 0;
   }
-  for (i = 0; cat[i] && o + 8 < sizeof head - sizeof HEAD_TOOLS; i++) {
+  for (i = 0; cat[i] && o + 8 < cap - sizeof HEAD_TOOLS; i++) {
     char ch = cat[i];
     if (ch == '"' || ch == '\\') { head[o++] = '\\'; head[o++] = ch; }
     else if (ch == '\n') { head[o++] = '\\'; head[o++] = 'n'; }
@@ -325,6 +331,7 @@ static const char *build_head(void) {
     memcpy(head + o, NONE, sizeof NONE - 1);
     o += sizeof NONE - 1;
   }
+  free(cat);
   memcpy(head + o, HEAD_TOOLS, sizeof HEAD_TOOLS);  /* with its terminator */
   return head;
 }
@@ -340,7 +347,12 @@ static int start_request(void) {
    * the history a second time, round after round, until ROUNDS_MAX. */
   fs_remove(DIR "/" REPLY);
   if (chatlog_trim(HISTORY_CAP) != 0) ESP_LOGW(TAG, "could not trim the history");
-  if (chatlog_write_request(REQUEST, build_head(), TAIL) != 0) return -4;
+  {
+    char *head = build_head();
+    int rc = head ? chatlog_write_request(REQUEST, head, TAIL) : -1;
+    free(head);
+    if (rc != 0) return -4;
+  }
   if (httpq_start_files(&s_running, URL, DIR "/" REQUEST, "application/json",
                         s_auth, DIR "/" REPLY, TIMEOUT_MS) != 0)
     return -4;

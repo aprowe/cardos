@@ -18,6 +18,7 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_app_desc.h"
+#include "psa/crypto.h"
 
 #include "kernel/console/console.h"
 #include "kernel/drv/display.h"
@@ -30,6 +31,7 @@
 #include "kernel/ui/desktop.h"
 #include "kernel/ui/pins.h"
 #include "kernel/ui/launchui.h"
+#include "kernel/ui/icons.h"
 #include "kernel/app/capprun.h"
 #include "kernel/app/cmdline.h"
 #include "kernel/app/capp.h"
@@ -138,8 +140,11 @@ static void cmd_mem(void) {
   con_printf("heap free        %6u B  (largest block %u)\n",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-  con_printf("exec free        %6u B\n",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_EXEC));
+  /* With the largest block: an app's code has to fit in one piece, and the
+   * total said 44 KB free the day Calendar could not load in 13.9. */
+  con_printf("exec free        %6u B  (largest block %u)\n",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_EXEC),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_EXEC));
   con_printf("low water        %6u B\n",
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
   /* Reported as what it is. "reserved at boot" was true and was also the
@@ -233,9 +238,10 @@ static void cmd_log(const char *arg) {
  * something, 0 to fall through to the older `do ID` on the focused app. */
 static int do_catalog(const char *what) {
   /* Whole, not line by line: a few lines per app, and 4 KB is dozens of
-   * apps' worth. Static because it is too big for the console's stack. */
-  static char buf[4096];
-  char app[24], *line, *next;
+   * apps' worth. Allocated for the listing, not static: a static buffer held
+   * its 4 KB of heap for good, for a command typed now and then. */
+  enum { CAT_MAX = 4096 };
+  char *buf, app[24], *line, *next;
   int fd, n, shown = 0;
   size_t alen;
 
@@ -246,7 +252,9 @@ static int do_catalog(const char *what) {
 
   fd = fs_open(CAPPRUN_CATALOG, FS_O_READ);
   if (fd < 0) return 0;
-  n = fs_read(fd, buf, sizeof buf - 1);
+  buf = malloc(CAT_MAX);
+  if (!buf) { fs_close(fd); con_write("no memory for the list\n"); return 1; }
+  n = fs_read(fd, buf, CAT_MAX - 1);
   fs_close(fd);
   buf[n > 0 ? n : 0] = 0;
 
@@ -258,6 +266,7 @@ static int do_catalog(const char *what) {
       shown++;
     }
   }
+  free(buf);
   if (!shown && alen) return 0;             /* not an app with commands */
   if (!shown) con_write("no app has commands yet\n");
   return 1;
@@ -1103,6 +1112,13 @@ void app_main(void) {
   size_t heap_at_boot;
   const char *nvs_erased = NULL;    /* why, if this boot wiped the settings */
 
+  /* The crypto library's one-time setup, now, while the heap is one piece.
+   * Left to the first HTTPS request, its few hundred bytes of lifelong state
+   * landed in the middle of the free region: the largest executable block
+   * went from 36 KB to 13.3 KB and stayed there, and Calendar's 13.9 KB of
+   * code could not load again until a reboot (measured 2026-09-23). */
+  psa_crypto_init();
+
   /* Tell the bootloader this image is good, so an OTA-updated CardOS does not
    * roll itself back on the next reset -- see the app launcher spec. Only
    * meaningful from an OTA slot: running from factory it just logs an error,
@@ -1267,6 +1283,17 @@ void app_main(void) {
   agent_init();
   clock_init();
   bg_init();
+  /* A command that opens its app (CAPP_CMD_OPEN) opens it the way `run`
+   * does: through the launcher. */
+  capprun_set_opener(launchui_run);
+
+  /* The icon scan, whichever shell comes up. It is also what writes a new
+   * firmware's apps to the card (seed_capps) and the command catalog, and it
+   * used to run only when the launcher did -- so a device that booted into
+   * the console kept its old apps through every flash, and `do` found none
+   * of the new commands (2026-09-23). The launcher skips its own scan when
+   * this one has run. */
+  if (fs_mounted()) icons_reload();
   /* Asked for rather than waited on: if WiFi is already up this is answered
    * in a second, and if it is not the job simply finds nothing. Either way
    * the shell starts now. */

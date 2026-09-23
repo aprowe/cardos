@@ -340,15 +340,24 @@ static void clamp_scroll(void) {
   if (H.top < 0) H.top = 0;
 }
 
-static void add_habit(void) {
+/* A habit called `name`, saved: what the add view does with its draft and
+ * what the `add` command does with its argument. The index -- of the new
+ * one, or of one already called that -- or -1 if the list is full or the
+ * name is empty or has a '/' (it is also a filename). */
+static int add_name(const char *name) {
   int i;
-  if (!H.draft_len || H.n >= MAX_HABITS) { H.view = VIEW_LIST; return; }
-  for (i = 0; i < H.n; i++)
-    if (same(H.habit[i].name, H.draft)) { H.view = VIEW_LIST; H.sel = i; clamp_scroll(); return; }
-  api->fmt(H.habit[H.n].name, sizeof H.habit[0].name, "%s", H.draft);
-  H.sel = H.n;
+  if (!name || !name[0] || H.n >= MAX_HABITS) return -1;
+  for (i = 0; name[i]; i++) if (name[i] == '/') return -1;
+  for (i = 0; i < H.n; i++) if (same(H.habit[i].name, name)) return i;
+  api->fmt(H.habit[H.n].name, sizeof H.habit[0].name, "%s", name);
   H.n++;
   habits_save();
+  return H.n - 1;
+}
+
+static void add_habit(void) {
+  int i = H.draft_len ? add_name(H.draft) : -1;
+  if (i >= 0) H.sel = i;
   H.view = VIEW_LIST;
   clamp_scroll();
 }
@@ -679,10 +688,20 @@ static void app_paint(void *st, CRect c) {
 /* ---- input --------------------------------------------------------------- */
 
 enum { ACT_ADD = 1, ACT_DELETE, ACT_CANCEL, ACT_SAVE, ACT_TODAY, ACT_TOGGLE, ACT_CALENDAR,
-       ACT_STATS };
+       ACT_STATS, ACT_DONE, ACT_LIST };
+
+/* Commands too (CAPP_CMD_YES): `done` and `list` have no menu entry -- the
+ * GUI marks a day by walking to it, a sentence names the habit instead. */
+static const CappParam P_HABIT[] = { { "habit", CAPP_ARG_TEXT, "the habit, or enough of its name" } };
+static const CappParam P_NEW[]   = { { "name",  CAPP_ARG_TEXT, "what the habit is called" } };
 
 static const CappAction ACTIONS[] = {
-  { "add",      "Add habit",    "Habit", 0x01, ACT_ADD },      /* ctrl-a */
+  { "add",      "Add habit",    "Habit", 0x01, ACT_ADD,        /* ctrl-a */
+    "start tracking a new habit", P_NEW, 1, CAPP_CMD_YES },
+  { "done",     "Done today",   0,       0,    ACT_DONE,
+    "mark a habit done today", P_HABIT, 1, CAPP_CMD_YES },
+  { "list",     "List",         0,       0,    ACT_LIST,
+    "every habit, whether it is done today, and its streak", 0, 0, CAPP_CMD_YES },
   { "delete",   "Delete habit", "Habit", 0x04, ACT_DELETE },   /* ctrl-d */
   { "today",    "Today",        "Habit", 0x14, ACT_TODAY },    /* ctrl-t */
   { "toggle",   "Toggle",       "Habit", 0x18, ACT_TOGGLE },   /* ctrl-x */
@@ -723,6 +742,76 @@ static int do_action(int a) {
 }
 
 static int app_action(void *st, int a) { (void)st; return do_action(a); }
+
+/* Lower-case: is `needle` somewhere in `hay`? */
+static int contains(const char *hay, const char *needle) {
+  int i, j;
+  for (i = 0; hay[i]; i++) {
+    for (j = 0; needle[j]; j++) {
+      char a = hay[i + j], b = needle[j];
+      if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+      if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+      if (a != b) break;
+    }
+    if (!needle[j]) return 1;
+    if (!hay[i + j]) return 0;
+  }
+  return 0;
+}
+
+/* The commands: the same logs and the same functions as the screen, with a
+ * name where the screen has a cursor. All local -- the card is the truth. */
+static int app_command(void *st, int action, int argc, const char *const *argv,
+                       char *out, size_t n) {
+  CappTime t;
+  uint32_t today;
+  size_t o = 0;
+  int i, hit = -1, hits = 0, marked;
+  (void)st;
+  (void)argc;
+
+  api->now(&t);
+  today = t.synced ? pack_date(t.year, t.month, t.day) : 0;
+
+  switch (action) {
+  case ACT_ADD:
+    i = add_name(argv[0]);
+    if (i < 0) {
+      api->fmt(out, n, H.n >= MAX_HABITS ? "already %d habits" : "not a name for a habit",
+               MAX_HABITS);
+      return -1;
+    }
+    api->fmt(out, n, "tracking %s", H.habit[i].name);
+    return 0;
+
+  case ACT_LIST:
+    if (!H.n) { api->fmt(out, n, "no habits yet"); return 0; }
+    for (i = 0; i < H.n && o + 8 < n; i++) {
+      int count = log_load(H.habit[i].name, log_scratch, MAX_LOG_DATES);
+      int streak = t.synced ? compute_streak(log_scratch, count, t.year, t.month, t.day) : 0;
+      int done = today && date_in_array(log_scratch, count, today);
+      o += (size_t)api->fmt(out + o, n - o, "- %s: %s, %d day streak\n", H.habit[i].name,
+                            done ? "done today" : "not yet today", streak);
+    }
+    return 0;
+
+  case ACT_DONE:
+    if (!today) { api->fmt(out, n, "the clock is not set, so which day is today?"); return -1; }
+    for (i = 0; i < H.n; i++)
+      if (contains(H.habit[i].name, argv[0])) { hit = i; hits++; }
+    if (!hits) { api->fmt(out, n, "no habit matches \"%s\"", argv[0]); return -1; }
+    if (hits > 1) { api->fmt(out, n, "%d habits match \"%s\"; say more", hits, argv[0]); return -1; }
+    if (day_marked(H.habit[hit].name, today)) {
+      api->fmt(out, n, "%s was already done today", H.habit[hit].name);
+      return 0;
+    }
+    toggle_log_date(H.habit[hit].name, today, &marked);
+    api->fmt(out, n, marked ? "%s: done today" : "%s: the log is full", H.habit[hit].name);
+    return marked ? 0 : -1;
+  }
+  api->fmt(out, n, "habits has no command %d", action);
+  return -1;
+}
 
 static int key_list(uint8_t k) {
   if (api->key_repeat() && k != CAPP_KEY_UP && k != CAPP_KEY_DOWN) return 0;
@@ -874,6 +963,8 @@ const CappInfo capp_info = {
   "arrows\tmove\na\tadd a habit\nd\tdelete\nenter\topen today / mark done / open day\n"
   "left/right\t(day view) previous/next day; (calendar) same, a week with up/down\n"
   "c\tcalendar\ns\tstats\nescape\tback\n",
+  ACTIONS,
+  sizeof ACTIONS / sizeof ACTIONS[0],
 };
 
 static CappUi UI;
@@ -892,6 +983,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.actions = ACTIONS;
   UI.nactions = NACT;
   UI.action = app_action;
+  UI.command = app_command;
   api->ui(&UI);
   return 0;
 }
