@@ -28,12 +28,13 @@ static const CappAudio *au;
 
 enum { ST_SET = 0, ST_RUNNING, ST_PAUSED, ST_DONE };
 
-#define CLR_BG     CAPP_RGB(24, 26, 32)
-#define CLR_ALARM  CAPP_RGB(180, 30, 30)
-#define CLR_TEXT   CAPP_RGB(224, 228, 236)
-#define CLR_DIM    CAPP_RGB(130, 138, 150)
-#define CLR_FIELD  CAPP_RGB(52, 80, 116)
-#define CLR_PAUSED CAPP_RGB(200, 150, 40)
+#define CLR_BG      CAPP_RGB(24, 26, 32)
+#define CLR_ALARM   CAPP_RGB(180, 30, 30)
+#define CLR_TEXT    CAPP_RGB(224, 228, 236)
+#define CLR_DIM     CAPP_RGB(130, 138, 150)
+#define CLR_FIELD   CAPP_RGB(52, 80, 116)
+#define CLR_PAUSED  CAPP_RGB(200, 150, 40)
+#define CLR_BAR_BG  CAPP_RGB(44, 48, 58)
 
 static struct {
   int      state;
@@ -41,6 +42,7 @@ static struct {
   int      field;               /* 0 minutes, 1 seconds -- which is selected in ST_SET */
   uint32_t remain_ms;           /* what is on screen */
   uint32_t remain_at_start;     /* remain_ms when this run (or pause) began */
+  uint32_t total_ms;            /* the full duration of the run in progress, for the bar */
   uint32_t start_ms;            /* ticks_ms() when the current run segment began */
   int      flash_on;
   uint32_t flash_at;
@@ -124,6 +126,7 @@ static void start_or_resume(uint32_t now_ms) {
   if (T.state == ST_SET) {
     if (!configured_ms()) return;      /* nothing to time */
     T.remain_at_start = configured_ms();
+    T.total_ms = T.remain_at_start;    /* the bar's 100%; a resume does not reset it */
   } else if (T.state == ST_PAUSED) {
     T.remain_at_start = T.remain_ms;
   } else {
@@ -163,13 +166,14 @@ static void reset(void) {
 
 /* ---- painting -------------------------------------------------------------- */
 
-static void mmss(uint32_t ms, char *out, size_t n) {
+static void remain_mmss(uint32_t ms, int *mm, int *ss) {
   uint32_t s = (ms + 999) / 1000;      /* round up: 59.9s left still reads 1:00 */
-  api->fmt(out, n, "%u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
+  *mm = (int)(s / 60);
+  *ss = (int)(s % 60);
 }
 
-/* Poor man's bold: the font is one size, so the focal clock is drawn twice,
- * one pixel right, to read heavier than the rest of the screen. */
+/* Poor man's bold: the font is one size, so a word is drawn twice, one pixel
+ * right, to read heavier than the rest of the screen. */
 static void text_bold(int x, int y, const char *s, uint16_t fg, uint16_t bg) {
   api->text((int16_t)x, (int16_t)y, s, fg, bg);
   api->text((int16_t)(x + 1), (int16_t)y, s, fg, bg);
@@ -187,36 +191,129 @@ static void text_center_bold(int cx, int y, const char *s, uint16_t fg, uint16_t
   text_bold(cx - w / 2, y, s, fg, bg);
 }
 
+/* ---- the big clock face ----------------------------------------------------
+ *
+ * api->text is one size, the 6x8 console font -- too small to be the point of
+ * a fullscreen timer. There is no scale argument to ask for bigger, so the
+ * digits are drawn as filled blocks instead: seven segments per digit, built
+ * out of api->fill rather than a bitmap, which is what "no font asset, no
+ * libc, no allocator" leaves an app free to do. */
+#define DIG_W   22
+#define DIG_H   40
+#define DIG_T   5     /* segment thickness */
+#define DIG_GAP 8     /* between every digit and the colon */
+#define COLON_W 12
+
+static void seg_fill(int x, int y, int w, int h, uint16_t fg) {
+  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), fg);
+}
+
+/* Segment bits: a top, b top-right, c bottom-right, d bottom, e bottom-left,
+ * f top-left, g middle -- the standard seven-segment layout, 0-9. */
+static void draw_digit(int x, int y, int d, uint16_t fg) {
+  static const uint8_t SEG[10] = {
+    0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F,
+  };
+  int midY  = y + DIG_H / 2 - DIG_T / 2;
+  int vTopH = midY - (y + DIG_T);
+  int vBotY = midY + DIG_T;
+  int vBotH = (y + DIG_H - DIG_T) - vBotY;
+  uint8_t m = (d >= 0 && d <= 9) ? SEG[d] : 0;
+
+  if (m & 0x01) seg_fill(x + DIG_T, y, DIG_W - 2 * DIG_T, DIG_T, fg);
+  if (m & 0x02) seg_fill(x + DIG_W - DIG_T, y + DIG_T, DIG_T, vTopH, fg);
+  if (m & 0x04) seg_fill(x + DIG_W - DIG_T, vBotY, DIG_T, vBotH, fg);
+  if (m & 0x08) seg_fill(x + DIG_T, y + DIG_H - DIG_T, DIG_W - 2 * DIG_T, DIG_T, fg);
+  if (m & 0x10) seg_fill(x, vBotY, DIG_T, vBotH, fg);
+  if (m & 0x20) seg_fill(x, y + DIG_T, DIG_T, vTopH, fg);
+  if (m & 0x40) seg_fill(x + DIG_T, midY, DIG_W - 2 * DIG_T, DIG_T, fg);
+}
+
+static void draw_colon(int x, int y, uint16_t fg) {
+  seg_fill(x, y + DIG_H / 3 - DIG_T / 2, DIG_T, DIG_T, fg);
+  seg_fill(x, y + DIG_H * 2 / 3 - DIG_T / 2, DIG_T, DIG_T, fg);
+}
+
+/* Where each of the four digits and the colon land, for a block centred on
+ * cx -- the one place that layout is computed, so the digits drawn and the
+ * field highlighted behind them in paint_set cannot disagree about it. */
+#define TIME_BLOCK_W (4 * DIG_W + COLON_W + 4 * DIG_GAP)
+static void time_positions(int cx, int x[4], int *colon_x) {
+  int cur = cx - TIME_BLOCK_W / 2;
+  x[0] = cur; cur += DIG_W + DIG_GAP;
+  x[1] = cur; cur += DIG_W + DIG_GAP;
+  *colon_x = cur; cur += COLON_W + DIG_GAP;
+  x[2] = cur; cur += DIG_W + DIG_GAP;
+  x[3] = cur;
+}
+
+static void draw_time(int cx, int y, int minutes, int seconds, uint16_t fg) {
+  int x[4], colon_x;
+  time_positions(cx, x, &colon_x);
+  draw_digit(x[0], y, (minutes / 10) % 10, fg);
+  draw_digit(x[1], y, minutes % 10, fg);
+  draw_colon(colon_x, y, fg);
+  draw_digit(x[2], y, (seconds / 10) % 10, fg);
+  draw_digit(x[3], y, seconds % 10, fg);
+}
+
 static void paint_set(CRect c) {
-  char min[4], sec[4];
-  int mx, sx, y = c.y + c.h / 2 - 16;
-  int boxw = 30, boxh = 20, gap = 10;
-  int total = boxw * 2 + gap + 6;      /* + the colon */
+  int x[4], colon_x, cx = c.x + c.w / 2, y = c.y + c.h / 2 - DIG_H / 2 - 6;
+  int pad = 4;
 
-  api->fmt(min, sizeof min, "%02d", T.set_min);
-  api->fmt(sec, sizeof sec, "%02d", T.set_sec);
-  mx = c.x + c.w / 2 - total / 2;
-  sx = mx + boxw + gap;
+  time_positions(cx, x, &colon_x);
+  if (T.field == 0)
+    api->fill(rect(x[0] - pad, y - pad, x[1] + DIG_W - x[0] + 2 * pad, DIG_H + 2 * pad), CLR_FIELD);
+  else
+    api->fill(rect(x[2] - pad, y - pad, x[3] + DIG_W - x[2] + 2 * pad, DIG_H + 2 * pad), CLR_FIELD);
+  draw_time(cx, y, T.set_min, T.set_sec, CLR_TEXT);
 
-  api->fill(rect(mx, y, boxw, boxh), T.field == 0 ? CLR_FIELD : CLR_BG);
-  api->fill(rect(sx, y, boxw, boxh), T.field == 1 ? CLR_FIELD : CLR_BG);
-  text_bold(mx + boxw / 2 - 6, y + 6, min, CLR_TEXT, T.field == 0 ? CLR_FIELD : CLR_BG);
-  text_bold(sx + boxw / 2 - 6, y + 6, sec, CLR_TEXT, T.field == 1 ? CLR_FIELD : CLR_BG);
-  api->text((int16_t)(mx + boxw), (int16_t)(y + 6), ":", CLR_TEXT, CLR_BG);
+  text_center(cx, y - 18, "set", CLR_DIM, CLR_BG);
+  text_center(cx, y + DIG_H + pad + 14, "left/right field  up/down +-1", CLR_DIM, CLR_BG);
+  text_center(cx, y + DIG_H + pad + 26, "digits type  space start", CLR_DIM, CLR_BG);
+}
 
-  text_center(c.x + c.w / 2, y - 14, "set", CLR_DIM, CLR_BG);
-  text_center(c.x + c.w / 2, y + boxh + 12, "left/right field  up/down +-1", CLR_DIM, CLR_BG);
-  text_center(c.x + c.w / 2, y + boxh + 24, "digits type  space start", CLR_DIM, CLR_BG);
+/* Green with time to spare, red as it runs out, yellow the midpoint between
+ * -- interpolated in RGB rather than snapped between three fixed colours, so
+ * the bar eases from one to the next instead of jumping. Two ramps, not one
+ * straight green-to-red line: a single ramp spends the whole first half
+ * looking olive, and olive does not read as "plenty of time". */
+static uint16_t lerp_rgb(int r0, int g0, int b0, int r1, int g1, int b1, int t, int tmax) {
+  int r = r0 + (r1 - r0) * t / tmax;
+  int g = g0 + (g1 - g0) * t / tmax;
+  int b = b0 + (b1 - b0) * t / tmax;
+  return CAPP_RGB(r, g, b);
+}
+static uint16_t bar_colour(uint32_t remain, uint32_t total) {
+  uint32_t pct = total ? remain * 100 / total : 0;      /* 0..100 left */
+  if (pct >= 50) return lerp_rgb(230, 190, 40,  60, 175, 90, (int)pct - 50, 50);  /* yellow -> green */
+  return lerp_rgb(200, 45, 40,  230, 190, 40, (int)pct, 50);                     /* red -> yellow */
+}
+
+/* The track is always the full width, drawn first; the fill sits on top of it
+ * and shrinks from the right as remain_ms counts down toward 0, out of
+ * total_ms -- the duration when this run started, not remain_at_start, which
+ * a pause and resume would otherwise reset to whatever was left. */
+#define BAR_H    8
+#define BAR_GAP  6
+static void draw_bar(int cx, int y) {
+  int w = TIME_BLOCK_W, x = cx - w / 2;
+  int fill_w = (int)((uint32_t)w * T.remain_ms / T.total_ms);
+  uint16_t colour = bar_colour(T.remain_ms, T.total_ms);
+
+  api->fill(rect(x, y, w, BAR_H), CLR_BAR_BG);
+  if (fill_w > 0) api->fill(rect(x, y, fill_w, BAR_H), colour);
 }
 
 static void paint_running(CRect c, const char *label, uint16_t colour) {
-  char buf[8];
-  int y = c.y + c.h / 2 - 10;
+  int mm, ss, cx = c.x + c.w / 2, y = c.y + c.h / 2 - DIG_H / 2 - 6;
+  int bar_y = y + DIG_H + BAR_GAP;
 
-  mmss(T.remain_ms, buf, sizeof buf);
-  text_center_bold(c.x + c.w / 2, y, buf, CLR_TEXT, CLR_BG);
-  text_center(c.x + c.w / 2, y - 16, label, colour, CLR_BG);
-  text_center(c.x + c.w / 2, y + 20, "space pause  r reset", CLR_DIM, CLR_BG);
+  remain_mmss(T.remain_ms, &mm, &ss);
+  draw_time(cx, y, mm, ss, CLR_TEXT);
+  text_center(cx, y - 18, label, colour, CLR_BG);
+  draw_bar(cx, bar_y);
+  text_center(cx, bar_y + BAR_H + 12, "space pause  r reset", CLR_DIM, CLR_BG);
 }
 
 static void paint_done(CRect c) {
