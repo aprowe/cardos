@@ -4,7 +4,6 @@
 
 #include "kernel/sys/env.h"
 #include "kernel/net/wifi.h"
-#include "kernel/net/http.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -141,67 +140,6 @@ void clock_persist_tick(void) {
 
 int clock_synced(void) { return s_synced; }
 int clock_have_time(void) { return s_have; }
-
-/* Free, no key required, HTTPS: geolocates the device's own public IP and
- * answers with (among other fields) the IANA zone name for wherever that IP
- * is. Good enough to ask "roughly where is this network" -- nobody carries a
- * Cardputer across a zone boundary mid-session and expects the clock to
- * follow without being asked. */
-#define GEO_TZ_URL "https://ipapi.co/json/"
-
-/* Pull a JSON string field out by name -- the same minimal approach gauth.c
- * uses for the same reason: the reply is small, flat and machine-generated,
- * and a real parser is several kilobytes to extract one field from it. */
-static int json_str(const char *hay, const char *name, char *out, size_t n) {
-  char pat[32];
-  const char *p;
-  size_t i = 0;
-
-  snprintf(pat, sizeof pat, "\"%s\"", name);
-  p = strstr(hay, pat);
-  if (!p) return -1;
-  p += strlen(pat);
-  while (*p == ' ' || *p == ':') p++;
-  if (*p != '"') return -1;
-  p++;
-  while (*p && *p != '"' && i + 1 < n) {
-    if (*p == '\\' && p[1]) p++;        /* an escape: take the next byte as-is */
-    out[i++] = *p++;
-  }
-  out[i] = 0;
-  return i ? 0 : -1;
-}
-
-/* Ask the network's own idea of where it is. Blocks for up to timeout_ms --
- * call it off the background task, the same rule clock_sync follows, since
- * this is a blocking HTTPS round trip and the shell must not stall for it.
- *
- * Returns 0 and the IANA zone name (e.g. "America/Los_Angeles") in buf, or
- * negative if there is no network, the request failed, or the reply had no
- * timezone field. What to do with that name -- applying it, mapping it to
- * the POSIX form env TZ actually needs -- is not this function's job. */
-int clock_geo_tz(char *buf, size_t n, int timeout_ms) {
-  static char reply[900];
-  int r;
-
-  if (!buf || n < 2) return -1;
-  buf[0] = 0;
-
-  if (!wifi_is_connected()) return -1;
-
-  r = http_get(GEO_TZ_URL, reply, sizeof reply, timeout_ms);
-  if (r < 0) {
-    ESP_LOGW(TAG, "geo tz lookup failed (%d)", r);
-    return -1;
-  }
-
-  if (json_str(reply, "timezone", buf, n) != 0) {
-    ESP_LOGW(TAG, "geo tz lookup: no timezone field in the reply");
-    buf[0] = 0;
-    return -1;
-  }
-  return 0;
-}
 
 int clock_sync(int timeout_ms) {
   esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG(NTP_SERVER);

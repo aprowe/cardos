@@ -5,7 +5,6 @@
 #include "kernel/drv/bthid.h"
 #include "kernel/net/wifi.h"
 #include "kernel/sys/clock.h"
-#include "kernel/sys/env.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -90,22 +89,6 @@ static void run_job(BgJob job) {
       char when[40];
       clock_full(when, sizeof when);
       post("clock: %s", when);
-
-      /* The radio is already up and NTP just answered, so this is the
-       * cheapest moment there will ever be to also ask where the network
-       * seems to be. Skipped once a person has said TZ themselves -- a
-       * guess should never overwrite a choice. Applied and saved the same
-       * way `set TZ=...` is: env_set persists it to NVS itself, and TZ has
-       * to be pushed through clock_apply_zone() before anything reads a
-       * clock again or the new value sits there unused until reboot. */
-      if (!clock_zone_set()) {
-        char tz[48];
-        if (clock_geo_tz(tz, sizeof tz, 8000) == 0) {
-          env_set("TZ", tz);
-          clock_apply_zone();
-          post("timezone: %s", tz);
-        }
-      }
     }
     break;
 

@@ -65,12 +65,4 @@ void clock_full(char *buf, size_t n);
  * of" line -- and 0 is the value to check for before writing either. */
 uint32_t clock_epoch(void);
 
-/* Ask a free IP-geolocation HTTPS API where this network's own address seems
- * to be, and hand back the IANA zone name (e.g. "America/Los_Angeles") in
- * buf. Blocks for up to timeout_ms -- call it off the background task, not
- * from a shell. Returns 0 on success, negative if there is no network, the
- * request failed, or the reply had no timezone field -- callers should leave
- * TZ alone in that case. Does not touch env TZ or NVS itself. */
-int clock_geo_tz(char *buf, size_t n, int timeout_ms);
-
 #endif /* CARDOS_CLOCK_H */
