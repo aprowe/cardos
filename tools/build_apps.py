@@ -271,6 +271,17 @@ def check_placement(stem, elf):
         raise SystemExit(
             "%s: its 16x16 icon in capp_info is blank. Draw one: 32 bytes, "
             "1bpp, two bytes a row, bit 7 leftmost (apps/timer.c has one)." % stem)
+    # And the colour one the launcher actually shows. Without it the app
+    # wears generic.cic, a blank page -- which is how Habits, Memo, Share and
+    # Timer looked until 2026-09-23, each with a perfectly good mono icon.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import make_color_icons
+    if not flags & CAPP_CLI and name not in make_color_icons.ICONS:
+        raise SystemExit(
+            "%s: no colour icon for '%s' in tools/make_color_icons.py -- the "
+            "launcher would show a blank page. Add a 16x16 picture under that "
+            "name in ICONS (its INK letters are the palette), then run "
+            "python tools/make_color_icons.py." % (stem, name))
 
 
 def seed_name(stem):

@@ -447,7 +447,9 @@ hardware-specific. What it cost to learn:
   refuses it: a line in `apps/folders.txt` (`name Tools`, `Games`, `Net`, or
   `-` for a CLI app at the top level), and a non-blank 16x16 icon in its
   `capp_info` (32 bytes, 1bpp, two bytes a row, bit 7 leftmost; `apps/timer.c`
-  has one). The folder also reaches the `/update` manifest, so a first install
+  has one). And a colour icon under the app's name in
+  `tools/make_color_icons.py` (then run it): the launcher shows that one, and
+  without it the app is a blank page. The folder also reaches the `/update` manifest, so a first install
   lands in it rather than at the top level, which is where every app Build
   made used to end up.
 
