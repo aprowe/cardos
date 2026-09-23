@@ -116,6 +116,20 @@ void test_build_shows_what_the_server_is_doing(void) {
   HTTP_REPLY = "pending\n";                                /* an older server */
   poll_now();
   CHECK(C.progress[0] == 0);
+  CHECK_EQ(C.log_seen, 0);
+
+  {
+    int before = C.nlines;
+    HTTP_REPLY = "pending\nstep 1/2: reading\nread kernel/app/capp.h\n> using memo.c";
+    poll_now();
+    CHECK_EQ(C.log_seen, 2);                    /* both lines, counted */
+    CHECK(C.nlines >= before + 2);              /* and in the window */
+    CHECK(strcmp(C.progress, "step 1/2: reading") == 0);
+
+    HTTP_REPLY = "pending\nstep 1/2: writing\nwrite apps/timer.c";
+    poll_now();
+    CHECK_EQ(C.log_seen, 3);                    /* the next poll asks from 3 */
+  }
 
   HTTP_REPLY = "done\nall done";
   poll_now();

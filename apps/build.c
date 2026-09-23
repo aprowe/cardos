@@ -77,6 +77,7 @@ static struct {
   int   dots;
   char  progress[31];             /* "step 2/3: writing timer.c"; the bar is
                                      40 columns, less "Build  " and dots */
+  int   log_seen;                 /* the server's log lines already shown */
 
   char  reply[REPLY_MAX];
   char  status[40];
@@ -229,6 +230,7 @@ static void send_now(void) {
     return;
   }
   C.progress[0] = 0;              /* nothing said yet about this one */
+  C.log_seen = 0;
   C.started = api->ticks_ms();
   C.next_poll = C.started + POLL_MS;
 }
@@ -241,7 +243,7 @@ static void poll_now(void) {
   int n;
 
   mark_bar();                     /* the dots, the time, or an error */
-  api->fmt(url, sizeof url, "%s/chat?id=%d", C.base, C.job);
+  api->fmt(url, sizeof url, "%s/chat?id=%d&from=%d", C.base, C.job, C.log_seen);
   n = api->http("GET", url, (const char *)0, (const char *)0,
                 C.token[0] ? C.token : (const char *)0,
                 C.reply, sizeof C.reply, 20000);
@@ -263,6 +265,20 @@ static void poll_now(void) {
       i++;
     }
     C.progress[i] = 0;
+    /* Then the log lines past the ones already shown, one per line: what
+     * Claude read, searched, wrote and said. Dim, above where the answer
+     * will land, so the wait is something to watch rather than dots. */
+    while (*s && *s != '\n') s++;
+    while (*s == '\n') {
+      char line[COLS * 2 + 1];
+      s++;
+      for (i = 0; s[i] && s[i] != '\n' && i < (int)sizeof line - 1; i++) line[i] = s[i];
+      line[i] = 0;
+      while (*s && *s != '\n') s++;
+      if (!line[0]) continue;
+      push_wrapped(line, WHO_NOTE);
+      C.log_seen++;
+    }
     C.next_poll = api->ticks_ms() + POLL_MS;
     C.dots = (C.dots + 1) & 3;
     return;
