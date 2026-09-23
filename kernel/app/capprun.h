@@ -28,8 +28,11 @@
  * seventeen, the scan ran out on the last one it found, and the only sign was
  * a line in the log nobody reads -- the app simply was not in the launcher.
  * A slot is about 300 bytes of .bss, so headroom is cheap and running out is
- * not. */
-#define CAPPRUN_MAX 20
+ * not. It was 20, and the droplet's Counter made twenty-one: Share lost its
+ * slot the same way (2026-09-23). tools/build_apps.py now refuses a set of
+ * apps within four of this -- a reload's stale copy and a command's borrowed
+ * slot each need one spare at the same moment. */
+#define CAPPRUN_MAX 32
 
 /* Load and read the descriptor. Nothing runs. Returns a slot index, or -1. */
 int capprun_load(const char *path);

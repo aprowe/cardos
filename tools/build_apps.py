@@ -352,6 +352,24 @@ def emit_header(built):
     print("  %s (%d bytes of flash)" % (os.path.relpath(HEADER, ROOT), total))
 
 
+# Every app on the card holds a launcher slot for as long as the device is up
+# (kernel/app/capprun.h). One too many and the last app the scan finds is
+# simply missing -- Share, the day Counter arrived. Four spare, because a
+# reload's stale copy and a command's borrowed slot need one each.
+SLOT_SPARE = 4
+
+
+def check_slots(napps):
+    with open(os.path.join(ROOT, "kernel", "app", "capprun.h"), encoding="utf-8") as f:
+        m = re.search(r"#define\s+CAPPRUN_MAX\s+(\d+)", f.read())
+    limit = int(m.group(1))
+    if napps + SLOT_SPARE > limit:
+        raise SystemExit(
+            "%d apps, and CAPPRUN_MAX in kernel/app/capprun.h is %d: raise it to "
+            "at least %d, or the launcher silently drops an app"
+            % (napps, limit, napps + SLOT_SPARE))
+
+
 def main():
     if not os.path.exists(GCC):
         raise SystemExit("no Xtensa toolchain at " + TOOLCHAIN)
@@ -362,6 +380,7 @@ def main():
     if not srcs:
         raise SystemExit("no apps in " + APPS)
 
+    check_slots(len(srcs))
     print("building %d app(s):" % len(srcs))
     built = [build(s) for s in srcs]
     emit_header(built)
