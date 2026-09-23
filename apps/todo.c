@@ -71,6 +71,8 @@
 #define TASKS_URL "https://tasks.googleapis.com/tasks/v1/lists/%s/tasks?showCompleted=true&showHidden=false&maxResults=40&fields=items(id,title,status)"
 #define TASK_URL "https://tasks.googleapis.com/tasks/v1/lists/%s/tasks/%s"
 #define ADD_URL  "https://tasks.googleapis.com/tasks/v1/lists/%s/tasks"
+/* A new list. fields= as everywhere here: the reply is what the buffer holds. */
+#define NEWLIST_URL "https://tasks.googleapis.com/tasks/v1/users/@me/lists?fields=id,title"
 
 #define CLR_BG      CAPP_RGB(22, 24, 30)
 #define CLR_ROW     CAPP_RGB(30, 33, 40)
@@ -89,7 +91,7 @@ typedef enum { VIEW_LIST = 0, VIEW_ADD, VIEW_LISTS, VIEW_ALL } View;
  * screen never stops. See CardApi.http_start. */
 /* The sweep, in order: the lists themselves, then the pending edits of the
  * list on screen, then its tasks, then every other list in turn. */
-enum { SYNC_IDLE = 0, SYNC_LIST, SYNC_PUSH, SYNC_PULL, SYNC_SWEEP };
+enum { SYNC_IDLE = 0, SYNC_LIST, SYNC_PUSH, SYNC_PULL, SYNC_SWEEP, SYNC_NEWLIST };
 
 /* The overview's rows. Capped rather than sized to the lists, because eight
  * lists of forty tasks is more than fits on a 135-pixel screen many times
@@ -145,6 +147,9 @@ static struct {
   int   swept;                      /* how many the sweep has finished */
   int   synced_once;                /* the sweep has run; do not start another */
   int   cmd_waiting;                /* a `sync` command wants to hear the end */
+  int   cmd_newlist;                /* a `newlist` command wants to hear it */
+  int   draft_list;                 /* the draft is a list's name, not a task */
+  char  newlist_name[NAME_MAX];     /* the one being made */
 
   OverRow over[OVER_MAX];
   int     nover;
@@ -425,6 +430,60 @@ static void select_list(int i) {
   api->fmt(T.status, sizeof T.status, "%d cached -- s syncs", T.n);
   /* Sync it as soon as the tick comes round, not in ten minutes. */
   T.tried_once = 0;
+}
+
+/* Make a list at Google called `name`, and switch to it when it exists.
+ * Lists used to be made elsewhere, on purpose -- this is the one network
+ * operation with no offline form, because a list has no identity until
+ * Google gives it one, and a task cannot be pushed into a list that has no
+ * id. So it refuses plainly offline rather than pretending. 0 started (the
+ * answer comes from sync_tick), -1 not, with T.status saying why. */
+static int start_newlist(const char *name) {
+  char body[NAME_MAX + 24];
+  const char *tok;
+  int i, j;
+
+  if (!name || !name[0]) { say("a list needs a name"); return -1; }
+  if (T.nlists >= MAX_LISTS) {
+    api->fmt(T.status, sizeof T.status, "already %d lists, the most this holds", MAX_LISTS);
+    return -1;
+  }
+  if (T.stage != SYNC_IDLE) { say("syncing -- try again in a moment"); return -1; }
+  tok = api->google_token();
+  if (!tok || !tok[0]) { say(api->google_status()); return -1; }
+
+  /* The name goes into JSON, so no quote or backslash, as for a task. */
+  for (i = 0, j = 0; name[i] && j < NAME_MAX - 1; i++)
+    T.newlist_name[j++] = (name[i] == '"' || name[i] == '\\') ? '\'' : name[i];
+  T.newlist_name[j] = 0;
+  api->fmt(body, sizeof body, "{\"title\":\"%s\"}", T.newlist_name);
+  if (api->http_start("POST", NEWLIST_URL, body, "application/json", tok, 15000) != 0) {
+    say("busy -- another request is running");
+    return -1;
+  }
+  T.stage = SYNC_NEWLIST;
+  say("making the list...");
+  return 0;
+}
+
+/* The reply to start_newlist: the list, switched to, or why not. */
+static void newlist_done(int n) {
+  char id[ID_MAX], msg[64];
+  T.stage = SYNC_IDLE;
+  if (n < 0 || !json_str_at(T.reply, "id", id, ID_MAX) || !id[0]) {
+    api->fmt(msg, sizeof msg, "could not make the list (%d)", n);
+    say(msg);
+    if (T.cmd_newlist) { T.cmd_newlist = 0; api->command_done(-1, msg); }
+    return;
+  }
+  api->fmt(T.lists[T.nlists].id, ID_MAX, "%s", id);
+  api->fmt(T.lists[T.nlists].name, NAME_MAX, "%s", T.newlist_name);
+  T.nlists++;
+  select_list(T.nlists - 1);       /* saves the lists, loads the (empty) cache */
+  api->fmt(msg, sizeof msg, "made %s, and switched to it", T.newlist_name);
+  say(msg);
+  logf("made list %s", T.newlist_name);
+  if (T.cmd_newlist) { T.cmd_newlist = 0; api->command_done(0, msg); }
 }
 
 /* ---- the overview -------------------------------------------------------
@@ -759,6 +818,8 @@ static void sync_tick(void) {
   n = api->http_poll(T.reply, sizeof T.reply);
   if (n == CAPP_HTTP_PENDING) return;
 
+  if (T.stage == SYNC_NEWLIST) { newlist_done(n); return; }
+
   /* The list changed under it. The lists themselves are not per-list and
    * are kept; anything else was the old list's and is dropped. select_list
    * left tried_once clear, so the next tick syncs the new list. */
@@ -1052,7 +1113,8 @@ static void paint_add(CRect c) {
   int i;
 
   api->fill(c, CLR_BG);
-  api->text((short)(c.x + 6), (short)(c.y + 10), "New task", CLR_BARFG, CLR_BG);
+  api->text((short)(c.x + 6), (short)(c.y + 10),
+            T.draft_list ? "New list" : "New task", CLR_BARFG, CLR_BG);
 
   api->fill(rect(c.x + 5, c.y + 26, c.w - 10, 14), CLR_ROW);
   for (i = 0; i < T.draft_len; i++) shown[i] = T.draft[i];
@@ -1061,7 +1123,8 @@ static void paint_add(CRect c) {
   api->text((short)(c.x + 8), (short)(c.y + 29), shown, CLR_TEXT, CLR_ROW);
 
   api->text((short)(c.x + 6), (short)(c.y + 48),
-            "enter adds   backspace cancels", CLR_DONE, CLR_BG);
+            T.draft_list ? "enter makes it   backspace cancels"
+                         : "enter adds   backspace cancels", CLR_DONE, CLR_BG);
 }
 
 /* Everything this app can be asked to do, stated once.
@@ -1076,7 +1139,7 @@ static void paint_add(CRect c) {
  * menu, which is why an editor's save did nothing in a window. */
 enum { ACT_ADD = 1, ACT_TICK, ACT_DELETE, ACT_SYNC, ACT_LISTS, ACT_ALL,
        ACT_SAVE, ACT_CANCEL, ACT_OPEN, ACT_GOTO, ACT_PRINT,
-       ACT_DONE, ACT_LIST };
+       ACT_DONE, ACT_LIST, ACT_NEWLIST };
 
 /* Commands as well as actions (CAPP_CMD_YES): what `do todo ...`, voice and
  * an AI can ask for, with no screen. `done` and `list` have no menu entry --
@@ -1085,6 +1148,7 @@ enum { ACT_ADD = 1, ACT_TICK, ACT_DELETE, ACT_SYNC, ACT_LISTS, ACT_ALL,
 static const CappParam P_TEXT[]  = { { "text",  CAPP_ARG_TEXT, "what the task says" } };
 static const CappParam P_TITLE[] = { { "title", CAPP_ARG_TEXT,
                                        "the task, or enough of it to match" } };
+static const CappParam P_NAME[]  = { { "name",  CAPP_ARG_TEXT, "what the list is called" } };
 
 static const CappAction LIST_ACTIONS[] = {
   { "add",    "Add",      "Task", 0x01, ACT_ADD,       /* ctrl-a */
@@ -1094,6 +1158,8 @@ static const CappAction LIST_ACTIONS[] = {
   { "sync",   "Sync now", "List", 0x13, ACT_SYNC,      /* ctrl-s */
     "sync every list with Google", 0, 0, CAPP_CMD_YES | CAPP_CMD_NET },
   { "lists",  "Lists...", "List", 0x0C, ACT_LISTS },   /* ctrl-l */
+  { "newlist", "New list...", "List", 0x0E, ACT_NEWLIST,   /* ctrl-n */
+    "make a new task list and switch to it", P_NAME, 1, CAPP_CMD_YES | CAPP_CMD_NET },
   { "all",    "All lists", "List", 0x0F, ACT_ALL },   /* ctrl-o */
   { "print",  "Print",    "List", CAPP_KEY_PRINT, ACT_PRINT },  /* fn-p */
   { "done",   "Done",     0,      0,    ACT_DONE,
@@ -1246,8 +1312,11 @@ static int app_key(void *st, unsigned char k);
 static int do_action(int a) {
   switch (a) {
   case ACT_ADD:
+  case ACT_NEWLIST:
+    /* One draft view for both: a task's title or a new list's name. */
     T.draft[0] = 0;
     T.draft_len = 0;
+    T.draft_list = (a == ACT_NEWLIST);
     T.view = VIEW_ADD;
     use_add_menus();
     return 1;
@@ -1279,10 +1348,20 @@ static int do_action(int a) {
     return 1;
   case ACT_PRINT:  print_page(); return 1;
   case ACT_SAVE:
-    add_draft();                       /* returns to the list itself */
+    if (T.draft_list) {
+      /* The answer lands later, from sync_tick; the status says so now. */
+      if (T.draft_len) start_newlist(T.draft);
+      T.draft_list = 0;
+      T.draft[0] = 0;
+      T.draft_len = 0;
+      T.view = VIEW_LIST;
+    } else {
+      add_draft();                     /* returns to the list itself */
+    }
     use_list_menus();
     return 1;
   case ACT_CANCEL:
+    T.draft_list = 0;
     T.view = VIEW_LIST;
     use_list_menus();
     return 1;
@@ -1467,6 +1546,11 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
     cache_save();
     api->fmt(out, n, "ticked off \"%s\"", T.item[hit].title);
     return 0;
+
+  case ACT_NEWLIST:
+    if (start_newlist(argv[0]) != 0) { api->fmt(out, n, "%s", T.status); return -1; }
+    T.cmd_newlist = 1;
+    return CAPP_CMD_PENDING;
 
   case ACT_SYNC:
     if (T.stage != SYNC_IDLE) { api->fmt(out, n, "already syncing"); return -1; }
