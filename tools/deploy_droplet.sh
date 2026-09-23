@@ -110,7 +110,13 @@ print(\"   published:\", \", \".join(build.publish(\"$STORE\", updates.FIRMWARE,
 update() {
   git push -q droplet master
   ssh "$HOST" "chgrp -R cardos $BARE && chmod -R g+w $BARE"
-  as_cardos "set -e; cd $CLONE; git fetch -q origin; git merge -q --no-edit origin/master; git log --oneline -1"
+  # Build's own commits are on `remote`, so this is a real merge, and the
+  # service user has no git identity -- server/build.py passes one per
+  # command for the same reason.
+  as_cardos "set -e; cd $CLONE; git fetch -q origin
+    git -c user.name='CardOS droplet' -c user.email=cardos@droplet.invalid \
+      merge -q --no-edit origin/master
+    git log --oneline -1"
   build_and_publish
   unit_and_restart
 }
