@@ -137,6 +137,44 @@ void test_build_shows_what_the_server_is_doing(void) {
   CHECK(C.progress[0] == 0);
 }
 
+static void type_and_enter(const char *s) {
+  while (*s) INST.key(INST.state, (unsigned char)*s++);
+  INST.key(INST.state, CAPP_KEY_ENTER);
+}
+
+/* Enter while a request runs used to send at once and poll the new job
+ * instead, so the first answer was never collected. Now it waits its turn. */
+void test_build_queues_what_is_typed_while_a_request_runs(void) {
+  int i;
+  boot();
+  API.http = fake_http;
+  C.job = 7;                                  /* one is running */
+
+  type_and_enter("add a bar");
+  CHECK_EQ(C.nqueued, 1);
+  CHECK(!C.sending);                          /* held, not sent */
+  CHECK_EQ(C.job, 7);                         /* still waiting on the first */
+  type_and_enter("make it blue");
+  CHECK_EQ(C.nqueued, 2);
+
+  HTTP_REPLY = "done\nfirst answer";          /* the first answer lands */
+  poll_now();
+  CHECK_EQ(C.job, 0);
+  CHECK(C.sending);                           /* the next goes on the next tick */
+  CHECK(strcmp(C.pending, "add a bar") == 0); /* in the order typed */
+  CHECK_EQ(C.nqueued, 1);
+  CHECK(strcmp(C.queued[0], "make it blue") == 0);
+
+  for (i = 0; i < QUEUE_MAX + 2; i++) type_and_enter("more");
+  CHECK_EQ(C.nqueued, QUEUE_MAX);             /* full is full */
+  CHECK(C.in_len > 0);                        /* and the refused text is kept */
+
+  C.in_len = 0; C.input[0] = 0;
+  C.sending = 0;
+  type_and_enter("/new");
+  CHECK_EQ(C.nqueued, 0);                     /* nothing carries over */
+}
+
 void test_build_installs_a_ui(void) {
   boot();
   CHECK(INST.paint != NULL);
