@@ -462,6 +462,8 @@ void test_tzreply_the_zone_line_is_optional(void);
 void test_tzreply_refuses_what_is_not_a_rule(void);
 void test_tzreply_a_rule_too_long_for_the_buffer_is_refused_not_cut(void);
 void test_manifest_parses_firmware_and_apps(void);
+void test_manifest_reads_an_apps_folder(void);
+void test_manifest_a_folder_that_is_not_a_name_is_ignored(void);
 void test_manifest_skips_what_it_does_not_understand(void);
 void test_manifest_rejects_a_page_that_is_not_one(void);
 void test_manifest_refuses_a_malformed_line_but_keeps_the_rest(void);
@@ -995,6 +997,8 @@ int main(void) {
   RUN(test_tzreply_a_rule_too_long_for_the_buffer_is_refused_not_cut);
   printf("-- update --\n");
   RUN(test_manifest_parses_firmware_and_apps);
+  RUN(test_manifest_reads_an_apps_folder);
+  RUN(test_manifest_a_folder_that_is_not_a_name_is_ignored);
   RUN(test_manifest_skips_what_it_does_not_understand);
   RUN(test_manifest_rejects_a_page_that_is_not_one);
   RUN(test_manifest_refuses_a_malformed_line_but_keeps_the_rest);

@@ -28,6 +28,25 @@ void test_manifest_parses_firmware_and_apps(void) {
   CHECK_EQ(m.app[1].hash, 0xDEADBEEFu);      /* either case */
 }
 
+/* The folder rides at the end of an app line, so firmware from before it
+ * reads the same line and ignores the extra word. Without one, the app
+ * belongs at the top level -- and an app new to the card used to land there
+ * whatever its folder, because only the seed blobs knew it. */
+void test_manifest_reads_an_apps_folder(void) {
+  Manifest m;
+  CHECK_EQ(manifest_parse("app timer 0000beef 12924 Tools\n"
+                          "app grep 00000001 2000\n", &m), 2);
+  CHECK(strcmp(m.app[0].folder, "Tools") == 0);
+  CHECK(m.app[1].folder[0] == 0);
+}
+
+void test_manifest_a_folder_that_is_not_a_name_is_ignored(void) {
+  Manifest m;
+  CHECK_EQ(manifest_parse("app timer 0000beef 12924 ../sys\n", &m), 1);
+  CHECK_EQ(m.napps, 1);                      /* the app is still an app */
+  CHECK(m.app[0].folder[0] == 0);            /* but lands at the top level */
+}
+
 void test_manifest_skips_what_it_does_not_understand(void) {
   Manifest m;
   int n = manifest_parse("# a comment\nfont 6x8 abcd 100\napp cat 00000001 5\n\n", &m);

@@ -23,6 +23,10 @@ import struct
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIRMWARE = os.path.join(ROOT, ".pio", "build", "cardputer", "firmware.bin")
 APPS_DIR = os.path.join(ROOT, "build", "apps")
+# Which folder each app belongs in. Shared with tools/build_apps.py, which
+# seeds the firmware from it; the manifest carries it so a first install
+# lands in the folder too, not at the top level.
+FOLDERS_FILE = os.path.join(ROOT, "apps", "folders.txt")
 
 # esp_app_desc_t sits after the 24-byte image header and the first 8-byte
 # segment header. Within it: magic u32, secure_version u32, reserv1 u32[2],
@@ -60,11 +64,26 @@ def app_files(apps_dir=None):
                   if f.endswith(".capp") and os.path.isfile(os.path.join(apps_dir, f)))
 
 
-def manifest(firmware=None, apps_dir=None):
+def load_folders(path=None):
+    """{app: folder} from apps/folders.txt; top-level apps ("-") are left out."""
+    out = {}
+    try:
+        with open(path or FOLDERS_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.split("#", 1)[0].split()
+                if len(line) == 2 and line[1] != "-" and valid_name(line[1]):
+                    out[line[0]] = line[1]
+    except OSError:
+        pass
+    return out
+
+
+def manifest(firmware=None, apps_dir=None, folders=None):
     """The locations default at call time, not definition time, so a test
     can point the module somewhere else."""
     firmware = firmware or FIRMWARE
     apps_dir = apps_dir or APPS_DIR
+    folders = load_folders() if folders is None else folders
     lines = []
     if os.path.isfile(firmware):
         with open(firmware, "rb") as f:
@@ -75,7 +94,12 @@ def manifest(firmware=None, apps_dir=None):
     for name in app_files(apps_dir):
         with open(os.path.join(apps_dir, name), "rb") as f:
             data = f.read()
-        lines.append("app %s %08x %d" % (name[:-len(".capp")], fnv1a32(data), len(data)))
+        stem = name[:-len(".capp")]
+        line = "app %s %08x %d" % (stem, fnv1a32(data), len(data))
+        # Last, so firmware that predates it reads the line and ignores it.
+        if folders.get(stem):
+            line += " " + folders[stem]
+        lines.append(line)
     return "".join(l + "\n" for l in lines)
 
 

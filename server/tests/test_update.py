@@ -38,9 +38,18 @@ def main():
         f.write(b"not an app")
 
     print("the manifest:")
-    m = updates.manifest(firmware=os.path.join(tmp, "none.bin"), apps_dir=apps)
+    m = updates.manifest(firmware=os.path.join(tmp, "none.bin"), apps_dir=apps,
+                         folders={})
     fails += not check("lists each .capp with its hash and size",
                        m, "app pinball e40c292c 1\n")
+    m = updates.manifest(firmware=os.path.join(tmp, "none.bin"), apps_dir=apps,
+                         folders={"pinball": "Games"})
+    fails += not check("and the folder it belongs in, last",
+                       m, "app pinball e40c292c 1 Games\n")
+    fails += not check("the repository's own table is apps/folders.txt",
+                       updates.load_folders().get("timer"), "Tools")
+    fails += not check("where '-' means the top level",
+                       "grep" in updates.load_folders(), False)
     fails += not check("fnv1a of the empty string is the reference value",
                        updates.fnv1a32(b""), 0x811c9dc5)
 
@@ -74,7 +83,7 @@ def main():
 
     r = get(base + "/update").decode()
     fails += not check("/update is the manifest", r.split("\n")[1],
-                       "app pinball e40c292c 1")
+                       "app pinball e40c292c 1 Games")
     fails += not check("/update/app/NAME is the file",
                        get(base + "/update/app/pinball"), b"a")
     fails += not check("/update/firmware is the image",

@@ -26,6 +26,8 @@ typedef struct {
   char     name[MANIFEST_NAME_MAX];   /* "pinball", without .capp */
   uint32_t hash;                      /* FNV-1a 32 of the file */
   uint32_t size;
+  char     folder[MANIFEST_NAME_MAX]; /* "Games", or "" for the top level:
+                                         where a first install goes */
 } ManifestApp;
 
 typedef struct {

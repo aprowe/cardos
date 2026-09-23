@@ -167,6 +167,15 @@ static int install_app(const ManifestApp *a, UpdateLog log, void *ctx) {
 
   snprintf(url, sizeof url, "%s/update/app/%s", update_base(), a->name);
   capp_path(a->name, dst, sizeof dst);
+  /* Wherever it already is, it stays -- the user may have moved it. An app
+   * the card has never had goes where the manifest says, not the top level:
+   * that used to be the fate of every app Build made. */
+  if (a->folder[0] && fs_stat(dst, &st) != 0) {
+    char dir[48];
+    snprintf(dir, sizeof dir, "%s/%s", ICONS_DIR, a->folder);
+    if (fs_stat(dir, &st) != 0) fs_mkdir(dir);
+    snprintf(dst, sizeof dst, "%s/%s.capp", dir, a->name);
+  }
   snprintf(tmp, sizeof tmp, "%s.new", dst);
 
   n = http_download_ex(url, tmp, bearer(), NULL, NULL, 30000);

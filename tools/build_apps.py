@@ -112,37 +112,69 @@ def check_image(elf, name):
                          % (name, ", ".join(sorted(set(undef)))))
 
 
-# Which folder of /apps each app is seeded into.
-#
-# The launcher reads one level of subdirectory, and `update apps` finds an app
-# wherever it already sits (see capp_path in kernel/net/update.c), so grouping
-# is purely a question of where the blob is first written.
-#
-# CLI-only apps are deliberately absent: they never appear as an icon, and
-# leaving them at the top level keeps them on the default PATH, so `grep TODO
-# /apps` still resolves from the console with nothing to configure.
-FOLDERS = {
-    "mines":    "Games",
-    "pinball":  "Games",
+# Which folder of /apps each app goes in: apps/folders.txt, shared with the
+# server, which puts it in the /update manifest so a first install lands in
+# the folder too. Every app must have a line -- "-" for the top level, where
+# the CLI apps stay on the default PATH -- because an app nobody placed used to
+# land at the top level with no folder, which is where Build's apps all went.
+FOLDERS_FILE = os.path.join(APPS, "folders.txt")
 
-    "web":      "Net",
-    "claude":   "Net",
-    "build":    "Net",
-    "stocks":   "Net",
-    "screen":   "Net",
-    "share":    "Net",
 
-    "calendar": "Tools",
-    "files":    "Tools",
-    "ide":      "Tools",
-    "explorer": "Tools",
-    "edit":     "Tools",
-    "photo":    "Tools",
-    "todo":     "Tools",
-    "memo":     "Tools",
-    "timer":    "Tools",
-    "habits":   "Tools",
-}
+def load_folders():
+    """{app: folder or None} for every app apps/folders.txt names."""
+    out = {}
+    with open(FOLDERS_FILE, encoding="utf-8") as f:
+        for line in f:
+            words = line.split("#", 1)[0].split()
+            if len(words) == 2:
+                out[words[0]] = None if words[1] == "-" else words[1]
+    return out
+
+
+FOLDERS = load_folders()
+
+# The descriptor's layout (CappInfo in kernel/app/capp.h): capp_info is the
+# first thing in .data (apps/capp.ld keeps it there), so it can be read out of
+# the ELF without running or relocating anything.
+CAPP_CLI = 0x0001
+ICON_OFFSET, ICON_BYTES = 20, 32
+
+
+def read_info(elf):
+    """(flags, name, icon bytes) from a built .capp's capp_info."""
+    import struct
+    with open(elf, "rb") as f:
+        data = f.read()
+    shoff, = struct.unpack_from("<I", data, 0x20)
+    shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 0x2E)
+
+    def section(i):
+        return struct.unpack_from("<IIIIIIIIII", data, shoff + i * shentsize)
+    names_off = section(shstrndx)[4]
+    for i in range(shnum):
+        sh = section(i)
+        end = data.index(bytes([0]), names_off + sh[0])
+        if data[names_off + sh[0]:end] == b".data":
+            off = sh[4]
+            _ver, flags = struct.unpack_from("<HH", data, off)
+            name = data[off + 4:off + 20].split(bytes([0]))[0].decode("ascii", "replace")
+            return flags, name, data[off + ICON_OFFSET:off + ICON_OFFSET + ICON_BYTES]
+    raise SystemExit("%s: no .data section, so no capp_info" % elf)
+
+
+def check_placement(stem, elf):
+    """Refuse an app that nobody placed or that has no face. A Build turn that
+    makes an app reads this when it fails, so the message says what to do."""
+    if stem not in FOLDERS:
+        raise SystemExit(
+            "%s: apps/folders.txt has no line for it. Add one: '%s Tools' (or "
+            "Games, Net -- the folders there are), or '%s -' for a CLI app at "
+            "the top level." % (stem, stem, stem))
+    flags, name, icon = read_info(elf)
+    if not flags & CAPP_CLI and not any(icon):
+        raise SystemExit(
+            "%s: its 16x16 icon in capp_info is blank. Draw one: 32 bytes, "
+            "1bpp, two bytes a row, bit 7 leftmost (apps/timer.c has one)." % stem)
 
 
 def seed_name(stem):
@@ -160,6 +192,7 @@ def build(src):
     run([LD, "-q", "-T", os.path.join(APPS, "capp.ld"),
          "--gc-sections", "-o", elf, obj])
     check_image(elf, name)
+    check_placement(name, elf)
 
     size = os.path.getsize(elf)
     print("  %-8s %6d bytes" % (name + ".capp", size))

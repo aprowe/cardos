@@ -1,0 +1,30 @@
+# Which folder of /apps each app lives in: "name folder", one per line.
+# `-` is the top level -- for CLI apps, which stay on the default PATH so
+# `grep TODO /apps` resolves from the console with nothing to configure.
+#
+# Every app in apps/ must have a line: tools/build_apps.py refuses one that
+# does not, because an app nobody placed used to land at the top level with
+# no folder. The launcher shows one level of folders; these are the ones
+# there are. Read by tools/build_apps.py (where the firmware seeds it) and by
+# server/updates.py (the /update manifest, so a first install lands here too).
+
+build     Net
+calendar  Tools
+cat       -
+claude    Net
+edit      Tools
+explorer  Tools
+files     Tools
+grep      -
+habits    Tools
+ide       Tools
+memo      Tools
+mines     Games
+photo     Tools
+pinball   Games
+screen    Net
+share     Net
+stocks    Net
+timer     Tools
+todo      Tools
+web       Net

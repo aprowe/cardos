@@ -443,6 +443,14 @@ hardware-specific. What it cost to learn:
 
 ## Working agreements
 
+- **A new app needs two things besides its code**, or `tools/build_apps.py`
+  refuses it: a line in `apps/folders.txt` (`name Tools`, `Games`, `Net`, or
+  `-` for a CLI app at the top level), and a non-blank 16x16 icon in its
+  `capp_info` (32 bytes, 1bpp, two bytes a row, bit 7 leftmost; `apps/timer.c`
+  has one). The folder also reaches the `/update` manifest, so a first install
+  lands in it rather than at the top level, which is where every app Build
+  made used to end up.
+
 - **Nothing that talks HTTPS runs on `cardos-bg`.** Its stack is 4 KB
   (`BG_STACK`, `kernel/sys/bg.c`) and a TLS handshake does not fit. A Build
   turn (2026-09-23) added a timezone lookup to `https://ipapi.co` there, right

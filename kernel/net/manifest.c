@@ -125,6 +125,11 @@ int manifest_parse(const char *text, Manifest *out) {
           parse_hex32(b, &hash) == 0 && parse_dec(c, &size) == 0) {
         ap->hash = hash;
         ap->size = size;
+        /* An optional last word: the folder. Checked as a name like the app
+         * is, so "../sys" is not a place to write to; a bad one means the
+         * top level rather than a refused app. */
+        if (!word(q, ap->folder, sizeof ap->folder) || !name_ok(ap->folder))
+          ap->folder[0] = 0;
         out->napps++;
         understood++;
       } else {
