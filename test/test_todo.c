@@ -893,14 +893,21 @@ void test_todo_the_app_gets_no_keys_while_the_menu_is_up(void) {
 
 /* ---- the printed page ---------------------------------------------------- */
 
-static char fake_printed[PAGE_MAX];
-static int fake_print(const char *doc) { snprintf(fake_printed, sizeof fake_printed, "%s", doc); return 0; }
+static char fake_printed[PAGE_MAX], fake_fonts[64];
+/* The page, and the faces it was asked to be set in, "body bold head". */
+static int fake_print(const char *doc, const char *body, const char *bold,
+                      const char *head) {
+  snprintf(fake_printed, sizeof fake_printed, "%s", doc);
+  snprintf(fake_fonts, sizeof fake_fonts, "%s %s %s", body ? body : "-",
+           bold ? bold : "-", head ? head : "-");
+  return 0;
+}
 static void fake_now(CappTime *t) { memset(t, 0, sizeof *t); t->synced = 2; t->year = 2026; t->month = 9; t->day = 20; t->hour = 10; t->min = 5; }
 static const char *fake_print_status(void) { return "printed"; }
 
 void test_todo_prints_open_tasks_as_boxes_and_done_ones_ticked(void) {
   use_fake_api();
-  FAKE.print = fake_print;
+  FAKE.print_fonts = fake_print;
   FAKE.now = fake_now;
   FAKE.print_status = fake_print_status;
   T.nlists = 1; T.cur = 0;
@@ -913,13 +920,15 @@ void test_todo_prints_open_tasks_as_boxes_and_done_ones_ticked(void) {
   print_page();
   CHECK(!strcmp(fake_printed,
     "# Groceries\n[ ] Milk\n[ ] Bread\n---\n[x] Eggs\n---\nprinted 20 Sep 10:05\n"));
+  /* Set in the print faces from fonts/fonts.txt, as Edit's pages are. */
+  CHECK(!strcmp(fake_fonts, "print24 print24b print34b"));
   CHECK_EQ(T.printing, 1);
   CHECK(!strcmp(T.status, "printing..."));
 }
 
 void test_todo_prints_the_overview_with_a_heading_per_list(void) {
   use_fake_api();
-  FAKE.print = fake_print;
+  FAKE.print_fonts = fake_print;
   FAKE.now = fake_now;
   T.nlists = 2;
   snprintf(T.lists[0].name, sizeof T.lists[0].name, "%s", "Home");
@@ -934,11 +943,15 @@ void test_todo_prints_the_overview_with_a_heading_per_list(void) {
     "# All lists\n## Home\n[ ] Bins\n## Work\n[ ] Report\n[ ] Slides\n---\nprinted 20 Sep 10:05\n"));
 }
 
-static int fake_print_busy(const char *doc) { (void)doc; return -1; }
+static int fake_print_busy(const char *doc, const char *body, const char *bold,
+                           const char *head) {
+  (void)doc; (void)body; (void)bold; (void)head;
+  return -1;
+}
 
 void test_todo_says_so_when_the_printer_is_busy_or_missing(void) {
   use_fake_api();
-  FAKE.print = fake_print_busy;
+  FAKE.print_fonts = fake_print_busy;
   FAKE.now = fake_now;
   T.view = VIEW_LIST;
   print_page();
@@ -949,7 +962,7 @@ void test_todo_says_so_when_the_printer_is_busy_or_missing(void) {
 void test_todo_page_stops_short_rather_than_overflowing(void) {
   int i;
   use_fake_api();
-  FAKE.print = fake_print;
+  FAKE.print_fonts = fake_print;
   FAKE.now = fake_now;
   T.nlists = 1; T.cur = 0;
   for (i = 0; i < MAX_ITEMS; i++)
