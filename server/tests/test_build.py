@@ -43,6 +43,17 @@ class Plan(unittest.TestCase):
         self.assertEqual(plan({"apps/pinball.c"}), (True, False))
         self.assertEqual(plan({"kernel/drv/speaker.c"}), (True, True))
         self.assertEqual(plan({"apps/pinball.c", "src/main.c"}), (True, True))
+        # A font is embedded in the firmware, so a new one is an OS build.
+        self.assertEqual(plan({"fonts/fonts.txt"}), (True, True))
+
+    def test_fonts_are_rebuilt_only_when_asked_for(self):
+        # make_cfnt.py --all runs before the apps when a turn touched fonts/
+        # -- a line added to fonts.txt is a request -- and not otherwise, so
+        # a FreeType that rasterises a pixel differently cannot churn
+        # font_blobs.h on every Build.
+        self.assertTrue(build.needs_fonts({"fonts/fonts.txt"}))
+        self.assertTrue(build.needs_fonts({"apps/timer.c", "fonts/src/X.ttf"}))
+        self.assertFalse(build.needs_fonts({"apps/timer.c", "kernel/ui/draw.c"}))
 
     def test_errors_tail_prefers_errors(self):
         log = "\n".join(["noise %d" % i for i in range(50)] +
@@ -107,7 +118,7 @@ class Turn(unittest.TestCase):
         c.snapshot = lambda: self.snaps.pop(0)
         self.built, self.commits = [], []
 
-        def fake_build(apps, fw):
+        def fake_build(apps, fw, fonts=False):
             self.built.append((apps, fw))
             with open(os.path.join(self.out, "apps", "p.capp"), "wb") as f:
                 f.write(app_image())
@@ -151,7 +162,7 @@ class Turn(unittest.TestCase):
         self.assertEqual(len(self.commits), 1)
 
     def test_build_failure_publishes_nothing_but_keeps_the_work(self):
-        self.c.build = lambda apps, fw: (False, "apps/p.c:12: error: oops")
+        self.c.build = lambda apps, fw, fonts=False: (False, "apps/p.c:12: error: oops")
         state, reply = self.c.run_turn("break it")
         self.assertIn("build failed", reply)
         self.assertIn("p.c:12", reply)

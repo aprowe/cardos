@@ -59,6 +59,13 @@ def build_plan(paths):
     return bool(code), any(not p.startswith("apps/") for p in code)
 
 
+def needs_fonts(paths):
+    """Did the turn ask for a font? A line in fonts/fonts.txt is how an app
+    requests one (CLAUDE.md), and the agent has no shell to run
+    make_cfnt.py itself -- so the build does, only then."""
+    return any(p.startswith("fonts/") for p in paths)
+
+
 def git_snapshot(root=ROOT):
     """{path: sha1 of its content, or None if deleted} for every path git
     calls changed or untracked. Content, not status letters: a turn that edits
@@ -142,9 +149,11 @@ class BuildingChat(ChatService):
     def snapshot(self):
         return git_snapshot(self.cwd)
 
-    def build(self, apps, firmware):
-        """(ok, log). The apps first: the firmware embeds them."""
+    def build(self, apps, firmware, fonts=False):
+        """(ok, log). Fonts, then the apps: the firmware embeds both."""
         steps = []
+        if fonts:
+            steps.append([sys.executable, os.path.join("tools", "make_cfnt.py"), "--all"])
         if apps:
             steps.append([sys.executable, os.path.join("tools", "build_apps.py")])
         if firmware:
@@ -196,7 +205,7 @@ class BuildingChat(ChatService):
             report("building firmware" if firmware else "building apps")
             log("-- building %s (%d files changed)"
                 % ("apps and firmware" if firmware else "apps", len(paths)))
-            ok, out = self.build(apps, firmware)
+            ok, out = self.build(apps, firmware, needs_fonts(paths))
             if not ok:
                 self.commit(title + " (does not build)\n\n" + text)
                 return state, (reply + "\n\nbuild failed, nothing published:\n"
