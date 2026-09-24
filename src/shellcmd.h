@@ -51,6 +51,7 @@ void cmd_run(const char *arg);
 void cmd_env(void);
 
 /* google                    -- what is stored, and whether it works
+ * google pull               -- fetch the dashboard's sign-in (env DASH)
  * google id|secret|token X  -- set one field (tools/google_auth.py sends these)
  * google test               -- fetch an access token now
  * google forget             -- erase them */

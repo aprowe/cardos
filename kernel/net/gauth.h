@@ -46,4 +46,16 @@ const char *gauth_token(void);
 
 const char *gauth_status(void);
 
+/* The sign-in happens on the dashboard now (server/dash.py): a browser signs
+ * in at DASH/dash, and the device fetches the result from DASH/google/creds
+ * with its bearer token -- the three values, a line each, as google.txt holds
+ * them. Over HTTPS, because it crosses the internet and carries the refresh
+ * token; not through env PROXY, which is plain HTTP. `env DASH` overrides the
+ * address. tools/google_auth.py still works when there is no network. */
+#define GAUTH_DASH_DEFAULT "https://cardos.arowe.net"
+
+/* Fetch and store the dashboard's credentials. Blocking. 0 on success; on
+ * failure -1 and gauth_status() says why in words. */
+int gauth_pull(const char *base, const char *bearer);
+
 #endif /* CARDOS_GAUTH_H */

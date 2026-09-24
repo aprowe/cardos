@@ -352,6 +352,17 @@ forget` delete the file too. A hand-written `/config/wifi.txt` is also the
 way to give a fresh device its network without a keyboard. `kernel/sys/conf.c`
 holds the line format (host-tested); `conf_file.c` is the fs glue.
 
+**Google sign-in is on the dashboard now** (2026-09-24).
+`https://cardos.arowe.net/dash` (`server/dash.py`; the password is the
+server's `--token`) signs in with a Google *Web* client, and the device runs
+`google pull`, which fetches client id, secret and refresh token from
+`/google/creds` over HTTPS with its bearer, `env DASH` overriding the address.
+Only `/dash*` and `/google/creds` are exposed on that name;
+`tools/deploy_droplet.sh dash` sets up nginx, the certificate and the client.
+`tools/google_auth.py` remains the offline fallback. Refresh tokens expiring
+after 7 days is the consent screen being in Testing, not a bug here -- publish
+it. Design in `docs/superpowers/specs/2026-09-24-dashboard-google-design.md`.
+
 **"Google: not configured" came back over and over** (2026-09-20), and the
 cause was the push, not the device. `tools/google_auth.py` typed the three
 `google` commands with a fixed 1.5 s wait after each -- but the console takes

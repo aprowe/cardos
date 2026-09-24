@@ -696,7 +696,26 @@ void cmd_google(const char *arg) {
     con_printf("google: %s\n", gauth_configured() ? "credentials stored"
                                                  : "not configured");
     con_printf("status: %s\n", gauth_status());
-    con_write("set up with: python tools/google_auth.py\n");
+    con_write("sign in at DASH/dash, then: google pull\n");
+    return;
+  }
+
+  if (!strcmp(arg, "pull")) {
+    const char *base = env_get("DASH");
+    const char *tok = update_token();
+    if (!base || !*base) base = GAUTH_DASH_DEFAULT;
+    if (!wifi_is_connected() && wifi_connect_saved(20000) != 0) {
+      err("google", "no network");
+      return;
+    }
+    con_printf("fetching from %s...\n", base);
+    if (gauth_pull(base, *tok ? tok : NULL) != 0) {
+      con_printf("google pull: %s\n", gauth_status());
+      return;
+    }
+    con_write("stored. checking with Google...\n");
+    tok = gauth_token();
+    con_printf("%s: %s\n", tok ? "signed in" : "failed", gauth_status());
     return;
   }
 
@@ -715,7 +734,7 @@ void cmd_google(const char *arg) {
   }
 
   sp = strchr(arg, ' ');
-  if (!sp) { err("google", "id, secret, token, test or forget"); return; }
+  if (!sp) { err("google", "pull, id, secret, token, test or forget"); return; }
   while (*sp == ' ') sp++;
 
   if (!strncmp(arg, "id ", 3))          gauth_set(sp, NULL, NULL);

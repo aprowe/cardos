@@ -6,6 +6,9 @@
 #     bash tools/deploy_droplet.sh update    after pushing new master: merge it in, restart
 #     bash tools/deploy_droplet.sh pull      bring the droplet's Build commits to this laptop
 #     bash tools/deploy_droplet.sh sync      all three -- here, droplet, GitHub -- the same
+#     bash tools/deploy_droplet.sh dash [CLIENT.json]
+#                                            https://cardos.arowe.net/dash: nginx site,
+#                                            certificate, Google Web client into the env
 #
 # Run from the repository root on the laptop. Uses the root ssh login that
 # already exists; adds no keys and no accounts. Everything on the droplet runs
@@ -147,10 +150,67 @@ sync() {
   echo "in sync: $(git log --oneline -1)"
 }
 
+# The dashboard (server/dash.py) on its own name, over HTTPS -- Google will
+# not redirect a web sign-in anywhere else. Only /dash and /google/creds are
+# exposed on that name; Build, voice and updates stay on :8080 as before.
+# Needs the DNS A record for $DASH_HOST pointing here first, or certbot fails.
+# Safe to repeat. With a "Web application" client JSON from the Cloud console,
+# also puts its id and secret into /etc/cardos/env and restarts the service.
+DASH_HOST="${DASH_HOST:-cardos.arowe.net}"
+dash() {
+  local json="${1:-}"
+  ssh "$HOST" "set -e
+    cat > /etc/nginx/sites-available/cardos-dash <<'EOF'
+# CardOS dashboard: server/dash.py behind HTTPS. See tools/deploy_droplet.sh.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $DASH_HOST;
+    location = /dash { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-proxy.conf; }
+    location /dash/  { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-proxy.conf; }
+    location = /google/creds { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-proxy.conf; }
+    location = / { return 302 /dash; }
+    location / { return 404; }
+}
+EOF
+    cat > /etc/nginx/cardos-dash-proxy.conf <<'EOF'
+proxy_set_header Host \$host;
+proxy_set_header X-Real-IP \$remote_addr;
+proxy_set_header X-Forwarded-Proto \$scheme;
+client_max_body_size 16k;
+EOF
+    ln -sf /etc/nginx/sites-available/cardos-dash /etc/nginx/sites-enabled/cardos-dash
+    nginx -t -q && systemctl reload nginx
+    # --nginx edits the site above to add 443 and the redirect from 80.
+    certbot --nginx -n --redirect -d $DASH_HOST 2>&1 | tail -2
+    touch /etc/cardos/env
+    grep -q '^DASH_URL=' /etc/cardos/env || echo 'DASH_URL=https://$DASH_HOST' >> /etc/cardos/env
+    grep -q '^CARDOS_STATE=' /etc/cardos/env || echo 'CARDOS_STATE=/var/lib/cardos' >> /etc/cardos/env"
+
+  if [ -n "$json" ]; then
+    # Read here, sent over ssh on stdin: the secret never lands on a command line.
+    python -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+w = d.get("web")
+if not w:
+    sys.exit("that is not a Web application client (no \"web\" key) -- the dashboard needs one")
+print(w["client_id"]); print(w["client_secret"])' "$json" |
+    ssh "$HOST" 'set -e; read -r id; read -r secret
+      sed -i "/^GOOGLE_CLIENT_ID=/d; /^GOOGLE_CLIENT_SECRET=/d" /etc/cardos/env
+      printf "GOOGLE_CLIENT_ID=%s\nGOOGLE_CLIENT_SECRET=%s\n" "$id" "$secret" >> /etc/cardos/env
+      chmod 600 /etc/cardos/env
+      systemctl restart cardos-proxy; sleep 2; systemctl is-active cardos-proxy'
+  fi
+  echo "dashboard: https://$DASH_HOST/dash  (password: the server's --token)"
+  echo "redirect URI for the Google client: https://$DASH_HOST/dash/google/callback"
+}
+
 case "${1:-}" in
   setup) setup ;;
   update) update ;;
   pull) pull ;;
   sync) sync ;;
-  *) sed -n '2,13p' "$0"; exit 2 ;;
+  dash) dash "${2:-}" ;;
+  *) sed -n '2,16p' "$0"; exit 2 ;;
 esac

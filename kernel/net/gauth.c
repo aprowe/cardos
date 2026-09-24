@@ -237,3 +237,40 @@ const char *gauth_token(void) {
 }
 
 const char *gauth_status(void) { return s_detail; }
+
+int gauth_pull(const char *base, const char *bearer) {
+  static char reply[GAUTH_ID_MAX + GAUTH_SECRET_MAX + GAUTH_REFRESH_MAX + 64];
+  static char lines[3][GAUTH_REFRESH_MAX];
+  char url[160];
+  int n;
+
+  snprintf(url, sizeof url, "%s/google/creds", base);
+  n = http_request("GET", url, NULL, NULL, bearer, reply, sizeof reply, 15000);
+  if (n < 0) {
+    if (n == -403)
+      snprintf(s_detail, sizeof s_detail, "the server wants the token in "
+               "/config/claude.token");
+    else if (n == -404)
+      snprintf(s_detail, sizeof s_detail, "not signed in: open %s/dash", base);
+    else if (n == -503)
+      snprintf(s_detail, sizeof s_detail, "the server has no --token set");
+    else
+      snprintf(s_detail, sizeof s_detail, "cannot reach %s (%d)", base, n);
+    return -1;
+  }
+  reply[n < (int)sizeof reply ? n : (int)sizeof reply - 1] = 0;
+
+  /* conf_split cuts a long line to fit rather than failing, and a cut token
+   * is a token Google refuses a day later with nothing to say why -- so
+   * measure against the smaller limits the fields are stored with. */
+  if (conf_split(reply, &lines[0][0], 3, GAUTH_REFRESH_MAX) < 3 ||
+      !lines[0][0] || !lines[1][0] || !lines[2][0] ||
+      strlen(lines[0]) >= GAUTH_ID_MAX || strlen(lines[1]) >= GAUTH_SECRET_MAX ||
+      strlen(lines[2]) >= GAUTH_REFRESH_MAX - 1) {
+    snprintf(s_detail, sizeof s_detail, "%s", "the server's reply was not three values");
+    return -1;
+  }
+  gauth_set(lines[0], lines[1], lines[2]);
+  snprintf(s_detail, sizeof s_detail, "%s", "pulled from the dashboard");
+  return 0;
+}
