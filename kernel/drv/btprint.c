@@ -291,6 +291,16 @@ int btprint_connect(const uint8_t addr[6], uint8_t addr_type, int timeout_ms) {
 void btprint_disconnect(void) {
   int st = s.state;
   s.state = ST_OFF;
+  /* No radio, no link -- and nothing to ask NimBLE about. A connect that
+   * failed because the radio would not start left the state FAILED and the
+   * handle at its zero start, which reads as a real connection; the
+   * terminate below then went into a host that was never initialised and
+   * the device crashed (LoadProhibited in ble_hs_is_enabled, 2026-09-24:
+   * printing from Todo with 48 KB free). */
+  if (!bthid_radio_on()) {
+    s.conn = BLE_HS_CONN_HANDLE_NONE;
+    return;
+  }
   /* Handle 0 is a real connection -- the first one NimBLE opens, when no
    * mouse or keyboard got there first. Treating it as "none" left the link
    * up, and every print after the first was refused as already connected. */

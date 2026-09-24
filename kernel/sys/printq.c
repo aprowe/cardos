@@ -4,6 +4,8 @@
 #include "kernel/sys/applog.h"
 #include "kernel/drv/btprint.h"
 #include "kernel/ui/fontres.h"
+#include "kernel/drv/bthid.h"
+#include "kernel/net/httpq.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -29,6 +31,9 @@ typedef struct {
   void      *ctx;
   void     (*done)(void *ctx);
   int      (*count)(void *ctx);   /* rows to come, for the percentage; or NULL */
+  /* Anything the source needs that should not be held while the radio
+   * starts: a document's fonts. Called once the printer is connected. */
+  void     (*prepare)(void *ctx);
   int        total;
 } Job;
 
@@ -38,6 +43,7 @@ typedef struct {
   PrintDoc   doc;
   PrintFonts fonts;
   int        font[3];             /* body, bold, head: fontres handles or -1 */
+  char       name[3][24];         /* what to load, when the radio is up */
 } DocJob;
 
 static volatile int s_busy;
@@ -64,12 +70,30 @@ static void job_task(void *param) {
   const char *why = NULL;
 
   if (printq_printer(addr, &type, NULL, 0) != 0) { why = "no printer set"; goto out; }
-  /* Counted here rather than by the caller: it renders the whole document
-   * once, on this stack, not the shell's. */
-  if (j->count) j->total = j->count(j->ctx);
 
   set_status("connecting");
-  if (btprint_connect(addr, type, CONNECT_MS) != 0) { why = btprint_error(); goto out; }
+  if (btprint_connect(addr, type, CONNECT_MS) != 0) {
+    /* The radio needs about 80 KB free to start, and an HTTPS request in
+     * flight holds some 35 KB of TLS -- Todo syncs every list when it opens,
+     * so fn-p in the first few seconds met exactly that. Wait for the
+     * request to finish and try once more, rather than fail a print that
+     * would fit a moment later. */
+    int waited = 0;
+    if (bthid_radio_on() || !httpq_active()) { why = btprint_error(); goto out; }
+    set_status("waiting for the network");
+    while (httpq_active() && waited < 30000) {
+      vTaskDelay(pdMS_TO_TICKS(100));
+      waited += 100;
+    }
+    set_status("connecting");
+    if (btprint_connect(addr, type, CONNECT_MS) != 0) { why = btprint_error(); goto out; }
+  }
+
+  /* After the radio, not before: Bluetooth takes 67 KB, and three print
+   * fonts loaded first were 12 KB of the difference between starting and
+   * not. Then counted, which renders the document once in those fonts. */
+  if (j->prepare) j->prepare(j->ctx);
+  if (j->count) j->total = j->count(j->ctx);
 
   n = printdoc_prologue(pkt, sizeof pkt);
   if (n < 0 || btprint_write(pkt, (size_t)n) != 0) { why = btprint_error(); goto out; }
@@ -113,14 +137,14 @@ out:
 }
 
 static int start(PrintRowFn fn, void *ctx, void (*done)(void *ctx),
-                 int (*count)(void *ctx)) {
+                 int (*count)(void *ctx), void (*prepare)(void *ctx)) {
   Job *j;
   uint8_t addr[6], type;
   if (s_busy) return -1;
   if (printq_printer(addr, &type, NULL, 0) != 0) return -2;
   j = (Job *)calloc(1, sizeof *j);
   if (!j) return -3;
-  j->fn = fn; j->ctx = ctx; j->done = done; j->count = count;
+  j->fn = fn; j->ctx = ctx; j->done = done; j->count = count; j->prepare = prepare;
   s_busy = 1;
   set_status("starting");
   if (xTaskCreatePinnedToCore(job_task, "print", J_STACK, j, J_PRIORITY,
@@ -134,7 +158,7 @@ static int start(PrintRowFn fn, void *ctx, void (*done)(void *ctx),
 }
 
 int printq_print_rows(PrintRowFn fn, void *ctx, void (*done)(void *ctx)) {
-  return start(fn, ctx, done, NULL);
+  return start(fn, ctx, done, NULL, NULL);
 }
 
 static int doc_rows(void *ctx, uint8_t row[PRINT_ROW_BYTES]) {
@@ -149,6 +173,20 @@ static int doc_count(void *ctx) {
   n = printdoc_count_with(scratch, d->text, &d->fonts);
   free(scratch);
   return n;
+}
+
+/* The fonts, once the printer is connected (see job_task). One that will
+ * not load -- no card, no file, no memory now the radio has its share -- is
+ * left NULL and that style prints in 6x8, which is still a page. */
+static void doc_prepare(void *ctx) {
+  DocJob *d = (DocJob *)ctx;
+  int i;
+  for (i = 0; i < 3; i++)
+    d->font[i] = d->name[i][0] ? fontres_load(d->name[i], d) : -1;
+  d->fonts.body = fontres_get(d->font[0]);
+  d->fonts.bold = fontres_get(d->font[1]);
+  d->fonts.head = fontres_get(d->font[2]);
+  printdoc_begin_fonts(&d->doc, d->text, &d->fonts);
 }
 
 static void doc_done(void *ctx) {
@@ -170,16 +208,16 @@ int printq_print_doc_fonts(const char *doc, const char *body, const char *bold,
   if (!d) return -3;
   d->text = strdup(doc);
   if (!d->text) { free(d); return -3; }
-  /* The job's own copies, owned by the job: the app may close before the
-   * paper is out, and its fonts go when it does. */
+  /* Only the names now. The job loads its own copies once the radio is up
+   * (doc_prepare), owned by the job: the app may close before the paper is
+   * out, and its fonts go when it does. */
   name[0] = body; name[1] = bold; name[2] = head;
-  for (i = 0; i < 3; i++)
-    d->font[i] = name[i] ? fontres_load(name[i], d) : -1;
-  d->fonts.body = fontres_get(d->font[0]);
-  d->fonts.bold = fontres_get(d->font[1]);
-  d->fonts.head = fontres_get(d->font[2]);
-  printdoc_begin_fonts(&d->doc, d->text, &d->fonts);
-  rc = start(doc_rows, d, doc_done, doc_count);
+  for (i = 0; i < 3; i++) {
+    d->font[i] = -1;
+    if (name[i]) snprintf(d->name[i], sizeof d->name[i], "%s", name[i]);
+  }
+  printdoc_begin(&d->doc, d->text);
+  rc = start(doc_rows, d, doc_done, doc_count, doc_prepare);
   if (rc != 0) doc_done(d);
   return rc;
 }
