@@ -1,66 +1,82 @@
-/* A tally counter: space increments, enter records a lap, del resets.
+/* Counter: a tally you can read across a room, with laps.
  *
- * The count is drawn as big seven-segment digits -- the same construction
- * apps/timer.c uses, since there is no scale argument on api->text and a
- * counter's whole point is the number being readable across the room. A
- * ring of 24 ticks behind it lights up clockwise as the count climbs,
- * wrapping every 24 (an odometer, not a percentage: there is no maximum to
- * be a percentage of), and glows on the tick that just lit for a couple of
- * hundred milliseconds -- the only per-frame animation here, so it is the
- * only thing that asks tick() for a repaint, and only while it is running.
+ * Space adds one -- hold it to count fast -- and backspace takes one off, so
+ * a tap too many is not a reason to start over. Enter records a lap: the
+ * count at that moment, how far it moved since the lap before, and the time.
+ * Del resets the count and the laps, after asking.
  *
- * A lap is the count at the moment enter was pressed, stamped with the wall
- * clock if it is synced and with time-since-open if it is not; newest is
- * always laps[0], which is why adding one is a shift rather than an append.
- * del resets both to zero, but asks first if there is anything to lose --
- * the same y/n pattern apps/habits.c and apps/memo.c use before a delete.
+ * The number is set in clock56, Space Mono Bold at 56 px (fonts/fonts.txt),
+ * up to six digits, and in num30 past that; it flashes teal for a moment on
+ * every change. Laps and captions are Atkinson Hyperlegible at 13 px. If a
+ * font will not load the same calls draw in the 6x8 font, which is small
+ * but still right.
+ *
+ * The state is /var/counter/state.txt, plain text a card reader or Files can
+ * read:
+ *
+ *     count=47
+ *     lap=47 d=12 14:32:07      newest first; d= is the change since the
+ *     lap=35 d=35 14:20:51      lap below it (older files without d= get it
+ *                               worked out on load)
+ *
+ * Saved whole through apps/safefile.h, so a power cut mid-save leaves the old
+ * file or the new one, never half of one. A single press saves at once; a
+ * held key saves once, when it has been still for a moment, rather than
+ * every 60 ms of the repeat.
+ *
+ * Commands (the same functions as the keys): add, sub, set N, lap, show.
  */
 
 #include "kernel/app/capp.h"
+#include "apps/toolbar.h"
+#include "apps/safefile.h"
 
 static const CardApi *api;
 
-#define MAX_LAPS   100
-#define LAP_ROW_H  11
-#define RING_TICKS 24
-#define RING_R     22
-#define HERO_H     78     /* the ring, the number and the hint below it */
-#define PULSE_MS   220    /* how long a freshly-lit tick glows */
+#define STATE_DIR   CAPP_VAR "/counter"
+#define STATE_PATH  STATE_DIR "/state.txt"
 
-#define STATE_DIR  CAPP_VAR "/counter"
-#define STATE_PATH STATE_DIR "/state.txt"
+#define MAX_LAPS      99
+#define ROW_H         17
+#define FOOT_H        11
+#define FLASH_MS      180      /* the teal after a change */
+#define SAVE_IDLE_MS  700      /* a held key saves once it has been still this long */
+#define BIG_DIGITS    6        /* clock56 fits six across 240 px */
 
-#define CLR_BG         CAPP_RGB(16, 18, 24)
-#define CLR_TEXT       CAPP_RGB(236, 239, 245)
-#define CLR_DIM        CAPP_RGB(120, 128, 142)
-#define CLR_DIVIDER    CAPP_RGB(44, 48, 58)
-#define CLR_RING_TRACK CAPP_RGB(42, 46, 56)
-#define CLR_RING_LIT   CAPP_RGB(96, 210, 196)
-#define CLR_LAP_NUM    CAPP_RGB(255, 196, 92)
-#define CLR_PANEL      CAPP_RGB(24, 27, 34)
-#define CLR_PANEL_ALT  CAPP_RGB(28, 32, 41)
-#define CLR_BAR        CAPP_RGB(40, 44, 54)
-#define CLR_BAR_FG     CAPP_RGB(232, 236, 244)
-#define CLR_WARN       CAPP_RGB(220, 90, 70)
+#define CLR_BG      CAPP_RGB(14, 16, 22)
+#define CLR_TEXT    CAPP_RGB(238, 241, 247)
+#define CLR_DIM     CAPP_RGB(128, 136, 150)
+#define CLR_FAINT   CAPP_RGB(70, 76, 90)
+#define CLR_ACCENT  CAPP_RGB(96, 214, 198)
+#define CLR_LAP     CAPP_RGB(255, 198, 96)
+#define CLR_ROW     CAPP_RGB(20, 23, 31)
+#define CLR_ROW_ALT CAPP_RGB(25, 29, 38)
+#define CLR_FOOT    CAPP_RGB(32, 36, 46)
+#define CLR_WARN    CAPP_RGB(236, 104, 84)
 
 typedef struct {
   uint32_t count;
-  char     stamp[12];   /* "14:32:07" if the clock is synced, else "+3:41" */
+  int32_t  delta;          /* since the lap before this one */
+  char     stamp[10];      /* "14:32:07" with a clock, "+3:41" without */
 } Lap;
 
 enum { ASK_NONE = 0, ASK_RESET };
 
 static struct {
   uint32_t count;
-  Lap      laps[MAX_LAPS];
+  Lap      laps[MAX_LAPS];     /* newest first */
   int      nlaps;
-  int      top;          /* scroll offset into laps, newest-first */
-  int      rows;          /* how many lap rows currently fit */
+  int      top, rows;          /* the lap list's scroll */
   int      ask;
-  uint32_t pulse_at;      /* ticks_ms() of the last increment, or 0 */
-  int      dirty;         /* counted since the last save, not yet written */
-  uint32_t start_ms;      /* for elapsed lap stamps when the clock is not synced */
-  CRect    content;
+
+  int      dirty;              /* changed, not yet on the card */
+  uint32_t changed_at;
+  uint32_t flash_at;
+  int      flashing;
+  uint32_t start_ms;
+
+  int      f_big, f_mid, f_ui, f_uib;   /* font handles; -1 is the 6x8 font */
+  CRect    hero, list, foot;
 } C;
 
 static CRect rect(int x, int y, int w, int h) {
@@ -69,51 +85,73 @@ static CRect rect(int x, int y, int w, int h) {
   return r;
 }
 
-static void text_center(int cx, int y, const char *s, uint16_t fg, uint16_t bg) {
-  int w = (int)api->str_len(s) * 6;
-  api->text((int16_t)(cx - w / 2), (int16_t)y, s, fg, bg);
-}
+/* ---- the state ------------------------------------------------------------ */
 
-/* ---- state on the card --------------------------------------------------
- *
- * Whole-file rewrite, the same choice apps/habits.c makes for its logs: the
- * state is a handful of lines, well inside a stack buffer, and a file only
- * ever fully read then fully written cannot be left half-updated by a save
- * that lands mid-count. "count=N" on its own line, then one "lap=N stamp"
- * per lap, newest first -- both plain text, so a card reader or `cat` in
- * Files reads it without this app. */
-
-static int starts_with(const char *s, const char *prefix) {
-  while (*prefix) { if (*s != *prefix) return 0; s++; prefix++; }
+static int starts_with(const char *s, const char *p) {
+  while (*p) { if (*s != *p) return 0; s++; p++; }
   return 1;
 }
 
-static void apply_line(const char *line) {
-  const char *p;
+static const char *read_u32(const char *p, uint32_t *out) {
   uint32_t v = 0;
+  while (*p >= '0' && *p <= '9') v = v * 10u + (uint32_t)(*p++ - '0');
+  *out = v;
+  return p;
+}
+
+/* A lap's line: "lap=47 d=12 14:32:07", or the older "lap=47 14:32:07". A
+ * delta that was not written is marked by has_d = 0 and filled in once
+ * every lap is read (fix_deltas). */
+static int s_has_d[MAX_LAPS];
+
+static void apply_line(const char *line) {
+  uint32_t v;
+  const char *p;
   if (starts_with(line, "count=")) {
-    for (p = line + 6; *p >= '0' && *p <= '9'; p++) v = v * 10 + (uint32_t)(*p - '0');
+    read_u32(line + 6, &v);
     C.count = v;
   } else if (starts_with(line, "lap=") && C.nlaps < MAX_LAPS) {
-    Lap *lap = &C.laps[C.nlaps];
-    for (p = line + 4; *p >= '0' && *p <= '9'; p++) v = v * 10 + (uint32_t)(*p - '0');
+    Lap *l = &C.laps[C.nlaps];
+    p = read_u32(line + 4, &v);
+    l->count = v;
+    l->delta = 0;
+    s_has_d[C.nlaps] = 0;
     while (*p == ' ') p++;
-    lap->count = v;
-    api->fmt(lap->stamp, sizeof lap->stamp, "%s", p);
+    if (starts_with(p, "d=")) {
+      int neg = 0;
+      p += 2;
+      if (*p == '-') { neg = 1; p++; }
+      else if (*p == '+') p++;
+      p = read_u32(p, &v);
+      l->delta = neg ? -(int32_t)v : (int32_t)v;
+      s_has_d[C.nlaps] = 1;
+      while (*p == ' ') p++;
+    }
+    api->fmt(l->stamp, sizeof l->stamp, "%s", p);
     C.nlaps++;
   }
+}
+
+static void fix_deltas(void) {
+  int i;
+  for (i = 0; i < C.nlaps; i++)
+    if (!s_has_d[i])
+      C.laps[i].delta = (int32_t)C.laps[i].count -
+                        (int32_t)(i + 1 < C.nlaps ? C.laps[i + 1].count : 0);
 }
 
 static void state_load(void) {
   char buf[256], line[64];
   int fd, n, i, len = 0;
-  fd = api->open(STATE_PATH, CAPP_O_READ);
+  C.count = 0;
+  C.nlaps = 0;
+  fd = safe_open_read(api, STATE_PATH);
   if (fd < 0) return;
   while ((n = api->read(fd, buf, sizeof buf)) > 0) {
     for (i = 0; i < n; i++) {
-      char c = buf[i];
-      if (c != '\n') {
-        if (len < (int)sizeof line - 1) line[len++] = c;
+      if (buf[i] == '\r') continue;
+      if (buf[i] != '\n') {
+        if (len < (int)sizeof line - 1) line[len++] = buf[i];
         continue;
       }
       line[len] = 0;
@@ -121,127 +159,59 @@ static void state_load(void) {
       apply_line(line);
     }
   }
+  if (len) { line[len] = 0; apply_line(line); }   /* no newline at the end */
   api->close(fd);
+  fix_deltas();
 }
 
-static void state_save(void) {
-  char line[80];
-  int fd, i, n;
-  api->mkdir(STATE_DIR);
-  fd = api->open(STATE_PATH, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
-  if (fd < 0) return;
-  n = api->fmt(line, sizeof line, "count=%u\n", (unsigned)C.count);
-  api->write(fd, line, (size_t)n);
-  for (i = 0; i < C.nlaps; i++) {
-    n = api->fmt(line, sizeof line, "lap=%u %s\n", (unsigned)C.laps[i].count, C.laps[i].stamp);
-    api->write(fd, line, (size_t)n);
-  }
-  api->close(fd);
-  C.dirty = 0;
-}
-
-/* ---- the ring --------------------------------------------------------
- *
- * 24 points around a circle, 15 degrees apart, starting at the top and
- * going clockwise -- precomputed rather than called through sin/cos, since
- * an app here links against no libm. (dx, dy) is the unit offset scaled by
- * 1000; a tick's position is the centre plus radius * offset / 1000. */
-static const int16_t RING_DX[RING_TICKS] = {
-     0, 259, 500, 707, 866, 966,1000, 966, 866, 707, 500, 259,
-     0,-259,-500,-707,-866,-966,-1000,-966,-866,-707,-500,-259,
-};
-static const int16_t RING_DY[RING_TICKS] = {
- -1000,-966,-866,-707,-500,-259,   0, 259, 500, 707, 866, 966,
-  1000, 966, 866, 707, 500, 259,   0,-259,-500,-707,-866,-966,
-};
-
-static uint16_t lerp_rgb(int r0, int g0, int b0, int r1, int g1, int b1, int t, int tmax) {
-  int r = r0 + (r1 - r0) * t / tmax;
-  int g = g0 + (g1 - g0) * t / tmax;
-  int b = b0 + (b1 - b0) * t / tmax;
-  return CAPP_RGB(r, g, b);
-}
-
-static void draw_ring(int cx, int cy, int r) {
-  int lit = C.count == 0 ? 0 : (int)((C.count - 1) % RING_TICKS) + 1;
-  int newest = lit - 1;
-  uint32_t since = C.pulse_at ? api->ticks_ms() - C.pulse_at : PULSE_MS;
+static int state_save(void) {
+  SafeFile f;
+  char line[64];
   int i;
-
-  for (i = 0; i < RING_TICKS; i++) {
-    int x = cx + r * (int)RING_DX[i] / 1000;
-    int y = cy + r * (int)RING_DY[i] / 1000;
-    int on = i < lit;
-    uint16_t col = on ? CLR_RING_LIT : CLR_RING_TRACK;
-    int sz = on ? 4 : 2;
-    if (on && i == newest && since < PULSE_MS) {
-      col = lerp_rgb(180, 245, 230, 96, 210, 196, (int)since, PULSE_MS);
-      sz = 5;
-    }
-    api->fill(rect(x - sz / 2, y - sz / 2, sz, sz), col);
+  api->mkdir(STATE_DIR);
+  if (safe_begin(&f, api, STATE_PATH) != 0) return -1;
+  api->fmt(line, sizeof line, "count=%u\n", (unsigned)C.count);
+  safe_line(&f, line);
+  for (i = 0; i < C.nlaps; i++) {
+    api->fmt(line, sizeof line, "lap=%u d=%d %s\n", (unsigned)C.laps[i].count,
+             (int)C.laps[i].delta, C.laps[i].stamp);
+    safe_line(&f, line);
   }
+  if (safe_commit(&f) != 0) return -1;
+  C.dirty = 0;
+  return 0;
 }
 
-/* ---- the big number, seven segments per digit -------------------------
+/* ---- what the keys and the commands do -------------------------------------
  *
- * The same construction as apps/timer.c's clock face: no font is big
- * enough, so each digit is drawn as filled blocks rather than text. The
- * size shrinks as the count grows more digits, so a counter that reaches
- * the thousands still reads rather than running off the ring. */
+ * `now` is the save policy: 1 writes the card at once, 0 leaves it to tick
+ * once the key has been still for SAVE_IDLE_MS. */
 
-static void seg_fill(int x, int y, int w, int h, uint16_t fg) {
-  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), fg);
+static void changed(int now) {
+  C.dirty = 1;
+  C.changed_at = api->ticks_ms();
+  C.flash_at = C.changed_at;
+  C.flashing = 1;
+  if (now) state_save();
 }
 
-static void draw_digit(int x, int y, int d, int w, int h, int t, uint16_t fg) {
-  static const uint8_t SEG[10] = {
-    0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F,
-  };
-  int midY  = y + h / 2 - t / 2;
-  int vTopH = midY - (y + t);
-  int vBotY = midY + t;
-  int vBotH = (y + h - t) - vBotY;
-  uint8_t m = (d >= 0 && d <= 9) ? SEG[d] : 0;
-
-  if (m & 0x01) seg_fill(x + t, y, w - 2 * t, t, fg);
-  if (m & 0x02) seg_fill(x + w - t, y + t, t, vTopH, fg);
-  if (m & 0x04) seg_fill(x + w - t, vBotY, t, vBotH, fg);
-  if (m & 0x08) seg_fill(x + t, y + h - t, w - 2 * t, t, fg);
-  if (m & 0x10) seg_fill(x, vBotY, t, vBotH, fg);
-  if (m & 0x20) seg_fill(x, y + t, t, vTopH, fg);
-  if (m & 0x40) seg_fill(x + t, midY, w - 2 * t, t, fg);
+static void count_add(int now) {
+  if (C.count < 0xFFFFFFFEu) C.count++;
+  changed(now);
 }
 
-static int count_digits(uint32_t v) {
-  int n = 1;
-  while (v >= 10) { v /= 10; n++; }
-  return n;
+/* Not below zero: a tally counts things that happened. */
+static int count_sub(int now) {
+  if (!C.count) return 0;
+  C.count--;
+  changed(now);
+  return 1;
 }
 
-static void digit_size(int n, int *w, int *h, int *t, int *gap) {
-  if (n <= 2)      { *w = 14; *h = 26; *t = 5; }
-  else if (n == 3) { *w = 11; *h = 22; *t = 4; }
-  else if (n == 4) { *w = 9;  *h = 18; *t = 3; }
-  else if (n == 5) { *w = 7;  *h = 15; *t = 2; }
-  else             { *w = 6;  *h = 12; *t = 2; }
-  *gap = *t < 3 ? 2 : 3;
+static void count_set(uint32_t v) {
+  C.count = v;
+  changed(1);
 }
-
-static void draw_number(int cx, int y, uint32_t value, uint16_t fg) {
-  char digits[10];
-  int n = 0, i, w, h, t, gap, total, x;
-  uint32_t v = value;
-  do { digits[n++] = (char)(v % 10); v /= 10; } while (v && n < (int)sizeof digits);
-  digit_size(n, &w, &h, &t, &gap);
-  total = n * w + (n - 1) * gap;
-  x = cx - total / 2;
-  for (i = n - 1; i >= 0; i--) {
-    draw_digit(x, y, digits[i], w, h, t, fg);
-    x += w + gap;
-  }
-}
-
-/* ---- laps -------------------------------------------------------------- */
 
 static void stamp_now(char *out, size_t n) {
   CappTime t;
@@ -249,158 +219,307 @@ static void stamp_now(char *out, size_t n) {
   if (t.synced) {
     api->fmt(out, n, "%02u:%02u:%02u", t.hour, t.min, t.sec);
   } else {
-    uint32_t s = (api->ticks_ms() - C.start_ms) / 1000;
-    api->fmt(out, n, "+%u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
+    uint32_t s = (api->ticks_ms() - C.start_ms) / 1000u;
+    api->fmt(out, n, "+%u:%02u", (unsigned)(s / 60u), (unsigned)(s % 60u));
   }
 }
 
-/* Newest first, so a new lap is a shift rather than an append. */
+/* Newest first; the oldest falls off the end at MAX_LAPS. */
 static void add_lap(void) {
   int i;
+  int32_t prev = C.nlaps ? (int32_t)C.laps[0].count : 0;
   if (C.nlaps < MAX_LAPS) C.nlaps++;
-  for (i = C.nlaps - 1; i > 0; i--)
-    api->mem_cpy(&C.laps[i], &C.laps[i - 1], sizeof(Lap));
+  for (i = C.nlaps - 1; i > 0; i--) api->mem_cpy(&C.laps[i], &C.laps[i - 1], sizeof(Lap));
   C.laps[0].count = C.count;
+  C.laps[0].delta = (int32_t)C.count - prev;
   stamp_now(C.laps[0].stamp, sizeof C.laps[0].stamp);
   C.top = 0;
-  state_save();
+  changed(1);
 }
 
-static void do_reset(void) {
+static void reset_all(void) {
   C.count = 0;
   C.nlaps = 0;
   C.top = 0;
-  C.pulse_at = 0;
-  state_save();
+  changed(1);
 }
 
-/* immediate: save now rather than waiting for the pulse to end. A single
- * tap wants to be durable at once, like every other app's save-on-change;
- * a space held down to fast-count would otherwise rewrite the file every
- * 60 ms while it repeats, which is a lot to ask of an SD card, so a
- * held burst instead saves once, when app_tick sees the pulse expire. */
-static void bump(int immediate) {
-  C.count++;
-  C.pulse_at = api->ticks_ms();
-  C.dirty = 1;
-  if (immediate) state_save();
+/* ---- painting --------------------------------------------------------------- */
+
+static int digits_of(uint32_t v) {
+  int n = 1;
+  while (v >= 10) { v /= 10; n++; }
+  return n;
 }
 
-/* ---- painting ------------------------------------------------------------ */
-
-static CRect hero_rect(void) {
-  return rect(C.content.x, C.content.y, C.content.w, HERO_H);
+static int number_font(void) {
+  return digits_of(C.count) <= BIG_DIGITS ? C.f_big : C.f_mid;
 }
 
-static void paint_laps(CRect r) {
-  char hdr[24];
-  int i, y, header_h = 10;
+static void layout(CRect c) {
+  int big = api->font_height(C.f_big);
+  int hero_h = 6 + big + 2 + api->font_height(C.f_ui) + 4;
+  C.hero = rect(c.x, c.y, c.w, hero_h);
+  C.foot = rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H);
+  C.list = rect(c.x, C.hero.y + C.hero.h, c.w, C.foot.y - (C.hero.y + C.hero.h));
+  C.rows = C.list.h / ROW_H;
+  if (C.rows < 0) C.rows = 0;
+}
 
-  api->fmt(hdr, sizeof hdr, "laps  (%d)", C.nlaps);
-  api->text((int16_t)(r.x + 6), (int16_t)(r.y + 1), hdr, CLR_DIM, CLR_BG);
-  r.y += header_h; r.h -= header_h;
-  C.rows = r.h / LAP_ROW_H;
+/* The line the number sits on, the height of the big font whichever font is
+ * drawing -- so a count passing a million does not move the caption. */
+static CRect number_rect(void) {
+  return rect(C.hero.x, C.hero.y + 6, C.hero.w, api->font_height(C.f_big));
+}
 
-  if (!C.nlaps) {
-    api->text((int16_t)(r.x + 6), (int16_t)(r.y + 2), "enter records one", CLR_DIM, CLR_BG);
-    return;
+/* The number, and the strips either side of it in the background: the font
+ * fills behind its own glyphs, so nothing is cleared first and a held space
+ * does not flash the digits off and on. */
+static void paint_number(void) {
+  char s[12];
+  CRect r = number_rect();
+  int f = number_font(), w, h = api->font_height(f), x, y;
+  api->fmt(s, sizeof s, "%u", (unsigned)C.count);
+  w = api->text_width(f, s);
+  x = r.x + (r.w - w) / 2;
+  y = r.y + (r.h - h) / 2;
+  if (x > r.x) api->fill(rect(r.x, r.y, x - r.x, r.h), CLR_BG);
+  if (x + w < r.x + r.w) api->fill(rect(x + w, r.y, r.x + r.w - (x + w), r.h), CLR_BG);
+  if (h < r.h) {
+    api->fill(rect(x, r.y, w, y - r.y), CLR_BG);
+    api->fill(rect(x, y + h, w, r.y + r.h - (y + h)), CLR_BG);
   }
-  for (i = C.top, y = r.y; i < C.nlaps && i < C.top + C.rows; i++, y += LAP_ROW_H) {
-    uint16_t bg = (i % 2) ? CLR_PANEL : CLR_PANEL_ALT;
-    char num[12];
-    int slen;
-    api->fill(rect(r.x, y, r.w, LAP_ROW_H), bg);
-    api->fmt(num, sizeof num, "%u", (unsigned)C.laps[i].count);
-    api->text((int16_t)(r.x + 6), (int16_t)(y + 1), num, CLR_LAP_NUM, bg);
-    slen = (int)api->str_len(C.laps[i].stamp);
-    api->text((int16_t)(r.x + r.w - 6 - 6 * slen), (int16_t)(y + 1), C.laps[i].stamp, CLR_DIM, bg);
-  }
+  api->text_font(f, (int16_t)x, (int16_t)y, s, C.flashing ? CLR_ACCENT : CLR_TEXT, CLR_BG);
 }
 
-static void paint_status(CRect s) {
-  api->fill(s, CLR_BAR);
+static void paint_caption(void) {
+  char s[48];
+  int y = C.hero.y + 6 + api->font_height(C.f_big) + 2, w;
+  int h = api->font_height(C.f_ui);
+  if (!C.nlaps) api->fmt(s, sizeof s, "enter records a lap");
+  else api->fmt(s, sizeof s, "%d lap%s   last %+d", C.nlaps, C.nlaps == 1 ? "" : "s",
+                (int)C.laps[0].delta);
+  w = api->text_width(C.f_ui, s);
+  /* from the bottom of the number's line: the two rows between it and the
+   * caption belong to nobody else, and were left showing what was there */
+  api->fill(rect(C.hero.x, y - 2, C.hero.w, C.hero.y + C.hero.h - (y - 2)), CLR_BG);
+  api->text_font(C.f_ui, (int16_t)(C.hero.x + (C.hero.w - w) / 2), (int16_t)y, s,
+                 CLR_DIM, CLR_BG);
+  (void)h;
+}
+
+static void paint_hero(void) {
+  api->fill(rect(C.hero.x, C.hero.y, C.hero.w, 6), CLR_BG);
+  paint_number();
+  paint_caption();
+}
+
+static void paint_list(void) {
+  int i, y = C.list.y;
+  for (i = C.top; i < C.nlaps && i < C.top + C.rows; i++, y += ROW_H) {
+    const Lap *l = &C.laps[i];
+    uint16_t bg = (i & 1) ? CLR_ROW_ALT : CLR_ROW;
+    char num[8], cnt[12], d[12];
+    int ty = y + (ROW_H - api->font_height(C.f_ui)) / 2, sw;
+    api->fill(rect(C.list.x, y, C.list.w, ROW_H), bg);
+    api->fmt(num, sizeof num, "#%d", C.nlaps - i);
+    api->fmt(cnt, sizeof cnt, "%u", (unsigned)l->count);
+    api->fmt(d, sizeof d, "%+d", (int)l->delta);
+    api->text_font(C.f_ui, (int16_t)(C.list.x + 8), (int16_t)ty, num, CLR_FAINT, bg);
+    api->text_font(C.f_uib, (int16_t)(C.list.x + 44), (int16_t)ty, cnt, CLR_TEXT, bg);
+    api->text_font(C.f_ui, (int16_t)(C.list.x + 108), (int16_t)ty, d, CLR_LAP, bg);
+    sw = api->text_width(C.f_ui, l->stamp);
+    api->text_font(C.f_ui, (int16_t)(C.list.x + C.list.w - 8 - sw), (int16_t)ty,
+                   l->stamp, CLR_DIM, bg);
+  }
+  if (y < C.list.y + C.list.h)
+    api->fill(rect(C.list.x, y, C.list.w, C.list.y + C.list.h - y), CLR_BG);
+}
+
+static void paint_foot(void) {
+  char s[48];
+  api->fill(C.foot, CLR_FOOT);
   if (C.ask == ASK_RESET) {
-    char q[48];
-    api->fmt(q, sizeof q, "reset and erase %d lap%s?  y/n", C.nlaps, C.nlaps == 1 ? "" : "s");
-    api->text((int16_t)(s.x + 4), (int16_t)(s.y + 2), q, CLR_WARN, CLR_BAR);
+    api->fmt(s, sizeof s, "reset to 0 and clear %d lap%s?  y/n", C.nlaps,
+             C.nlaps == 1 ? "" : "s");
+    api->text((int16_t)(C.foot.x + 4), (int16_t)(C.foot.y + 2), s, CLR_WARN, CLR_FOOT);
   } else {
-    api->text((int16_t)(s.x + 4), (int16_t)(s.y + 2), "del resets everything", CLR_BAR_FG, CLR_BAR);
+    api->text((int16_t)(C.foot.x + 4), (int16_t)(C.foot.y + 2),
+              "spc +1  bksp -1  enter lap  del reset", CLR_DIM, CLR_FOOT);
   }
 }
 
-static void app_paint(void *st, CRect c) {
-  int cx, ring_cy, w, h, t, gap, num_y, hint_y, div_y;
+static void app_paint(void *st, CRect full) {
+  CRect c;
   (void)st;
-  C.content = c;
-  api->fill(c, CLR_BG);
-
-  cx = c.x + c.w / 2;
-  ring_cy = c.y + 30;
-  draw_ring(cx, ring_cy, RING_R);
-
-  digit_size(count_digits(C.count), &w, &h, &t, &gap);
-  num_y = ring_cy - h / 2;
-  draw_number(cx, num_y, C.count, CLR_TEXT);
-
-  hint_y = ring_cy + RING_R + 8;
-  text_center(cx, hint_y, "space +1   enter lap", CLR_DIM, CLR_BG);
-
-  div_y = hint_y + 14;
-  api->fill(rect(c.x + 10, div_y, c.w - 20, 1), CLR_DIVIDER);
-
-  paint_laps(rect(c.x, div_y + 3, c.w, c.y + c.h - 11 - (div_y + 3)));
-  paint_status(rect(c.x, c.y + c.h - 11, c.w, 11));
+  if (toolbar_only_menu()) { toolbar_paint_menu(full); return; }
+  if (toolbar_only_bar()) { toolbar_paint_bar(full); return; }
+  toolbar_paint_bar(full);
+  c = toolbar_rest(full);
+  layout(c);
+  paint_hero();
+  paint_list();
+  paint_foot();
+  toolbar_paint_menu(full);
 }
 
-/* ---- input ----------------------------------------------------------- */
+/* ---- actions and keys --------------------------------------------------------- */
+
+enum { ACT_ADD = 1, ACT_SUB, ACT_LAP, ACT_RESET, ACT_SET, ACT_SHOW };
+
+static const CappParam P_N[] = { { "n", CAPP_ARG_INT, "the number to set it to" } };
+
+static const CappAction ACTIONS[] = {
+  { "add",   "+1",          "Count", 0, ACT_ADD,
+    "add one to the count", 0, 0, CAPP_CMD_YES },
+  { "sub",   "-1",          "Count", 0, ACT_SUB,
+    "take one off the count", 0, 0, CAPP_CMD_YES },
+  { "lap",   "Record lap",  "Count", 0, ACT_LAP,
+    "record a lap: the count now, the change since the last, the time", 0, 0, CAPP_CMD_YES },
+  { "reset", "Reset...",    "Count", 0, ACT_RESET },
+  { "set",   "Set",         0,       0, ACT_SET,
+    "set the count to a number", P_N, 1, CAPP_CMD_YES },
+  { "show",  "Show",        0,       0, ACT_SHOW,
+    "the count and the last few laps", 0, 0, CAPP_CMD_YES },
+};
+#define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
+
+/* What each change repaints: the number alone for a count, and the caption
+ * and the list too for a lap. Nothing marked means everything. */
+static void damage_number(void) {
+  if (number_font() == C.f_big) api->damage(number_rect());
+}
+static void damage_laps(void) {
+  api->damage(C.hero);
+  api->damage(C.list);
+}
+
+static int do_action(int a) {
+  switch (a) {
+  case ACT_ADD:   count_add(1); damage_number(); return 1;
+  case ACT_SUB:   if (count_sub(1)) damage_number(); return 1;
+  case ACT_LAP:   add_lap(); damage_laps(); return 1;
+  case ACT_RESET: if (C.count || C.nlaps) C.ask = ASK_RESET; return 1;
+  default:        return 0;
+  }
+}
+
+static int app_action(void *st, int a) { (void)st; return do_action(a); }
+
+static int app_command(void *st, int action, int argc, const char *const *argv,
+                       char *out, size_t n) {
+  size_t o;
+  int i;
+  (void)st;
+  switch (action) {
+  case ACT_ADD: count_add(1); break;
+  case ACT_SUB:
+    if (!count_sub(1)) { api->fmt(out, n, "the count is already 0"); return -1; }
+    break;
+  case ACT_LAP: add_lap(); break;
+  case ACT_SET: {
+    uint32_t v;
+    const char *p = argc > 0 ? argv[0] : "";
+    if (*p < '0' || *p > '9' || *read_u32(p, &v)) {
+      api->fmt(out, n, "set takes a whole number, 0 or more");
+      return -1;
+    }
+    count_set(v);
+    break;
+  }
+  case ACT_SHOW:
+    o = (size_t)api->fmt(out, n, "count %u", (unsigned)C.count);
+    for (i = 0; i < C.nlaps && i < 5 && o + 32 < n; i++)
+      o += (size_t)api->fmt(out + o, n - o, "\nlap %d: %u (%+d) at %s", C.nlaps - i,
+                            (unsigned)C.laps[i].count, (int)C.laps[i].delta, C.laps[i].stamp);
+    return 0;
+  default:
+    api->fmt(out, n, "counter has no command %d", action);
+    return -1;
+  }
+  if (action == ACT_LAP)
+    api->fmt(out, n, "lap %d: %u (%+d)", C.nlaps, (unsigned)C.count, (int)C.laps[0].delta);
+  else
+    api->fmt(out, n, "count %u", (unsigned)C.count);
+  return 0;
+}
+
+static void clamp_top(void) {
+  int max = C.nlaps - C.rows;
+  if (max < 0) max = 0;
+  if (C.top > max) C.top = max;
+  if (C.top < 0) C.top = 0;
+}
 
 static int app_key(void *st, uint8_t k) {
+  int a = toolbar_key(k);
   (void)st;
-  /* Space is meant to be held for a fast count; nothing else here repeats. */
-  if (api->key_repeat() && k != ' ') return 0;
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return do_action(a);
 
   if (C.ask == ASK_RESET) {
-    if (k == 'y' || k == 'Y' || k == CAPP_KEY_ENTER) { C.ask = ASK_NONE; do_reset(); }
-    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC) C.ask = ASK_NONE;
+    if (api->key_repeat()) return 1;
+    if (k == 'y' || k == 'Y' || k == CAPP_KEY_ENTER) { C.ask = ASK_NONE; reset_all(); }
+    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) C.ask = ASK_NONE;
+    else return 1;
     return 1;
   }
 
+  /* Space and backspace are for holding down; so is scrolling. Nothing else
+   * here should fire twice because a finger rested on it. */
+  if (api->key_repeat() && k != ' ' && k != CAPP_KEY_BACK &&
+      k != CAPP_KEY_UP && k != CAPP_KEY_DOWN) return 1;
+
   switch (k) {
-  case ' ':            bump(!api->key_repeat()); return 1;
-  case CAPP_KEY_ENTER:  add_lap(); return 1;
-  case 0x7F:            /* Del */
-    if (C.count || C.nlaps) C.ask = ASK_RESET;
+  case ' ':
+    count_add(!api->key_repeat());
+    damage_number();
     return 1;
-  case CAPP_KEY_ESC:
-    return 0;           /* top level: nothing to go back to */
-  default:
-    return 0;
+  case CAPP_KEY_BACK:
+    if (count_sub(!api->key_repeat())) damage_number();
+    return 1;
+  case CAPP_KEY_ENTER: return do_action(ACT_LAP);
+  case 0x7F:           return do_action(ACT_RESET);
+  case CAPP_KEY_UP:    C.top--; clamp_top(); api->damage(C.list); return 1;
+  case CAPP_KEY_DOWN:  C.top++; clamp_top(); api->damage(C.list); return 1;
+  default:             return 0;
   }
 }
 
 static int app_click(void *st, int16_t x, int16_t y, int button) {
-  (void)st; (void)x; (void)button;
+  int a;
+  (void)st; (void)button;
+  a = toolbar_click(x, y);
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return do_action(a);
+  y = (int16_t)(y - toolbar_h());
   if (C.ask != ASK_NONE) return 0;
-  if (y < C.content.y + HERO_H) { bump(1); return 1; }
+  if (y >= 0 && y < C.hero.h) { count_add(1); damage_number(); return 1; }
   return 0;
+}
+
+static int app_mouse(void *st, int16_t x, int16_t y, int buttons, int wheel) {
+  int ch;
+  (void)st; (void)buttons;
+  ch = toolbar_saw_mouse();
+  if (toolbar_hover(x, y)) ch = 1;
+  if (wheel) { C.top += wheel > 0 ? -1 : 1; clamp_top(); ch = 1; }
+  return ch;
 }
 
 static int app_wants_text(void *st) { (void)st; return 0; }
 
-/* Only the pulse on the ring moves by itself, and only for PULSE_MS after
- * an increment -- damage() keeps that to its own small rectangle so a held
- * space does not reflash the whole screen on every one of the shell's ~5 ms
- * passes. The same expiry is also when a fast-counted burst gets written to
- * the card: see bump(). */
-static int app_tick(void *st, uint32_t now_ms) {
+/* The flash fading back to white, and the save a held key put off. */
+static int app_tick(void *st, uint32_t now) {
+  int redraw = 0;
   (void)st;
-  if (!C.pulse_at) return 0;
-  if (now_ms - C.pulse_at >= PULSE_MS) {
-    C.pulse_at = 0;
-    if (C.dirty) state_save();
+  if (C.flashing && now - C.flash_at >= FLASH_MS) {
+    C.flashing = 0;
+    damage_number();
+    redraw = 1;
   }
-  api->damage(hero_rect());
-  return 1;
+  if (C.dirty && now - C.changed_at >= SAVE_IDLE_MS) state_save();
+  return redraw;
 }
 
 const CappInfo capp_info = {
@@ -412,24 +531,40 @@ const CappInfo capp_info = {
     0x20, 0x04, 0x21, 0x84, 0x21, 0x84, 0x27, 0xE4,
     0x27, 0xE4, 0x21, 0x84, 0x21, 0x84, 0x20, 0x04,
     0x20, 0x04, 0x3F, 0xFC, 0x00, 0x00, 0x00, 0x00 },
-  "space\t+1\nenter\trecord a lap\ndel\treset, asks first\nclick\t+1 too\n",
+  "space\t+1, hold to count fast\nbackspace\t-1\nenter\trecord a lap\n"
+  "del\treset, asks first\nup/down\tscroll the laps\nclick\t+1\n",
+  ACTIONS,
+  sizeof ACTIONS / sizeof ACTIONS[0],
 };
 
 static CappUi UI;
 
 int capp_main(const CardApi *a, int argc, char **argv) {
-  api = a;
   (void)argc; (void)argv;
+  api = a;
   api->mem_set(&C, 0, sizeof C);
   C.start_ms = api->ticks_ms();
-  api->mkdir(STATE_DIR);
+  C.f_big = C.f_mid = C.f_ui = C.f_uib = -1;
   state_load();
+  /* A command needs the state and nothing to draw with. */
+  if (!api->headless()) {
+    C.f_big = api->font_load("clock56");
+    C.f_mid = api->font_load("num30");
+    C.f_ui  = api->font_load("ui13");
+    C.f_uib = api->font_load("ui13b");
+    toolbar_init(api, ACTIONS, NACT, 0, 0);
+  }
 
   UI.paint = app_paint;
   UI.key = app_key;
   UI.click = app_click;
+  UI.mouse = app_mouse;
   UI.tick = app_tick;
   UI.wants_text = app_wants_text;
+  UI.actions = ACTIONS;
+  UI.nactions = NACT;
+  UI.action = app_action;
+  UI.command = app_command;
   api->ui(&UI);
   return 0;
 }

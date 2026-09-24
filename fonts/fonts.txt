@@ -18,3 +18,13 @@ clock56     SpaceMono-Bold.ttf                56    --chars 0123456789: --tabula
 print24     AtkinsonHyperlegible-Regular.ttf  24    --bpp 1
 print24b    AtkinsonHyperlegible-Bold.ttf     24    --bpp 1
 print34b    AtkinsonHyperlegible-Bold.ttf     34    --bpp 1
+#
+# App text on screen: Atkinson Hyperlegible at 13 px, regular and bold, for
+# names, headings and lists where the 6x8 console font reads as a terminal.
+# Counter and Habits use them.
+ui13        AtkinsonHyperlegible-Regular.ttf  13
+ui13b       AtkinsonHyperlegible-Bold.ttf     13
+#
+# Numbers that are the point of a screen but not the whole of it: a streak,
+# a count past six digits. Space Mono like clock56, same tabular digits.
+num30       SpaceMono-Bold.ttf                30    --chars "0123456789+-:%/" --tabular --tight

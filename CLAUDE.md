@@ -478,6 +478,14 @@ hardware-specific. What it cost to learn:
   lands in it rather than at the top level, which is where every app Build
   made used to end up.
 
+- **An app's own files are saved through `apps/safefile.h`**: write
+  `NAME.tmp`, remove `NAME`, rename (the card's rename will not replace a
+  file), and `safe_open_read` puts back a `.tmp` a power cut stranded. A
+  device switched off by being pulled from a pocket is the normal case, and
+  rewriting in place loses the file in that window. Counter and Habits use
+  it; their host tests (`test/test_counter.c`, `test/test_habits.c`) show
+  how to test an app's storage against files on the PC.
+
 - **Nothing that talks HTTPS runs on `cardos-bg`.** Its stack is 4 KB
   (`BG_STACK`, `kernel/sys/bg.c`) and a TLS handshake does not fit. A Build
   turn (2026-09-23) added a timezone lookup to `https://ipapi.co` there, right
