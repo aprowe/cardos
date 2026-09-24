@@ -7,20 +7,22 @@ and the device fetches the result over the network with `google pull`.
 
 Two doors, and neither opens the other:
 
-  /dash...        a browser, with a session cookie. The password is the
-                  server's --token, so there is no user list to keep.
+  /dash...        a browser, with a session cookie. The password is
+                  DASH_PASSWORD from the environment; there is no user list.
   /google/creds   the device, with its bearer token (/config/claude.token),
                   as for every other route. A cookie does not open it and
                   the bearer does not open /dash.
 
-The cookie is an expiry and an HMAC of it keyed by the token: a restart keeps
-you logged in, and changing the token logs everyone out.
+The cookie is an expiry and an HMAC of it keyed by the token and the
+password: a restart keeps you logged in, and changing either logs everyone
+out. The server still needs --token: it is what keeps /google/creds shut.
 
 Google will only redirect a web sign-in to HTTPS on a real domain, which is
 why this lives behind nginx and certbot rather than on :8080. The Web client
 it signs in with is configured in the environment (/etc/cardos/env on the
 droplet), never in the repository:
 
+  DASH_PASSWORD   the dashboard's password; with none set, it will not run
   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET   the "Web application" OAuth client
   DASH_URL        https://cardos.arowe.net (the redirect is DASH_URL + CALLBACK)
   CARDOS_STATE    where google.json is kept; ~/.cardos by default
@@ -63,6 +65,10 @@ def client():
 
 def base_url():
     return os.environ.get("DASH_URL", "https://cardos.arowe.net").rstrip("/")
+
+
+def password():
+    return os.environ.get("DASH_PASSWORD", "")
 
 
 def state_dir():
@@ -162,6 +168,12 @@ def _server_token(h):
     return h.chat.token if h.chat else None
 
 
+def _cookie_key(h):
+    """Both secrets, so changing either one ends every session."""
+    t, p = _server_token(h), password()
+    return t + "\0" + p if t and p else None
+
+
 def _cookie(h):
     for part in h.headers.get("Cookie", "").split(";"):
         k, _, v = part.strip().partition("=")
@@ -171,7 +183,7 @@ def _cookie(h):
 
 
 def logged_in(h):
-    return cookie_ok(_server_token(h), _cookie(h))
+    return cookie_ok(_cookie_key(h), _cookie(h))
 
 
 def _set_cookie(value, max_age):
@@ -248,7 +260,7 @@ def login_page(msg=""):
     note = "<p class='msg bad'>%s</p>" % html.escape(msg) if msg else ""
     return _page("CardOS", "<h1>CardOS</h1>%s<section><h2>Sign in</h2>"
                  "<form method=post action=/dash/login style='display:block'>"
-                 "<label>Server token<input type=password name=password autofocus "
+                 "<label>Password<input type=password name=password autofocus "
                  "autocomplete=current-password></label>"
                  "<button class=primary>Sign in</button></form></section>" % note)
 
@@ -314,11 +326,16 @@ def status_card(h):
 # cookie: a browser has no bearer and the device has no cookie.
 
 def _need_token(h):
-    if _server_token(h):
+    if _server_token(h) and password():
         return True
     h.html(_page("CardOS", "<h1>CardOS</h1><p class=bad>The dashboard needs the "
-                 "server started with --token; that is its password.</p>"), 503)
+                 "server started with --token and DASH_PASSWORD set.</p>"), 503)
     return False
+
+
+# Wrong passwords wait their turn: the server is threaded, and a sleep per
+# request alone would let a hundred guesses run side by side.
+_fail_lock = threading.Lock()
 
 
 def get_dash(h, path, args):
@@ -340,11 +357,14 @@ def post_login(h, path, args):
     if not _need_token(h):
         return
     given = (_form(h).get("password") or [""])[0]
-    if not hmac.compare_digest(_server_token(h), given):
-        time.sleep(1)                          # a guess a second, not a thousand
-        h.html(login_page("That is not the token."), 403)
+    if not hmac.compare_digest(password().encode(), given.encode()):
+        with _fail_lock:
+            time.sleep(1)                      # a guess a second, not a thousand
+        sys.stderr.write("dash: wrong password from %s\n"
+                         %(h.headers.get("X-Real-IP") or h.client_address[0]))
+        h.html(login_page("Wrong password."), 403)
         return
-    h.redirect("/dash", [_set_cookie(make_cookie(_server_token(h)), SESSION_DAYS * 86400)])
+    h.redirect("/dash", [_set_cookie(make_cookie(_cookie_key(h)), SESSION_DAYS * 86400)])
 
 
 def post_logout(h, path, args):

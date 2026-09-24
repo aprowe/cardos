@@ -202,7 +202,7 @@ print(w["client_id"]); print(w["client_secret"])' "$json" |
       chmod 600 /etc/cardos/env
       systemctl restart cardos-proxy; sleep 2; systemctl is-active cardos-proxy'
   fi
-  echo "dashboard: https://$DASH_HOST/dash  (password: the server's --token)"
+  echo "dashboard: https://$DASH_HOST/dash  (password: DASH_PASSWORD in /etc/cardos/env)"
   echo "redirect URI for the Google client: https://$DASH_HOST/dash/google/callback"
 }
 

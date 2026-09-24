@@ -14,13 +14,17 @@ setting and has nothing to do with this code.)
 ## Shape
 
 - **`server/dash.py`**: one service module with its own `ROUTES`.
-  - `/dash...` is for a browser. The password is the server's `--token`. A
-    session cookie holds `expiry.HMAC(token, expiry)`, is HttpOnly, Secure and
-    SameSite=Lax, and lasts 30 days.
+  - `/dash...` is for a browser. The password is `DASH_PASSWORD` from the
+    environment (not the token, so the device's secret is never typed into a
+    browser). A session cookie holds `expiry.HMAC(token + password, expiry)`,
+    is HttpOnly, Secure and SameSite=Lax, and lasts 30 days; changing either
+    secret ends every session. Wrong guesses are serialised at one a second
+    and logged with the caller's address.
   - `/google/creds` is for the device, with the usual bearer. It returns client
     id, secret and refresh token, a line each.
   - Neither credential opens the other door.
-  - With no `--token`, both refuse to run (503). Every other route is open on a
+  - With no `--token` (or, for `/dash`, no `DASH_PASSWORD`), both refuse to
+    run (503). Every other route is open on a
     tokenless server; this one never is.
 - **Sign-in**: a Google **Web application** client, redirect
   `https://cardos.arowe.net/dash/google/callback`.

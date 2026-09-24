@@ -353,8 +353,8 @@ way to give a fresh device its network without a keyboard. `kernel/sys/conf.c`
 holds the line format (host-tested); `conf_file.c` is the fs glue.
 
 **Google sign-in is on the dashboard now** (2026-09-24).
-`https://cardos.arowe.net/dash` (`server/dash.py`; the password is the
-server's `--token`) signs in with a Google *Web* client, and the device runs
+`https://cardos.arowe.net/dash` (`server/dash.py`; the password is
+`DASH_PASSWORD` in `/etc/cardos/env`, and the server still needs `--token`) signs in with a Google *Web* client, and the device runs
 `google pull`, which fetches client id, secret and refresh token from
 `/google/creds` over HTTPS with its bearer, `env DASH` overriding the address.
 Only `/dash*` and `/google/creds` are exposed on that name;

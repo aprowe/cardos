@@ -12,6 +12,7 @@ from server import chat as chatmod
 from http.server import ThreadingHTTPServer
 
 TOKEN = "s3cret-token"
+PASSWORD = "pw-for-tests"
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -57,7 +58,8 @@ class Server(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         os.environ.update(CARDOS_STATE=self.dir, GOOGLE_CLIENT_ID="cid.apps",
-                          GOOGLE_CLIENT_SECRET="csec", DASH_URL="https://dash.example")
+                          GOOGLE_CLIENT_SECRET="csec", DASH_URL="https://dash.example",
+                          DASH_PASSWORD=PASSWORD)
         self.exchanged, self.revoked = [], []
 
         def fake_exchange(code, cid, csec, redirect):
@@ -95,7 +97,7 @@ class Server(unittest.TestCase):
             dict(resp.headers), resp.read().decode()
 
     def login(self):
-        code, hdrs, _ = self.req("/dash/login", {"password": TOKEN})
+        code, hdrs, _ = self.req("/dash/login", {"password": PASSWORD})
         self.assertEqual(code, 303)
         return hdrs["Set-Cookie"].split(";")[0].split("=", 1)[1]
 
@@ -120,12 +122,22 @@ class Doors(Server):
         self.assertNotIn("Set-Cookie", hdrs)
 
     def test_right_password_sets_a_safe_cookie(self):
-        _, hdrs, _ = self.req("/dash/login", {"password": TOKEN})
+        _, hdrs, _ = self.req("/dash/login", {"password": PASSWORD})
         for flag in ("HttpOnly", "Secure", "SameSite=Lax", "Path=/dash"):
             self.assertIn(flag, hdrs["Set-Cookie"])
         code, _, body = self.req("/dash", cookie=self.login())
         self.assertIn("Log out", body)
         self.assertIn("Server", body)
+
+    def test_the_token_is_not_the_password(self):
+        code, _, _ = self.req("/dash/login", {"password": TOKEN})
+        self.assertEqual(code, 403)
+
+    def test_changing_the_password_ends_sessions(self):
+        cookie = self.login()
+        os.environ["DASH_PASSWORD"] = "new"
+        _, _, body = self.req("/dash", cookie=cookie)
+        self.assertIn("name=password", body)
 
     def test_bearer_does_not_open_the_dashboard(self):
         _, _, body = self.req("/dash", bearer=TOKEN)
@@ -210,6 +222,17 @@ class Google(Server):
         self.req("/dash/google/forget", {}, cookie=cookie)
         self.assertEqual(self.revoked, ["r-abc"])
         self.assertIsNone(dash.load_creds())
+
+
+class NoPassword(Server):
+
+    def setUp(self):
+        super().setUp()
+        os.environ["DASH_PASSWORD"] = ""
+
+    def test_dashboard_refuses_to_run(self):
+        self.assertEqual(self.req("/dash")[0], 503)
+        self.assertEqual(self.req("/dash/login", {"password": ""})[0], 503)
 
 
 class NoToken(Server):
