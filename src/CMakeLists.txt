@@ -27,6 +27,8 @@ idf_component_register(
     "../kernel/ui/pickmodel.c"
     "../kernel/ui/picker.c"
     "../kernel/ui/overlay.c"
+    "../kernel/ui/cfont.c"
+    "../kernel/ui/fontres.c"
     "../kernel/sys/env.c"
     "../kernel/sys/sio.c"
     "../kernel/sys/input.c"

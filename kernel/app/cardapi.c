@@ -27,6 +27,7 @@
 #include "kernel/drv/keyboard.h"
 #include "kernel/console/console.h"
 #include "kernel/sys/clock.h"
+#include "kernel/ui/fontres.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -373,6 +374,33 @@ static const char *api_proxy(void) { return update_base(); }
 static int  api_headless(void) { return capprun_headless(); }
 static void api_command_done(int rc, const char *out) { capprun_command_done(rc, out); }
 
+/* Fonts (API 31). Owned by the app whose code is running, and released
+ * with it by capprun -- see kernel/ui/fontres.h. A handle that is not a
+ * loaded font draws in the 6x8 font, so a failed load degrades rather than
+ * blanks the screen. */
+static int  api_font_load(const char *name) {
+  return fontres_load(name, capprun_executing());
+}
+static void api_font_free(int f) { fontres_free(f); }
+static void api_text_font(int font, int16_t x, int16_t y, const char *s,
+                          uint16_t fg, uint16_t bg) {
+  const CFont *f = fontres_get(font);
+  if (f) draw_text_cfont(f, x, y, s, fg, bg);
+  else draw_text(x, y, s, fg, bg);
+}
+static int api_text_width(int font, const char *s) {
+  const CFont *f = fontres_get(font);
+  return f ? cfont_width(f, s) : draw_text_width(s);
+}
+static int api_font_height(int font) {
+  const CFont *f = fontres_get(font);
+  return f ? f->height : 8;
+}
+static int api_print_fonts(const char *doc, const char *body, const char *bold,
+                           const char *head) {
+  return printq_print_doc_fonts(doc, body, bold, head);
+}
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -400,6 +428,8 @@ static const CardApi API = {
   api_audio,
   api_proxy,
   api_headless, api_command_done,
+  api_font_load, api_font_free, api_text_font, api_text_width, api_font_height,
+  api_print_fonts,
 };
 
 const CardApi *cardos_api(void) { return &API; }

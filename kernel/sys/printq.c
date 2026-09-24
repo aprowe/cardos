@@ -3,6 +3,7 @@
 #include "kernel/sys/conf.h"
 #include "kernel/sys/applog.h"
 #include "kernel/drv/btprint.h"
+#include "kernel/ui/fontres.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -15,8 +16,10 @@
 
 static const char *TAG = "printq";
 
-/* PrintDoc is about 2 KB and lives on this stack, plus the packet buffers
- * and NimBLE's callbacks. Measured usage TBD; 6 KB has headroom. */
+/* The packet buffers and NimBLE's callbacks. The PrintDoc is on the heap
+ * (DocJob), and so is the scratch one the row count renders into -- at
+ * 3 KB since fonts made its block 64 rows, it no longer belongs on this
+ * stack. */
 #define J_STACK    6144
 #define J_PRIORITY 4
 #define CONNECT_MS 15000
@@ -31,8 +34,10 @@ typedef struct {
 
 /* The document form of a job: the copied text and its renderer. */
 typedef struct {
-  char    *text;
-  PrintDoc doc;
+  char      *text;
+  PrintDoc   doc;
+  PrintFonts fonts;
+  int        font[3];             /* body, bold, head: fontres handles or -1 */
 } DocJob;
 
 static volatile int s_busy;
@@ -137,28 +142,50 @@ static int doc_rows(void *ctx, uint8_t row[PRINT_ROW_BYTES]) {
 }
 
 static int doc_count(void *ctx) {
-  return printdoc_count_rows(((DocJob *)ctx)->text);
+  DocJob *d = (DocJob *)ctx;
+  PrintDoc *scratch = (PrintDoc *)malloc(sizeof *scratch);
+  int n;
+  if (!scratch) return 0;                  /* no percentage, still prints */
+  n = printdoc_count_with(scratch, d->text, &d->fonts);
+  free(scratch);
+  return n;
 }
 
 static void doc_done(void *ctx) {
   DocJob *d = (DocJob *)ctx;
+  int i;
+  for (i = 0; i < 3; i++) fontres_free(d->font[i]);
   free(d->text);
   free(d);
 }
 
-int printq_print_doc(const char *doc) {
+int printq_print_doc_fonts(const char *doc, const char *body, const char *bold,
+                           const char *head) {
+  const char *name[3];
   DocJob *d;
-  int rc;
+  int rc, i;
   if (!doc) return -3;
   if (s_busy) return -1;
   d = (DocJob *)calloc(1, sizeof *d);
   if (!d) return -3;
   d->text = strdup(doc);
   if (!d->text) { free(d); return -3; }
-  printdoc_begin(&d->doc, d->text);
+  /* The job's own copies, owned by the job: the app may close before the
+   * paper is out, and its fonts go when it does. */
+  name[0] = body; name[1] = bold; name[2] = head;
+  for (i = 0; i < 3; i++)
+    d->font[i] = name[i] ? fontres_load(name[i], d) : -1;
+  d->fonts.body = fontres_get(d->font[0]);
+  d->fonts.bold = fontres_get(d->font[1]);
+  d->fonts.head = fontres_get(d->font[2]);
+  printdoc_begin_fonts(&d->doc, d->text, &d->fonts);
   rc = start(doc_rows, d, doc_done, doc_count);
   if (rc != 0) doc_done(d);
   return rc;
+}
+
+int printq_print_doc(const char *doc) {
+  return printq_print_doc_fonts(doc, NULL, NULL, NULL);
 }
 
 int printq_busy(void) { return s_busy; }

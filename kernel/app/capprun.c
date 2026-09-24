@@ -11,6 +11,7 @@
 #include "kernel/sys/env.h"
 #include "kernel/app/cmdline.h"
 #include "kernel/fs/fs.h"
+#include "kernel/ui/fontres.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -489,6 +490,7 @@ static void release_image(Run *s) {
    * queue, that reply refused every sync on the device until the next
    * reboot -- see httpq.h. */
   httpq_abandon(s);
+  fontres_release_owner(s);          /* and the fonts it asked for */
   if (s->loaded) capp_unload(&s->la);
   s->loaded = 0;
   s->has_ui = 0;

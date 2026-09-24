@@ -195,11 +195,16 @@ static void text_center_bold(int cx, int y, const char *s, uint16_t fg, uint16_t
 
 /* ---- the big clock face ----------------------------------------------------
  *
- * api->text is one size, the 6x8 console font -- too small to be the point of
- * a fullscreen timer. There is no scale argument to ask for bigger, so the
- * digits are drawn as filled blocks instead: seven segments per digit, built
- * out of api->fill rather than a bitmap, which is what "no font asset, no
- * libc, no allocator" leaves an app free to do. */
+ * Set in clock56, a font made for this app (fonts/fonts.txt): Space Mono
+ * Bold's digits and colon at 56 px, every digit the same width so a
+ * countdown does not shuffle sideways, the line cut to the ink.
+ *
+ * Without it -- a card the firmware has not seeded, a font that will not
+ * load -- the digits are the seven-segment blocks this app drew before
+ * fonts existed, built out of api->fill. A fullscreen timer in the 6x8
+ * console font would be a timer nobody can read across a room. */
+#define CLOCK_FONT "clock56"
+static int s_font = -1;
 #define DIG_W   22
 #define DIG_H   40
 #define DIG_T   5     /* segment thickness */
@@ -240,6 +245,13 @@ static void draw_colon(int x, int y, uint16_t fg) {
  * cx -- the one place that layout is computed, so the digits drawn and the
  * field highlighted behind them in paint_set cannot disagree about it. */
 #define TIME_BLOCK_W (4 * DIG_W + COLON_W + 4 * DIG_GAP)
+
+/* The face's measurements, whichever face it is. */
+static int dig_h(void) { return s_font >= 0 ? api->font_height(s_font) : DIG_H; }
+static int block_w(void) {
+  return s_font >= 0 ? api->text_width(s_font, "00:00") : TIME_BLOCK_W;
+}
+
 static void time_positions(int cx, int x[4], int *colon_x) {
   int cur = cx - TIME_BLOCK_W / 2;
   x[0] = cur; cur += DIG_W + DIG_GAP;
@@ -249,8 +261,36 @@ static void time_positions(int cx, int x[4], int *colon_x) {
   x[3] = cur;
 }
 
-static void draw_time(int cx, int y, int minutes, int seconds, uint16_t fg) {
+/* Where field 0 (minutes) or 1 (seconds) sits, for the highlight behind it. */
+static void field_span(int cx, int field, int *fx, int *fw) {
+  if (s_font >= 0) {
+    int x0 = cx - block_w() / 2, w2 = api->text_width(s_font, "00");
+    *fx = field ? x0 + w2 + api->text_width(s_font, ":") : x0;
+    *fw = w2;
+  } else {
+    int x[4], colon_x;
+    time_positions(cx, x, &colon_x);
+    *fx = field ? x[2] : x[0];
+    *fw = (field ? x[3] : x[1]) + DIG_W - *fx;
+  }
+}
+
+/* `bg0` and `bg1` are what each field sits on: a font draws its own
+ * background, so the highlighted field has to say which colour it is. */
+static void draw_time(int cx, int y, int minutes, int seconds, uint16_t fg,
+                      uint16_t bg0, uint16_t bg1) {
   int x[4], colon_x;
+  if (s_font >= 0) {
+    char mm[4], ss[4];
+    int x0 = cx - block_w() / 2, w2 = api->text_width(s_font, "00");
+    api->fmt(mm, sizeof mm, "%02d", minutes % 100);
+    api->fmt(ss, sizeof ss, "%02d", seconds % 60);
+    api->text_font(s_font, (int16_t)x0, (int16_t)y, mm, fg, bg0);
+    api->text_font(s_font, (int16_t)(x0 + w2), (int16_t)y, ":", fg, CLR_BG);
+    api->text_font(s_font, (int16_t)(x0 + w2 + api->text_width(s_font, ":")),
+                   (int16_t)y, ss, fg, bg1);
+    return;
+  }
   time_positions(cx, x, &colon_x);
   draw_digit(x[0], y, (minutes / 10) % 10, fg);
   draw_digit(x[1], y, minutes % 10, fg);
@@ -260,19 +300,27 @@ static void draw_time(int cx, int y, int minutes, int seconds, uint16_t fg) {
 }
 
 static void paint_set(CRect c) {
-  int x[4], colon_x, cx = c.x + c.w / 2, y = c.y + c.h / 2 - DIG_H / 2 - 6;
-  int pad = 4;
+  int h = dig_h(), cx = c.x + c.w / 2, y = c.y + c.h / 2 - h / 2 - 6;
+  int pad = 4, fx, fw;
 
-  time_positions(cx, x, &colon_x);
-  if (T.field == 0)
-    api->fill(rect(x[0] - pad, y - pad, x[1] + DIG_W - x[0] + 2 * pad, DIG_H + 2 * pad), CLR_FIELD);
-  else
-    api->fill(rect(x[2] - pad, y - pad, x[3] + DIG_W - x[2] + 2 * pad, DIG_H + 2 * pad), CLR_FIELD);
-  draw_time(cx, y, T.set_min, T.set_sec, CLR_TEXT);
+  field_span(cx, T.field, &fx, &fw);
+  if (s_font >= 0) {
+    /* Time, then the highlight, then its field again on top: the colon's
+     * line fills its own background, and drawn after the highlight it ate
+     * the padding on that side, leaving the blue flush against the digit. */
+    char v[4];
+    draw_time(cx, y, T.set_min, T.set_sec, CLR_TEXT, CLR_BG, CLR_BG);
+    api->fill(rect(fx - pad, y - pad, fw + 2 * pad, h + 2 * pad), CLR_FIELD);
+    api->fmt(v, sizeof v, "%02d", T.field ? T.set_sec % 60 : T.set_min % 100);
+    api->text_font(s_font, (int16_t)fx, (int16_t)y, v, CLR_TEXT, CLR_FIELD);
+  } else {
+    api->fill(rect(fx - pad, y - pad, fw + 2 * pad, h + 2 * pad), CLR_FIELD);
+    draw_time(cx, y, T.set_min, T.set_sec, CLR_TEXT, CLR_BG, CLR_BG);
+  }
 
   text_center(cx, y - 18, "set", CLR_DIM, CLR_BG);
-  text_center(cx, y + DIG_H + pad + 14, "left/right field  up/down +-1", CLR_DIM, CLR_BG);
-  text_center(cx, y + DIG_H + pad + 26, "digits type  space start", CLR_DIM, CLR_BG);
+  text_center(cx, y + h + pad + 14, "left/right field  up/down +-1", CLR_DIM, CLR_BG);
+  text_center(cx, y + h + pad + 26, "digits type  space start", CLR_DIM, CLR_BG);
 }
 
 /* Green with time to spare, red as it runs out, yellow the midpoint between
@@ -299,7 +347,7 @@ static uint16_t bar_colour(uint32_t remain, uint32_t total) {
 #define BAR_H    8
 #define BAR_GAP  6
 static void draw_bar(int cx, int y) {
-  int w = TIME_BLOCK_W, x = cx - w / 2;
+  int w = block_w(), x = cx - w / 2;
   int fill_w = (int)((uint32_t)w * T.remain_ms / T.total_ms);
   uint16_t colour = bar_colour(T.remain_ms, T.total_ms);
 
@@ -317,16 +365,16 @@ static void draw_bar(int cx, int y) {
  * writes go straight to the panel, so that flash was visible. */
 static CRect time_bar_rect(void) {
   int cx = T.at.x + T.at.w / 2;
-  int y  = T.at.y + T.at.h / 2 - DIG_H / 2 - 6;
-  return rect(cx - TIME_BLOCK_W / 2, y, TIME_BLOCK_W, DIG_H + BAR_GAP + BAR_H);
+  int h  = dig_h(), y = T.at.y + T.at.h / 2 - h / 2 - 6;
+  return rect(cx - block_w() / 2, y, block_w(), h + BAR_GAP + BAR_H);
 }
 
 static void paint_running(CRect c, const char *label, uint16_t colour) {
-  int mm, ss, cx = c.x + c.w / 2, y = c.y + c.h / 2 - DIG_H / 2 - 6;
-  int bar_y = y + DIG_H + BAR_GAP;
+  int mm, ss, h = dig_h(), cx = c.x + c.w / 2, y = c.y + c.h / 2 - h / 2 - 6;
+  int bar_y = y + h + BAR_GAP;
 
   remain_mmss(T.remain_ms, &mm, &ss);
-  draw_time(cx, y, mm, ss, CLR_TEXT);
+  draw_time(cx, y, mm, ss, CLR_TEXT, CLR_BG, CLR_BG);
   text_center(cx, y - 18, label, colour, CLR_BG);
   draw_bar(cx, bar_y);
   text_center(cx, bar_y + BAR_H + 12, "space pause  r reset", CLR_DIM, CLR_BG);
@@ -494,8 +542,11 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   au = api->audio();
   api->mem_set(&T, 0, sizeof T);
   ensure_beep();
+  /* Asked for, not assumed: -1 is the seven-segment face. The OS frees it
+   * when the app closes. */
+  s_font = api->headless() ? -1 : api->font_load(CLOCK_FONT);
 
-  minutes = argc > 1 ? parse_minutes(argv[1]) : 0;
+  minutes =argc > 1 ? parse_minutes(argv[1]) : 0;
   if (minutes) {
     T.set_min = minutes;
     start_or_resume(api->ticks_ms());

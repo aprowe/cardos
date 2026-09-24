@@ -225,3 +225,132 @@ void test_printdoc_count_rows_matches_the_stream(void) {
 void test_printdoc_tolerates_cr_and_missing_final_newline(void) {
   CHECK_EQ(drain("a\r\nb\r\n", NULL), drain("a\nb", NULL));
 }
+
+/* ---- with fonts ----
+ *
+ * A made-up font whose every printable character is a solid 4x10 block,
+ * one pixel in from the pen and six rows down a 20-row line, advancing 6.
+ * All the glyphs share one bitmap, which the format allows. So where ink
+ * lands, and where a line breaks, can be worked out by hand. */
+
+#include "kernel/ui/cfont.h"
+
+static uint8_t s_fbuf[16 + 95 * 10 + 8];
+
+static void make_block_font(CFont *f, int height) {
+  uint8_t *p = s_fbuf, *t;
+  int i;
+  memset(s_fbuf, 0, sizeof s_fbuf);
+  memcpy(p, "CFNT", 4);
+  p[4] = 1; p[5] = 1; p[6] = (uint8_t)height; p[7] = (uint8_t)(height - 4);
+  p[8] = ' '; p[10] = 95;
+  for (i = 0; i < 95; i++) {
+    t = p + 16 + i * 10;
+    if (i == 0) { t[8] = 6; t[9] = 1; continue; }     /* space: no ink */
+    t[4] = 4; t[5] = 10; t[6] = 1; t[7] = 6; t[8] = 6; t[9] = 1;
+  }
+  memset(p + 16 + 95 * 10, 0xFF, 5);                   /* 40 set bits */
+  CHECK_EQ(cfont_parse(f, s_fbuf, sizeof s_fbuf), 0);
+}
+
+static int drain_fonts(const char *text, const PrintFonts *pf, int *inked,
+                       int *first_x, int *widest) {
+  static PrintDoc d;
+  uint8_t row[PRINT_ROW_BYTES];
+  int n = 0, x;
+  *inked = 0; *first_x = -1; *widest = 0;
+  printdoc_begin_fonts(&d, text, pf);
+  while (printdoc_next_row(&d, row)) {
+    int w = ink(row, 0, PRINT_WIDTH);
+    n++;
+    if (w) (*inked)++;
+    if (w > *widest) *widest = w;
+    for (x = 0; x < PRINT_WIDTH; x++)
+      if (px(row, x) && (*first_x < 0 || x < *first_x)) *first_x = x;
+    CHECK_EQ(ink(row, 0, PRINT_MARGIN), 0);
+    CHECK_EQ(ink(row, PRINT_WIDTH - PRINT_MARGIN, PRINT_WIDTH), 0);
+    if (n > 4000) break;
+  }
+  return n;
+}
+
+void test_printdoc_font_draws_a_line_in_that_font(void) {
+  CFont f;
+  PrintFonts pf = { 0, 0, 0 };
+  int inked, first_x, widest, n;
+  make_block_font(&f, 20);
+  pf.body = &f;
+  n = drain_fonts("ab", &pf, &inked, &first_x, &widest);
+  CHECK_EQ(inked, 10);                     /* the block is ten rows tall */
+  CHECK_EQ(first_x, PRINT_MARGIN + 1);     /* one pixel in from the pen */
+  CHECK_EQ(widest, 8);                     /* two 4-wide blocks */
+  CHECK(n >= 20 && n <= 26);               /* one line and its gap */
+}
+
+/* 352 usable pixels at 6 a character is 58 whole characters. */
+void test_printdoc_font_wraps_by_pixel_width(void) {
+  CFont f;
+  PrintFonts pf = { 0, 0, 0 };
+  char text[80];
+  int inked, first_x, widest;
+  make_block_font(&f, 20);
+  pf.body = &f;
+  memset(text, 'a', 58); text[58] = 0;
+  drain_fonts(text, &pf, &inked, &first_x, &widest);
+  CHECK_EQ(inked, 10);                     /* fits on one line */
+  memset(text, 'a', 59); text[59] = 0;
+  drain_fonts(text, &pf, &inked, &first_x, &widest);
+  CHECK_EQ(inked, 20);                     /* one over: two lines */
+  /* and at a space when there is one: 40 a's, a space, 30 a's is two
+   * lines, the first holding only the 40. */
+  memset(text, 'a', 71); text[40] = ' '; text[71] = 0;
+  drain_fonts(text, &pf, &inked, &first_x, &widest);
+  CHECK_EQ(inked, 20);
+  CHECK_EQ(widest, 40 * 4);
+}
+
+void test_printdoc_font_heading_uses_the_heading_font_and_is_ruled(void) {
+  CFont body, head;
+  static uint8_t hbuf[sizeof s_fbuf];
+  PrintFonts pf = { 0, 0, 0 };
+  int inked, first_x, widest, n;
+  make_block_font(&head, 30);
+  memcpy(hbuf, s_fbuf, sizeof hbuf);
+  CHECK_EQ(cfont_parse(&head, hbuf, sizeof hbuf), 0);
+  make_block_font(&body, 20);
+  pf.body = &body; pf.head = &head;
+  n = drain_fonts("# Hi", &pf, &inked, &first_x, &widest);
+  CHECK(n >= 30 + 4);                      /* taller than a body line */
+  CHECK(widest >= PRINT_WIDTH - 2 * PRINT_MARGIN);   /* the rule */
+  CHECK_EQ(inked, 10 + 2);                 /* the glyphs and the rule */
+}
+
+void test_printdoc_font_checkbox_sits_beside_its_text(void) {
+  CFont f;
+  PrintFonts pf = { 0, 0, 0 };
+  int inked, first_x, widest;
+  make_block_font(&f, 20);
+  pf.body = &f;
+  drain_fonts("[ ] x", &pf, &inked, &first_x, &widest);
+  CHECK_EQ(first_x, PRINT_MARGIN);         /* the box's left edge */
+  CHECK(inked >= 10 && inked <= 20);       /* box and text share rows */
+}
+
+/* No fonts is the old renderer, row for row. */
+void test_printdoc_no_fonts_is_the_6x8_rendering(void) {
+  PrintFonts none = { 0, 0, 0 };
+  static const char *doc = "# Title\n[ ] one\n[x] two\n---\nplain text";
+  static PrintDoc a, b;
+  uint8_t ra[PRINT_ROW_BYTES], rb[PRINT_ROW_BYTES];
+  int ga, gb, same = 1, n = 0;
+  printdoc_begin(&a, doc);
+  printdoc_begin_fonts(&b, doc, &none);
+  do {
+    ga = printdoc_next_row(&a, ra);
+    gb = printdoc_next_row(&b, rb);
+    if (ga != gb || (ga && memcmp(ra, rb, sizeof ra))) same = 0;
+    n++;
+  } while (ga && gb && n < 4000);
+  CHECK(same);
+  CHECK_EQ(printdoc_count_with(&b, doc, &none), printdoc_count_rows(doc));
+}

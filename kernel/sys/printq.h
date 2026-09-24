@@ -24,6 +24,13 @@
  * printq_status(). */
 int printq_print_doc(const char *doc);
 
+/* The same, set in fonts from /fonts (names as fontres_load takes them, any
+ * NULL). The job loads its own copies and frees them when the paper is out,
+ * so the app that asked can close meanwhile. A font that will not load is
+ * left out and the page prints anyway. */
+int printq_print_doc_fonts(const char *doc, const char *body, const char *bold,
+                           const char *head);
+
 /* Start printing rows from `fn`; `done`, if given, is called on the job's
  * task when it finishes, to free `ctx`. Same return values. */
 int printq_print_rows(PrintRowFn fn, void *ctx, void (*done)(void *ctx));

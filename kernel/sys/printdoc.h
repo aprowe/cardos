@@ -22,6 +22,11 @@
  * The screen font is 6x8; at 203 dpi that is unreadable at 1x, so nothing
  * here prints smaller than 2x (12x16 -- 29 columns between the margins).
  *
+ * Or the document is set in real fonts: .cfnt files the app names
+ * (kernel/ui/cfont.h), a body, a bold for ## and a heading face for #, each
+ * optional. Lines then wrap by pixel width rather than by column. Without
+ * them it is the 6x8 font as above, row for row.
+ *
  * The job runner (printq.c) takes a row source rather than a document, so a
  * pre-rendered bitmap can be streamed through the same path later. */
 #ifndef CARDOS_PRINTDOC_H
@@ -29,6 +34,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+#include "kernel/ui/cfont.h"
 
 #define PRINT_WIDTH     384
 #define PRINT_ROW_BYTES (PRINT_WIDTH / 8)
@@ -62,7 +69,17 @@ const char *printdoc_status_text(const uint8_t *reply, size_t n);
 
 /* ---- renderer ---- */
 
-#define PRINTDOC_LINE_H_MAX 40    /* the tallest block: a 3x heading and its rule */
+/* The tallest block: a heading line and its rule. 40 held a 3x heading in
+ * the 6x8 font; a 34 px heading face and its rule need 57. A font taller
+ * than the block is cut at the bottom rather than overrunning it. */
+#define PRINTDOC_LINE_H_MAX 64
+
+/* The faces a document is set in. Any may be NULL: ## falls back to the
+ * body, # to the bold and then the body, and no body at all is the 6x8
+ * font for everything. The fonts must outlive the document. */
+typedef struct {
+  const CFont *body, *bold, *head;
+} PrintFonts;
 
 typedef struct {
   const char *text;              /* the document; must outlive the struct */
@@ -76,9 +93,11 @@ typedef struct {
   int      style;                /* PD_* */
   int      cont;                 /* a continuation (wrapped) line */
   int      done;
+  PrintFonts fonts;
 } PrintDoc;
 
 void printdoc_begin(PrintDoc *d, const char *text);
+void printdoc_begin_fonts(PrintDoc *d, const char *text, const PrintFonts *f);
 
 /* Fills `row` and returns 1, or returns 0 when the document has ended.
  * Has the PrintRowFn shape, so &printdoc_next_row is a row source. */
@@ -87,6 +106,10 @@ int  printdoc_next_row(void *d, uint8_t row[PRINT_ROW_BYTES]);
 /* Rows the whole document will produce. Runs the renderer over a copy, so it
  * costs what printing costs minus the radio; for a progress figure. */
 int  printdoc_count_rows(const char *text);
+
+/* The same, in fonts, rendering into `scratch` -- a PrintDoc is 3 KB, which
+ * a caller on a small stack would rather allocate than declare. */
+int  printdoc_count_with(PrintDoc *scratch, const char *text, const PrintFonts *f);
 
 /* Draw one glyph into a row block at scale `s`, `bold` smears one pixel
  * right. Exposed for the tests; x is a pixel column, y a row in the block. */

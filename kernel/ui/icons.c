@@ -8,6 +8,8 @@
 #include "kernel/ui/desktop.h"
 #include "kernel/ui/icons_builtin.h"
 #include "kernel/ui/icons_color.h"
+#include "kernel/ui/font_blobs.h"
+#include "kernel/ui/fontres.h"
 
 #include <stdlib.h>
 
@@ -150,6 +152,27 @@ static void seed_capps(void) {
   if (fd >= 0) { fs_write(fd, &want, sizeof want); fs_close(fd); }
 }
 
+/* The fonts, into /fonts, where api->font_load finds them by name. The
+ * colour icons' rule: rewritten whenever the size differs, which is what a
+ * rebuilt font looks like -- a font the firmware does not carry is left
+ * alone, so one put there by hand survives. */
+static void seed_fonts(void) {
+  size_t i;
+  char path[64];
+  int fd, ok;
+
+  fs_mkdir(FONTS_DIR);
+  for (i = 0; i < FONT_BLOB_COUNT; i++) {
+    snprintf(path, sizeof path, "%s/%s", FONTS_DIR, FONT_BLOBS[i].name);
+    if (file_size(path) == (int)FONT_BLOBS[i].size) continue;
+    fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    if (fd < 0) continue;
+    ok = write_all(fd, FONT_BLOBS[i].data, FONT_BLOBS[i].size) == 0;
+    fs_close(fd);
+    if (!ok || file_size(path) != (int)FONT_BLOBS[i].size) fs_remove(path);
+  }
+}
+
 /* The colour icons, written out beside the apps. Same reasoning as the
  * binaries: a file the user can only get onto the card with a card reader is a
  * file they will not have. Overwritten whenever the size differs, which is the
@@ -234,6 +257,7 @@ static void seed_dir(void) {
 
   seed_capps();
   seed_colour_icons();
+  seed_fonts();
   seed_example();
 }
 

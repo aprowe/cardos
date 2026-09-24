@@ -317,7 +317,29 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`.
+`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`.
+
+**Fonts are files an app asks for** (2026-09-23). The 6x8 console font is
+still compiled in and still the default; anything nicer is a `.cfnt` in
+`/fonts` on the card, which an app loads by name (`api->font_load("clock56")`)
+and draws with `api->text_font`. A `.cfnt` is a bitmap font rendered on the PC
+at one size -- the device has no TrueType rasteriser and should not grow one
+-- by `tools/make_cfnt.py` from a TTF in `fonts/src` (open-licence only; the
+OFL texts are beside them). **Fonts are made on request:** an app that wants a
+face or a size adds a line to `fonts/fonts.txt` and runs `python
+tools/make_cfnt.py --all`, which writes `fonts/NAME.cfnt` and
+`kernel/ui/font_blobs.h`; the firmware seeds `/fonts` from that like the
+colour icons. Screen fonts are 4-bit coverage, blended against the `bg` the
+app passes (so `text_font` fills its line and needs no clear first); print
+fonts are 1-bit. `kernel/ui/cfont.c` reads the format and is host-tested,
+including every way a file can lie about where its bitmaps are;
+`kernel/ui/fontres.c` loads them, owned by the app (freed when capprun
+releases it) or by a print job. `api->print_fonts(doc, body, bold, head)` sets
+a print in fonts -- Edit prints in Atkinson Hyperlegible -- and
+`printdoc.c`'s output with no fonts is pinned row for row to the 6x8 one.
+Timer's digits are `clock56` (Space Mono Bold, digits only, every digit the
+same width). No shared libraries were needed: a font is data, and the one
+renderer is in the kernel behind the API table.
 
 **Credentials survive a reflash** (2026-09-19). WiFi and Google credentials
 live in NVS at runtime, and a full-table flash wipes NVS -- one day it cost the
@@ -410,6 +432,9 @@ The `` ` `` key (labelled ESC) is the universal escape. Arrow keys are the
   cannot ship. Forgetting it means the firmware embeds apps built against a
   different API version, and the loader refuses them at boot with
   "built for a different API version".
+- `python tools/make_cfnt.py --all` rebuilds the loadable fonts from
+  `fonts/fonts.txt`; `--show out.png --text 12:34` renders a `.cfnt` back to
+  check it.
 - `python tools/make_font.py` regenerates the 6x8 font from pictures.
   `--show` renders the table back out; edit the pictures, never the hex.
 - `python tools/mapsize.py` says where the flash and RAM went, per component.

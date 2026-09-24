@@ -644,7 +644,11 @@ static const TbIcon EDIT_ICONS[] = { { "S", ACT_SAVE } };
 
 /* The buffer, as the printer's markup: it is markdown-shaped already, so a
  * note with `# headings` and `[ ] tasks` prints as the preview shows it.
- * Joined here rather than sent line by line because print() copies once. */
+ * Joined here rather than sent line by line because print() copies once.
+ *
+ * Set in Atkinson Hyperlegible (fonts/fonts.txt): a 24 px body, its bold
+ * for `##` and 34 px bold for `#`. The job loads them, not this app, so
+ * closing Edit mid-print is fine; a card without them prints in 6x8. */
 static void print_buffer(void) {
   int i, at = 0, rc;
   for (i = 0; i < E.nlines; i++) {
@@ -655,7 +659,7 @@ static void print_buffer(void) {
     E.page[at++] = 10;
   }
   E.page[at] = 0;
-  rc = api->print(E.page);
+  rc = api->print_fonts(E.page, "print24", "print24b", "print34b");
   if (rc == 0)       { E.printing = 1; say("printing..."); }
   else if (rc == -1) say("still printing the last one");
   else if (rc == -2) say("no printer: print scan in the console");

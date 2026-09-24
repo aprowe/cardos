@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 30
+#define CAPP_API_VERSION 31
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -111,6 +111,7 @@ typedef struct {
 #define CAPP_SYS    "/sys"
 #define CAPP_CONFIG "/config"
 #define CAPP_CACHE  "/cache"
+#define CAPP_FONTS  "/fonts"  /* .cfnt files; font_load("clock56") looks here */
 #define CAPP_HOME   "/home"
 #define CAPP_APPS   "/apps"
 #define CAPP_VAR    "/var"
@@ -679,6 +680,35 @@ typedef struct {
    * answered CAPP_CMD_PENDING. */
   int  (*headless)(void);
   void (*command_done)(int rc, const char *out);
+
+  /* ---- fonts (API 31) ----
+   *
+   * Bitmap fonts from the card, made on the PC by tools/make_cfnt.py and
+   * listed in fonts/fonts.txt -- an app that wants one asks for it there.
+   * font_load takes a name in /fonts ("clock56" is /fonts/clock56.cfnt) or a
+   * path, and returns a handle or -1; the font is the app's until font_free
+   * or until the app closes, when the OS frees it anyway. Asking twice for
+   * the same font returns the same handle.
+   *
+   * text_font draws a line with its top at y, font_height(f) tall, filling
+   * `bg` behind the glyphs (so redrawing a changing number needs no clear
+   * first) and blending the edges into it. A handle of -1 -- a failed load
+   * -- is the 6x8 font, as are text_width(-1, s) and font_height(-1), so an
+   * app can pass whatever font_load gave it and still draw something.
+   *
+   * print_fonts prints like print, with the body set in `body`, `## ` lines
+   * in `bold` and `# ` lines in `head` -- names, as font_load takes. Any may
+   * be NULL (## falls back to the body, # to bold then body), and all NULL
+   * is print. A font that will not load is dropped, not an error: the page
+   * still comes out, in the 6x8 font. Same return values as print. */
+  int  (*font_load)(const char *name);
+  void (*font_free)(int font);
+  void (*text_font)(int font, int16_t x, int16_t y, const char *s,
+                    uint16_t fg, uint16_t bg);
+  int  (*text_width)(int font, const char *s);
+  int  (*font_height)(int font);
+  int  (*print_fonts)(const char *doc, const char *body, const char *bold,
+                      const char *head);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

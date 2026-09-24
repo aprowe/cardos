@@ -1,7 +1,7 @@
 /* The print document renderer and the printer's wire format. See printdoc.h.
  *
- * Portable: no allocation, no I/O, and the font comes from the same table
- * the console draws with. */
+ * Portable: no allocation, no I/O. The fonts are the console's 6x8 table,
+ * or .cfnt files the caller has already loaded. */
 #include "kernel/sys/printdoc.h"
 #include "kernel/console/font6x8.h"
 
@@ -144,18 +144,67 @@ static void rule(uint8_t (*block)[PRINT_ROW_BYTES], int rows, int y) {
   fill(block, rows, PRINT_MARGIN, y, USABLE, 2);
 }
 
-static void checkbox(uint8_t (*block)[PRINT_ROW_BYTES], int rows, int ticked) {
+/* `y` is its top: 0 beside the 6x8 font, and sat on the baseline beside a
+ * real one, so the box is level with the text rather than above it. */
+static void checkbox(uint8_t (*block)[PRINT_ROW_BYTES], int rows, int ticked, int y) {
   int x = PRINT_MARGIN, i;
-  fill(block, rows, x, 0, BOX, 2);
-  fill(block, rows, x, BOX - 2, BOX, 2);
-  fill(block, rows, x, 0, 2, BOX);
-  fill(block, rows, x + BOX - 2, 0, 2, BOX);
+  fill(block, rows, x, y, BOX, 2);
+  fill(block, rows, x, y + BOX - 2, BOX, 2);
+  fill(block, rows, x, y, 2, BOX);
+  fill(block, rows, x + BOX - 2, y, 2, BOX);
   if (!ticked) return;
   /* a cross, two pixels thick, inside the border */
   for (i = 3; i < BOX - 3; i++) {
-    fill(block, rows, x + i, i, 2, 2);
-    fill(block, rows, x + BOX - 2 - i, i, 2, 2);
+    fill(block, rows, x + i, y + i, 2, 2);
+    fill(block, rows, x + BOX - 2 - i, y + i, 2, 2);
   }
+}
+
+/* ---- in a .cfnt ---- */
+
+/* The face a style is set in, or NULL for the 6x8 font. */
+static const CFont *style_font(const PrintDoc *d, int style) {
+  const PrintFonts *f = &d->fonts;
+  if (!f->body) return NULL;
+  if (style == PD_HEAD) return f->head ? f->head : (f->bold ? f->bold : f->body);
+  if (style == PD_SUB) return f->bold ? f->bold : f->body;
+  return f->body;
+}
+
+/* A string in a font, ink at coverage 8 or more -- the printer has two
+ * colours, and a 1bpp font is already 0 or 15. */
+static void font_text(uint8_t (*block)[PRINT_ROW_BYTES], int rows, int x, int y,
+                      const CFont *f, const char *s, int len) {
+  CGlyph g;
+  int i, gx, gy;
+  for (i = 0; i < len; i++) {
+    cfont_glyph(f, (unsigned char)s[i], &g);
+    for (gy = 0; gy < g.h; gy++)
+      for (gx = 0; gx < g.w; gx++)
+        if (cfont_pixel(f, &g, gx, gy) >= 8)
+          set_px(block, rows, x + g.x + gx, y + g.y + gy);
+    x += g.adv;
+  }
+}
+
+/* The longest prefix of `s` whose pen travel fits `avail` pixels, breaking
+ * at a space when there is one; the pixel twin of wrap_len. At least one
+ * character, so a glyph wider than the paper cannot stall the document. */
+static int wrap_px(const CFont *f, const char *s, int len, int avail, int *skip) {
+  CGlyph g;
+  int n = 0, w = 0, i;
+  while (n < len) {
+    cfont_glyph(f, (unsigned char)s[n], &g);
+    if (w + g.adv > avail) break;
+    w += g.adv;
+    n++;
+  }
+  if (n >= len) { *skip = len; return len; }
+  for (i = n; i > 0; i--)
+    if (s[i] == ' ') { *skip = i + 1; return i; }
+  if (n == 0) n = 1;
+  *skip = n;
+  return n;
 }
 
 /* How the line is drawn: pixel x where text starts, and the scale. */
@@ -228,10 +277,40 @@ static int next_source_line(PrintDoc *d) {
   return 1;
 }
 
+/* The same, in the style's .cfnt. Heights follow the font: the line, and
+ * the gap under it the 6x8 layout has, plus the rule under a heading. */
+static int next_block_font(PrintDoc *d, const CFont *f) {
+  int n, skip, x, rows;
+  x = style_x(d->style, d->cont);
+  switch (d->style) {
+  case PD_HEAD: rows = f->height + 4 + 2 + 8; break;
+  case PD_SUB:  rows = f->height + 6; break;
+  default:      rows = f->height + 4; break;
+  }
+  if (rows > PRINTDOC_LINE_H_MAX) rows = PRINTDOC_LINE_H_MAX;
+  d->block_rows = rows;
+
+  n = wrap_px(f, d->rest, d->rest_len, PRINT_WIDTH - PRINT_MARGIN - x, &skip);
+  if (!d->cont && (d->style == PD_CHECK || d->style == PD_CHECKED)) {
+    int top = f->ascent - BOX;
+    checkbox(d->block, rows, d->style == PD_CHECKED, top < 0 ? 0 : top);
+  }
+  font_text(d->block, rows, x, 0, f, d->rest, n);
+  if (d->style == PD_HEAD && d->rest_len - skip <= 0)
+    rule(d->block, rows, f->height + 4);
+
+  d->rest += skip;
+  d->rest_len -= skip;
+  if (d->rest_len <= 0) d->rest = NULL;
+  else d->cont = 1;
+  return 1;
+}
+
 /* Render the next block: the next wrapped line of the current source line,
  * or the first of a new one. 0 when there is nothing left. */
 static int next_block(PrintDoc *d) {
   int scale, cols, n, skip, x, bold;
+  const CFont *f;
   if (d->rest == NULL && !next_source_line(d)) return 0;
 
   memset(d->block, 0, sizeof d->block);
@@ -250,6 +329,8 @@ static int next_block(PrintDoc *d) {
     break;
   }
 
+  if ((f = style_font(d, d->style)) != NULL) return next_block_font(d, f);
+
   scale = style_scale(d->style);
   cols  = style_cols(d->style, d->cont);
   x     = style_x(d->style, d->cont);
@@ -257,7 +338,7 @@ static int next_block(PrintDoc *d) {
   n = wrap_len(d->rest, d->rest_len, cols, &skip);
 
   if (!d->cont && (d->style == PD_CHECK || d->style == PD_CHECKED))
-    checkbox(d->block, d->block_rows, d->style == PD_CHECKED);
+    checkbox(d->block, d->block_rows, d->style == PD_CHECKED, 0);
   text_at(d->block, d->block_rows, x, 0, d->rest, n, scale, bold);
   if (d->style == PD_HEAD && d->rest_len - skip <= 0)
     rule(d->block, d->block_rows, FONT_H * 3 + 4);
@@ -269,12 +350,17 @@ static int next_block(PrintDoc *d) {
   return 1;
 }
 
-void printdoc_begin(PrintDoc *d, const char *text) {
+void printdoc_begin_fonts(PrintDoc *d, const char *text, const PrintFonts *f) {
   memset(d, 0, sizeof *d);
   d->text = text;
   d->pos = text;
   d->rest = NULL;
   d->done = (text == NULL || *text == 0);
+  if (f) d->fonts = *f;
+}
+
+void printdoc_begin(PrintDoc *d, const char *text) {
+  printdoc_begin_fonts(d, text, NULL);
 }
 
 int printdoc_next_row(void *ctx, uint8_t row[PRINT_ROW_BYTES]) {
@@ -287,11 +373,15 @@ int printdoc_next_row(void *ctx, uint8_t row[PRINT_ROW_BYTES]) {
   return 1;
 }
 
-int printdoc_count_rows(const char *text) {
-  PrintDoc d;
+int printdoc_count_with(PrintDoc *d, const char *text, const PrintFonts *f) {
   uint8_t row[PRINT_ROW_BYTES];
   int n = 0;
-  printdoc_begin(&d, text);
-  while (printdoc_next_row(&d, row)) n++;
+  printdoc_begin_fonts(d, text, f);
+  while (printdoc_next_row(d, row)) n++;
   return n;
+}
+
+int printdoc_count_rows(const char *text) {
+  PrintDoc d;
+  return printdoc_count_with(&d, text, NULL);
 }

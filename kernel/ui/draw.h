@@ -12,6 +12,7 @@
 
 #include "kernel/drv/display.h"
 #include "kernel/ui/rect.h"
+#include "kernel/ui/cfont.h"
 
 /* The classic beveled palette. Chosen for legibility at 240x135: a one-pixel
  * light/dark edge still reads as raised, where a subtle flat fill vanishes. */
@@ -57,6 +58,13 @@ void draw_text_ellipsis(int16_t x, int16_t y, int16_t max_w, const char *s,
                         uint16_t fg, uint16_t bg);
 
 int16_t draw_text_width(const char *s);
+
+/* Text in a .cfnt (kernel/ui/cfont.h): `y` is the top of the line, which is
+ * font->height tall and filled with `bg` behind the glyphs, so redrawing a
+ * string over itself leaves no trace of the last one. Edges are blended
+ * against `bg`. Clipped like everything else. */
+void draw_text_cfont(const CFont *f, int16_t x, int16_t y, const char *s,
+                     uint16_t fg, uint16_t bg);
 
 /* The pointer. 8x12 plus a one-pixel outline, so it stays visible over the
  * teal desktop, a grey window and a white content well alike. */

@@ -1,0 +1,20 @@
+# The fonts the device carries: one line each, built by
+#
+#     python tools/make_cfnt.py --all
+#
+# into fonts/NAME.cfnt and kernel/ui/font_blobs.h, which the firmware writes
+# to /fonts on the card. An app asks for one by NAME: api->font_load("clock56").
+# Fonts are made on request -- an app that wants a face or a size adds a line
+# here rather than scaling one that exists (bitmap fonts do not scale).
+#
+# NAME      SOURCE (fonts/src)               SIZE  OPTIONS (as make_cfnt.py takes them)
+#
+# Timer's face: digits and the colon only, each digit the same width so a
+# countdown does not shuffle, the line cut to the ink.
+clock56     SpaceMono-Bold.ttf                56    --chars 0123456789: --tabular --tight
+#
+# Paper, for the thermal printer: two colours, so 1 bit. 24 px is 3 mm at
+# 203 dpi, about 33 characters between the margins. Edit prints in these.
+print24     AtkinsonHyperlegible-Regular.ttf  24    --bpp 1
+print24b    AtkinsonHyperlegible-Bold.ttf     24    --bpp 1
+print34b    AtkinsonHyperlegible-Bold.ttf     34    --bpp 1

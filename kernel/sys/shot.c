@@ -60,7 +60,13 @@ int shot_take(const char *name, void (*repaint)(void)) {
   s_fd = -1;
 
   snprintf(url, sizeof url, "%s/shot?name=%s", update_base(), name);
-  n = http_post_file(url, s_path, "application/octet-stream", reply, sizeof reply, 15000);
+  /* With the device's shared secret, as voice and update send it: a remote
+   * server answers 403 without one, and the shot stayed on the card. */
+  {
+    const char *t = update_token();
+    n = http_post_file_progress(url, s_path, "application/octet-stream",
+                                *t ? t : NULL, reply, sizeof reply, 15000, NULL);
+  }
   if (n < 0) snprintf(s_error, sizeof s_error, "on the card, but the proxy said %d", n);
   return 0;
 }

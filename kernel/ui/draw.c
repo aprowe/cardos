@@ -375,3 +375,55 @@ void draw_cursor(int16_t x, int16_t y) {
     }
   }
 }
+
+/* A run of text in a .cfnt, composed in bands and sent a band at a time.
+ *
+ * The same shape as draw_text: only the visible part of the run is built,
+ * into s_text, and each band is one blit. A band is as many rows of the
+ * visible width as s_text holds -- sixteen at full screen width, more for
+ * narrower runs -- so a 42-row clock face is three transactions, not 42.
+ * The background is laid first and every glyph pixel blended onto it, which
+ * is what lets 4-bit edges look smooth on whatever colour the app chose. */
+void draw_text_cfont(const CFont *f, int16_t x, int16_t y, const char *s,
+                     uint16_t fg, uint16_t bg) {
+  Rect cell, v;
+  int band, top, i;
+
+  if (!f || !s || !*s) return;
+  cell.x = x;
+  cell.y = y;
+  cell.w = (int16_t)cfont_width(f, s);
+  cell.h = f->height;
+  v = rect_intersect(cell, s_clip);
+  if (rect_is_empty(v)) return;
+  band = (int)(sizeof s_text / sizeof s_text[0]) / v.w;
+  if (band < 1) return;                    /* wider than the screen: cannot be */
+
+  for (top = v.y; top < v.y + v.h; top += band) {
+    int rows = v.y + v.h - top, pen = x;
+    const char *p;
+    if (rows > band) rows = band;
+    for (i = 0; i < rows * v.w; i++) s_text[i] = bg;
+
+    for (p = s; *p; p++) {
+      CGlyph g;
+      int gx0, gx1, gy0, gy1, gx, gy;
+      cfont_glyph(f, (unsigned char)*p, &g);
+      /* The part of this glyph's box inside the band and the visible run. */
+      gx0 = v.x - (pen + g.x);             if (gx0 < 0) gx0 = 0;
+      gx1 = v.x + v.w - (pen + g.x);       if (gx1 > g.w) gx1 = g.w;
+      gy0 = top - (y + g.y);               if (gy0 < 0) gy0 = 0;
+      gy1 = top + rows - (y + g.y);        if (gy1 > g.h) gy1 = g.h;
+      for (gy = gy0; gy < gy1; gy++) {
+        uint16_t *out = s_text + (y + g.y + gy - top) * v.w + (pen + g.x - v.x);
+        for (gx = gx0; gx < gx1; gx++) {
+          int a = cfont_pixel(f, &g, gx, gy);
+          if (a) out[gx] = cfont_blend(fg, bg, a);
+        }
+      }
+      pen += g.adv;
+      if (pen >= v.x + v.w && g.x >= 0) break;   /* the rest is off the run */
+    }
+    display_blit(v.x, (int16_t)top, v.w, (int16_t)rows, s_text);
+  }
+}
