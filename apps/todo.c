@@ -1261,10 +1261,14 @@ static void page_all(void) {
   page_footer(at);
 }
 
+/* Set in the same faces as Edit's prints (fonts/fonts.txt): Atkinson
+ * Hyperlegible 24 for the tasks, its bold for each list's `##` in the
+ * overview, 34 bold for the `#` title. The job loads them, so leaving Todo
+ * mid-print is fine; a card without them prints in 6x8. */
 static void print_page(void) {
   int rc;
   if (T.view == VIEW_ALL) page_all(); else page_list();
-  rc = api->print(T.page);
+  rc = api->print_fonts(T.page, "print24", "print24b", "print34b");
   if (rc == 0)       { T.printing = 1; say("printing..."); }
   else if (rc == -1) say("still printing the last one");
   else if (rc == -2) say("no printer: print scan in the console");
