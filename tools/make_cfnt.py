@@ -52,8 +52,12 @@ HEADER = struct.Struct("<4sBBBBHHI")
 GLYPH = struct.Struct("<IBBbbBB")
 
 
-def render(ttf, size, chars, bpp, tabular, leading, tight=False):
+def render(ttf, size, chars, bpp, tabular, leading, tight=False, style=None):
     font = ImageFont.truetype(ttf, size)
+    if style:
+        # A variable font's named instance: Inter ships as one file with
+        # every weight in it, and "Bold" is one of its names.
+        font.set_variation_by_name(style)
     ascent, descent = font.getmetrics()
     height = ascent + descent + leading
     codes = sorted(set(ord(c) for c in chars))
@@ -197,7 +201,7 @@ def build_all():
             name, src, size, opts = words[0], words[1], int(words[2]), words[3:]
             a = parser().parse_args([os.path.join(FONTS, "src", src), str(size),
                                      os.path.join(FONTS, name + ".cfnt")] + opts)
-            f = render(a.src, a.size, a.chars, a.bpp, a.tabular, a.leading, a.tight)
+            f = render(a.src, a.size, a.chars, a.bpp, a.tabular, a.leading, a.tight, a.style)
             data = encode(f)
             with open(a.out, "wb") as out:
                 out.write(data)
@@ -238,6 +242,7 @@ def parser():
     ap.add_argument("--tabular", action="store_true",
                     help="every digit as wide as the widest")
     ap.add_argument("--leading", type=int, default=0, help="extra rows under each line")
+    ap.add_argument("--style", help="a variable font's named style, like Bold")
     ap.add_argument("--tight", action="store_true",
                     help="line height is the ink of the included glyphs")
     ap.add_argument("--show", metavar="PNG", help="decode SRC (a .cfnt) into a picture")
@@ -260,7 +265,7 @@ def main():
     if not a.src or not a.size or not a.out:
         ap.error("SRC SIZE OUT, SRC.cfnt --show PNG [--text T], or --all")
 
-    f = render(a.src, a.size, a.chars, a.bpp, a.tabular, a.leading, a.tight)
+    f = render(a.src, a.size, a.chars, a.bpp, a.tabular, a.leading, a.tight, a.style)
     data = encode(f)
     with open(a.out, "wb") as fh:
         fh.write(data)

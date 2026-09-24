@@ -9,6 +9,7 @@
  * opens. A view owns the whole content area while it is up.
  */
 
+#include "kernel/sys/power.h"
 #include "kernel/ui/settings.h"
 #include "kernel/ui/draw.h"
 #include "kernel/ui/desktop.h"
@@ -170,6 +171,38 @@ static void bright_step(SettingsState *st, int dir) {
 
 static void act_bright(SettingsState *st) { bright_step(st, +1); }
 
+/* The screen timeouts, as the steps anyone would pick rather than a number
+ * to type: enter and right go up the list, left down, and both wrap. 0 is
+ * never, and sits at the end where "longer still" would be. */
+static const int DIM_STEPS[] = { 15, 30, 60, 120, 300, 0 };
+static const int OFF_STEPS[] = { 60, 120, 300, 600, 1800, 0 };
+#define NSTEPS 6
+
+static void fmt_secs(char *b, size_t n, int s) {
+  if (!s) snprintf(b, n, "never");
+  else if (s < 60) snprintf(b, n, "%d s", s);
+  else snprintf(b, n, "%d min", s / 60);
+}
+
+static int step_index(const int *steps, int v) {
+  int i;
+  for (i = 0; i < NSTEPS; i++) if (steps[i] == v) return i;
+  return 0;
+}
+
+static void timeout_step(SettingsState *st, int off, int dir) {
+  const int *steps = off ? OFF_STEPS : DIM_STEPS;
+  int i = (step_index(steps, off ? power_off_s() : power_dim_s()) + dir + NSTEPS) % NSTEPS;
+  char v[16];
+  if (off) power_set_timeouts(power_dim_s(), steps[i]);
+  else power_set_timeouts(steps[i], power_off_s());
+  fmt_secs(v, sizeof v, steps[i]);
+  snprintf(st->note, sizeof st->note, "%s %s, saved", off ? "screen off after" : "dim after", v);
+}
+
+static void act_dim(SettingsState *st) { timeout_step(st, 0, +1); }
+static void act_off(SettingsState *st) { timeout_step(st, 1, +1); }
+
 #define VOLUME_STEP 10
 
 static void volume_step(SettingsState *st, int dir) {
@@ -208,6 +241,8 @@ static void v_btboot(char *b, size_t n) {
   snprintf(b, n, "%s", bthid_autostart() ? "on" : "off");
 }
 static void v_bright(char *b, size_t n) { snprintf(b, n, "%d%%", display_brightness()); }
+static void v_dim(char *b, size_t n) { fmt_secs(b, n, power_dim_s()); }
+static void v_off(char *b, size_t n) { fmt_secs(b, n, power_off_s()); }
 
 /* The menu bar in every app from the start, rather than only once a mouse
  * moves or fn-b asks. A file every app can see (CAPP_MENUBAR_FILE), read as
@@ -255,6 +290,8 @@ static const Row ROWS[] = {
   { NULL,        "Radio off",    NULL,     act_radio_off,  0 },
 
   { "Display",   "Brightness",   v_bright, act_bright,     0 },
+  { NULL,        "Dim after",    v_dim,    act_dim,        0 },
+  { NULL,        "Screen off",   v_off,    act_off,        0 },
   { NULL,        "Menu bar",     v_menubar, act_menubar,   1 },
 
   { "Sound",     "Volume",       v_volume, act_volume,     0 },
@@ -468,6 +505,8 @@ static int key_rows(SettingsState *st, uint8_t k) {
   case KEY_RIGHT:
     if (ROWS[st->sel].action == act_bright) { bright_step(st, k == KEY_RIGHT ? +1 : -1); return 1; }
     if (ROWS[st->sel].action == act_volume) { volume_step(st, k == KEY_RIGHT ? +1 : -1); return 1; }
+    if (ROWS[st->sel].action == act_dim) { timeout_step(st, 0, k == KEY_RIGHT ? +1 : -1); return 1; }
+    if (ROWS[st->sel].action == act_off) { timeout_step(st, 1, k == KEY_RIGHT ? +1 : -1); return 1; }
     return 0;
   default: return 0;
   }

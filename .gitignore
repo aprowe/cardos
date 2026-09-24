@@ -29,3 +29,4 @@ chatlog_test*/
 todo_test_cache_*.cache
 counter_test*
 habits_test*
+clock_test*

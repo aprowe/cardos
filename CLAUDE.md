@@ -324,7 +324,7 @@ paint used to clear the active slot for the rest of the tick — so `damage()`
 marks were dropped and the request had no owner. Apps now say "busy" when a
 start is refused instead of returning silently.
 
-**API version 30** (`CAPP_API_VERSION` in `capp.h` is the truth; this
+**API version 32** (`CAPP_API_VERSION` in `capp.h` is the truth; this
 paragraph is history). It moved six times in one day — 11 to 17 — and has
 kept moving since; each move means every `.capp` must be rebuilt, because the
 loader refuses a binary built against a different table. `python
@@ -337,7 +337,7 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`.
+`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`.
 
 **Fonts are files an app asks for** (2026-09-23). The 6x8 console font is
 still compiled in and still the default; anything nicer is a `.cfnt` in
@@ -360,6 +360,41 @@ a print in fonts -- Edit prints in Atkinson Hyperlegible -- and
 Timer's digits are `clock56` (Space Mono Bold, digits only, every digit the
 same width). No shared libraries were needed: a font is data, and the one
 renderer is in the kernel behind the API table.
+
+**Every setting a person chose survives a reflash** (2026-09-24). WiFi,
+Google and `env` have their own mirrors (below); everything else small --
+brightness, volume, the boot shell, Bluetooth at boot, desktop autostart,
+launcher pins, the screen timeouts -- is mirrored to `/config/settings.txt`
+by `kernel/sys/prefs.c`, one `key=value` a line, rewritten from NVS after
+each change and restored at boot for any key NVS has lost (NVS wins where
+both have one). **A new NVS setting goes in the table in `prefs.c` and its
+setter calls `prefs_mirror()`**; only a true cache (the last known time)
+stays out. Values escape newlines (`kernel/sys/kvtext.c`, host-tested) --
+the pins are names one a line, and unescaped they restored as one pin.
+`defaults` deletes the file too, or the next boot would undo it.
+
+**The screen's timeouts are a setting, and apps can hold it on** (2026-09-24).
+Settings > Display: "Dim after" (15 s .. 5 min, never) and "Screen off"
+(1 .. 30 min, never), `dim_s`/`off_s` in prefs. `api->keep_awake(1)` holds
+the backlight on while it matters -- Timer while it counts and rings,
+Clock's `k` for a nightstand -- and is let go when the app closes
+(`power_release_owner` in capprun); `api->wake()` lights it now, as a key
+would, without being a key. `kernel/sys/power.c`.
+
+**Alarms ring whatever is open** (2026-09-24). `/config/alarms.txt`, one
+alarm a line (`on 07:00 -MTWTF- Work`, `once`, `snooze`; the format and the
+rules are `kernel/sys/alarmfmt.h`, header-only and libc-free so the kernel
+and the Clock app share it, host-tested). `kernel/sys/alarm.c` reads it when
+the minute changes and rings the due one as a panel over the current app --
+which is not closed or told -- beeping, holding the screen on, until a key:
+`s` snoozes nine minutes, anything else stops it; unanswered it stops after
+five. A `once` switches itself off after ringing, a snooze deletes itself.
+The Clock app (`apps/clock.c`) is the face and the editor; it re-reads the
+file before every change and finds its alarm by content, never position,
+so it cannot undo what the kernel changed. Commands: `do clock add 7:30
+wake up`, `list`, `next`, `off 7:30`. The big numbers everywhere are Inter
+Bold now (`clock56`, `num30`); `make_cfnt.py --style Bold` picks a variable
+font's weight.
 
 **Credentials survive a reflash** (2026-09-19). WiFi and Google credentials
 live in NVS at runtime, and a full-table flash wipes NVS -- one day it cost the

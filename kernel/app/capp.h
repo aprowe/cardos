@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 31
+#define CAPP_API_VERSION 32
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -709,6 +709,18 @@ typedef struct {
   int  (*font_height)(int font);
   int  (*print_fonts)(const char *doc, const char *body, const char *bold,
                       const char *head);
+
+  /* ---- the screen staying on (API 32) ----
+   *
+   * The backlight dims and then goes off when nobody has pressed anything
+   * for a while (Settings > Display). keep_awake(1) holds it on -- a timer
+   * counting down, an alarm ringing, anything meant to be watched rather
+   * than touched -- until keep_awake(0) or until the app closes, when the
+   * OS lets go for it. wake() lights it now, as a key would, without being
+   * a key: the alarm going off, a reply arriving. Neither is permission to
+   * hold the screen for ever; hold it while it matters. */
+  void (*keep_awake)(int on);
+  void (*wake)(void);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

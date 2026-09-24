@@ -1,5 +1,6 @@
 /* The desktop shell. See desktop.h. */
 
+#include "kernel/sys/prefs.h"
 #include "kernel/ui/desktop.h"
 #include "kernel/ui/draw.h"
 #include "kernel/drv/keyboard.h"
@@ -1360,6 +1361,7 @@ void desktop_set_autostart(int on) {
   nvs_set_u8(h, NVS_AUTOSTART, (uint8_t)(on ? 1 : 0));
   nvs_commit(h);
   nvs_close(h);
+  prefs_mirror();              /* and /config/settings.txt: see prefs.h */
 }
 
 int desktop_autostart(void) {

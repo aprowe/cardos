@@ -402,6 +402,25 @@ ICONS = {
         ".KKKKKKKKKKKKKK.",
         "................",
     ],
+    # An alarm clock: a round face, two bells, the hands at ten past ten.
+    "Clock": [
+        "..KK........KK..",
+        ".KyyK.KKKK.KyyK.",
+        ".KyyKKWWWWKKyyK.",
+        "..KKWWWWWWWWKK..",
+        "...KWWWKWWWWK...",
+        "..KWWWWKWWWWWK..",
+        "..KWWWWKWWWWWK..",
+        "..KWWWWKKKKWWK..",
+        "..KWWWWWWWWWWK..",
+        "..KWWWWWWWWWWK..",
+        "...KWWWWWWWWK...",
+        "....KKWWWWKK....",
+        ".....KKKKKK.....",
+        "....KK....KK....",
+        "...KK......KK...",
+        "................",
+    ],
     # A rounded badge with a plus in it: one more.
     "Counter": [
         "................",
@@ -544,6 +563,26 @@ ICONS = {
         ".KKKKKKKKKKKKKK.",
         "................",
         "................",
+    ],
+    # A calculator whose screen is showing a graph -- which is the whole
+    # difference between this and a plain calculator.
+    "Calc": [
+        "..KKKKKKKKKKKK..",
+        ".KDDDDDDDDDDDDK.",
+        ".KDKKKKKKKKKKDK.",
+        ".KDKKKKKKKKgKDK.",
+        ".KDKKKKKKKgKKDK.",
+        ".KDKgKKKKgKKKDK.",
+        ".KDKKgKKgKKKKDK.",
+        ".KDKKKggKKKKKDK.",
+        ".KDKKKKKKKKKKDK.",
+        ".KDDDDDDDDDDDDK.",
+        ".KDWWDWWDWWDyyK.",
+        ".KDDDDDDDDDDDDK.",
+        ".KDWWDWWDWWDyyK.",
+        ".KDDDDDDDDDDDDK.",
+        ".KDWWDWWDWWDrrK.",
+        "..KKKKKKKKKKKK..",
     ],
 
     # Calendar: a wall calendar, two rings and a red heading band, with rows

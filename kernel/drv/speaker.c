@@ -1,4 +1,5 @@
 /* The speaker. See speaker.h. */
+#include "kernel/sys/prefs.h"
 #include "kernel/drv/speaker.h"
 #include "kernel/drv/mic.h"
 #include "kernel/fs/fs.h"
@@ -52,6 +53,7 @@ void speaker_set_volume(int pct) {
   nvs_set_u8(h, NVS_VOLUME, (uint8_t)s_volume);
   nvs_commit(h);
   nvs_close(h);
+  prefs_mirror();              /* and /config/settings.txt: see prefs.h */
 }
 int  speaker_volume(void) { load_volume(); return s_volume; }
 

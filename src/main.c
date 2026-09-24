@@ -5,6 +5,7 @@
  * rather than a task -- the shell proper arrives with those.
  */
 
+#include "kernel/sys/prefs.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,6 +50,7 @@
 #include "kernel/sys/tzlookup.h"
 #include "kernel/sys/busy.h"
 #include "kernel/sys/shot.h"
+#include "kernel/sys/alarm.h"
 #include "kernel/sys/agent.h"
 #include "kernel/net/httpq.h"
 #include "kernel/sys/power.h"
@@ -390,6 +392,7 @@ static void run_builtin(const char *line, char *arg) {
       nvs_erase_all(h);
       nvs_commit(h);
       nvs_close(h);
+      prefs_forget_file();       /* or the next boot would put them all back */
       con_write("settings cleared: brightness, shell, PATH, bluetooth-at-boot.\n");
       con_write("wifi credentials are kept by the driver and survive this.\n");
       con_write("reboot to start fresh.\n");
@@ -1036,6 +1039,7 @@ static void repaint_shells(void) {
 static void repaint_all(void) {
   if (s_mode == MODE_CONSOLE) con_repaint();
   else repaint_shells();
+  alarm_paint_over();          /* a ringing alarm stays on top */
 }
 
 /* A screenshot asked for over the serial line, from tools/shots.py. Named by
@@ -1242,6 +1246,12 @@ void app_main(void) {
     if (wifi_restore_from_card())  con_write("wifi: network restored from /config/wifi.txt\n");
     if (gauth_restore_from_card()) con_write("google: credentials restored from /config/google.txt\n");
     if (env_restore_from_card())   con_write("env: variables restored from /config/env.txt\n");
+    /* Everything else small (prefs.h). Brightness was read before the card
+     * was up, so a restored one is applied now; the rest are read later. */
+    if (prefs_restore_from_card()) {
+      con_write("settings: restored from /config/settings.txt\n");
+      if (!s_safe_mode) display_load_brightness();
+    }
     fs_space(&total, &freeb);
     con_printf("sd %u MB, %u MB free\n",
                (unsigned)(total / (1024 * 1024)),
@@ -1286,6 +1296,7 @@ void app_main(void) {
   /* A command that opens its app (CAPP_CMD_OPEN) opens it the way `run`
    * does: through the launcher. */
   capprun_set_opener(launchui_run);
+  alarm_set_repaint(repaint_all);    /* what a ringing alarm's panel covered */
 
   /* The icon scan, whichever shell comes up. It is also what writes a new
    * firmware's apps to the card (seed_capps) and the command catalog, and it
@@ -1368,6 +1379,7 @@ void app_main(void) {
       if (power_dimmed()) { power_wake(); k = 0; }
     }
     power_tick();
+    alarm_tick();           /* reads /config/alarms.txt when the minute changes */
     clock_persist_tick();   /* writes at most once every ten minutes */
 
     /* What the background task finished while nobody was waiting. One per
@@ -1395,6 +1407,10 @@ void app_main(void) {
         else if (s_mode == MODE_LAUNCHER) launchui_note(line);
       }
     }
+
+    /* A ringing alarm answers every key: nothing underneath should open,
+     * type or close because someone reached out to stop it. */
+    if (k && alarm_ringing()) { alarm_key(k); k = 0; }
 
     /* Before any shell sees it. */
     if (k && global_key(k)) k = 0;

@@ -1,5 +1,6 @@
 /* The desktop's pinned apps. See pins.h. */
 
+#include "kernel/sys/prefs.h"
 #include "kernel/ui/pins.h"
 
 #include <stdio.h>
@@ -25,6 +26,7 @@ static void save(void) {
   nvs_set_str(h, NVS_KEY, s_pins);
   nvs_commit(h);
   nvs_close(h);
+  prefs_mirror();              /* and /config/settings.txt: see prefs.h */
 }
 
 void pins_init(void) {

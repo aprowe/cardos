@@ -137,6 +137,9 @@ static void start_or_resume(uint32_t now_ms) {
   T.remain_ms = T.remain_at_start;     /* so the repaint before the first tick is right */
   T.start_ms = now_ms;
   T.state = ST_RUNNING;
+  /* A countdown is watched, not touched: the screen stays on while it runs
+   * and while it rings (API 32), and goes back to its own timeouts after. */
+  api->keep_awake(1);
 }
 
 static void pause(uint32_t now_ms) {
@@ -144,11 +147,14 @@ static void pause(uint32_t now_ms) {
   if (T.state != ST_RUNNING) return;
   T.remain_ms = elapsed >= T.remain_at_start ? 0 : T.remain_at_start - elapsed;
   T.state = ST_PAUSED;
+  api->keep_awake(0);
 }
 
 static void go_off(uint32_t now_ms) {
   T.remain_ms = 0;
   T.state = ST_DONE;
+  api->wake();                           /* in case it went dark anyway */
+  api->keep_awake(1);
   T.flash_on = 1;
   T.flash_at = now_ms;
   if (au->state() == CAPP_AUDIO_IDLE) au->play(BEEP_PATH);
@@ -158,9 +164,11 @@ static void go_off(uint32_t now_ms) {
 static void dismiss(void) {
   if (au->state() != CAPP_AUDIO_IDLE) au->stop();
   T.state = ST_SET;
+  api->keep_awake(0);
 }
 
 static void reset(void) {
+  api->keep_awake(0);
   if (au->state() != CAPP_AUDIO_IDLE) au->stop();
   if (T.state == ST_SET) { T.set_min = 0; T.set_sec = 0; }
   T.state = ST_SET;

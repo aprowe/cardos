@@ -12,6 +12,7 @@
 #include "kernel/app/cmdline.h"
 #include "kernel/fs/fs.h"
 #include "kernel/ui/fontres.h"
+#include "kernel/sys/power.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -491,6 +492,7 @@ static void release_image(Run *s) {
    * reboot -- see httpq.h. */
   httpq_abandon(s);
   fontres_release_owner(s);          /* and the fonts it asked for */
+  power_release_owner(s);            /* and the screen, if it held it on */
   if (s->loaded) capp_unload(&s->la);
   s->loaded = 0;
   s->has_ui = 0;

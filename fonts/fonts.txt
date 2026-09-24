@@ -9,9 +9,11 @@
 #
 # NAME      SOURCE (fonts/src)               SIZE  OPTIONS (as make_cfnt.py takes them)
 #
-# Timer's face: digits and the colon only, each digit the same width so a
-# countdown does not shuffle, the line cut to the ink.
-clock56     SpaceMono-Bold.ttf                56    --chars 0123456789: --tabular --tight
+# The big numbers -- Clock, Timer, Counter, an alarm ringing: digits and the
+# colon only, each digit the same width so a running time does not shuffle,
+# the line cut to the ink. Inter Bold (it was Space Mono, whose slab 1 and
+# dotted 0 read as a terminal, 2026-09-24).
+clock56     Inter-Variable.ttf                56    --chars 0123456789: --tabular --tight --style Bold
 #
 # Paper, for the thermal printer: two colours, so 1 bit. 24 px is 3 mm at
 # 203 dpi, about 33 characters between the margins. Edit prints in these.
@@ -26,5 +28,5 @@ ui13        AtkinsonHyperlegible-Regular.ttf  13
 ui13b       AtkinsonHyperlegible-Bold.ttf     13
 #
 # Numbers that are the point of a screen but not the whole of it: a streak,
-# a count past six digits. Space Mono like clock56, same tabular digits.
-num30       SpaceMono-Bold.ttf                30    --chars "0123456789+-:%/" --tabular --tight
+# a count past six digits, Clock's seconds. Inter Bold like clock56.
+num30       Inter-Variable.ttf                30    --chars "0123456789+-:%/" --tabular --tight --style Bold

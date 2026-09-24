@@ -9,9 +9,11 @@
 # server/updates.py (the /update manifest, so a first install lands here too).
 
 build     Net
+calc      Tools
 calendar  Tools
 cat       -
 claude    Net
+clock     Tools
 counter   Tools
 edit      Tools
 explorer  Tools

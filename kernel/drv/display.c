@@ -10,6 +10,7 @@
  * also always colour-inverted.
  */
 
+#include "kernel/sys/prefs.h"
 #include "kernel/drv/display.h"
 
 #include "driver/gpio.h"
@@ -305,6 +306,7 @@ void display_set_brightness(int pct) {
   nvs_set_u8(h, NVS_BRIGHT, (uint8_t)pct);
   nvs_commit(h);
   nvs_close(h);
+  prefs_mirror();              /* and /config/settings.txt: see prefs.h */
 }
 
 void display_load_brightness(void) {

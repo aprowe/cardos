@@ -28,6 +28,7 @@
 #include "kernel/console/console.h"
 #include "kernel/sys/clock.h"
 #include "kernel/ui/fontres.h"
+#include "kernel/sys/power.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -401,6 +402,11 @@ static int api_print_fonts(const char *doc, const char *body, const char *bold,
   return printq_print_doc_fonts(doc, body, bold, head);
 }
 
+/* The screen (API 32): held by the app whose code is running, and let go by
+ * capprun when it closes -- see kernel/sys/power.h. */
+static void api_keep_awake(int on) { power_hold(capprun_caller(), on); }
+static void api_wake(void) { power_wake_now(); }
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -430,6 +436,7 @@ static const CardApi API = {
   api_headless, api_command_done,
   api_font_load, api_font_free, api_text_font, api_text_width, api_font_height,
   api_print_fonts,
+  api_keep_awake, api_wake,
 };
 
 const CardApi *cardos_api(void) { return &API; }

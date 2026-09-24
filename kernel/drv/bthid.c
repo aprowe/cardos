@@ -18,6 +18,7 @@
  * globals would have them overwrite each other's handles.
  */
 
+#include "kernel/sys/prefs.h"
 #include "kernel/drv/bthid.h"
 #include "kernel/drv/vendor/esp_hid_gap.h"
 #include "kernel/input/kbd_hid.h"
@@ -798,6 +799,7 @@ void bthid_set_autostart(int on) {
   nvs_set_u8(h, NVS_BTBOOT, (uint8_t)(on ? 1 : 0));
   nvs_commit(h);
   nvs_close(h);
+  prefs_mirror();              /* and /config/settings.txt: see prefs.h */
 }
 
 void bthid_stop(BtHidKind kind) {

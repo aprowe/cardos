@@ -1,5 +1,6 @@
 /* See shell.h. */
 
+#include "kernel/sys/prefs.h"
 #include "kernel/ui/shell.h"
 #include "kernel/console/console.h"
 #include "kernel/ui/desktop.h"
@@ -24,6 +25,7 @@ void ui_set_shell(UiShell s) {
   nvs_set_u8(h, NVS_SHELL, (uint8_t)s);
   nvs_commit(h);
   nvs_close(h);
+  prefs_mirror();              /* and /config/settings.txt: see prefs.h */
 }
 
 UiShell ui_saved_shell(void) {
