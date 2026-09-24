@@ -365,18 +365,31 @@ static void scan_firmware_folder(void) {
  * end keeping theirs. The carousel can then walk 0..icons_count()-1 with no
  * gaps, and a lookup still sees everything. Parents are flat indices, so
  * they are remapped through the same move. */
+/* In place, one Icon of scratch. It sorted into a second whole table on the
+ * stack, which was 6 KB at 48 icons and overflowed the main task at 80 --
+ * a reboot loop right after the scan (2026-09-23). */
 static void partition_cli(void) {
-  Icon tmp[MAX_ICONS];
   int  newpos[MAX_ICONS];
-  int i, n = 0;
+  Icon t;
+  int i, w = 0, n = 0;
 
-  for (i = 0; i < s_nicon; i++) if (!s_icon[i].cli) { newpos[i] = n; tmp[n++] = s_icon[i]; }
+  for (i = 0; i < s_nicon; i++) if (!s_icon[i].cli) newpos[i] = n++;
   s_nvisible = n;
-  for (i = 0; i < s_nicon; i++) if (s_icon[i].cli)  { newpos[i] = n; tmp[n++] = s_icon[i]; }
+  for (i = 0; i < s_nicon; i++) if (s_icon[i].cli)  newpos[i] = n++;
+
+  /* Each visible entry slides down past the commands before it; the
+   * commands shift up one together, so both keep their order. */
   for (i = 0; i < s_nicon; i++) {
-    if (tmp[i].parent >= 0) tmp[i].parent = newpos[tmp[i].parent];
-    s_icon[i] = tmp[i];
+    if (s_icon[i].cli) continue;
+    if (i != w) {
+      t = s_icon[i];
+      memmove(&s_icon[w + 1], &s_icon[w], (size_t)(i - w) * sizeof s_icon[0]);
+      s_icon[w] = t;
+    }
+    w++;
   }
+  for (i = 0; i < s_nicon; i++)
+    if (s_icon[i].parent >= 0) s_icon[i].parent = newpos[s_icon[i].parent];
 }
 
 void icons_reload(void) {

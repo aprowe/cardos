@@ -238,5 +238,5 @@ void test_trailing_data_is_allowed_when_reading_a_partition(void) {
  * count is a build-time fact, so this is a build-time check. */
 void test_there_are_more_app_slots_than_apps(void) {
   /* apps/*.c, one .capp each. Update when an app is added or removed. */
-  CHECK(CAPPRUN_MAX >= 17);
+  CHECK(CAPPRUN_APPS >= 26);
 }

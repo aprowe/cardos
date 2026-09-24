@@ -606,7 +606,7 @@ int launchui_run_path(const char *path, const char *args) {
     }
   }
 
-  slot = capprun_load(path);
+  slot = capprun_load_once(path);
   if (slot < 0) return -1;
   capprun_start(slot, path, args);
   if (!capprun_is_app(slot)) return 0;    /* a command, and it is done */

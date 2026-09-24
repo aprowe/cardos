@@ -352,20 +352,21 @@ def emit_header(built):
     print("  %s (%d bytes of flash)" % (os.path.relpath(HEADER, ROOT), total))
 
 
-# Every app on the card holds a launcher slot for as long as the device is up
-# (kernel/app/capprun.h). One too many and the last app the scan finds is
-# simply missing -- Share, the day Counter arrived. Four spare, because a
-# reload's stale copy and a command's borrowed slot need one each.
+# Every app on the card holds an entry in the kernel's app table for as long
+# as the device is up (CAPPRUN_APPS, kernel/app/capprun.h). One too many and
+# the last app the scan finds is simply missing -- Share, the day Counter
+# arrived. Four spare, for programs run by path, which take an entry for the
+# length of their run.
 SLOT_SPARE = 4
 
 
 def check_slots(napps):
     with open(os.path.join(ROOT, "kernel", "app", "capprun.h"), encoding="utf-8") as f:
-        m = re.search(r"#define\s+CAPPRUN_MAX\s+(\d+)", f.read())
+        m = re.search(r"#define\s+CAPPRUN_APPS\s+(\d+)", f.read())
     limit = int(m.group(1))
     if napps + SLOT_SPARE > limit:
         raise SystemExit(
-            "%d apps, and CAPPRUN_MAX in kernel/app/capprun.h is %d: raise it to "
+            "%d apps, and CAPPRUN_APPS in kernel/app/capprun.h is %d: raise it to "
             "at least %d, or the launcher silently drops an app"
             % (napps, limit, napps + SLOT_SPARE))
 

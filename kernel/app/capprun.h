@@ -14,28 +14,29 @@
 #include "kernel/ui/app.h"
 #include "kernel/app/capp.h"
 
-/* Sixteen. Four when /desktop held three programs, eight when it held five,
- * and then Pinball arrived as the ninth and simply was not there: the scan
- * asked for a slot, got -1, and skipped the app without a word. Nothing was
- * broken and nothing was reported -- the icon was just missing, which is the
- * worst way for a limit to make itself known.
+/* Two limits, because an app on the card and an app in memory are counted
+ * separately (see Entry and Run in capprun.c).
  *
- * A slot costs a name, a help string and some pointers -- about 250 bytes --
- * whether or not anything is in it. The memory that matters is the per-program
- * allocation, and that is only paid by programs that exist. */
-/* One more than the apps that exist, so adding one does not silently cost
- * another its slot. It was 16 with sixteen apps: merging the Share app made
- * seventeen, the scan ran out on the last one it found, and the only sign was
- * a line in the log nobody reads -- the app simply was not in the launcher.
- * A slot is about 300 bytes of .bss, so headroom is cheap and running out is
- * not. It was 20, and the droplet's Counter made twenty-one: Share lost its
- * slot the same way (2026-09-23). tools/build_apps.py now refuses a set of
- * apps within four of this -- a reload's stale copy and a command's borrowed
- * slot each need one spare at the same moment. */
-#define CAPPRUN_MAX 32
+ * CAPPRUN_APPS is every .capp the icon scan can list. It was one table with
+ * the running state in it, sized to the apps that existed, and each time an
+ * app arrived past it the last one found silently vanished from the launcher:
+ * Pinball at 9, Share at 17, Share again at 21. An entry is about 140 bytes
+ * now, so the room is real. tools/build_apps.py still refuses a set of apps
+ * within four of it.
+ *
+ * CAPPRUN_RUNS is how many can be in memory at once: the desktop's eight
+ * windows, the launcher's app, a command, and a stale copy during a reload. */
+#define CAPPRUN_APPS 64
+#define CAPPRUN_RUNS 10
 
-/* Load and read the descriptor. Nothing runs. Returns a slot index, or -1. */
+/* Load and read the descriptor. Nothing runs. Returns a slot index -- an
+ * entry, which is what every function here taking `slot` means -- or -1. */
 int capprun_load(const char *path);
+
+/* The same, for one run of a program the scan did not list (`./prog`, Files
+ * opening one): the image stays loaded for the capprun_start that follows,
+ * and the entry goes when that run does. */
+int capprun_load_once(const char *path);
 
 /* The command catalog: every app's commands, one line each, written by the
  * loads between begin and end (the icon scan). */

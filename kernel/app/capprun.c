@@ -20,9 +20,50 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+/* Two tables, because an app on the card and an app in memory are different
+ * things with different counts.
+ *
+ * An Entry is what the icon scan learns about each .capp: its name, icon,
+ * flags and path. Every app on the card has one for as long as the scan's
+ * list stands, and it is small. A Run is an app actually in memory -- its
+ * image, the interface it installed, what it marked damaged -- and there are
+ * only ever a few: the one on screen, the desktop's windows, a command.
+ *
+ * They were one struct, a Slot, and every app on the card paid for a running
+ * app's worth of state whether or not it ever ran. The table was sized for
+ * the apps that existed, and each time an app arrived past it the last one
+ * the scan found silently vanished from the launcher: Pinball at 9, Share at
+ * 17, Share again at 21 (2026-09-23). A Slot was 456 bytes; an Entry is
+ * about 140 and a Run about 360, so 64 of one and 10 of the other cost less
+ * than the 32 Slots they replace. */
+typedef struct Run Run;
+
 typedef struct {
-  LoadedApp la;
   int       used;
+  /* Loaded for one run, not by the scan -- launchui_run_path, a command for
+   * an app the scan never saw. It goes when its run does, instead of every
+   * `./prog` leaving an entry behind until the next reload. */
+  int       transient;
+  char      name[16];     /* copied out: CappInfo.name need not be terminated */
+  /* The rest of the descriptor, copied for the same reason the name is: the
+   * image it came from is not resident. Twelve apps' icons are 384 bytes;
+   * twelve apps' code was 48 KB of executable RAM, which is most of the
+   * pool. */
+  uint8_t   icon[CAPP_ICON_BYTES];
+  uint16_t  flags;
+  char      path[80];
+  Run      *run;          /* in memory right now, or NULL */
+} Entry;
+
+struct Run {
+  int       used;
+  /* The entry it was started from. NULL once the icon scan re-ran while a
+   * shell still held this app: the scan made a fresh entry for the same
+   * file, and this run lives on only until the shell lets go -- it must not
+   * be found as that app again. */
+  Entry    *entry;
+  LoadedApp la;
+  int       loaded;       /* is the image in memory right now */
 
   /* What the app said changed since its last paint, in the coordinates its
    * last paint was given. Unioned as it is declared; consumed by the shell,
@@ -31,22 +72,15 @@ typedef struct {
   Rect      damage;
   int       has_damage;
 
-  char      name[16];     /* copied out: CappInfo.name need not be terminated */
+  /* Copied from the entry, which a reload can take away while this runs. */
+  char      name[16];
+  uint16_t  flags;
+  /* Written from the action table, or copied from capp_info.help, when the
+   * app installs its interface -- the one moment the image and the table
+   * are both certainly there. Only a running app has a help panel to show. */
   char      help[160];
 
-  /* The rest of the descriptor, copied for the same reason the name is: the
-   * image it came from is not resident. Twelve apps' icons are 384 bytes;
-   * twelve apps' code was 48 KB of executable RAM, which is most of the
-   * pool. */
-  uint8_t   icon[CAPP_ICON_BYTES];
-  uint16_t  flags;
-  char      path[80];
-  int       loaded;       /* is the image in memory right now */
-  /* Set when the icon scan re-ran while a shell still held this app. The
-   * scan loaded a fresh copy into another slot; this one lives on only until
-   * the shell lets go, and must not be handed out as an app again. */
-  int       stale;
-  /* A release asked for while one of this slot's own handlers was on the
+  /* A release asked for while one of this run's own handlers was on the
    * stack -- Files calling run("edit") from its click handler, and the
    * launcher letting go of Files. Freeing the code then would return into
    * it; the trampoline does the release on its way out instead. */
@@ -56,23 +90,29 @@ typedef struct {
   int       has_ui;
 
   AppDef    def;          /* the same thing, wearing a built-in app's clothes */
-} Slot;
+};
 
 static const char *TAG = "capp";
 
+static Entry s_entry[CAPPRUN_APPS];
+static Run   s_run[CAPPRUN_RUNS];
 
-static Slot s_slot[CAPPRUN_MAX];
+/* Where the next free-run search starts. Round the pool rather than lowest
+ * first, so a run just released is the last to be handed to a different app:
+ * a shell that let go of an AppDef should not be holding it any more, but if
+ * one were, it finds an empty run (IMAGE_GONE) rather than someone else. */
+static int s_run_next;
 
-/* Which slot is running. The api->ui callback has no argument saying who is
+/* Which run is starting. The api->ui callback has no argument saying who is
  * calling, and cannot: it is called from inside the program, which has no idea
- * it lives in a slot. */
-static Slot *s_running;
+ * it lives in a run. */
+static Run *s_running;
 
-/* Which slot's callback is executing right now, for the same reason: damage()
+/* Which run's callback is executing right now, for the same reason: damage()
  * is called from inside a handler and the program cannot name itself. Set
  * around every trampoline below, cleared after -- a damage() from anywhere
  * else has no owner and is dropped rather than credited to whoever ran last. */
-static Slot *s_active;
+static Run *s_active;
 
 static CRect to_crect(Rect r) {
   CRect o;
@@ -80,8 +120,8 @@ static CRect to_crect(Rect r) {
   return o;
 }
 
-/* One set of trampolines for every slot, with the slot as the AppDef's state.
- * Generated thunks per slot would be the alternative, and there is no need. */
+/* One set of trampolines for every run, with the run as the AppDef's state.
+ * Generated thunks per run would be the alternative, and there is no need. */
 /* Every trampoline checks that the image is still there before calling into
  * it. It should be -- a shell releases an app only when it closes it -- but
  * the window that outlives its twin (open the same app twice, close one) and
@@ -89,7 +129,7 @@ static CRect to_crect(Rect r) {
  * into freed executable RAM, and a check costs nothing. */
 #define IMAGE_GONE(s) (!(s)->loaded || !(s)->has_ui)
 
-static void release_slot(Slot *s);
+static void release_run(Run *s);
 
 /* The tail of every trampoline: the handler has returned, so a release that
  * was asked for while it ran can happen now.
@@ -102,16 +142,16 @@ static void release_slot(Slot *s);
  * were dropped, and the request it then started had no owner, so the slot
  * could not be disowned when the app closed. That reply sat uncollected and
  * every sync after it was refused until reboot. See httpq.h. */
-static void handler_done(Slot *s, Slot *prev) {
+static void handler_done(Run *s, Run *prev) {
   s_active = prev;
   if (s->release_pending && s_active != s) {
     s->release_pending = 0;
-    release_slot(s);
+    release_run(s);
   }
 }
 
 static void tr_paint(void *state, Rect c) {
-  Slot *s = (Slot *)state, *prev;
+  Run *s = (Run *)state, *prev;
   if (IMAGE_GONE(s)) return;
   prev = s_active;
   s_active = s;
@@ -130,7 +170,7 @@ static void tr_paint(void *state, Rect c) {
  * goes straight through, which is how every app that has not been converted
  * keeps working. */
 static int tr_key(void *state, uint8_t k) {
-  Slot *s = (Slot *)state, *prev;
+  Run *s = (Run *)state, *prev;
   int r, i;
 
   if (IMAGE_GONE(s)) return 0;
@@ -153,46 +193,37 @@ static int tr_key(void *state, uint8_t k) {
 
 /* Run one by name, for anything that is not a finger: the console, a script,
  * a model choosing between the verbs an app actually offers. */
+static Run *run_of(const AppDef *a);
+
 int capprun_action_invoke(const AppDef *a, const char *id) {
-  int i, j;
-  Slot *prev;
-  if (!a || !id) return -1;
-  for (i = 0; i < CAPPRUN_MAX; i++) {
-    Slot *s = &s_slot[i];
-    if (!s->used || (const void *)s != a->state) continue;
-    if (IMAGE_GONE(s)) return -1;
-    for (j = 0; j < (int)s->ui.nactions; j++) {
-      const char *p = s->ui.actions[j].id, *q = id;
-      while (*p && *p == *q) { p++; q++; }
-      if (*p || *q) continue;
-      if (!s->ui.action) return -1;
-      prev = s_active;
-  s_active = s;
-      s->ui.action(s->ui.state, s->ui.actions[j].action);
-      handler_done(s, prev);
-      return 0;
-    }
-    return -1;
+  int j;
+  Run *s = run_of(a), *prev;
+  if (!s || !id || IMAGE_GONE(s)) return -1;
+  for (j = 0; j < (int)s->ui.nactions; j++) {
+    const char *p = s->ui.actions[j].id, *q = id;
+    while (*p && *p == *q) { p++; q++; }
+    if (*p || *q) continue;
+    if (!s->ui.action) return -1;
+    prev = s_active;
+    s_active = s;
+    s->ui.action(s->ui.state, s->ui.actions[j].action);
+    handler_done(s, prev);
+    return 0;
   }
   return -1;
 }
 
 /* The table, for a shell that wants to list it. */
 const CappAction *capprun_actions(const AppDef *a, int *n) {
-  int i;
+  Run *s = run_of(a);
   if (n) *n = 0;
-  if (!a) return 0;
-  for (i = 0; i < CAPPRUN_MAX; i++) {
-    Slot *s = &s_slot[i];
-    if (!s->used || (const void *)s != a->state) continue;
-    if (n) *n = (int)s->ui.nactions;
-    return s->ui.actions;
-  }
-  return 0;
+  if (!s) return 0;
+  if (n) *n = (int)s->ui.nactions;
+  return s->ui.actions;
 }
 
 static int tr_click(void *state, int16_t x, int16_t y, int button) {
-  Slot *s = (Slot *)state, *prev;
+  Run *s = (Run *)state, *prev;
   int r;
   if (IMAGE_GONE(s)) return 0;
   prev = s_active;
@@ -203,7 +234,7 @@ static int tr_click(void *state, int16_t x, int16_t y, int button) {
 }
 
 static int tr_mouse(void *state, int16_t x, int16_t y, int buttons, int wheel) {
-  Slot *s = (Slot *)state, *prev;
+  Run *s = (Run *)state, *prev;
   int r;
   if (IMAGE_GONE(s)) return 0;
   prev = s_active;
@@ -214,7 +245,7 @@ static int tr_mouse(void *state, int16_t x, int16_t y, int buttons, int wheel) {
 }
 
 static int tr_tick(void *state, uint32_t now_ms) {
-  Slot *s = (Slot *)state, *prev;
+  Run *s = (Run *)state, *prev;
   int r;
   if (IMAGE_GONE(s)) return 0;
   prev = s_active;
@@ -225,13 +256,13 @@ static int tr_tick(void *state, uint32_t now_ms) {
 }
 
 static int16_t tr_height(void *state, int16_t w) {
-  Slot *s = (Slot *)state;
+  Run *s = (Run *)state;
   if (IMAGE_GONE(s)) return 0;
   return s->ui.height ? s->ui.height(s->ui.state, w) : 0;
 }
 
 static int tr_wants_text(void *state) {
-  Slot *s = (Slot *)state;
+  Run *s = (Run *)state;
   if (IMAGE_GONE(s)) return 0;
   return s->ui.wants_text ? s->ui.wants_text(s->ui.state) : 0;
 }
@@ -239,7 +270,7 @@ static int tr_wants_text(void *state) {
 /* An app marking what it changed. Unioned, because two marks between paints
  * are one repair. */
 void capprun_damage(CRect r) {
-  Slot *s = s_active;
+  Run *s = s_active;
   Rect n;
 
   if (!s || r.w <= 0 || r.h <= 0) return;
@@ -251,7 +282,7 @@ void capprun_damage(CRect r) {
 
 /* What the shell should clip the next paint to, or 0 for "all of it". */
 static int tr_take_damage(void *state, Rect *out) {
-  Slot *s = (Slot *)state;
+  Run *s = (Run *)state;
   if (!s->has_damage) return 0;
   *out = s->damage;
   return 1;
@@ -259,7 +290,7 @@ static int tr_take_damage(void *state, Rect *out) {
 
 /* Called by the program, through the API table, from inside capp_main. */
 void capprun_install_ui(const CappUi *ui) {
-  Slot *s = s_running;
+  Run *s = s_running;
   if (!s || !ui) return;
 
   s->ui = *ui;               /* copied: the program may pass a local */
@@ -285,6 +316,9 @@ void capprun_install_ui(const CappUi *ui) {
    * "ctrl-p markdown preview" while the desktop was quietly taking ctrl-P.
    * With a table there is one description, and this renders it. An app with
    * no table keeps its written help. */
+  s->help[0] = 0;
+  if (!(ui->actions && ui->nactions) && s->la.info && s->la.info->help)
+    snprintf(s->help, sizeof s->help, "%s", s->la.info->help);
   if (ui->actions && ui->nactions) {
     size_t n = 0;
     int i;
@@ -347,35 +381,68 @@ static void catalog_add(const char *path, const CappInfo *info) {
   }
 }
 
-/* Load, read the descriptor, and -- unless `keep` -- give the image back.
- * `keep` is for a command borrowing a slot: it is about to run the app, and
- * loading it, freeing it and loading it again left a gap in the executable
- * pool each time, until a command could not load Calendar with 44 KB free
- * and no single block of 13.9 KB (2026-09-23). */
-static int load_slot(const char *path, int keep) {
-  int i;
-  Slot *s;
+/* A run for this entry, from the pool. NULL when every run is taken, which
+ * means ten apps in memory at once -- said loudly, since the symptom is an
+ * app that will not start. */
+static Run *run_new(Entry *e) {
+  int k;
+  for (k = 0; k < CAPPRUN_RUNS; k++) {
+    Run *r = &s_run[(s_run_next + k) % CAPPRUN_RUNS];
+    if (r->used) continue;
+    s_run_next = (int)(r - s_run + 1) % CAPPRUN_RUNS;
+    memset(r, 0, sizeof *r);
+    r->used = 1;
+    r->entry = e;
+    memcpy(r->name, e->name, sizeof r->name);
+    r->flags = e->flags;
+    e->run = r;
+    return r;
+  }
+  ESP_LOGE(TAG, "cannot start %s: all %d runs in use, raise CAPPRUN_RUNS",
+           e->name, CAPPRUN_RUNS);
+  return NULL;
+}
 
-  for (i = 0; i < CAPPRUN_MAX; i++) if (!s_slot[i].used) break;
-  if (i == CAPPRUN_MAX) {
+/* The run behind an AppDef a shell holds. Matched by the state pointer, so a
+ * built-in's AppDef matches nothing here. */
+static Run *run_of(const AppDef *a) {
+  int k;
+  if (!a) return NULL;
+  for (k = 0; k < CAPPRUN_RUNS; k++)
+    if (s_run[k].used && (const void *)&s_run[k] == a->state) return &s_run[k];
+  return NULL;
+}
+
+/* Load, read the descriptor into a new entry, and -- unless `keep` -- give
+ * the image back. `keep` is for something about to run the app: loading it,
+ * freeing it and loading it again left a gap in the executable pool each
+ * time, until a command could not load Calendar with 44 KB free and no single
+ * block of 13.9 KB (2026-09-23). A kept image goes straight into a run. */
+static int load_entry(const char *path, int transient, int keep) {
+  LoadedApp la;
+  Entry *e;
+  Run *r;
+  int i;
+
+  for (i = 0; i < CAPPRUN_APPS; i++) if (!s_entry[i].used) break;
+  if (i == CAPPRUN_APPS) {
     /* Loudly, because the symptom is an app that quietly does not appear. */
-    ESP_LOGE(TAG, "no slot for %s: all %d in use, raise CAPPRUN_MAX",
-             path, CAPPRUN_MAX);
+    ESP_LOGE(TAG, "no entry for %s: all %d in use, raise CAPPRUN_APPS",
+             path, CAPPRUN_APPS);
     return -1;
   }
-  s = &s_slot[i];
+  e = &s_entry[i];
 
-  memset(s, 0, sizeof *s);
-  if (capp_load(path, &s->la) != CAPP_OK) return -1;
+  memset(e, 0, sizeof *e);
+  if (capp_load(path, &la) != CAPP_OK) return -1;
 
-  memcpy(s->name, s->la.info->name, sizeof s->name - 1);
-  s->name[sizeof s->name - 1] = 0;
-  if (s->la.info->help)
-    snprintf(s->help, sizeof s->help, "%s", s->la.info->help);
-  memcpy(s->icon, s->la.info->icon, sizeof s->icon);
-  s->flags = s->la.info->flags;
-  snprintf(s->path, sizeof s->path, "%s", path);
-  catalog_add(path, s->la.info);
+  memcpy(e->name, la.info->name, sizeof e->name - 1);
+  e->name[sizeof e->name - 1] = 0;
+  memcpy(e->icon, la.info->icon, sizeof e->icon);
+  e->flags = la.info->flags;
+  e->transient = transient;
+  snprintf(e->path, sizeof e->path, "%s", path);
+  catalog_add(path, la.info);
 
   /* And now give it back.
    *
@@ -384,33 +451,40 @@ static int load_slot(const char *path, int keep) {
    * cost about 4 KB of executable RAM each, and with twelve apps on the card
    * the pool was down to 28 KB before anything had been run. The descriptor
    * is copied above; the code is not needed again until someone starts it. */
-  if (keep) {
-    s->loaded = 1;
+  if (keep && (r = run_new(e)) != NULL) {
+    r->la = la;
+    r->loaded = 1;
   } else {
-    capp_unload(&s->la);
-    s->loaded = 0;
+    capp_unload(&la);
+    if (keep) return -1;                 /* no run to keep it in */
   }
-  s->used = 1;
+  e->used = 1;
   return i;
 }
 
-int capprun_load(const char *path) { return load_slot(path, 0); }
+int capprun_load(const char *path) { return load_entry(path, 0, 0); }
 
-/* Bring the image back for a slot that is about to run. */
-static int ensure_loaded(Slot *s) {
+/* For one run of a program the scan did not list: loaded now, kept for the
+ * start that follows, and gone with that run. */
+int capprun_load_once(const char *path) { return load_entry(path, 1, 1); }
+
+/* Bring the image back for a run that is about to start. */
+static int ensure_loaded(Run *s) {
   CappResult r;
   if (s->loaded) return 0;
-  r = capp_load(s->path, &s->la);
+  r = capp_load(s->entry->path, &s->la);
   if (r != CAPP_OK) {
-    ESP_LOGE(TAG, "%s: %s", s->path, capp_strerror(r));
+    ESP_LOGE(TAG, "%s: %s", s->entry->path, capp_strerror(r));
     return -1;
   }
   s->loaded = 1;
   return 0;
 }
 
-/* Let go of one, if nothing is still calling into it. */
-static void release_slot(Slot *s) {
+/* Take the program out of memory and forget what it installed, keeping the
+ * run: for a restart, where the same AppDef should come back as the same
+ * app, as it did when there was only one table. */
+static void release_image(Run *s) {
   /* A request it started and will never collect goes with it. Left in the
    * queue, that reply refused every sync on the device until the next
    * reboot -- see httpq.h. */
@@ -418,8 +492,20 @@ static void release_slot(Slot *s) {
   if (s->loaded) capp_unload(&s->la);
   s->loaded = 0;
   s->has_ui = 0;
-  if (s->stale) { s->stale = 0; s->used = 0; }
   share_app_closed(s);
+}
+
+/* Let go of one completely: the image, and the run back to the pool. An entry
+ * that existed only for this run goes too. */
+static void release_run(Run *s) {
+  release_image(s);
+  s->release_pending = 0;
+  if (s->entry) {
+    s->entry->run = NULL;
+    if (s->entry->transient) s->entry->used = 0;
+  }
+  s->entry = NULL;
+  s->used = 0;
 }
 
 const void *capprun_caller(void) {
@@ -431,41 +517,35 @@ const void *capprun_caller(void) {
  * that installed nothing, and a shell releases what it hosts when it closes
  * it. The one executing right now counts too, whether or not it has a UI --
  * a command may be the thing asking for the reload. */
-static int slot_busy(const Slot *s) {
+static int run_busy(const Run *s) {
   return (s->loaded && s->has_ui) || s == s_running || s == s_active;
 }
 
 /* A shell saying it has finished with an app -- the window closed, or escape
- * left it. Matched by the AppDef's state pointer, which is the slot; a
- * built-in's AppDef matches nothing here and is left alone. */
+ * left it. */
 void capprun_release(const AppDef *a) {
-  int i;
-  if (!a) return;
-  for (i = 0; i < CAPPRUN_MAX; i++) {
-    Slot *s = &s_slot[i];
-    if (!s->used || (const void *)s != a->state) continue;
-    if (s == s_active || s == s_running) s->release_pending = 1;
-    else release_slot(s);
-    return;
-  }
+  Run *s = run_of(a);
+  if (!s) return;
+  if (s == s_active || s == s_running) s->release_pending = 1;
+  else release_run(s);
 }
 
-/* Forget every slot, so the icon scan can start again. Except the ones a
- * shell is still hosting, and the one running right now: `update apps` is
- * asked for from inside Build and from the Claude terminal, and the reload
- * that follows used to free the caller's own code and return into it. Those
- * keep their image, marked stale, and go when the shell lets go of them; the
- * scan loads a fresh copy of the same file into another slot, so the icon
- * grid shows the new version while the old one is still on screen. */
+/* Forget every entry, so the icon scan can start again. The runs a shell is
+ * still hosting, and the one running right now, stay: `update apps` is asked
+ * for from inside Build and from the Claude terminal, and the reload that
+ * follows used to free the caller's own code and return into it. Those keep
+ * their image, detached from any entry, and go when the shell lets go of
+ * them; the scan makes a fresh entry for the same file, so the icon grid
+ * shows the new version while the old one is still on screen. */
 void capprun_unload_all(void) {
   int i;
-  for (i = 0; i < CAPPRUN_MAX; i++) {
-    Slot *s = &s_slot[i];
+  for (i = 0; i < CAPPRUN_RUNS; i++) {
+    Run *s = &s_run[i];
     if (!s->used) continue;
-    if (slot_busy(s)) { s->stale = 1; continue; }
-    release_slot(s);
-    s->used = 0;
+    if (run_busy(s)) { s->entry = NULL; continue; }
+    release_run(s);
   }
+  for (i = 0; i < CAPPRUN_APPS; i++) s_entry[i].used = 0;
 }
 
 /* Split a command line into argv. In place, into a buffer of our own, because
@@ -535,27 +615,39 @@ static int meet_needs(uint16_t flags) {
   return got;
 }
 
+static Entry *entry_at(int slot) {
+  if (slot < 0 || slot >= CAPPRUN_APPS || !s_entry[slot].used) return NULL;
+  return &s_entry[slot];
+}
+
 int capprun_start(int slot, const char *name, const char *args) {
   static char argbuf[192];
   char *argv[CAPP_MAX_ARGS];
   int argc, rc;
-  Slot *s;
+  Entry *e = entry_at(slot);
+  Run *s;
   extern const CardApi *cardos_api(void);
 
-  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return -1;
-  s = &s_slot[slot];
+  if (!e) return -1;
+  s = e->run;
 
   /* Already on screen somewhere? Its globals hold that run's state, and
    * calling capp_main over them is not a second copy of the app, it is the
-   * first one with its memory scribbled on. Start from a fresh image. A shell
-   * that would rather keep the running one (the desktop raises the existing
-   * window) checks before it gets here. The app asking to restart itself
-   * from one of its own handlers is refused: its code is on the stack. */
-  if (s == s_active || s == s_running || s->stale) return -1;
-  if (s->loaded && s->has_ui) release_slot(s);
+   * first one with its memory scribbled on. Start from a fresh image, in the
+   * same run, so a shell still holding its AppDef finds the new instance. A
+   * shell that would rather keep the running one (the desktop raises the
+   * existing window) checks before it gets here. The app asking to restart
+   * itself from one of its own handlers is refused: its code is on the
+   * stack. */
+  if (s) {
+    if (s == s_active || s == s_running) return -1;
+    if (s->loaded && s->has_ui) release_image(s);
+  } else if ((s = run_new(e)) == NULL) {
+    return -1;
+  }
   s->has_ui = 0;
 
-  argc = split_args(name ? name : s->name, args, argbuf, sizeof argbuf,
+  argc = split_args(name ? name : e->name, args, argbuf, sizeof argbuf,
                     argv, CAPP_MAX_ARGS);
 
   /* Meet what the app said it needs, before it runs.
@@ -564,7 +656,7 @@ int capprun_start(int slot, const char *name, const char *args) {
    * the twenty seconds of joining a network belong to "starting Web" instead
    * of to "Web is broken". Failure is not fatal: caps_ok() reports what was
    * actually found and the app decides what to say about it. */
-  if (ensure_loaded(s) != 0) return -1;
+  if (ensure_loaded(s) != 0) { release_run(s); return -1; }
   s_caps_ok = meet_needs(s->flags);
 
   s_running = s;
@@ -574,7 +666,7 @@ int capprun_start(int slot, const char *name, const char *args) {
   /* A command -- grep, cat -- does its work in capp_main and returns having
    * installed nothing. Nothing will call into it again, so it goes straight
    * back to the pool. A graphical app installed handlers and has to stay. */
-  if (!s->has_ui) release_slot(s);
+  if (!s->has_ui) release_run(s);
   return rc;
 }
 
@@ -628,24 +720,24 @@ void capprun_command_done(int rc, const char *out) {
   s_cmd_waiting = 0;
 }
 
-/* The slot whose file is APP.capp, in whichever folder. */
-static Slot *slot_for_app(const char *app) {
+/* The entry whose file is APP.capp, in whichever folder. */
+static Entry *entry_for_app(const char *app) {
   int i;
   size_t n = strlen(app);
-  for (i = 0; i < CAPPRUN_MAX; i++) {
-    Slot *s = &s_slot[i];
+  for (i = 0; i < CAPPRUN_APPS; i++) {
+    Entry *e = &s_entry[i];
     const char *base;
-    if (!s->used || s->stale) continue;
-    base = strrchr(s->path, '/');
-    base = base ? base + 1 : s->path;
-    if (!strncmp(base, app, n) && !strcmp(base + n, ".capp")) return s;
+    if (!e->used) continue;
+    base = strrchr(e->path, '/');
+    base = base ? base + 1 : e->path;
+    if (!strncmp(base, app, n) && !strcmp(base + n, ".capp")) return e;
   }
   return NULL;
 }
 
-/* APP.capp on the card: the top of /apps, then each folder in it. The slots
- * only hold what the launcher's icon scan loaded, and outside the launcher
- * -- at the console -- they are empty, so a command cannot count on them.
+/* APP.capp on the card: the top of /apps, then each folder in it. The entries
+ * only hold what the icon scan loaded, and a card changed since -- or a scan
+ * that has not run -- leaves the app out, so a command cannot count on them.
  * 0 and the path, or -1. */
 static int find_capp(const char *app, char *out, size_t n) {
   FsDir d;
@@ -669,35 +761,41 @@ int capprun_command(const char *app, const char *cmd, int nwords,
   static char join[CAPPRUN_CMD_TEXT];
   const char *argv[CAPP_CMD_ARGS_MAX];
   const CappAction *a;
-  Slot *s, *prev;
+  Entry *e;
+  Run *s, *prev;
   char why[96];
-  int headless, argc, rc, borrowed = 0;
+  int headless, argc, rc;
 
   out[0] = 0;
-  s = slot_for_app(app);
-  if (!s) {
-    /* Not in a slot: find it on the card and borrow one for the command. */
+  e = entry_for_app(app);
+  if (!e) {
+    /* Not listed: find it on the card, with an entry that goes when the
+     * command's run does. Loaded once, into that run. */
     char path[80];
     int i;
-    if (find_capp(app, path, sizeof path) != 0 || (i = load_slot(path, 1)) < 0) {
+    if (find_capp(app, path, sizeof path) != 0 || (i = load_entry(path, 1, 1)) < 0) {
       snprintf(out, n, "no app called %s", app);
       return -1;
     }
-    s = &s_slot[i];
-    borrowed = 1;
+    e = &s_entry[i];
   }
-  if (s == s_active || s == s_running) {
+  s = e->run;
+  if (s && (s == s_active || s == s_running)) {
     snprintf(out, n, "%s is busy", app);         /* its code is on the stack */
     return -1;
   }
 
-  headless = !(s->loaded && s->has_ui);
+  headless = !(s && s->loaded && s->has_ui);
   if (headless) {
     char *mainargv[1];
+    if (!s && (s = run_new(e)) == NULL) {
+      snprintf(out, n, "could not start %s: too many apps open", app);
+      return -1;
+    }
     mainargv[0] = s->name;
     s->has_ui = 0;
     if (ensure_loaded(s) != 0) {
-      if (borrowed) s->used = 0;
+      release_run(s);
       snprintf(out, n, "could not load %s: not enough memory for its code", app);
       return -1;
     }
@@ -706,9 +804,8 @@ int capprun_command(const char *app, const char *cmd, int nwords,
     s->la.main(cardos_api(), 1, mainargv);
     s_running = NULL;
     if (!s->has_ui) {
-      release_slot(s);
+      release_run(s);
       s_headless = 0;
-      if (borrowed) s->used = 0;
       snprintf(out, n, "%s has no commands", app);
       return -1;
     }
@@ -728,9 +825,8 @@ int capprun_command(const char *app, const char *cmd, int nwords,
     /* Not the handler: the app on screen with these arguments. The headless
      * copy that read the table goes first, so the one that opens is fresh. */
     if (headless) {
-      release_slot(s);
+      release_run(s);
       s_headless = 0;
-      if (borrowed) s->used = 0;
     }
     return open_with(app, argc, argv, out, n);
   }
@@ -766,12 +862,14 @@ int capprun_command(const char *app, const char *cmd, int nwords,
 
 finish:
   if (headless) {
-    release_slot(s);
+    /* The run goes back, and an entry made only for this command with it.
+     * Unless a handler above asked for it already: handler_done has done
+     * the release, and the run may belong to nobody now. */
+    if (s->used && s->entry == e) release_run(s);
     s_headless = 0;
-    if (borrowed) s->used = 0;             /* the slot goes back too */
   } else {
     /* The open instance changed under its own screen. No marks means the
-     * whole rectangle at the next paint (see `damage` in Slot). */
+     * whole rectangle at the next paint (see `damage` in Run). */
     s->has_damage = 0;
   }
   return rc;
@@ -783,7 +881,7 @@ int capprun_caps_ok(void) { return s_caps_ok; }
  * one being started, inside a handler the one the trampoline entered, and a
  * capp_main entered from another app's handler is the innermost. Used as an
  * identity, never dereferenced -- it names the owner of a request, so
- * release_slot can disown it. NULL between handlers. */
+ * release_run can disown it. NULL between handlers. */
 const void *capprun_executing(void) {
   return s_running ? (const void *)s_running : (const void *)s_active;
 }
@@ -791,39 +889,39 @@ const void *capprun_executing(void) {
 /* What to call it in a log line. "app" when no app is on the stack, which
  * means the kernel logged through the same path. */
 const char *capprun_executing_name(void) {
-  Slot *s = s_running ? s_running : s_active;
+  Run *s = s_running ? s_running : s_active;
   return (s && s->name[0]) ? s->name : "app";
 }
 
 int capprun_is_app(int slot) {
-  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return 0;
-  return s_slot[slot].has_ui;
+  Entry *e = entry_at(slot);
+  return e && e->run && e->run->has_ui;
 }
 
 const char *capprun_name(int slot) {
-  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return "";
-  return s_slot[slot].name;
+  Entry *e = entry_at(slot);
+  return e ? e->name : "";
 }
 
 const uint8_t *capprun_icon(int slot) {
-  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return NULL;
-  return s_slot[slot].icon;
+  Entry *e = entry_at(slot);
+  return e ? e->icon : NULL;
 }
 
 int capprun_is_cli(int slot) {
-  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return 0;
-  return (s_slot[slot].flags & CAPP_CLI) != 0;
+  Entry *e = entry_at(slot);
+  return e && (e->flags & CAPP_CLI) != 0;
 }
 
 int capprun_fullscreen(int slot) {
-  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return 0;
-  return (s_slot[slot].flags & CAPP_FULLSCREEN) != 0;
+  Entry *e = entry_at(slot);
+  return e && (e->flags & CAPP_FULLSCREEN) != 0;
 }
 
 const AppDef *capprun_def(int slot) {
-  if (slot < 0 || slot >= CAPPRUN_MAX || !s_slot[slot].used) return NULL;
-  if (!s_slot[slot].has_ui) return NULL;
-  return &s_slot[slot].def;
+  Entry *e = entry_at(slot);
+  if (!e || !e->run || !e->run->has_ui) return NULL;
+  return &e->run->def;
 }
 
 uint32_t capprun_exec_free(void) { return capp_exec_free(); }

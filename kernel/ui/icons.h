@@ -41,8 +41,10 @@
  * folders holding thirteen apps between them, and a Firmware folder with four
  * images is 25. The scan simply stopped when it ran out, so the last folder
  * looked empty and nobody was told. Sized with room now rather than exactly,
- * because the failure is silent. */
-#define MAX_ICONS 48
+ * because the failure is silent. 80 since the app table grew to 64
+ * (CAPPRUN_APPS): the folders, the built-ins and the firmware images come out
+ * of the same count. */
+#define MAX_ICONS 80
 
 typedef enum { ICON_BUILTIN, ICON_FIRMWARE, ICON_CAPP, ICON_FOLDER } IconKind;
 
