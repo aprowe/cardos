@@ -18,6 +18,14 @@
  *      [x] task           ticked checkbox
  *      ---                horizontal rule
  *      text               2x text, word-wrapped; a blank line is a gap
+ *      %%N*w,b,w,b=RAW    N identical pixel rows (N 1..64, default 1):
+ *                         run lengths alternating white and black from
+ *                         x = 0, then, optionally, raw pixels after `=`
+ *                         as base64, six to a digit, leftmost first. Full
+ *                         width, no margin, no gap -- an image is a run of
+ *                         these lines (Calc's graphs). Runs are short for
+ *                         a smooth curve and raw for a busy one, so a
+ *                         writer uses whichever is shorter row by row.
  *
  * The screen font is 6x8; at 203 dpi that is unreadable at 1x, so nothing
  * here prints smaller than 2x (12x16 -- 29 columns between the margins).

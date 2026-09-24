@@ -213,6 +213,26 @@ rewrite. Design and the measured numbers in
 `docs/specs/2026-09-20-print-design.md`; the protocol notes and the PC probe
 that verified it are in `~/Projects/printer`.
 
+**Pictures go to paper as `%%` lines** (2026-09-24). A print document may
+carry pixel rows: `%%N*runs=base64` -- N identical rows, run lengths
+alternating white/black from x = 0, then optionally raw pixels, six to a
+base64 digit (`kernel/sys/printdoc.h`). No API change: it is still
+`api->print`. A writer picks runs or raw per row, whichever is shorter --
+runs alone put one graph of `4sin(5x)` at 20 KB, and the kernel copies the
+whole document. A line that only starts with `%%` is text, as before.
+Needs the firmware that knows it: on older firmware the lines print as text.
+
+**Calc is a graphing calculator** (`apps/calc.c`, 2026-09-24). A roll of
+sums (`ans`, `a=5`, implicit multiplication, sin..round, `n!`), and any
+line that is `y=...` or mentions x becomes one of four graphs: Tab shows
+them, arrows pan, + - zoom, f fits, t traces. fn-p prints the view on
+screen, the graph as a `%%` picture. Single-precision float, shown to seven
+digits, because that is the hardware -- and an app links no libgcc, so
+Calc carries its own `__divsf3` (`a / b` compiles to a call) and its own
+libm. Struct assignment compiles to `memcpy`, which is not there either;
+use `api->mem_cpy`. `test/test_calc.c` checks the maths against the
+host's libm.
+
 **The toolbar is a keyboard menu too** (2026-09-18). `fn-b` shows the bar and
 puts the keyboard in it: left/right walk the menu names, down opens one,
 up/down walk its items, Enter runs the highlighted one as an action, Escape

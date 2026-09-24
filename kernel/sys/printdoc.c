@@ -95,7 +95,7 @@ const char *printdoc_status_text(const uint8_t *reply, size_t n) {
 
 /* ------------------------------------------------------------- renderer -- */
 
-enum { PD_TEXT, PD_CHECK, PD_CHECKED, PD_SUB, PD_HEAD, PD_RULE, PD_BLANK };
+enum { PD_TEXT, PD_CHECK, PD_CHECKED, PD_SUB, PD_HEAD, PD_RULE, PD_BLANK, PD_BITS };
 
 #define USABLE     (PRINT_WIDTH - 2 * PRINT_MARGIN)   /* 352 */
 #define BOX        16                                  /* the checkbox, square */
@@ -227,10 +227,84 @@ static int style_height(int style) {
   }
 }
 
+/* A base64 digit's value, or -1. */
+static int b64(char c) {
+  if (c >= 'A' && c <= 'Z') return c - 'A';
+  if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+  if (c >= '0' && c <= '9') return c - '0' + 52;
+  if (c == '+') return 62;
+  if (c == '/') return 63;
+  return -1;
+}
+
+/* Where the runs of a bitmap line start: past `%%` and any `N*`. */
+static int bits_start(const char *s, int len) {
+  int i = 2;
+  while (i < len && s[i] >= '0' && s[i] <= '9') i++;
+  return i < len && s[i] == '*' ? i + 1 : 2;
+}
+
+/* A bitmap line: `%%` [N `*`] run,run,... [`=` base64] -- see
+ * printdoc.h. Checked whole before it counts, so a line that merely
+ * starts with `%%` (a LaTeX comment in a file Edit prints) is text, as it
+ * always was. Returns the repeat count, or 0 if this is not one. */
+static int bits_repeat(const char *s, int len) {
+  int i = 2, rep = 1, v = 0, digits = 0;
+  if (len < 2 || s[0] != '%' || s[1] != '%') return 0;
+  while (i < len && s[i] >= '0' && s[i] <= '9') {
+    v = v * 10 + (s[i] - '0');
+    i++;
+    if (v > 999) return 0;
+  }
+  if (i < len && s[i] == '*') {
+    if (i == 2 || v < 1 || v > PRINTDOC_LINE_H_MAX) return 0;
+    rep = v;
+  }
+  for (i = bits_start(s, len); i < len; i++) {
+    if (s[i] >= '0' && s[i] <= '9') digits++;
+    else if (s[i] == ',' && digits) digits = 0;
+    else if (s[i] == '=') break;
+    else return 0;
+  }
+  for (i++; i < len; i++)
+    if (b64(s[i]) < 0) return 0;
+  return rep;
+}
+
+/* Decode a bitmap line into block row `y`: the runs, white first then
+ * black, alternating from x = 0, then any raw pixels after `=`, six to a
+ * base64 digit, leftmost first. Past the paper's edge is dropped. */
+static void bits_row(uint8_t (*block)[PRINT_ROW_BYTES], int rows, int y,
+                     const char *s, int len) {
+  int i, x = 0, black = 0, v = 0, any = 0;
+  for (i = bits_start(s, len); i <= len; i++) {
+    if (i < len && s[i] >= '0' && s[i] <= '9') {
+      if (v < 100000) v = v * 10 + (s[i] - '0');     /* past the paper is past the paper */
+      any = 1;
+      continue;
+    }
+    if (any) {
+      if (v > PRINT_WIDTH) v = PRINT_WIDTH;
+      if (black) fill(block, rows, x, y, v, 1);
+      x += v;
+      if (x > PRINT_WIDTH) x = PRINT_WIDTH;
+      black = !black;
+      v = 0; any = 0;
+    }
+    if (i >= len || s[i] == '=') break;
+  }
+  for (i++; i < len && x < PRINT_WIDTH; i++) {
+    int d = b64(s[i]), bit;
+    for (bit = 5; bit >= 0; bit--, x++)
+      if (d & (1 << bit)) set_px(block, rows, x, y);
+  }
+}
+
 /* Classify one source line, leaving `*text` at its content. */
 static int classify(const char *line, int len, const char **text, int *tlen) {
   *text = line; *tlen = len;
   if (len == 0) return PD_BLANK;
+  if (line[0] == '%' && bits_repeat(line, len)) return PD_BITS;
   if (len >= 3 && line[0] == '-' && line[1] == '-' && line[2] == '-') return PD_RULE;
   if (len >= 2 && line[0] == '#' && line[1] == '#') {
     *text = line + 2; *tlen = len - 2;
@@ -325,6 +399,14 @@ static int next_block(PrintDoc *d) {
     rule(d->block, d->block_rows, 8);
     d->rest = NULL;
     return 1;
+  case PD_BITS: {
+    int y;
+    d->block_rows = bits_repeat(d->rest, d->rest_len);
+    bits_row(d->block, d->block_rows, 0, d->rest, d->rest_len);
+    for (y = 1; y < d->block_rows; y++) memcpy(d->block[y], d->block[0], PRINT_ROW_BYTES);
+    d->rest = NULL;
+    return 1;
+  }
   default:
     break;
   }

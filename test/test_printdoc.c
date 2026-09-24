@@ -354,3 +354,74 @@ void test_printdoc_no_fonts_is_the_6x8_rendering(void) {
   CHECK(same);
   CHECK_EQ(printdoc_count_with(&b, doc, &none), printdoc_count_rows(doc));
 }
+
+/* ---- bitmap lines ---- */
+
+void test_printdoc_bits_line_lights_the_runs(void) {
+  PrintDoc d;
+  uint8_t row[PRINT_ROW_BYTES];
+  /* white 10, black 3, white 100, black 2: ink at 10..12 and 113..114 */
+  printdoc_begin(&d, "%%10,3,100,2");
+  CHECK(printdoc_next_row(&d, row));
+  CHECK_EQ(ink(row, 0, PRINT_WIDTH), 5);
+  CHECK(px(row, 10) && px(row, 12) && !px(row, 9) && !px(row, 13));
+  CHECK(px(row, 113) && px(row, 114) && !px(row, 115));
+  CHECK(!printdoc_next_row(&d, row));           /* one row, no gap under it */
+}
+
+void test_printdoc_bits_line_repeats_and_ends_black(void) {
+  int inked;
+  /* 5 identical rows; a black run at the end reaches the paper's edge */
+  CHECK_EQ(drain("%%5*380,4", &inked), 5);
+  CHECK_EQ(inked, 5);
+  /* blank rows: just a count */
+  CHECK_EQ(drain("%%7*", &inked), 7);
+  CHECK_EQ(inked, 0);
+  /* runs past the edge are clipped, not wrapped */
+  CHECK_EQ(drain("%%0,1000", &inked), 1);
+  CHECK_EQ(inked, 1);
+  /* consecutive bitmap lines butt together: an image is many of them */
+  CHECK_EQ(drain("%%3*0,1\n%%2*\n%%0,1", &inked), 6);
+  CHECK_EQ(inked, 4);
+}
+
+void test_printdoc_not_quite_bits_is_text(void) {
+  int inked;
+  /* a LaTeX comment, a bad repeat, a word: all print as text, 2x high */
+  CHECK(drain("%% comment", &inked) >= 16);
+  CHECK(inked > 0);
+  CHECK(drain("%%0*1,2", NULL) >= 16);
+  CHECK(drain("%%999*1,2", NULL) >= 16);
+  CHECK(drain("%%1,2x", NULL) >= 16);
+  CHECK_EQ(printdoc_count_rows("%%4*1,1\nhi"), 4 + printdoc_count_rows("hi"));
+}
+
+void test_printdoc_bits_line_carries_raw_pixels_after_an_equals(void) {
+  PrintDoc d;
+  uint8_t row[PRINT_ROW_BYTES];
+  /* 16 white, then base64: '/' is 63 = six black, 'g' is 32 = 100000,
+   * 'A' is none -- so ink at 16..21 and 22, and nothing from 23 */
+  printdoc_begin(&d, "%%16=/gA");
+  CHECK(printdoc_next_row(&d, row));
+  CHECK_EQ(ink(row, 0, PRINT_WIDTH), 7);
+  CHECK(!px(row, 15) && px(row, 16) && px(row, 21) && px(row, 22) && !px(row, 23));
+  CHECK(!printdoc_next_row(&d, row));
+  /* no runs before it: raw from the paper's edge, and it repeats */
+  CHECK_EQ(drain("%%3*=w", NULL), 3);
+  printdoc_begin(&d, "%%=w");                    /* 'w' is 48 = 110000 */
+  CHECK(printdoc_next_row(&d, row));
+  CHECK(px(row, 0) && px(row, 1) && !px(row, 2));
+  /* past the paper's edge is dropped */
+  {
+    char line[100];
+    int i, inked;
+    memcpy(line, "%%=", 3);
+    for (i = 0; i < 90; i++) line[3 + i] = '/';
+    line[93] = 0;
+    CHECK_EQ(drain(line, &inked), 1);
+    CHECK_EQ(inked, 1);
+  }
+  /* only base64 after the = */
+  CHECK(drain("%%=ab,c", NULL) >= 16);
+  CHECK(drain("%%1=a b", NULL) >= 16);
+}
