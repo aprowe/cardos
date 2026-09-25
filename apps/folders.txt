@@ -23,6 +23,7 @@ habits    Tools
 ide       Tools
 memo      Tools
 mines     Games
+noodle    Games
 photo     Tools
 pinball   Games
 screen    Net

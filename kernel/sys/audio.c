@@ -35,7 +35,7 @@ static void progress_cb(uint32_t bytes) { s_pos_bytes = bytes; }
 static void record_task(void *param) {
   int n;
   (void)param;
-  n = mic_record_wav(s_path, s_max_ms, stop_cb, level_cb);
+  n = mic_record_wav(s_path[0] ? s_path : NULL, s_max_ms, stop_cb, level_cb);
   s_last_bytes = n;
   if (n < 0) snprintf(s_error, sizeof s_error, "%s", "the mic or the card refused");
   ESP_LOGI(TAG, "recorded %d bytes to %s", n, s_path);
@@ -68,8 +68,8 @@ static int start(void (*task)(void *), int state, const char *name) {
 
 int audio_record(const char *path, int max_ms) {
   if (s_state != AUDIO_IDLE) return -1;
-  if (!path || !*path) return -2;
-  snprintf(s_path, sizeof s_path, "%s", path);
+  if (path && !*path) return -2;
+  snprintf(s_path, sizeof s_path, "%s", path ? path : "");   /* "" listens */
   s_max_ms = max_ms;
   s_level = 0;
   s_last_bytes = -1;

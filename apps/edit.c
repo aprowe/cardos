@@ -77,6 +77,7 @@ static struct {
   /* markdown preview */
   int   ptop;                 /* first rendered row on screen */
   int   prows;                /* how many rows the document rendered to */
+  int   pmore;                /* rows are left below the screen */
 
   /* paper: the buffer joined with newlines, and whether the strip is
    * showing the job's progress */
@@ -299,37 +300,55 @@ static void backspace(void) {
  *
  * Markdown is a large specification and almost none of it earns its place on
  * a 240-pixel screen. What is here is what people actually write in notes:
- * headings, lists, quotes, code, rules, and bold or `code` inside a line.
- * Anything unrecognised is drawn as the text it is, which is markdown's whole
- * premise and a good fallback.
+ * headings, lists, quotes, code, rules, and bold, emphasis, `code` and links
+ * inside a line. Anything unrecognised is drawn as the text it is, which is
+ * markdown's whole premise and a good fallback.
  *
  * It renders from the edit buffer rather than the file, so a preview shows
  * what you have typed and not what you last saved.
  *
- * There is no font but the 6x8 one and no way to scale it -- the API draws
- * text one way. Weight is therefore faked by drawing a glyph twice, one pixel
- * apart, which at this size reads convincingly as bold; headings get that
- * plus colour plus a rule under the big ones. Italics have no honest
- * equivalent, so emphasis is shown in colour instead of being invented.
+ * Set in Atkinson Hyperlegible (ui13, ui13b from /fonts), a sans-serif, so a
+ * note reads as a page and not as a terminal; code, fenced or `inline`, stays
+ * in the 6x8 console font, where monospace is the point. Without the fonts on
+ * the card everything falls back to 6x8 and still wraps.
+ *
+ * Lines are word-wrapped to the width of the screen, measured in the font
+ * they are drawn in: a line breaks at the last space that fits, a word too
+ * long for a whole row is broken inside, and nothing is cut off. Wrapped rows
+ * of a list item or a quote hang under the text, not under the marker. The
+ * layout is walked for every paint -- ninety-six lines at most -- and draws
+ * only the rows on screen, so there is one description of it, not two.
  */
 
 #define PG_LEFT   4          /* the page margin */
-#define PG_ROW    9
+#define PG_CODE_H 10         /* a row of 6x8 code */
 
-/* One rendered row: the shape a line takes on the page. Built as the document
- * is walked so scrolling does not re-parse, and so the scrollbar knows how
- * long the document is before it has drawn it. */
 typedef enum {
   MD_TEXT = 0, MD_H1, MD_H2, MD_H3, MD_BULLET, MD_NUMBER,
   MD_QUOTE, MD_CODE, MD_RULE, MD_BLANK
 } MdKind;
 
-static void md_text(int x, int y, const char *s, uint16_t fg, uint16_t bg,
-                    int bold) {
-  api->text((short)x, (short)y, s, fg, bg);
-  /* The second pass is the whole of "bold" at six pixels: one to the right,
-   * transparent background so it thickens rather than smears. */
-  if (bold) api->text((short)(x + 1), (short)y, s, fg, bg);
+/* The style of each character once the markers are out of the line. */
+enum { ST_N = 0, ST_B, ST_E, ST_C, ST_L };   /* normal bold emph code link */
+
+static struct {
+  int     loaded;
+  int     body, bold;           /* font handles; -1 is the 6x8 font */
+  int     line_h;               /* a row of prose */
+  char    ch[MAXCOL + 1];       /* the line being laid out, markers removed */
+  uint8_t st[MAXCOL + 1];
+  int     n;
+} M;
+
+static void md_fonts(void) {
+  int hb, hbb;
+  if (M.loaded) return;
+  M.loaded = 1;
+  M.body = api->font_load ? api->font_load("ui13") : -1;
+  M.bold = api->font_load ? api->font_load("ui13b") : -1;
+  hb = api->font_height ? api->font_height(M.body) : 8;
+  hbb = api->font_height ? api->font_height(M.bold) : 8;
+  M.line_h = (hb > hbb ? hb : hbb) + 2;
 }
 
 /* Strip the markers a line begins with, and say what it was. */
@@ -370,88 +389,138 @@ static MdKind md_kind(const char *in, const char **body, int *indent) {
   return MD_TEXT;
 }
 
-/* Draw one run of text with the inline markers taken out: **bold**, *emph*,
- * `code`, and [label](url) reduced to its label.
- *
- * One pass, no nesting. Nested emphasis inside a note on a pocket computer is
- * a problem nobody has. */
-static void md_inline(int x, int y, int maxw, const char *s, uint16_t fg,
-                      uint16_t bg) {
-  char word[64];
-  int n = 0, bold = 0, code = 0;
-  int cx = x;
+static void md_put(char c, int st) {
+  if (M.n >= MAXCOL) return;
+  M.ch[M.n] = c;
+  M.st[M.n] = (uint8_t)st;
+  M.n++;
+  M.ch[M.n] = 0;
+}
 
+static int md_space(char c) { return c == 0 || c == ' '; }
+
+/* The line into M.ch and M.st with the inline markers taken out: **bold**,
+ * *emph* and _emph_, `code`, and [label](url) reduced to its label -- the URL
+ * will not fit and could not be followed from here anyway. `verbatim` for a
+ * fenced block, where markers are content. One pass, no nesting. An
+ * underscore inside a word (snake_case) is a character, not emphasis. */
+static void md_inline(const char *s, int verbatim) {
+  int bold = 0, emph = 0, code = 0;
+  const char *start = s;
+
+  M.n = 0;
+  M.ch[0] = 0;
+  if (verbatim) {
+    while (*s) md_put(*s++, ST_C);
+    return;
+  }
   while (*s) {
-    /* Flush what we have when a marker turns up, because the run either side
-     * is drawn differently. */
-    int flush = 0, next_bold = bold, next_code = code, skip = 0;
-
-    if (s[0] == '*' && s[1] == '*') { flush = 1; next_bold = !bold; skip = 2; }
-    else if (s[0] == '*' || s[0] == '_') { flush = 1; skip = 1; }
-    else if (s[0] == '`') { flush = 1; next_code = !code; skip = 1; }
-    else if (s[0] == '[') {
-      /* [label](url): the label is what a reader wants; the URL will not fit
-       * and could not be followed from here anyway. */
-      const char *close = s + 1;
+    if (code) {
+      if (*s == '`') { code = 0; s++; continue; }
+      md_put(*s++, ST_C);
+      continue;
+    }
+    if (s[0] == '*' && s[1] == '*') { bold = !bold; s += 2; continue; }
+    if (s[0] == '*') { emph = !emph; s++; continue; }
+    if (s[0] == '_' && (s == start || md_space(s[-1]) || md_space(s[1]) ||
+                        s[1] == '.' || s[1] == ',')) {
+      emph = !emph; s++; continue;
+    }
+    if (s[0] == '`') { code = 1; s++; continue; }
+    if (s[0] == '[') {
+      const char *close = s + 1, *end;
       while (*close && *close != ']') close++;
       if (*close == ']' && close[1] == '(') {
-        const char *end = close + 2;
+        end = close + 2;
         while (*end && *end != ')') end++;
         if (*end == ')') {
-          char label[48];
-          int li = 0;
-          const char *q = s + 1;
-          while (q < close && li < (int)sizeof label - 1) label[li++] = *q++;
-          label[li] = 0;
-          if (n) { word[n] = 0; md_text(cx, y, word, fg, bg, bold);
-                   cx += n * CHARW; n = 0; }
-          md_text(cx, y, label, CLR_PG_LINK, bg, 0);
-          cx += li * CHARW;
+          for (s++; s < close; s++) md_put(*s, ST_L);
           s = end + 1;
           continue;
         }
       }
     }
-
-    if (flush) {
-      if (n) {
-        word[n] = 0;
-        md_text(cx, y, word, code ? CLR_PG_H : fg, code ? CLR_PG_CODE : bg, bold);
-        cx += n * CHARW;
-        n = 0;
-      }
-      bold = next_bold;
-      code = next_code;
-      s += skip;
-      continue;
-    }
-
-    if (cx + (n + 1) * CHARW > x + maxw) break;      /* the wrap did its job */
-    if (n < (int)sizeof word - 1) word[n++] = *s;
-    s++;
-  }
-  if (n) {
-    word[n] = 0;
-    md_text(cx, y, word, code ? CLR_PG_H : fg, code ? CLR_PG_CODE : bg, bold);
+    md_put(*s++, bold ? ST_B : emph ? ST_E : ST_N);
   }
 }
 
-/* Walk the buffer, drawing rows from `from` for `rows` of them, and return
- * how many rows the whole document takes. Called twice: once to count (with
- * rows == 0), once to draw. Counting by walking is cheap here -- ninety-six
- * lines -- and it keeps one description of the layout rather than two. */
-static int md_render(CRect c, int from, int rows) {
-  int i, row = 0;
-  int wrapcols = (c.w - PG_LEFT * 2) / CHARW;
+/* The font a character is drawn in. A heading is bold throughout. */
+static int md_font(int st, int heading) {
+  if (st == ST_C) return -1;
+  if (heading || st == ST_B) return M.bold;
+  return M.body;
+}
+
+/* How wide M.ch[a..b) is, run by run, each run in its own font. */
+static int md_width(int a, int b, int heading) {
+  char run[MAXCOL + 1];
+  int w = 0;
+  while (a < b) {
+    int st = M.st[a], n = 0, f = md_font(st, heading);
+    while (a < b && md_font(M.st[a], heading) == f) run[n++] = M.ch[a++];
+    run[n] = 0;
+    w += api->text_width(f, run);
+  }
+  return w;
+}
+
+/* Where the row that starts at `from` ends, to fit `avail` pixels: after the
+ * last word that fits, or -- a word too wide for a row on its own -- inside
+ * it, one character at least, so the walk always moves on. */
+static int md_break(int from, int avail, int heading) {
+  int fit = -1, i = from, k;
+  while (i < M.n) {
+    int j = i;
+    while (j < M.n && M.ch[j] != ' ') j++;
+    if (md_width(from, j, heading) > avail) break;
+    fit = j;
+    i = j;
+    while (i < M.n && M.ch[i] == ' ') i++;
+  }
+  if (fit >= 0) return fit;
+  for (k = from + 1; k < M.n && md_width(from, k + 1, heading) <= avail; k++) { }
+  return k;
+}
+
+/* Draw M.ch[a..b) at x, y in a row `h` tall, run by run. */
+static void md_draw_run(int x, int y, int h, int a, int b, int heading,
+                        uint16_t fg, uint16_t bg) {
+  char run[MAXCOL + 1];
+  while (a < b) {
+    int st = M.st[a], n = 0, f = md_font(st, heading), fh;
+    uint16_t rf = fg, rb = bg;
+    while (a < b && M.st[a] == st) run[n++] = M.ch[a++];
+    run[n] = 0;
+    if (st == ST_C) { rf = CLR_PG_H; rb = CLR_PG_CODE; }
+    else if (st == ST_L) rf = CLR_PG_LINK;
+    else if (st == ST_E) rf = CLR_PG_H;
+    fh = api->font_height(f);
+    api->text_font(f, (int16_t)x, (int16_t)(y + (h - fh) / 2), run, rf, rb);
+    x += api->text_width(f, run);
+  }
+}
+
+/* A row the layout produced: which source line, and which of its characters.
+ * The host tests read these to check the wrap; drawing does not need them. */
+typedef void (*MdRowFn)(int line, int from, int to);
+static MdRowFn md_row_hook;
+
+/* Walk the buffer. Rows before `from` are laid out and skipped; rows from it
+ * are drawn into `c` for as long as they fit. Returns how many rows the
+ * document takes; E.pmore says whether any were left below the screen. */
+static int md_render(CRect c, int from) {
+  int i, row = 0, y = c.y;
   int fenced = 0;
+  int bottom = c.y + c.h;
+
+  md_fonts();
+  E.pmore = 0;
 
   for (i = 0; i < E.nlines; i++) {
-    const char *body;
-    int indent = 0;
+    const char *body = E.line[i];
+    int indent = 0, heading, h, x0, xtext, avail, pos, first = 1;
     MdKind k;
-    int x, avail, y;
     uint16_t fg = CLR_PG_TX, bg = CLR_PG;
-    int bold = 0;
 
     /* Editing keeps E.len and leaves old bytes past it; the preview reads
      * lines as strings, so it terminates each one first, or a line that was
@@ -466,93 +535,74 @@ static int md_render(CRect c, int from, int rows) {
     k = fenced ? MD_CODE : md_kind(E.line[i], &body, &indent);
     if (fenced) body = E.line[i];
 
-    /* Where this row lands, and whether it is on screen at all. */
-    y = c.y + (row - from) * PG_ROW;
-    row++;
-    if (rows == 0 || row - 1 < from || row - 1 >= from + rows) {
-      /* Not drawn, but long lines still take more than one row. */
-      if (k != MD_RULE && k != MD_BLANK) {
-        int len = (int)api->str_len(body);
-        int per = wrapcols - indent * 2 - (k == MD_BULLET || k == MD_NUMBER ? 2 : 0);
-        while (per > 0 && len > per) { len -= per; row++; }
-      }
+    heading = (k == MD_H1 || k == MD_H2);
+    h = (k == MD_CODE) ? PG_CODE_H : M.line_h;
+    x0 = c.x + PG_LEFT + indent * 12;
+    xtext = x0;
+    if (k == MD_BULLET) xtext += 8;
+    if (k == MD_QUOTE) xtext += 6;
+    avail = c.x + c.w - PG_LEFT - xtext;
+    if (avail < 24) avail = 24;
+    if (k == MD_H1 || k == MD_H2 || k == MD_H3) fg = CLR_PG_H;
+    if (k == MD_QUOTE) fg = CLR_PG_DIM;
+    if (k == MD_CODE) bg = CLR_PG_CODE;
+
+    /* Blank lines and rules are rows of their own, shorter than text. */
+    if (k == MD_BLANK || k == MD_RULE) {
+      h = (k == MD_BLANK) ? M.line_h / 2 : 7;
+      if (row++ < from) continue;
+      if (y + h > bottom) { E.pmore = 1; continue; }
+      if (k == MD_RULE)
+        api->fill(rect(c.x + PG_LEFT, y + 3, c.w - PG_LEFT * 2, 1), CLR_PG_RULE);
+      y += h;
       continue;
     }
 
-    x = c.x + PG_LEFT + indent * 2 * CHARW;
-    avail = c.w - (x - c.x) - PG_LEFT;
-
-    switch (k) {
-    case MD_BLANK:
-      break;
-
-    case MD_RULE:
-      api->fill(rect(c.x + PG_LEFT, y + 4, c.w - PG_LEFT * 2, 1), CLR_PG_RULE);
-      break;
-
-    case MD_H1:
-    case MD_H2:
-      fg = CLR_PG_H;
-      bold = 1;
-      break;
-    case MD_H3:
-      fg = CLR_PG_H;
-      break;
-
-    case MD_QUOTE:
-      /* The bar down the left is the whole visual idea of a quotation. */
-      api->fill(rect(x, y, 2, PG_ROW), CLR_PG_QUOT);
-      x += 6;
-      avail -= 6;
-      fg = CLR_PG_DIM;
-      break;
-
-    case MD_CODE:
-      api->fill(rect(c.x + PG_LEFT, y, c.w - PG_LEFT * 2, PG_ROW), CLR_PG_CODE);
-      bg = CLR_PG_CODE;
-      break;
-
-    case MD_BULLET:
-      /* A square, because the font has no bullet and a hyphen reads as a
-       * hyphen. */
-      api->fill(rect(x + 1, y + 3, 3, 3), CLR_PG_TX);
-      x += 8;
-      avail -= 8;
-      break;
-
-    case MD_NUMBER:
-    default:
-      break;
-    }
-
-    if (k == MD_BLANK || k == MD_RULE) continue;
-
-    if (k == MD_CODE) {
-      /* Verbatim: markers are content inside a fence. */
-      md_text(x, y, body, CLR_PG_TX, CLR_PG_CODE, 0);
-    } else if (bold || k == MD_H1 || k == MD_H2 || k == MD_H3) {
-      md_text(x, y, body, fg, bg, bold);
-      if (k == MD_H1)
-        api->fill(rect(c.x + PG_LEFT, y + PG_ROW - 1, c.w - PG_LEFT * 2, 1),
-                  CLR_PG_RULE);
-    } else {
-      md_inline(x, y, avail, body, fg, bg);
-    }
+    md_inline(body, k == MD_CODE);
+    pos = 0;
+    do {
+      int end = M.n == 0 ? 0 : md_break(pos, avail, heading);
+      if (md_row_hook) md_row_hook(i, pos, end);
+      if (row++ >= from) {
+        if (y + h > bottom) E.pmore = 1;
+        else {
+          if (k == MD_CODE)
+            api->fill(rect(c.x + PG_LEFT, y, c.w - PG_LEFT * 2, h), CLR_PG_CODE);
+          if (k == MD_QUOTE)
+            api->fill(rect(x0, y, 2, h), CLR_PG_QUOT);
+          /* A square, because the font has no bullet and a hyphen reads as a
+           * hyphen. On the first row only: the rest hang under the text. */
+          if (k == MD_BULLET && first)
+            api->fill(rect(x0 + 1, y + h / 2 - 1, 3, 3), CLR_PG_TX);
+          md_draw_run(xtext, y, h, pos, end, heading, fg, bg);
+          y += h;
+          if (k == MD_H1 && end >= M.n)
+            api->fill(rect(c.x + PG_LEFT, y - 1, c.w - PG_LEFT * 2, 1), CLR_PG_RULE);
+        }
+      }
+      first = 0;
+      pos = end;
+      while (pos < M.n && M.ch[pos] == ' ') pos++;
+    } while (pos < M.n);
   }
   return row;
 }
 
 static void paint_preview(CRect c) {
-  int rows = (c.h - ROWH) / PG_ROW;
   char bar[48];
 
+  if (E.ptop < 0) E.ptop = 0;
   api->fill(rect(c.x, c.y, c.w, c.h - ROWH), CLR_PG);
-  E.prows = md_render(rect(c.x, c.y + 2, c.w, c.h - ROWH - 2), E.ptop, rows);
+  E.prows = md_render(rect(c.x, c.y + 2, c.w, c.h - ROWH - 2), E.ptop);
 
   /* Clamp here rather than in the key handler: the length is only known once
-   * it has been laid out, and laying it out is what this just did. */
-  if (E.ptop > E.prows - rows) E.ptop = E.prows - rows;
-  if (E.ptop < 0) E.ptop = 0;
+   * it has been laid out, and laying it out is what this just did. A scroll
+   * past the end draws nothing, so it steps back and draws again. */
+  if (E.ptop >= E.prows && E.prows > 0) {
+    E.ptop = E.prows - 1;
+    api->fill(rect(c.x, c.y, c.w, c.h - ROWH), CLR_PG);
+    E.prows = md_render(rect(c.x, c.y + 2, c.w, c.h - ROWH - 2), E.ptop);
+  }
 
   api->fill(rect(c.x, c.y + c.h - ROWH, c.w, ROWH), CLR_BAR);
   api->fmt(bar, sizeof bar, "preview  %s  ctrl-p edits",
@@ -776,11 +826,13 @@ static int key_preview(unsigned char k) {
   case CAPP_KEY_ENTER:
     E.view = VIEW_EDIT;
     return 1;
+  /* Down only while there is more below: the rows are not all one height,
+   * so "the last screenful" is whatever the last paint found. */
   case CAPP_KEY_UP:    E.ptop -= 1; return 1;
-  case CAPP_KEY_DOWN:  E.ptop += 1; return 1;
-  case CAPP_KEY_LEFT:  E.ptop -= 12; return 1;
+  case CAPP_KEY_DOWN:  if (E.pmore) E.ptop += 1; return 1;
+  case CAPP_KEY_LEFT:  E.ptop -= 6; return 1;
   case CAPP_KEY_RIGHT:
-  case ' ':            E.ptop += 12; return 1;
+  case ' ':            if (E.pmore) E.ptop += 6; return 1;
   case 'g':            E.ptop = 0; return 1;
   case 0x0F: ask_open(); return 1;                /* ctrl-o, the file list */
   case 0x13: save(); return 1;                    /* ctrl-s still saves */
@@ -905,7 +957,10 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
   if (toolbar_hover(x, y)) changed = 1;
   if (!wheel) return changed;
 
-  if (E.view == VIEW_PREVIEW) { E.ptop -= wheel * 3; return 1; }
+  if (E.view == VIEW_PREVIEW) {
+    if (wheel > 0 || E.pmore) E.ptop -= wheel * 3;
+    return 1;
+  }
   if (E.view != VIEW_EDIT) return 0;
 
   E.top -= wheel * 3;

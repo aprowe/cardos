@@ -353,7 +353,10 @@ typedef struct {
 #define CAPP_AUDIO_PLAYING   2
 
 typedef struct {
-  int      (*record)(const char *path, int max_ms);  /* 0; -1 busy; -2 refused */
+  /* 0; -1 busy; -2 refused. A NULL path only listens -- level() moves and
+   * nothing is written -- on firmware from 2026-09-25; older firmware
+   * refuses it with -2, so an app that can fall back to a file should. */
+  int      (*record)(const char *path, int max_ms);
   int      (*play)(const char *path);                /* 0; -1 busy; -2 unplayable */
   void     (*stop)(void);
   int      (*state)(void);                           /* CAPP_AUDIO_* */
