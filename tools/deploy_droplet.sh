@@ -68,7 +68,7 @@ setup() {
 
   echo "== 6. the store, filled from that build"
   ssh "$HOST" "install -d -m 750 -o cardos -g cardos /var/lib/cardos $STORE"
-  build_and_publish
+  build_and_publish always
 
   echo "== 7. the service: run from the clone, with --build --store"
   unit_and_restart
@@ -99,15 +99,14 @@ unit_and_restart() {
 # needs this as much as `setup` does: new master can move CAPP_API_VERSION,
 # and a store still holding the old apps would hand the device binaries its
 # new loader refuses.
+#
+# The firmware only when something outside apps/ changed since the store's
+# firmware was built (server/build.py: firmware_due). It embeds every app, so
+# rebuilding it for an app change offered every device an OS update that was
+# only the apps again. `setup` passes always.
 build_and_publish() {
   as_cardos "set -e; cd $CLONE
-    $VENV/bin/python tools/build_apps.py | tail -1
-    $VENV/bin/python -m platformio run -e cardputer -e release 2>&1 | grep -E 'Flash:|SUCCESS|FAILED|rror' | tail -6
-    $VENV/bin/python -c '
-import sys; sys.path.insert(0, \".\")
-from server import build, updates
-fws = {\"debug\": updates.FIRMWARE, \"release\": updates.FIRMWARE_RELEASE}
-print(\"   published:\", \", \".join(build.publish(\"$STORE\", fws, updates.APPS_DIR, True)) or \"nothing\")'"
+    $VENV/bin/python -m server.build deploy --store $STORE --firmware ${1:-auto}"
 }
 
 update() {

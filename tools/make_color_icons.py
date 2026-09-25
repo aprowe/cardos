@@ -289,6 +289,27 @@ ICONS = {
         "................",
     ],
 
+    # A tube man mid-flail on his fan: yellow hair, googly eyes, one arm up
+    # and one out. The fan under him is what makes him a tube man and not a
+    # red worm.
+    "Noodle": [
+        "......KyyK......",
+        ".....KrrrrK.....",
+        ".....KWKWKK.....",
+        "..K..KrrrrK.....",
+        ".KrK..KmmK..KK..",
+        "..KrK.KrrK.KrrK.",
+        "...KrKrrrrKrK...",
+        "....KrrrrrrK....",
+        ".....KrrrK......",
+        "......KrrrK.....",
+        "......KrrK......",
+        ".....KrrK.......",
+        ".....KrrrK......",
+        "...KKKKKKKKKK...",
+        "...KDGDGDGDGK...",
+        "...KKKKKKKKKK...",
+    ],
     "Pinball": [
         "................",
         "..KKKKKKKKKKKK..",

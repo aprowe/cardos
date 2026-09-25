@@ -118,14 +118,17 @@ int mic_record_wav(const char *path, int max_ms,
   if (max_ms > MIC_HARD_MAX_MS) max_ms = MIC_HARD_MAX_MS;
   if (mic_open() != 0) return -1;
 
-  fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
-  if (fd < 0) { mic_close(); return -1; }
+  fd = -1;
+  if (path) {
+    fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    if (fd < 0) { mic_close(); return -1; }
 
-  wav_header(header, 0);
-  if (fs_write(fd, header, sizeof header) != (int)sizeof header) {
-    fs_close(fd);
-    mic_close();
-    return -1;
+    wav_header(header, 0);
+    if (fs_write(fd, header, sizeof header) != (int)sizeof header) {
+      fs_close(fd);
+      mic_close();
+      return -1;
+    }
   }
 
   started = esp_timer_get_time();
@@ -137,7 +140,7 @@ int mic_record_wav(const char *path, int max_ms,
     n = (int)(got / sizeof block[0]);
     if (n <= 0) continue;
 
-    if (fs_write(fd, block, got) != (int)got) break;
+    if (fd >= 0 && fs_write(fd, block, got) != (int)got) break;
     total += (uint32_t)got;
 
     if (level) level(loudness(block, n));
@@ -146,10 +149,12 @@ int mic_record_wav(const char *path, int max_ms,
   }
 
   /* Back to the top to write the lengths in. */
-  wav_header(header, total);
-  if (fs_seek(fd, 0, FS_SEEK_SET) >= 0)
-    fs_write(fd, header, sizeof header);
-  fs_close(fd);
+  if (fd >= 0) {
+    wav_header(header, total);
+    if (fs_seek(fd, 0, FS_SEEK_SET) >= 0)
+      fs_write(fd, header, sizeof header);
+    fs_close(fd);
+  }
   mic_close();
 
   ESP_LOGI(TAG, "recorded %u bytes (%u ms)", (unsigned)total,

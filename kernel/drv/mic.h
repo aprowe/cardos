@@ -37,7 +37,12 @@ void mic_close(void);
  * captured, so a caller can draw a meter and the speaker can see the thing is
  * listening. Nothing is more disheartening than talking at a still screen.
  *
- * Returns bytes of audio written (excluding the 44-byte header), or -1. */
+ * A NULL `path` listens without keeping anything: the level still comes,
+ * nothing goes to the card. For a meter or a toy that runs for minutes, where
+ * a file would be 32 KB a second of wear for nothing.
+ *
+ * Returns bytes of audio written (excluding the 44-byte header), or -1. With
+ * no path, the bytes that were heard. */
 int  mic_record_wav(const char *path, int max_ms,
                     int (*stop)(void), void (*level)(int pct));
 

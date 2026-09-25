@@ -198,6 +198,25 @@ meter is drawn in place and repainted only when it would look different, at
 most fifteen times a second -- clearing and redrawing it every tick was a
 visible flicker.
 
+**The mic can listen without a file** (2026-09-25). `record(NULL, ms)` runs
+the mic with `level()` moving and nothing written, where a file would be
+32 KB a second of card wear for a meter or a toy. Older firmware refuses a
+NULL path with -2, and an app should fall back to a file. Noodle
+(`apps/noodle.c`, Games) is the first user. It is the car-lot tube man: blow
+on the mic and he inflates and flails, stop and he folds over. He is drawn in
+15-row strips into a buffer and blitted, redrawing only where he moved.
+`NOODLE_DUMP=dir build\cardos_tests.exe` writes frames to look at, which is
+how the physics was tuned. Apps are not told when they are closed, so it
+records in 8 s pieces restarted from tick: leaving the app leaves the mic on
+for at most that long.
+
+**Edit's preview is set in Atkinson Hyperlegible and word-wraps** (2026-09-25),
+using `ui13`/`ui13b`, with code still in 6x8. It used to cut a long line at the
+screen edge and never draw the rest. Rows break at the last space that fits, a
+word too long for a row breaks inside, and list items and quotes hang under
+their text. `test/test_edit_preview.c` checks it against a font of uneven
+widths.
+
 **There is an OS file picker** (2026-09-20). `api->pick(&req)` puts a
 dialog over the app -- open a file, save (a name field, asks before
 replacing), or choose a folder (a "use this folder" row) -- and the app

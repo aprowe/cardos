@@ -17,7 +17,8 @@
 enum { AUDIO_IDLE = 0, AUDIO_RECORDING, AUDIO_PLAYING };
 
 /* Record a WAV (16 kHz mono 16-bit) to `path` for up to `max_ms`, or until
- * audio_stop. 0 started, -1 busy, -2 the mic or the card refused. */
+ * audio_stop. A NULL path listens only: audio_level moves, nothing is kept.
+ * 0 started, -1 busy, -2 the mic or the card refused. */
 int  audio_record(const char *path, int max_ms);
 
 /* Play a PCM WAV. 0 started, -1 busy, -2 unplayable (audio_error says). */
