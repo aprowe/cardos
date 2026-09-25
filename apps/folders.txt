@@ -22,6 +22,7 @@ grep      -
 habits    Tools
 ide       Tools
 memo      Tools
+forklift  Games
 mines     Games
 noodle    Games
 photo     Tools

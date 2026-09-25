@@ -210,6 +210,23 @@ how the physics was tuned. Apps are not told when they are closed, so it
 records in 8 s pieces restarted from tick: leaving the app leaves the mic on
 for at most that long.
 
+**Forklift is a warehouse you program** (2026-09-25, `apps/forklift.c`,
+Games). It is a demake of *The Farmer Was Replaced*. Orders arrive, robots
+fetch kinds from bays and ship them from a dock, and credits buy forks, a
+motor, more robots and a bigger warehouse with racks. The robots run the
+player's Forklang program: `apps/forklang.h`, a tiny pure ML-ish language
+(`c ? a : b`, `x -> e`, application by juxtaposition, a few definitions,
+`bot` returning an action). It is a tree walker with a fixed node pool, a
+cell arena reset every step, and limits on fuel and depth. `FL_MAX_DEPTH` is
+28 because the evaluator recurses on the shell's 8 KB stack. It has its own
+editor made for this keyboard: Tab completes, brackets pair, Enter indents,
+and the program is checked as you type. Design in
+`docs/superpowers/specs/2026-09-25-forklift-design.md`. Tests are
+`test_forklang.c` and `test_forklift.c`; `FORKLIFT_DUMP=dir` writes the
+screens. Its `.data` is 32 KB, the largest of any app. It pushed the debug
+image to 85% of flash, so the embedded-blob lever under "Flash is the
+constraint" is getting close.
+
 **Edit's preview is set in Atkinson Hyperlegible and word-wraps** (2026-09-25),
 using `ui13`/`ui13b`, with code still in 6x8. It used to cut a long line at the
 screen edge and never draw the rest. Rows break at the last space that fits, a
