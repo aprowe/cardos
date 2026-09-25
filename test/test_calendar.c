@@ -641,10 +641,13 @@ static char LAST_BODY[256];
 static char LAST_URL[URL_MAX];
 static const char *POLL_BODY;
 
+static char LAST_METHOD[8];
+
 static int fake_start(const char *m, const char *u, const char *b,
                       const char *ct, const char *tok, int ms) {
-  (void)m; (void)ct; (void)tok; (void)ms;
+  (void)ct; (void)tok; (void)ms;
   STARTS++;
+  snprintf(LAST_METHOD, sizeof LAST_METHOD, "%s", m ? m : "");
   snprintf(LAST_URL, sizeof LAST_URL, "%s", u);
   snprintf(LAST_BODY, sizeof LAST_BODY, "%s", b ? b : "");
   return START_RESULT;
@@ -911,4 +914,162 @@ void test_calendar_a_refusal_for_memory_says_so_and_retries_soon(void) {
   CHECK(strstr(C.status, "-4") == NULL);
   CHECK_EQ(C.next_auto, fake_ticks() + RETRY_MS);
   CHECK_EQ(SYNC_IDLE, C.stage);
+}
+
+/* ---- editing ----------------------------------------------------------------
+ *
+ * `e` opens the add form on the selected event; Save queues the change, and
+ * the push sends an event Google already has as a PATCH to its id.
+ */
+
+static void synced_three_events(void) {
+  use_sync_api();
+  C.offset = 0;
+  parse_reply(REPLY);
+  C.view = VIEW_AGENDA;
+}
+
+void test_calendar_e_opens_the_form_on_the_selected_event(void) {
+  synced_three_events();
+  C.sel = 1;                                  /* Dentist, 13:00 UTC */
+  key_agenda('e');
+  CHECK_EQ(VIEW_ADD, C.view);
+  CHECK_EQ(1, C.form_edit);
+  CHECK(strcmp(C.draft, "Dentist") == 0);
+  CHECK_EQ(13, C.draft_hour);
+  CHECK_EQ(0, C.draft_min);
+  CHECK_EQ(days_from_civil(2026, 9, 13), (int)C.draft_day);
+}
+
+void test_calendar_an_edit_is_sent_as_a_patch_and_keeps_the_length(void) {
+  synced_three_events();
+  C.sel = 0;                                  /* Standup, 08:30, 15 minutes */
+  key_agenda('e');
+  key_add('\t');                              /* the day */
+  key_add(CAPP_KEY_RIGHT);                    /* the 14th */
+  key_add('\t');                              /* the time */
+  key_add(CAPP_KEY_UP);                       /* 09:30 */
+  key_add(CAPP_KEY_ENTER);
+
+  CHECK_EQ(VIEW_AGENDA, C.view);
+  CHECK_EQ(0, C.form_edit);
+  CHECK(strcmp(LAST_METHOD, "PATCH") == 0);
+  CHECK(strstr(LAST_URL, "/events/aaa111") != NULL);
+  CHECK(strstr(LAST_BODY, "\"summary\":\"Standup\"") != NULL);
+  CHECK(strstr(LAST_BODY, "\"dateTime\":\"2026-09-14T09:30:00Z\"") != NULL);
+  CHECK(strstr(LAST_BODY, "\"dateTime\":\"2026-09-14T09:45:00Z\"") != NULL);
+}
+
+void test_calendar_a_new_event_is_still_a_post(void) {
+  use_sync_api();
+  add_event("Lunch", days_from_civil(2026, 9, 13), 12, 0);
+  sync_begin("s");
+  CHECK(strcmp(LAST_METHOD, "POST") == 0);
+  CHECK(strstr(LAST_URL, "/events/") == NULL);
+}
+
+void test_calendar_an_all_day_event_stays_all_day(void) {
+  synced_three_events();
+  C.sel = 2;                                  /* Birthday, the 14th */
+  key_agenda('e');
+  CHECK_EQ(1, C.draft_all_day);
+  key_add('\t');                              /* the day */
+  key_add('\t');                              /* skips the time: back to the title */
+  CHECK_EQ(FIELD_TITLE, C.field);
+  key_add('\t');
+  key_add(CAPP_KEY_RIGHT);                    /* the 15th */
+  key_add(CAPP_KEY_ENTER);
+  CHECK(strstr(LAST_BODY, "\"start\":{\"date\":\"2026-09-15\"}") != NULL);
+  CHECK(strstr(LAST_BODY, "\"end\":{\"date\":\"2026-09-16\"}") != NULL);
+}
+
+/* The title can come from Google with a quote in it, which the keyboard here
+ * would never have typed -- and unescaped it breaks the body. */
+void test_calendar_a_quote_in_a_title_is_escaped(void) {
+  synced_three_events();
+  snprintf(C.ev[1].summary, sizeof C.ev[1].summary, "%s", "Say \"hi\"");
+  C.sel = 1;
+  key_agenda('e');
+  key_add(CAPP_KEY_ENTER);
+  CHECK(strstr(LAST_BODY, "\"summary\":\"Say \\\"hi\\\"\"") != NULL);
+}
+
+/* A fetch that lands while an edit is still queued must not undo it. */
+void test_calendar_a_queued_edit_survives_a_fetch(void) {
+  synced_three_events();
+  snprintf(C.ev[1].summary, sizeof C.ev[1].summary, "%s", "Dentist, moved");
+  C.ev[1].dirty = 1;
+  snprintf(C.reply, sizeof C.reply, "%s", REPLY);
+  absorb();
+  CHECK_EQ(3, C.n);
+  {
+    int i, found = 0, stale = 0;
+    for (i = 0; i < C.n; i++) {
+      if (!strcmp(C.ev[i].summary, "Dentist, moved")) found++;
+      if (!strcmp(C.ev[i].summary, "Dentist")) stale++;
+    }
+    CHECK_EQ(1, found);
+    CHECK_EQ(0, stale);
+  }
+}
+
+/* And a sync that lands while the form is open leaves it on the same event. */
+void test_calendar_the_form_follows_its_event_through_a_sync(void) {
+  synced_three_events();
+  C.sel = 1;
+  key_agenda('e');
+  snprintf(C.reply, sizeof C.reply, "%s", REPLY);
+  absorb();                                   /* every struct made anew */
+  C.draft[0] = 0;
+  C.draft_len = 0;
+  {
+    const char *t = "Dentist 2";
+    while (*t) key_add((unsigned char)*t++);
+  }
+  key_add(CAPP_KEY_ENTER);
+  CHECK(strstr(LAST_URL, "/events/bbb222") != NULL);
+  CHECK(strstr(LAST_BODY, "Dentist 2") != NULL);
+}
+
+/* Deleted in a browser while the edit was queued: dropped, not retried at
+ * every sync from now on. */
+void test_calendar_a_patch_to_a_deleted_event_is_dropped(void) {
+  synced_three_events();
+  C.ev[1].dirty = 1;
+  sync_begin("s");
+  CHECK(strcmp(LAST_METHOD, "PATCH") == 0);
+  POLL_RESULT = -404;
+  POLL_BODY = "{}";
+  sync_tick();
+  CHECK_EQ(0, C.ev[1].dirty);
+  CHECK_EQ(SYNC_FETCH, C.stage);              /* and it carries on */
+  CHECK(logged_has("edit dropped"));
+}
+
+/* Other failures are still failures: the edit stays queued. */
+void test_calendar_a_failed_patch_keeps_the_edit(void) {
+  synced_three_events();
+  C.ev[1].dirty = 1;
+  sync_begin("s");
+  POLL_RESULT = -500;
+  sync_tick();
+  CHECK_EQ(1, C.ev[1].dirty);
+  CHECK_EQ(SYNC_IDLE, C.stage);
+}
+
+/* West of Greenwich an all-day event used to show on the day before: a bare
+ * date is midnight UTC, and the zone was taken off it like a timed event. */
+void test_calendar_an_all_day_event_is_on_its_own_date_anywhere(void) {
+  synced_three_events();
+  C.offset = -7 * 3600;                       /* Pacific daylight time */
+  CHECK_EQ(days_from_civil(2026, 9, 14), (int)ev_day(&C.ev[2]));
+  C.offset = 9 * 3600;                        /* Tokyo */
+  CHECK_EQ(days_from_civil(2026, 9, 14), (int)ev_day(&C.ev[2]));
+}
+
+void test_calendar_edit_is_one_of_the_apps_declared_actions(void) {
+  int i, found = 0;
+  for (i = 0; i < (int)(sizeof MAIN_ACTIONS / sizeof MAIN_ACTIONS[0]); i++)
+    if (MAIN_ACTIONS[i].action == ACT_EDIT) found = 1;
+  CHECK(found);
 }

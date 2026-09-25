@@ -34,6 +34,12 @@
  * The JSON is scanned for field names rather than parsed, as in Todo: a real
  * parser costs more than the four strings per event it would extract.
  *
+ * EDITING. `e` opens the add form on the selected event: title, day and time,
+ * keeping its length. A change is queued like an add -- the event is marked
+ * dirty -- and an event Google already has is sent as a PATCH to its id
+ * rather than a POST. A PATCH that comes back 404 or 410 means it was deleted
+ * elsewhere in the meantime; the edit is dropped rather than retried forever.
+ *
  * The sync is automatic and does not block. It runs on the OS's request task
  * (CardApi.http_start) and is collected from tick, so the screen keeps
  * drawing and the keyboard keeps working while it is in the air -- the shell
@@ -109,6 +115,10 @@ typedef struct {
    * travels with the struct through sort_events and through the compaction in
    * absorb, so it cannot point at the wrong thing. */
   uint8_t  sending;
+  /* The edit form is open on this event. A flag and not an index, for the
+   * reason `sending` is one: a sync that lands while the form is up sorts
+   * and rebuilds the array under it. absorb puts it back by id. */
+  uint8_t  editing;
 } Event;
 
 static const CardApi *api;
@@ -137,6 +147,9 @@ static struct {
   int   have_clock;
 
   Field field;
+  int   form_edit;                  /* the form is editing, not adding */
+  int   draft_all_day;              /* the event edited is all-day: no time */
+  char  edit_id[ID_MAX];            /* its Google id, to find it after a sync */
   char  draft[SUMMARY_MAX + 1];
   int   draft_len;
   int   draft_hour, draft_min;
@@ -339,6 +352,19 @@ static void local_hm(uint32_t utc, int *h, int *m) {
   *m = (int)(rem / 60 % 60);
 }
 
+/* The day an event is on. An all-day event is a bare date, stored as midnight
+ * UTC, and that date is the day wherever you are -- taking the zone off it put
+ * every all-day event on the day before, west of Greenwich. */
+static int32_t ev_day(const Event *e) {
+  return e->all_day ? (int32_t)(e->start / DAY_SECS) : local_day(e->start);
+}
+
+/* What the list is ordered by: an all-day event first on its own day, as if
+ * it began at local midnight, rather than wherever midnight UTC falls. */
+static int32_t ev_key(const Event *e) {
+  return e->all_day ? (int32_t)e->start - C.offset : (int32_t)e->start;
+}
+
 static int32_t today_day(void) {
   if (!C.have_clock) return 0;
   return days_from_civil(C.today_y, C.today_m, C.today_d);
@@ -410,7 +436,7 @@ static void sort_events(void) {
   for (i = 1; i < C.n; i++) {
     Event tmp;
     api->mem_cpy(&tmp, &C.ev[i], sizeof tmp);
-    for (j = i; j > 0 && C.ev[j - 1].start > tmp.start; j--)
+    for (j = i; j > 0 && ev_key(&C.ev[j - 1]) > ev_key(&tmp); j--)
       api->mem_cpy(&C.ev[j], &C.ev[j - 1], sizeof tmp);
     api->mem_cpy(&C.ev[j], &tmp, sizeof tmp);
   }
@@ -420,7 +446,7 @@ static int day_has_event(int32_t day) {
   int i;
   for (i = 0; i < C.n; i++) {
     if (C.ev[i].deleted) continue;
-    if (local_day(C.ev[i].start) == day) return 1;
+    if (ev_day(&C.ev[i]) == day) return 1;
   }
   return 0;
 }
@@ -432,7 +458,7 @@ static int day_event_at(int32_t day, int nth) {
   int i, seen = 0;
   for (i = 0; i < C.n; i++) {
     if (C.ev[i].deleted) continue;
-    if (local_day(C.ev[i].start) != day) continue;
+    if (ev_day(&C.ev[i]) != day) continue;
     if (seen++ == nth) return i;
   }
   return -1;
@@ -442,7 +468,7 @@ static int day_event_count(int32_t day) {
   int i, n = 0;
   for (i = 0; i < C.n; i++) {
     if (C.ev[i].deleted) continue;
-    if (local_day(C.ev[i].start) == day) n++;
+    if (ev_day(&C.ev[i]) == day) n++;
   }
   return n;
 }
@@ -454,7 +480,7 @@ static int day_position_of(int32_t day, int idx) {
   int i, seen = 0;
   for (i = 0; i < C.n; i++) {
     if (C.ev[i].deleted) continue;
-    if (local_day(C.ev[i].start) != day) continue;
+    if (ev_day(&C.ev[i]) != day) continue;
     if (i == idx) return seen;
     seen++;
   }
@@ -542,11 +568,12 @@ static void cache_load(void) {
  * and returns; sync_tick collects it on a later pass.
  */
 
-/* The next unpushed event, or -1. */
+/* The next unpushed event, or -1: one made here (no id yet, a POST) or one
+ * changed here (an id, a PATCH). */
 static int next_dirty(void) {
   int i;
   for (i = 0; i < C.n; i++)
-    if (C.ev[i].dirty && !C.ev[i].id[0] && !C.ev[i].deleted) return i;
+    if (C.ev[i].dirty && !C.ev[i].deleted) return i;
   return -1;
 }
 
@@ -563,14 +590,46 @@ static int sending_index(void) {
   return -1;
 }
 
+/* The summary as a JSON string's insides. A title that came from Google can
+ * hold a quote or a backslash even though the keyboard here refuses them. */
+static void json_escape(const char *in, char *out, int n) {
+  int o = 0;
+  for (; *in && o + 2 < n; in++) {
+    if (*in == '"' || *in == '\\') out[o++] = '\\';
+    out[o++] = *in;
+  }
+  out[o] = 0;
+}
+
+/* "2026-09-25", the whole of an all-day event's start or end. */
+static void rfc3339_date(uint32_t t, char *out, int n) {
+  int y, m, d;
+  civil_from_days((int32_t)(t / DAY_SECS), &y, &m, &d);
+  api->fmt(out, (size_t)n, "%04d-%02d-%02d", y, m, d);
+}
+
 static int start_push(const char *tok, int i) {
-  char body[SUMMARY_MAX + 160], s[24], e[24];
-  rfc3339_utc(C.ev[i].start, s, sizeof s);
-  rfc3339_utc(C.ev[i].end, e, sizeof e);
+  char body[SUMMARY_MAX * 2 + 160], title[SUMMARY_MAX * 2 + 2], s[24], e[24];
+  char url[URL_MAX];
+  const char *kind = C.ev[i].all_day ? "date" : "dateTime";
+  if (C.ev[i].all_day) {
+    rfc3339_date(C.ev[i].start, s, sizeof s);
+    rfc3339_date(C.ev[i].end, e, sizeof e);
+  } else {
+    rfc3339_utc(C.ev[i].start, s, sizeof s);
+    rfc3339_utc(C.ev[i].end, e, sizeof e);
+  }
+  json_escape(C.ev[i].summary, title, sizeof title);
   api->fmt(body, sizeof body,
-           "{\"summary\":\"%s\",\"start\":{\"dateTime\":\"%s\"},"
-           "\"end\":{\"dateTime\":\"%s\"}}",
-           C.ev[i].summary, s, e);
+           "{\"summary\":\"%s\",\"start\":{\"%s\":\"%s\"},"
+           "\"end\":{\"%s\":\"%s\"}}",
+           title, kind, s, kind, e);
+  /* Google has it already: change that one. A PATCH touches only the fields
+   * sent, so the attendees and reminders set elsewhere survive. */
+  if (C.ev[i].id[0]) {
+    api->fmt(url, sizeof url, "%s/%s", EVENTS_URL, C.ev[i].id);
+    return api->http_start("PATCH", url, body, "application/json", tok, 15000);
+  }
   return api->http_start("POST", EVENTS_URL, body, "application/json", tok,
                          15000);
 }
@@ -591,15 +650,30 @@ static int start_fetch(const char *tok) {
   return api->http_start("GET", url, 0, 0, tok, 20000);
 }
 
+/* Two strings the same? The app links no libc. */
+static int same(const char *a, const char *b) {
+  while (*a && *a == *b) { a++; b++; }
+  return *a == *b;
+}
+
+/* Is there a kept (still queued) event with this id among the first n? */
+static int kept_id(int n, const char *id) {
+  int i;
+  for (i = 0; i < n; i++)
+    if (C.ev[i].id[0] && same(C.ev[i].id, id)) return 1;
+  return 0;
+}
+
 /* Rebuild the list from a reply. Anything still queued survives, so a
- * deletion made in a browser disappears here too. */
+ * deletion made in a browser disappears here too. An edit still queued wins
+ * over Google's copy of the same event: it is newer, and it is on its way. */
 static int absorb(void) {
   char *p;
   int got = 0;
   int i, keep = 0, added = 0;
 
   for (i = 0; i < C.n; i++) {
-    if (!C.ev[i].dirty || C.ev[i].id[0]) continue;
+    if (!C.ev[i].dirty) continue;
     if (keep != i) api->mem_cpy(&C.ev[keep], &C.ev[i], sizeof C.ev[0]);
     keep++;
   }
@@ -630,6 +704,11 @@ static int absorb(void) {
     if (ep) json_when(ep, &e->end, &got);
     if (!e->end) e->end = e->start + 3600u;
 
+    if (e->id[0] && kept_id(keep, e->id)) e->id[0] = 0;     /* edited here */
+    /* The form is open on this one: the flag lives on the struct, and the
+     * struct was just made anew. */
+    if (e->id[0] && C.form_edit && C.edit_id[0] && same(e->id, C.edit_id))
+      e->editing = 1;
     if (e->id[0] && e->start) { C.n++; added++; }
     if (next) *next = saved;
     p = next;
@@ -765,6 +844,18 @@ static void sync_tick(void) {
            C.stage == SYNC_PUSH ? "push" : "fetch", n);
   logline(m);
 
+  if (n < 0 && C.stage == SYNC_PUSH && (n == -404 || n == -410)) {
+    /* A PATCH to an event deleted in a browser since. Retrying it would fail
+     * every sync from now on; the fetch that follows shows it gone. */
+    int i = sending_index();
+    if (i >= 0 && C.ev[i].id[0]) {
+      api->fmt(m, sizeof m, "sync: %s is gone at Google, edit dropped", C.ev[i].summary);
+      logline(m);
+      C.ev[i].dirty = 0;
+      C.ev[i].sending = 0;
+      n = 0;
+    }
+  }
   if (n < 0) { sync_failed(n); return; }
 
   if (C.stage == SYNC_PUSH) {
@@ -809,7 +900,16 @@ static void sync_tick(void) {
 
 /* ---- adding --------------------------------------------------------------- */
 
+static void clear_editing(void) {
+  int i;
+  for (i = 0; i < C.n; i++) C.ev[i].editing = 0;
+  C.form_edit = 0;
+  C.draft_all_day = 0;
+  C.edit_id[0] = 0;
+}
+
 static void begin_add(void) {
+  clear_editing();
   C.draft[0] = 0;
   C.draft_len = 0;
   C.field = FIELD_TITLE;
@@ -848,7 +948,66 @@ static int add_event(const char *title, int32_t day, int hour, int min) {
   return 0;
 }
 
+/* The form, filled in from event i. -1 if there is nothing to edit. */
+static int begin_edit(int i) {
+  Event *e;
+  if (i < 0 || i >= C.n || C.ev[i].deleted) return -1;
+  clear_editing();
+  e = &C.ev[i];
+  e->editing = 1;
+  C.form_edit = 1;
+  C.draft_all_day = e->all_day;
+  api->fmt(C.edit_id, sizeof C.edit_id, "%s", e->id);
+  api->fmt(C.draft, sizeof C.draft, "%s", e->summary);
+  C.draft_len = (int)api->str_len(C.draft);
+  C.draft_day = ev_day(e);
+  if (e->all_day) { C.draft_hour = 0; C.draft_min = 0; }
+  else local_hm(e->start, &C.draft_hour, &C.draft_min);
+  C.field = FIELD_TITLE;
+  C.view = VIEW_ADD;
+  return 0;
+}
+
+/* The event the form is open on, or -1 if it has gone -- a sync can take it
+ * away while the form is up. */
+static int editing_index(void) {
+  int i;
+  for (i = 0; i < C.n; i++) if (C.ev[i].editing) return i;
+  return -1;
+}
+
+/* What Save does in the edit form. The length is kept: moving a two-hour
+ * meeting should not make it an hour. */
+static int commit_edit(void) {
+  int i = editing_index(), j, k;
+  Event *e;
+  uint32_t len;
+  if (i < 0) { clear_editing(); return -1; }
+  e = &C.ev[i];
+  len = e->end > e->start ? e->end - e->start : (e->all_day ? DAY_SECS : 3600u);
+  for (j = 0, k = 0; C.draft[j] && k < SUMMARY_MAX; j++) e->summary[k++] = C.draft[j];
+  e->summary[k] = 0;
+  if (e->all_day)
+    e->start = (uint32_t)(C.draft_day * (int32_t)DAY_SECS);
+  else
+    e->start = (uint32_t)(C.draft_day * (int32_t)DAY_SECS
+                          + (int32_t)C.draft_hour * 3600 + C.draft_min * 60 - C.offset);
+  e->end = e->start + len;
+  e->dirty = 1;
+  clear_editing();
+  sort_events();
+  cache_save();
+  return 0;
+}
+
 static void commit_add(void) {
+  if (C.form_edit) {
+    if (!C.draft_len) { say("an event needs a title"); return; }
+    if (commit_edit() != 0) say("that event is gone -- a sync removed it");
+    else { say("changed"); sync_begin("edit"); }
+    C.view = VIEW_AGENDA;
+    return;
+  }
   if (!C.draft_len) { C.view = VIEW_AGENDA; return; }
   if (add_event(C.draft, C.draft_day, C.draft_hour, C.draft_min) != 0)
     say("the list is full");
@@ -917,7 +1076,7 @@ static void paint_agenda(CRect c) {
   C.shown_top = C.top;
   for (i = C.top; i < C.n && y + ROW_H <= c.y + c.h - BAR_H; i++) {
     Event *e = &C.ev[i];
-    int32_t d = local_day(e->start);
+    int32_t d = ev_day(e);
     char line[48], when[8];
     int hh, mm;
 
@@ -1078,7 +1237,8 @@ static void paint_add(CRect c) {
 
   civil_from_days(C.draft_day, &y, &m, &d);
   api->fill(rect(c.x, c.y, c.w, c.h - BAR_H), CLR_BG);
-  api->text((short)(c.x + 4), (short)(c.y + 3), "New event", CLR_HEAD, CLR_BG);
+  api->text((short)(c.x + 4), (short)(c.y + 3),
+            C.form_edit ? "Edit event" : "New event", CLR_HEAD, CLR_BG);
 
   for (i = 0; i < FIELD_COUNT; i++) {
     int yy = c.y + 20 + i * 18;
@@ -1091,9 +1251,12 @@ static void paint_add(CRect c) {
     else if (i == FIELD_DATE)
       api->fmt(line, sizeof line, "%s %d %s %d",
                WDAY[weekday_of_day(C.draft_day)], d, MON[m - 1], y);
+    else if (C.draft_all_day)
+      api->fmt(line, sizeof line, "%s", "all day");
     else
       api->fmt(line, sizeof line, "%02d:%02d", C.draft_hour, C.draft_min);
-    api->text((short)(c.x + 40), (short)(yy + 3), line, CLR_TEXT, bg);
+    api->text((short)(c.x + 40), (short)(yy + 3), line,
+              (i == FIELD_TIME && C.draft_all_day) ? CLR_DIM : CLR_TEXT, bg);
   }
 
   api->text((short)(c.x + 4), (short)(c.y + 76),
@@ -1107,7 +1270,7 @@ static void paint_add(CRect c) {
  * menu bar, the help panel and the names a script or a model would use all
  * come out of this table. See CappUi.actions. */
 enum { ACT_ADD = 1, ACT_DELETE, ACT_SYNC, ACT_AGENDA, ACT_MONTH, ACT_DAY,
-       ACT_SAVE, ACT_CANCEL, ACT_TODAY, ACT_UPCOMING };
+       ACT_SAVE, ACT_CANCEL, ACT_TODAY, ACT_UPCOMING, ACT_EDIT };
 
 /* Commands (CAPP_CMD_YES). add's title comes last so a sentence needs no
  * quotes: `add tomorrow 3pm dentist appointment`. */
@@ -1124,6 +1287,7 @@ static const CappAction MAIN_ACTIONS[] = {
     "today's events", 0, 0, CAPP_CMD_YES },
   { "upcoming", "Upcoming", 0,     0,    ACT_UPCOMING,
     "the events of the next seven days", 0, 0, CAPP_CMD_YES },
+  { "edit",   "Edit",     "Event", 0x05, ACT_EDIT },    /* ctrl-e */
   { "delete", "Delete",   "Event", 0x04, ACT_DELETE },  /* ctrl-d */
   { "agenda", "Agenda",   "View",  0x07, ACT_AGENDA },  /* ctrl-g */
   { "day",    "Day",      "View",  0x19, ACT_DAY },     /* ctrl-y: ctrl-d is
@@ -1160,7 +1324,7 @@ static void use_add_menus(void)  { toolbar_set(ADD_ACTIONS, NADD, 0, 0); }
  * on the first event, rather than on 1970. */
 static void goto_month(void) {
   if (!C.have_clock && C.n)
-    civil_from_days(local_day(C.ev[0].start), &C.cur_y, &C.cur_m, &C.cur_d);
+    civil_from_days(ev_day(&C.ev[0]), &C.cur_y, &C.cur_m, &C.cur_d);
   C.view = VIEW_MONTH;
 }
 
@@ -1180,15 +1344,27 @@ static void open_day(int32_t day, View back) {
 /* The day the day view should open on when nothing has been selected: today
  * if the clock knows, otherwise the first event there is. */
 static int32_t day_for_selection(void) {
-  if (C.sel >= 0 && C.sel < C.n) return local_day(C.ev[C.sel].start);
+  if (C.sel >= 0 && C.sel < C.n) return ev_day(&C.ev[C.sel]);
   if (C.have_clock) return today_day();
-  return C.n ? local_day(C.ev[0].start) : 0;
+  return C.n ? ev_day(&C.ev[0]) : 0;
+}
+
+/* The selected event, whichever view is up: the agenda's, or the day's. */
+static int selected_event(void) {
+  if (C.view == VIEW_DAY) return day_event_at(C.day_shown, C.day_sel);
+  if (C.view == VIEW_AGENDA && C.sel >= 0 && C.sel < C.n) return C.sel;
+  return -1;
 }
 
 /* The one place that knows what anything does. */
 static int do_action(int a) {
   switch (a) {
   case ACT_ADD:    begin_add(); use_add_menus(); return 1;
+  case ACT_EDIT:
+    if (C.view == VIEW_ADD) return 1;
+    if (begin_edit(selected_event()) != 0) { say("pick an event to edit"); return 1; }
+    use_add_menus();
+    return 1;
   case ACT_DELETE: delete_selected(); return 1;
   case ACT_SYNC:   sync_begin("s"); return 1;
   case ACT_AGENDA: C.view = VIEW_AGENDA; return 1;
@@ -1202,7 +1378,7 @@ static int do_action(int a) {
     return 1;
   case ACT_MONTH:  goto_month(); return 1;
   case ACT_SAVE:   commit_add(); use_main_menus(); return 1;
-  case ACT_CANCEL: C.view = VIEW_AGENDA; use_main_menus(); return 1;
+  case ACT_CANCEL: clear_editing(); C.view = VIEW_AGENDA; use_main_menus(); return 1;
   default: return 0;
   }
 }
@@ -1247,6 +1423,7 @@ static int key_agenda(unsigned char k) {
   case CAPP_KEY_DOWN: if (C.sel + 1 < C.n) { C.sel++; scroll_to_sel(); } return 1;
   case 'm': case 'M': return do_action(ACT_MONTH);
   case 'a': case 'A': return do_action(ACT_ADD);
+  case 'e': case 'E': return do_action(ACT_EDIT);
   case 's': case 'S': return do_action(ACT_SYNC);
   /* Enter opens the day the selected event is on. A letter for it was tried
    * and taken back: `d` deletes in Todo, and the same key meaning "delete"
@@ -1314,6 +1491,7 @@ static int key_day(unsigned char k) {
   }
   case 'm': case 'M': return do_action(ACT_MONTH);
   case 'a': case 'A': return do_action(ACT_ADD);
+  case 'e': case 'E': return do_action(ACT_EDIT);
   case 's': case 'S': return do_action(ACT_SYNC);
   default: return 0;
   }
@@ -1342,7 +1520,11 @@ static int key_month(unsigned char k) {
 
 static int key_add(unsigned char k) {
   if (k == CAPP_KEY_ENTER) return do_action(ACT_SAVE);
-  if (k == '\t') { C.field = (Field)((C.field + 1) % FIELD_COUNT); return 1; }
+  if (k == '\t') {
+    C.field = (Field)((C.field + 1) % FIELD_COUNT);
+    if (C.field == FIELD_TIME && C.draft_all_day) C.field = FIELD_TITLE;
+    return 1;
+  }
 
   if (C.field == FIELD_DATE) {
     if (k == CAPP_KEY_LEFT)  { C.draft_day--; return 1; }
@@ -1466,11 +1648,16 @@ static size_t list_days(int32_t from, int32_t to, int with_day, char *out, size_
   for (i = 0; i < C.n && o + 8 < n; i++) {
     int32_t d;
     if (C.ev[i].deleted) continue;
-    d = local_day(C.ev[i].start);
+    d = ev_day(&C.ev[i]);
     if (d < from || d >= to) continue;
-    local_hm(C.ev[i].start, &h, &m);
     if (with_day) day_label(d, label, sizeof label);
     else label[0] = 0;
+    if (C.ev[i].all_day) {
+      o += (size_t)api->fmt(out + o, n - o, "%s%sall day %s\n", label,
+                            with_day ? " " : "", C.ev[i].summary);
+      continue;
+    }
+    local_hm(C.ev[i].start, &h, &m);
     o += (size_t)api->fmt(out + o, n - o, "%s%s%02d:%02d %s\n", label,
                           with_day ? " " : "", h, m, C.ev[i].summary);
   }
@@ -1555,7 +1742,7 @@ static int app_click(void *st, short x, short y, int button) {
     int yy = 1, i;
     int32_t last = -999999;
     for (i = C.shown_top; i < C.n; i++) {
-      int32_t d = local_day(C.ev[i].start);
+      int32_t d = ev_day(&C.ev[i]);
       if (C.ev[i].deleted) continue;
       if (d != last) { yy += 10; last = d; }
       if (y >= yy && y < yy + ROW_H) { C.sel = i; return 1; }
@@ -1623,7 +1810,7 @@ const CappInfo capp_info = {
     0x55, 0x52, 0x40, 0x02, 0x55, 0x52, 0x40, 0x02,
     0x7F, 0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
   "arrows\tmove\nenter\tthis day on its own\nm\tmonth view / agenda\n"
-  "esc\tback, then out\na\tadd an event\n"
+  "esc\tback, then out\na\tadd an event\ne\tedit the selected event\n"
   "d / del\tdelete (unsynced only)\ns\tsync with Google\n",
   MAIN_ACTIONS,
   sizeof MAIN_ACTIONS / sizeof MAIN_ACTIONS[0],
