@@ -86,7 +86,7 @@ static void dump(const char *name) {
   {
     Box all = { 0, 0, SCREEN_W, HUD_Y };
     render(all);
-    paint_hud();
+    paint_hud(1);
   }
   snprintf(path, sizeof path, "%s/%s.ppm", dir, name);
   f = fopen(path, "wb");
