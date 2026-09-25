@@ -4,7 +4,7 @@ a real turn would edit this repository.
 
     python -m server.tests.test_build
 """
-import os, shutil, struct, sys, tempfile, threading, unittest, urllib.request
+import os, shutil, struct, subprocess, sys, tempfile, threading, unittest, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))             # the repository root
 
@@ -124,6 +124,71 @@ class Publish(unittest.TestCase):
         self.put("apps/bad.capp", app_image())
         build.publish(self.store, self.fw, self.apps, False)
         self.assertEqual(os.listdir(os.path.join(self.store, "apps")), ["bad.capp"])
+
+
+class FirmwareDue(unittest.TestCase):
+    """The deploy's rule: firmware only when something outside apps/ changed
+    since the store's firmware was built. Against a real git repository,
+    since the rule is a git diff."""
+
+    def git(self, *args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+                              + list(args), cwd=self.repo, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def commit(self, rel, text):
+        path = os.path.join(self.repo, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", rel)
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.store = tempfile.mkdtemp()
+        self.git("init", "-q")
+        self.commit("kernel/k.c", "1")
+        for flavor in updates.FLAVORS:
+            fw, _ = updates.store_paths(self.store, flavor)
+            updates.put_artifact(fw, firmware_image())
+
+    def tearDown(self):
+        shutil.rmtree(self.repo, ignore_errors=True)
+        shutil.rmtree(self.store, ignore_errors=True)
+
+    def due(self):
+        return build.firmware_due(self.store, root=self.repo)[0]
+
+    def test_no_record_means_build_it(self):
+        self.assertTrue(self.due())
+
+    def test_an_app_change_is_not_an_os_update(self):
+        build.record_firmware(self.store, root=self.repo)
+        self.assertFalse(self.due())
+        self.commit("apps/calendar.c", "edit")
+        self.assertFalse(self.due())
+
+    def test_a_kernel_change_is(self):
+        build.record_firmware(self.store, root=self.repo)
+        self.commit("apps/calendar.c", "edit")
+        self.commit("kernel/k.c", "2")
+        self.assertTrue(self.due())
+
+    def test_prose_is_not(self):
+        build.record_firmware(self.store, root=self.repo)
+        self.commit("CLAUDE.md", "words")
+        self.commit("tools/x.py", "tool")
+        self.assertFalse(self.due())
+
+    def test_a_missing_flavor_is_built(self):
+        build.record_firmware(self.store, root=self.repo)
+        os.remove(updates.store_paths(self.store, "release")[0])
+        self.assertTrue(self.due())
+
+    def test_an_unknown_record_is_built(self):
+        updates.put_artifact(os.path.join(self.store, build.FIRMWARE_REV), b"0" * 40)
+        self.assertTrue(self.due())
 
 
 class Turn(unittest.TestCase):

@@ -242,3 +242,82 @@ class BuildingChat(ChatService):
                 return state, (reply + "\n\npublished: " + ", ".join(sent)
                                + " -- /update installs")
             return state, reply + "\n\nbuilt; nothing new to install"
+
+
+# ---- deploying: tools/deploy_droplet.sh --------------------------------------
+#
+# The deploy used to build and publish both firmwares every time. The firmware
+# embeds every app as a seed blob, so an app-only change gave it a new hash and
+# every device was offered an OS update that changed nothing but the apps it
+# carries -- which `update apps` delivers anyway. The same rule as build_plan,
+# applied to what changed since the store's firmware was last published.
+
+FIRMWARE_REV = "firmware.rev"     # in the store: the commit its firmware is
+
+
+def firmware_due(store, root=ROOT):
+    """(due, why): does a deploy at HEAD need to build and publish firmware?"""
+    for flavor in updates.FLAVORS:
+        fw, _ = updates.store_paths(store, flavor)
+        if not os.path.isfile(fw):
+            return True, "the store has no %s firmware" % flavor
+    try:
+        with open(os.path.join(store, FIRMWARE_REV), encoding="utf-8") as f:
+            rev = f.read().strip()
+    except OSError:
+        return True, "no record of which commit the store's firmware was built from"
+    r = subprocess.run(["git", "diff", "--name-only", rev, "HEAD"], cwd=root,
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return True, "cannot diff from %s" % rev[:12]
+    paths = {p for p in r.stdout.splitlines() if p}
+    if build_plan(paths)[1]:
+        outside = sorted(p for p in paths if not p.startswith("apps/"))
+        return True, "changed outside apps/: " + ", ".join(outside[:4]) + \
+            (" ..." if len(outside) > 4 else "")
+    return False, "nothing outside apps/ changed since %s" % rev[:12]
+
+
+def record_firmware(store, root=ROOT):
+    """Remember HEAD as the commit the store's firmware now is."""
+    rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+                         text=True, check=True).stdout.strip()
+    updates.put_artifact(os.path.join(store, FIRMWARE_REV), (rev + "\n").encode())
+
+
+def deploy(store, always=False, root=ROOT, run=subprocess.run):
+    """Build the apps, the firmware if due, and publish. 0 or 1, for a shell."""
+    due, why = (True, "asked for") if always else firmware_due(store, root)
+    print("   firmware: %s (%s)" % ("building" if due else "skipped", why))
+    steps = [[sys.executable, os.path.join("tools", "build_apps.py")]]
+    if due:
+        steps.append([sys.executable, "-m", "platformio", "run",
+                      "-e", "cardputer", "-e", "release"])
+    for cmd in steps:
+        r = run(cmd, cwd=root, capture_output=True, text=True,
+                encoding="utf-8", errors="replace")
+        out = (r.stdout or "") + (r.stderr or "")
+        keep = [l for l in out.splitlines()
+                if any(w in l for w in ("Flash:", "SUCCESS", "FAILED", "rror", "commands in"))]
+        for line in keep[-6:]:
+            print("  " + line)
+        if r.returncode != 0:
+            print("   build failed; nothing published")
+            return 1
+    fws = {"debug": updates.FIRMWARE, "release": updates.FIRMWARE_RELEASE}
+    sent = publish(store, fws, updates.APPS_DIR, due)
+    if due:
+        record_firmware(store, root)
+    print("   published:", ", ".join(sent) or "nothing")
+    return 0
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description="build and publish into a store")
+    ap.add_argument("command", choices=["deploy"])
+    ap.add_argument("--store", required=True)
+    ap.add_argument("--firmware", choices=["auto", "always"], default="auto",
+                    help="auto: only when something outside apps/ changed")
+    a = ap.parse_args()
+    sys.exit(deploy(a.store, always=a.firmware == "always"))
