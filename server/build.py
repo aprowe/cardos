@@ -33,9 +33,9 @@ from .chat import ChatService, ROOT
 BUILD_TIMEOUT = 1800          # a first firmware build on one core is slow
 ERROR_TAIL = 1200
 
-# Paths whose change needs no build: prose, the PC-side tools, and the host
-# test suite, none of which the device ever sees.
-NO_BUILD = ("docs/", "tools/", "test/", "host/")
+# Paths whose change needs no build: prose, the PC-side tools, the host
+# test suite and this server, none of which the device ever sees.
+NO_BUILD = ("docs/", "tools/", "test/", "host/", "server/")
 
 _CLEAN = object()
 

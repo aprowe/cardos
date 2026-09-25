@@ -41,6 +41,7 @@ class Plan(unittest.TestCase):
         self.assertEqual(plan({"docs/x.md", "CLAUDE.md", "tools/app.py",
                                "test/test_x.c"}), (False, False))
         self.assertEqual(plan({"apps/pinball.c"}), (True, False))
+        self.assertEqual(plan({"server/build.py", "server/tests/x.py"}), (False, False))
         self.assertEqual(plan({"kernel/drv/speaker.c"}), (True, True))
         self.assertEqual(plan({"apps/pinball.c", "src/main.c"}), (True, True))
         # A font is embedded in the firmware, so a new one is an OS build.
