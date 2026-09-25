@@ -449,8 +449,7 @@ static int md_render(CRect c, int from, int rows) {
     const char *body;
     int indent = 0;
     MdKind k;
-    int x, avail, y;
-    uint16_t fg = CLR_PG_TX, bg = CLR_PG;
+    int x, avail, per, len, chunk;
     int bold = 0;
 
     /* Editing keeps E.len and leaves old bytes past it; the preview reads
@@ -466,78 +465,91 @@ static int md_render(CRect c, int from, int rows) {
     k = fenced ? MD_CODE : md_kind(E.line[i], &body, &indent);
     if (fenced) body = E.line[i];
 
-    /* Where this row lands, and whether it is on screen at all. */
-    y = c.y + (row - from) * PG_ROW;
-    row++;
-    if (rows == 0 || row - 1 < from || row - 1 >= from + rows) {
-      /* Not drawn, but long lines still take more than one row. */
-      if (k != MD_RULE && k != MD_BLANK) {
-        int len = (int)api->str_len(body);
-        int per = wrapcols - indent * 2 - (k == MD_BULLET || k == MD_NUMBER ? 2 : 0);
-        while (per > 0 && len > per) { len -= per; row++; }
-      }
-      continue;
-    }
-
     x = c.x + PG_LEFT + indent * 2 * CHARW;
     avail = c.w - (x - c.x) - PG_LEFT;
+    per = wrapcols - indent * 2 - (k == MD_BULLET || k == MD_NUMBER ? 2 : 0);
+    len = (k == MD_RULE || k == MD_BLANK) ? 0 : (int)api->str_len(body);
+    if (k == MD_H1 || k == MD_H2) bold = 1;
 
-    switch (k) {
-    case MD_BLANK:
-      break;
+    /* A row too long for the page keeps going on the next one, rather than
+     * being cut off at the edge -- this is the same length this loop counts
+     * when the row is off screen, so the two never disagree about how tall
+     * a line is. */
+    chunk = 0;
+    do {
+      int y = c.y + (row - from) * PG_ROW;
+      int visible = rows != 0 && row >= from && row < from + rows;
+      int take = len - chunk;
+      if (per > 0 && take > per) take = per;
 
-    case MD_RULE:
-      api->fill(rect(c.x + PG_LEFT, y + 4, c.w - PG_LEFT * 2, 1), CLR_PG_RULE);
-      break;
+      if (visible) {
+        int rx = x, ravail = avail;
+        uint16_t rfg = CLR_PG_TX, rbg = CLR_PG;
 
-    case MD_H1:
-    case MD_H2:
-      fg = CLR_PG_H;
-      bold = 1;
-      break;
-    case MD_H3:
-      fg = CLR_PG_H;
-      break;
+        switch (k) {
+        case MD_RULE:
+          api->fill(rect(c.x + PG_LEFT, y + 4, c.w - PG_LEFT * 2, 1), CLR_PG_RULE);
+          break;
 
-    case MD_QUOTE:
-      /* The bar down the left is the whole visual idea of a quotation. */
-      api->fill(rect(x, y, 2, PG_ROW), CLR_PG_QUOT);
-      x += 6;
-      avail -= 6;
-      fg = CLR_PG_DIM;
-      break;
+        case MD_H1:
+        case MD_H2:
+        case MD_H3:
+          rfg = CLR_PG_H;
+          break;
 
-    case MD_CODE:
-      api->fill(rect(c.x + PG_LEFT, y, c.w - PG_LEFT * 2, PG_ROW), CLR_PG_CODE);
-      bg = CLR_PG_CODE;
-      break;
+        case MD_QUOTE:
+          /* The bar down the left is the whole visual idea of a quotation,
+           * and continuation rows stay indented under the text, not the
+           * bar, once it has been drawn once. */
+          if (chunk == 0) api->fill(rect(x, y, 2, PG_ROW), CLR_PG_QUOT);
+          rx += 6;
+          ravail -= 6;
+          rfg = CLR_PG_DIM;
+          break;
 
-    case MD_BULLET:
-      /* A square, because the font has no bullet and a hyphen reads as a
-       * hyphen. */
-      api->fill(rect(x + 1, y + 3, 3, 3), CLR_PG_TX);
-      x += 8;
-      avail -= 8;
-      break;
+        case MD_CODE:
+          api->fill(rect(c.x + PG_LEFT, y, c.w - PG_LEFT * 2, PG_ROW), CLR_PG_CODE);
+          rbg = CLR_PG_CODE;
+          break;
 
-    case MD_NUMBER:
-    default:
-      break;
-    }
+        case MD_BULLET:
+          /* A square, because the font has no bullet and a hyphen reads as
+           * a hyphen -- drawn once, on the first row; the rest wrap under
+           * the text rather than under the bullet. */
+          if (chunk == 0) api->fill(rect(x + 1, y + 3, 3, 3), CLR_PG_TX);
+          rx += 8;
+          ravail -= 8;
+          break;
 
-    if (k == MD_BLANK || k == MD_RULE) continue;
+        case MD_NUMBER:
+        default:
+          break;
+        }
 
-    if (k == MD_CODE) {
-      /* Verbatim: markers are content inside a fence. */
-      md_text(x, y, body, CLR_PG_TX, CLR_PG_CODE, 0);
-    } else if (bold || k == MD_H1 || k == MD_H2 || k == MD_H3) {
-      md_text(x, y, body, fg, bg, bold);
-      if (k == MD_H1)
-        api->fill(rect(c.x + PG_LEFT, y + PG_ROW - 1, c.w - PG_LEFT * 2, 1),
-                  CLR_PG_RULE);
-    } else {
-      md_inline(x, y, avail, body, fg, bg);
-    }
+        if (k != MD_BLANK && k != MD_RULE) {
+          char piece[MAXCOL + 1];
+          int n = take;
+          if (n > (int)sizeof piece - 1) n = (int)sizeof piece - 1;
+          api->mem_cpy(piece, body + chunk, (size_t)n);
+          piece[n] = 0;
+
+          if (k == MD_CODE) {
+            /* Verbatim: markers are content inside a fence. */
+            md_text(rx, y, piece, CLR_PG_TX, CLR_PG_CODE, 0);
+          } else if (bold || k == MD_H3) {
+            md_text(rx, y, piece, rfg, rbg, bold);
+            if (k == MD_H1 && chunk + take >= len)
+              api->fill(rect(c.x + PG_LEFT, y + PG_ROW - 1, c.w - PG_LEFT * 2, 1),
+                        CLR_PG_RULE);
+          } else {
+            md_inline(rx, y, ravail, piece, rfg, rbg);
+          }
+        }
+      }
+
+      row++;
+      chunk += take;
+    } while (chunk < len);
   }
   return row;
 }
