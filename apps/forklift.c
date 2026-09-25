@@ -41,7 +41,7 @@
 #define SRC_MAX   (ED_LINES * (ED_COLS + 1) + 1)
 #define ROWH      9
 #define CHARW     6
-#define GUTTER    15
+#define GUTTER    18        /* two digits and a space */
 
 #define DIR        CAPP_HOME "/forklift"
 #define STATE_PATH DIR "/state.txt"
@@ -696,16 +696,35 @@ static CRect rect(int x, int y, int w, int h) {
   return r;
 }
 
+/* Painting without flicker.
+ *
+ * There is no back buffer, so any pixel drawn twice in one paint -- cleared
+ * to the background and then drawn over -- shows as a flash. The first
+ * version cleared the map every step and redrew it; the shell unions an
+ * app's damage marks into one rectangle, and the top and bottom bars together
+ * made that the whole screen, so the whole screen flashed up to 64 times a
+ * second. Now each thing is drawn once, onto what it replaces: a tile only
+ * when a robot left or entered it, a robot as pieces that do not overlap, the
+ * bars as text padded to the full width (text fills its own background) and
+ * only when the text changed. A full clear happens only when the screen was
+ * not ours -- a new view, or a paint nobody asked for. */
+
 static struct {
   int view;
   CRect c;
-  int shop_sel, ref_top;
-  int fast;
+  int shop_sel, ref_top, fast;
   uint32_t last_ms, acc_ms, last_save;
-  int prev_x[MAX_BOTS], prev_y[MAX_BOTS];
-  int32_t shown_credits;
-  int shown_norder, shown_orders;
+  int full;                         /* the next paint draws everything */
+  int asked;                        /* damage was marked since the last paint */
+  CRect ask;                        /* the union of it, content-relative */
+  int drawn_x[MAX_BOTS], drawn_y[MAX_BOTS], drawn_sig[MAX_BOTS], drawn_n;
+  char top_shown[44], msg_shown[44];
+  uint16_t msg_fg;
+  uint32_t order_shown;
+  int shop_drawn_sel;
 } U;
+
+#define TEXT_COLS (SCREEN_W / CHARW)
 
 static int tile_px(void) {
   int t = SCREEN_W / G.w, t2 = (MAP_Y1 - MAP_Y0) / G.h;
@@ -719,84 +738,225 @@ static CRect tile_rect(int x, int y) {
   return rect(U.c.x + map_x0() + x * t, U.c.y + map_y0() + y * t, t, t);
 }
 
+/* s, padded with spaces to n columns: text draws its own background, so a
+ * line drawn at full width needs no clearing first. */
+static void pad(char *out, const char *s, int n) {
+  int i = 0;
+  for (; s[i] && i < n; i++) out[i] = s[i];
+  for (; i < n; i++) out[i] = ' ';
+  out[n] = 0;
+}
+
+/* The outer rect less a hole in it, as up to four fills that do not overlap
+ * the hole: for drawing round something without drawing under it. */
+static void fill_around(CRect o, CRect h, uint16_t c) {
+  if (h.y > o.y) api->fill(rect(o.x, o.y, o.w, h.y - o.y), c);
+  if (h.y + h.h < o.y + o.h) api->fill(rect(o.x, h.y + h.h, o.w, o.y + o.h - h.y - h.h), c);
+  if (h.x > o.x) api->fill(rect(o.x, h.y, h.x - o.x, h.h), c);
+  if (h.x + h.w < o.x + o.w) api->fill(rect(h.x + h.w, h.y, o.x + o.w - h.x - h.w, h.h), c);
+}
+
+static int bot_sig(const Bot *b) {
+  int s = b->nheld, i;
+  for (i = 0; i < b->nheld; i++) s |= (b->held[i] + 1) << (3 + 3 * i);
+  return s;
+}
+
+static int bot_at(int x, int y) {
+  int b;
+  for (b = 0; b < G.nbots; b++) if (G.bot[b].x == x && G.bot[b].y == y) return b;
+  return -1;
+}
+
+/* A robot in its box: the body, with the crates it holds in a 2x2 grid at
+ * its top left. Every pixel is drawn once. */
+static void draw_bot(CRect body, int b) {
+  const Bot *bt = &G.bot[b];
+  int cs = (body.w - 2) / 2, i;
+  CRect grid;
+  if (cs < 2) cs = 2;
+  grid = rect(body.x + 1, body.y + 1, 2 * cs, 2 * cs);
+  fill_around(body, grid, BOT_C[b]);
+  for (i = 0; i < 4; i++) {
+    int cx = grid.x + (i & 1) * cs, cy = grid.y + (i >> 1) * cs;
+    if (i < bt->nheld) {
+      api->fill(rect(cx, cy, cs - 1, cs - 1), KIND_C[bt->held[i]]);
+      api->fill(rect(cx + cs - 1, cy, 1, cs), BOT_C[b]);
+      api->fill(rect(cx, cy + cs - 1, cs - 1, 1), BOT_C[b]);
+    } else {
+      api->fill(rect(cx, cy, cs, cs), BOT_C[b]);
+    }
+  }
+}
+
 static void paint_tile(int x, int y) {
-  CRect r = tile_rect(x, y);
+  CRect r = tile_rect(x, y), inner, body;
   const Tile *t = &G.tile[y][x];
-  int s = r.w, b;
+  int s = r.w, b = bot_at(x, y), in = s > 10 ? 2 : 1;
+  uint16_t base = ((x + y) & 1) ? C_FLOOR : C_FLOOR2;
+
+  body = rect(r.x + in, r.y + in, s - 2 * in, s - 2 * in);
   switch (t->t) {
   case TL_RACK:
-    api->fill(r, C_RACK);
+    api->fill(rect(r.x, r.y, s, s / 3), C_RACK);
     api->fill(rect(r.x, r.y + s / 3, s, 1), C_RACK_HI);
+    api->fill(rect(r.x, r.y + s / 3 + 1, s, s / 3 - 1), C_RACK);
     api->fill(rect(r.x, r.y + 2 * s / 3, s, 1), C_RACK_HI);
-    break;
+    api->fill(rect(r.x, r.y + 2 * s / 3 + 1, s, s - 2 * s / 3 - 1), C_RACK);
+    return;
   case TL_BAY:
-    api->fill(r, C_FLOOR);
-    api->frame(r, KIND_C[t->kind]);
-    api->fill(rect(r.x + s / 4, r.y + s / 4, s - s / 2, s - s / 2), KIND_C[t->kind]);
-    break;
-  case TL_SHIP:
-    api->fill(r, C_SHIP);
-    api->frame(r, C_SHIP_HI);
-    if (s >= 10) api->text((short)(r.x + (s - 6) / 2), (short)(r.y + (s - 8) / 2), "S", C_SHIP_HI, C_SHIP);
-    break;
+  case TL_SHIP: {
+    uint16_t frame = t->t == TL_BAY ? KIND_C[t->kind] : C_SHIP_HI;
+    uint16_t fill = t->t == TL_BAY ? C_FLOOR : C_SHIP;
+    api->frame(r, frame);
+    inner = rect(r.x + 1, r.y + 1, s - 2, s - 2);
+    if (b >= 0) {
+      if (in > 1) fill_around(inner, body, fill);
+      draw_bot(body, b);
+    } else if (t->t == TL_BAY) {
+      CRect crate = rect(r.x + s / 4, r.y + s / 4, s - s / 2, s - s / 2);
+      fill_around(inner, crate, fill);
+      api->fill(crate, KIND_C[t->kind]);
+    } else if (s >= 10) {
+      CRect letter = rect(r.x + (s - 6) / 2, r.y + (s - 8) / 2, 6, 8);
+      fill_around(inner, letter, fill);
+      api->text(letter.x, letter.y, "S", C_SHIP_HI, C_SHIP);
+    } else {
+      api->fill(inner, fill);
+    }
+    return;
+  }
   default:
-    api->fill(r, ((x + y) & 1) ? C_FLOOR : C_FLOOR2);
-  }
-  /* Any robot standing here, over the tile. */
-  for (b = 0; b < G.nbots; b++) {
-    const Bot *bt = &G.bot[b];
-    int i, in = s > 10 ? 2 : 1, cs;
-    if (bt->x != x || bt->y != y) continue;
-    api->fill(rect(r.x + in, r.y + in, s - 2 * in, s - 2 * in), BOT_C[b]);
-    cs = (s - 2 * in - 2) / 2;
-    if (cs < 2) cs = 2;
-    for (i = 0; i < bt->nheld; i++)
-      api->fill(rect(r.x + in + 1 + (i & 1) * cs, r.y + in + 1 + (i >> 1) * cs,
-                     cs - 1, cs - 1), KIND_C[bt->held[i]]);
+    if (b >= 0) {
+      fill_around(r, body, base);
+      draw_bot(body, b);
+    } else {
+      api->fill(r, base);
+    }
   }
 }
 
-static void paint_top(void) {
-  char s[48];
-  api->fill(rect(U.c.x, U.c.y, SCREEN_W, TOP_H), C_BAR);
-  api->fmt(s, sizeof s, "$%ld  orders %d  %d/s%s", (long)G.credits, G.orders,
+static void top_text(char *out) {
+  char left[48];
+  const char *right = G.paused ? "paused" : G.running ? "" : "no prog";
+  int n, rn = str_len(right), i;
+  api->fmt(left, sizeof left, "$%ld  orders %d  %d/s%s", (long)G.credits, G.orders,
            steps_per_s() * (U.fast ? 4 : 1), U.fast ? " fast" : "");
-  api->text((short)(U.c.x + 2), (short)(U.c.y + 1), s, C_BAR_FG, C_BAR);
-  api->text((short)(U.c.x + SCREEN_W - 38), (short)(U.c.y + 1),
-            G.paused ? "paused" : G.running ? "" : "no prog", C_BAR_FG, C_BAR);
-  U.shown_credits = G.credits;
-  U.shown_orders = G.orders;
+  pad(out, left, TEXT_COLS);
+  n = TEXT_COLS - rn;
+  for (i = 0; i < rn; i++) out[n + i] = right[i];
 }
 
-static void paint_bottom(void) {
-  int i, x;
+static void bottom_msg(const char **msg, uint16_t *fg) {
+  if (G.err[0]) { *msg = G.err; *fg = C_ERR; }
+  else if (G.note[0] && (int32_t)(G.note_until - api->ticks_ms()) > 0) { *msg = G.note; *fg = C_GOOD; }
+  else { *msg = "e code s shop r help spc pause f fast"; *fg = C_DIM; }
+}
+
+static uint32_t order_sig(void) {
+  uint32_t s = (uint32_t)G.norder | ((uint32_t)G.order_size << 4);
+  int i;
+  for (i = 0; i < G.norder && i < 8; i++) s ^= (uint32_t)(G.order[i] + 1) << (8 + 3 * i);
+  return s;
+}
+
+static void paint_top(int full) {
+  char s[TEXT_COLS + 1];
+  top_text(s);
+  if (full) {
+    api->fill(rect(U.c.x, U.c.y, SCREEN_W, 1), C_BAR);
+    api->fill(rect(U.c.x, U.c.y + 9, SCREEN_W, TOP_H - 9), C_BAR);
+  }
+  {
+    int i, same = !full;
+    for (i = 0; same && i <= TEXT_COLS; i++) if (s[i] != U.top_shown[i]) same = 0;
+    if (same) return;
+  }
+  api->text((short)U.c.x, (short)(U.c.y + 1), s, C_BAR_FG, C_BAR);
+  api->mem_cpy(U.top_shown, s, TEXT_COLS + 1);
+}
+
+static void paint_bottom(int full) {
+  int y = U.c.y + BOTTOM_Y, i, x;
   const char *msg;
-  uint16_t fg = C_DIM;
-  api->fill(rect(U.c.x, U.c.y + BOTTOM_Y, SCREEN_W, SCREEN_H - BOTTOM_Y), C_BG);
-  api->text((short)(U.c.x + 2), (short)(U.c.y + BOTTOM_Y + 2), "order", C_DIM, C_BG);
-  x = U.c.x + 36;
-  for (i = 0; i < G.norder; i++) {
-    api->fill(rect(x, U.c.y + BOTTOM_Y + 2, 8, 8), KIND_C[G.order[i]]);
-    x += 10;
+  uint16_t fg;
+  char s[TEXT_COLS + 1];
+
+  if (full) {
+    api->fill(rect(U.c.x, y, SCREEN_W, 2), C_BG);
+    api->fill(rect(U.c.x, y + 10, SCREEN_W, 3), C_BG);
+    api->fill(rect(U.c.x, y + 21, SCREEN_W, SCREEN_H - BOTTOM_Y - 21), C_BG);
+    api->text((short)U.c.x, (short)(y + 2), "order ", C_DIM, C_BG);
   }
-  for (i = G.norder; i < G.order_size; i++) {
-    api->frame(rect(x, U.c.y + BOTTOM_Y + 2, 8, 8), C_DIM);    /* done */
-    x += 10;
+  if (full || order_sig() != U.order_shown) {
+    /* Squares for what is still wanted, outlines for what has shipped; each
+     * square is drawn once, and only the space after them is cleared. */
+    x = U.c.x + 36;
+    for (i = 0; i < G.order_size; i++) {
+      CRect sq = rect(x, y + 2, 8, 8);
+      if (i < G.norder) api->fill(sq, KIND_C[G.order[i]]);
+      else {
+        api->frame(sq, C_DIM);
+        api->fill(rect(x + 1, y + 3, 6, 6), C_BG);
+      }
+      api->fill(rect(x + 8, y + 2, 2, 8), C_BG);
+      x += 10;
+    }
+    api->fill(rect(x, y + 2, U.c.x + SCREEN_W - x, 8), C_BG);
+    api->fill(rect(U.c.x + 30, y + 2, 6, 8), C_BG);
+    U.order_shown = order_sig();
   }
-  if (G.err[0]) { msg = G.err; fg = C_ERR; }
-  else if (G.note[0] && (int32_t)(G.note_until - api->ticks_ms()) > 0) { msg = G.note; fg = C_GOOD; }
-  else msg = "e code s shop r help spc pause f fast";
-  api->text((short)(U.c.x + 2), (short)(U.c.y + BOTTOM_Y + 13), msg, fg, C_BG);
-  U.shown_norder = G.norder;
+  bottom_msg(&msg, &fg);
+  pad(s, msg, TEXT_COLS);
+  {
+    int same = !full && fg == U.msg_fg;
+    for (i = 0; same && i <= TEXT_COLS; i++) if (s[i] != U.msg_shown[i]) same = 0;
+    if (!same) {
+      api->text((short)U.c.x, (short)(y + 13), s, fg, C_BG);
+      api->mem_cpy(U.msg_shown, s, TEXT_COLS + 1);
+      U.msg_fg = fg;
+    }
+  }
 }
 
-static void paint_map(void) {
-  int x, y;
-  api->fill(rect(U.c.x, U.c.y + TOP_H, SCREEN_W, BOTTOM_Y - TOP_H), C_BG);
-  paint_top();
-  for (y = 0; y < G.h; y++)
-    for (x = 0; x < G.w; x++) paint_tile(x, y);
-  paint_bottom();
+static void remember_drawn(void) {
+  int b;
+  for (b = 0; b < G.nbots; b++) {
+    U.drawn_x[b] = G.bot[b].x;
+    U.drawn_y[b] = G.bot[b].y;
+    U.drawn_sig[b] = bot_sig(&G.bot[b]);
+  }
+  U.drawn_n = G.nbots;
+}
+
+static void paint_map(int full) {
+  int x, y, b;
+  if (full || U.drawn_n != G.nbots) {
+    CRect area = rect(U.c.x, U.c.y + TOP_H, SCREEN_W, BOTTOM_Y - TOP_H);
+    CRect map = rect(U.c.x + map_x0(), U.c.y + map_y0(), G.w * tile_px(), G.h * tile_px());
+    fill_around(area, map, C_BG);
+    for (y = 0; y < G.h; y++)
+      for (x = 0; x < G.w; x++) paint_tile(x, y);
+    full = 1;
+  } else {
+    /* Each tile once, however many robots left or entered it: a robot that
+     * took a crate without moving left and entered the same tile. */
+    int tx[2 * MAX_BOTS], ty[2 * MAX_BOTS], n = 0, i, j;
+    for (b = 0; b < G.nbots; b++) {
+      if (U.drawn_x[b] == G.bot[b].x && U.drawn_y[b] == G.bot[b].y &&
+          U.drawn_sig[b] == bot_sig(&G.bot[b]))
+        continue;
+      tx[n] = U.drawn_x[b]; ty[n] = U.drawn_y[b]; n++;
+      tx[n] = G.bot[b].x;   ty[n] = G.bot[b].y;   n++;
+    }
+    for (i = 0; i < n; i++) {
+      for (j = 0; j < i; j++) if (tx[j] == tx[i] && ty[j] == ty[i]) break;
+      if (j == i) paint_tile(tx[i], ty[i]);
+    }
+  }
+  remember_drawn();
+  paint_top(full);
+  paint_bottom(full);
 }
 
 static uint16_t syn_colour(const char *l, int i, int *in_comment) {
@@ -810,35 +970,44 @@ static uint16_t syn_colour(const char *l, int i, int *in_comment) {
   return C_TEXT;
 }
 
-static void paint_code(void) {
+/* Every row is redrawn on every key, but as text that covers the whole row
+ * -- runs of one colour, then spaces to the edge -- so nothing is cleared
+ * first and nothing flashes. */
+static void paint_code(int full) {
   int rows = (SCREEN_H - TOP_H - ROWH - 1) / ROWH, cols = (SCREEN_W - GUTTER) / CHARW, r;
-  char s[64];
+  char s[TEXT_COLS + 1];
 
   if (E.cy < E.top) E.top = E.cy;
   if (E.cy >= E.top + rows) E.top = E.cy - rows + 1;
   if (E.cx < E.left) E.left = E.cx;
   if (E.cx >= E.left + cols) E.left = E.cx - cols + 1;
 
-  api->fill(rect(U.c.x, U.c.y, SCREEN_W, TOP_H), C_BAR);
-  api->fmt(s, sizeof s, "code  tab completes  esc runs");
-  api->text((short)(U.c.x + 2), (short)(U.c.y + 1), s, C_BAR_FG, C_BAR);
+  if (full) {
+    api->fill(rect(U.c.x, U.c.y, SCREEN_W, TOP_H), C_BAR);
+    api->fill(rect(U.c.x, U.c.y + TOP_H, GUTTER, SCREEN_H - TOP_H - ROWH - 1), C_ED_GUT);
+    api->fill(rect(U.c.x + GUTTER, U.c.y + TOP_H, SCREEN_W - GUTTER, SCREEN_H - TOP_H - ROWH - 1), C_ED_BG);
+    api->fill(rect(U.c.x, U.c.y + SCREEN_H - ROWH - 1, SCREEN_W, ROWH + 1), C_BG);
+    pad(s, "code  tab completes  esc runs", TEXT_COLS);
+    api->text((short)U.c.x, (short)(U.c.y + 1), s, C_BAR_FG, C_BAR);
+  }
 
   for (r = 0; r < rows; r++) {
-    int ln = E.top + r, y = U.c.y + TOP_H + 1 + r * ROWH, i, cmt = 0, x;
+    int ln = E.top + r, y = U.c.y + TOP_H + 1 + r * ROWH, i, cmt = 0;
     char num[4];
-    api->fill(rect(U.c.x, y, GUTTER, ROWH), C_ED_GUT);
-    api->fill(rect(U.c.x + GUTTER, y, SCREEN_W - GUTTER, ROWH), C_ED_BG);
-    if (ln >= E.nlines) continue;
-    api->fmt(num, sizeof num, "%2d", ln + 1);
-    api->text((short)(U.c.x + 1), (short)(y + 1), num,
+    if (ln >= E.nlines) {
+      api->text((short)U.c.x, (short)(y + 1), "   ", C_ED_NUM, C_ED_GUT);
+      pad(s, "", cols);
+      api->text((short)(U.c.x + GUTTER), (short)(y + 1), s, C_TEXT, C_ED_BG);
+      continue;
+    }
+    api->fmt(num, sizeof num, "%2d ", ln + 1);
+    api->text((short)U.c.x, (short)(y + 1), num,
               (E.status_err && G.prog.err_line == ln + 1) ? C_ERR : C_ED_NUM, C_ED_GUT);
-    /* Colour each character, then draw runs of one colour with one call:
-     * a call a character made typing lag. */
     {
       const char *l = E.line[ln];
       uint16_t col[ED_COLS + 1];
       char run[ED_COLS + 1];
-      int n = str_len(l), from, to, rl = 0, rx = 0;
+      int n = str_len(l), from, to, rl = 0, rx = 0, end;
       for (i = 0; i < n; i++) {
         col[i] = syn_colour(l, i, &cmt);
         if (!cmt && is_word(l[i]) && !(l[i] >= '0' && l[i] <= '9') &&
@@ -866,40 +1035,53 @@ static void paint_code(void) {
         if (!rl) rx = i - E.left;
         run[rl++] = l[i];
       }
-      (void)x;
+      /* Spaces to the edge, over whatever the row held before. */
+      end = to > from ? to - from : 0;
+      if (end < cols) {
+        pad(s, "", cols - end);
+        api->text((short)(U.c.x + GUTTER + end * CHARW), (short)(y + 1), s, C_TEXT, C_ED_BG);
+      }
     }
     if (ln == E.cy) {
       int cx = E.cx - E.left;
-      api->fill(rect(U.c.x + GUTTER + cx * CHARW, y, 1, ROWH), C_ED_CUR);
+      api->fill(rect(U.c.x + GUTTER + cx * CHARW, y + 1, 1, 8), C_ED_CUR);
     }
   }
-  {
-    int y = U.c.y + SCREEN_H - ROWH - 1;
-    api->fill(rect(U.c.x, y, SCREEN_W, ROWH + 1), C_BG);
-    api->text((short)(U.c.x + 2), (short)(y + 1), E.status, E.status_err ? C_ERR : C_GOOD, C_BG);
-  }
+  pad(s, E.status, TEXT_COLS);
+  api->text((short)U.c.x, (short)(U.c.y + SCREEN_H - ROWH), s, E.status_err ? C_ERR : C_GOOD, C_BG);
 }
 
-static void paint_shop(void) {
+static void paint_shop(int full) {
   int i;
-  char s[48];
-  api->fill(rect(U.c.x, U.c.y, SCREEN_W, SCREEN_H), C_BG);
-  api->fill(rect(U.c.x, U.c.y, SCREEN_W, TOP_H), C_BAR);
-  api->fmt(s, sizeof s, "shop  $%ld  enter buys  esc back", (long)G.credits);
-  api->text((short)(U.c.x + 2), (short)(U.c.y + 1), s, C_BAR_FG, C_BAR);
+  char s[TEXT_COLS + 1], t[48];
+  if (full) api->fill(rect(U.c.x, U.c.y, SCREEN_W, SCREEN_H), C_BG);
+  api->fmt(t, sizeof t, "shop  $%ld  enter buys  esc back", (long)G.credits);
+  pad(s, t, TEXT_COLS);
+  if (full) {
+    api->fill(rect(U.c.x, U.c.y, SCREEN_W, 1), C_BAR);
+    api->fill(rect(U.c.x, U.c.y + 9, SCREEN_W, 1), C_BAR);
+  }
+  api->text((short)U.c.x, (short)(U.c.y + 1), s, C_BAR_FG, C_BAR);
   for (i = 0; i < NSHOP; i++) {
     int y = U.c.y + TOP_H + 4 + i * 22, lv = shop_level(i), j;
     uint16_t bg = i == U.shop_sel ? C_SEL : C_BG;
-    api->fill(rect(U.c.x + 2, y, SCREEN_W - 4, 20), bg);
-    api->text((short)(U.c.x + 6), (short)(y + 2), SHOP[i].name, C_TEXT, bg);
+    /* A row's background only when its highlight changed. */
+    if (full || (U.shop_sel != U.shop_drawn_sel &&
+                 (i == U.shop_sel || i == U.shop_drawn_sel)))
+      api->fill(rect(U.c.x + 2, y, SCREEN_W - 4, 20), bg);
+    pad(s, SHOP[i].name, 10);
+    api->text((short)(U.c.x + 6), (short)(y + 2), s, C_TEXT, bg);
     for (j = 0; j < SHOP[i].max; j++)
       api->fill(rect(U.c.x + 70 + j * 8, y + 3, 6, 6), j < lv ? C_GOOD : C_ED_NUM);
-    if (lv >= SHOP[i].max) api->fmt(s, sizeof s, "max");
-    else api->fmt(s, sizeof s, "$%d", SHOP[i].cost[lv]);
+    if (lv >= SHOP[i].max) api->fmt(t, sizeof t, "max");
+    else api->fmt(t, sizeof t, "$%d", SHOP[i].cost[lv]);
+    pad(s, t, 6);
     api->text((short)(U.c.x + SCREEN_W - 44), (short)(y + 2), s,
               lv < SHOP[i].max && G.credits >= SHOP[i].cost[lv] ? C_GOOD : C_DIM, bg);
-    api->text((short)(U.c.x + 6), (short)(y + 11), SHOP[i].about, C_DIM, bg);
+    pad(s, SHOP[i].about, 37);
+    api->text((short)(U.c.x + 6), (short)(y + 11), s, C_DIM, bg);
   }
+  U.shop_drawn_sel = U.shop_sel;
 }
 
 /* The reference: syntax, then every built-in with its line. */
@@ -913,54 +1095,115 @@ static const char *const REF_HEAD[] = {
 };
 #define NREF_HEAD ((int)(sizeof REF_HEAD / sizeof REF_HEAD[0]))
 
-static void paint_ref(void) {
+static void paint_ref(int full) {
   int rows = (SCREEN_H - TOP_H - 2) / ROWH, r, total = NREF_HEAD + P_COUNT_OF_PRIMS;
+  char s[TEXT_COLS + 1];
   if (U.ref_top > total - rows) U.ref_top = total - rows;
   if (U.ref_top < 0) U.ref_top = 0;
-  api->fill(rect(U.c.x, U.c.y, SCREEN_W, SCREEN_H), C_BG);
-  api->fill(rect(U.c.x, U.c.y, SCREEN_W, TOP_H), C_BAR);
-  api->text((short)(U.c.x + 2), (short)(U.c.y + 1), "reference  up/down  esc back", C_BAR_FG, C_BAR);
+  if (full) {
+    api->fill(rect(U.c.x, U.c.y, SCREEN_W, SCREEN_H), C_BG);
+    api->fill(rect(U.c.x, U.c.y, SCREEN_W, TOP_H), C_BAR);
+    pad(s, "reference  up/down  esc back", TEXT_COLS);
+    api->text((short)U.c.x, (short)(U.c.y + 1), s, C_BAR_FG, C_BAR);
+  }
   for (r = 0; r < rows; r++) {
     int i = U.ref_top + r, y = U.c.y + TOP_H + 2 + r * ROWH;
-    if (i >= total) break;
+    if (i >= total) { pad(s, "", TEXT_COLS); api->text((short)U.c.x, (short)y, s, C_TEXT, C_BG); continue; }
     if (i < NREF_HEAD) {
-      api->text((short)(U.c.x + 2), (short)y, REF_HEAD[i], C_SYN_OP, C_BG);
+      pad(s, REF_HEAD[i], TEXT_COLS);
+      api->text((short)U.c.x, (short)y, s, C_SYN_OP, C_BG);
     } else {
       const FlPrim *p = &FL_PRIMS[i - NREF_HEAD];
-      api->text((short)(U.c.x + 2), (short)y, p->name, C_SYN_PRIM, C_BG);
-      api->text((short)(U.c.x + 50), (short)y, p->about, C_TEXT, C_BG);
+      pad(s, p->name, 8);
+      api->text((short)U.c.x, (short)y, s, C_SYN_PRIM, C_BG);
+      pad(s, p->about, TEXT_COLS - 8);
+      api->text((short)(U.c.x + 8 * CHARW), (short)y, s, C_TEXT, C_BG);
     }
   }
 }
 
+static int covers(CRect outer, CRect in) {
+  return in.x >= outer.x && in.y >= outer.y &&
+         in.x + in.w <= outer.x + outer.w && in.y + in.h <= outer.y + outer.h;
+}
+
 static void app_paint(void *st, CRect c) {
+  CRect area;
+  int full;
   (void)st;
   U.c = c;
+  area = api->paint_area ? api->paint_area() : c;
+  area.x = (short)(area.x - c.x);
+  area.y = (short)(area.y - c.y);
+  /* Ours only if we asked for it: anything bigger than what was marked is
+   * the shell repainting under something that covered us. The map marks
+   * what it changes; the other views are driven by keys and redraw rows. */
+  full = U.full;
+  if (U.view == VIEW_MAP && (!U.asked || !covers(U.ask, area))) full = 1;
+  U.full = 0;
+  U.asked = 0;
   switch (U.view) {
-  case VIEW_CODE: paint_code(); break;
-  case VIEW_SHOP: paint_shop(); break;
-  case VIEW_REF:  paint_ref(); break;
-  default:        paint_map(); break;
+  case VIEW_CODE: paint_code(full); break;
+  case VIEW_SHOP: paint_shop(full); break;
+  case VIEW_REF:  paint_ref(full); break;
+  default:        paint_map(full); break;
   }
 }
 
 /* ---- the shell's callbacks -------------------------------------------------------------- */
 
-static void damage_tile(int x, int y) {
+/* Mark a content-relative rect for the next paint, and remember the union. */
+static void ask(CRect r) {
+  api->damage(r);
+  if (!U.asked) { U.ask = r; U.asked = 1; return; }
+  {
+    int x0 = U.ask.x < r.x ? U.ask.x : r.x, y0 = U.ask.y < r.y ? U.ask.y : r.y;
+    int x1 = U.ask.x + U.ask.w > r.x + r.w ? U.ask.x + U.ask.w : r.x + r.w;
+    int y1 = U.ask.y + U.ask.h > r.y + r.h ? U.ask.y + U.ask.h : r.y + r.h;
+    U.ask = rect(x0, y0, x1 - x0, y1 - y0);
+  }
+}
+
+static void ask_tile(int x, int y) {
   CRect r = tile_rect(x, y);
   r.x = (short)(r.x - U.c.x);
   r.y = (short)(r.y - U.c.y);
-  api->damage(r);
+  ask(r);
 }
 
-static void remember_bots(void) {
-  int b;
-  for (b = 0; b < G.nbots; b++) { U.prev_x[b] = G.bot[b].x; U.prev_y[b] = G.bot[b].y; }
+/* What on the map is not as drawn: mark it. 1 if anything was. */
+static int ask_changes(void) {
+  int b, any = 0;
+  char s[TEXT_COLS + 1];
+  const char *msg;
+  uint16_t fg;
+  for (b = 0; b < G.nbots && b < U.drawn_n; b++) {
+    if (U.drawn_x[b] == G.bot[b].x && U.drawn_y[b] == G.bot[b].y &&
+        U.drawn_sig[b] == bot_sig(&G.bot[b]))
+      continue;
+    ask_tile(U.drawn_x[b], U.drawn_y[b]);
+    ask_tile(G.bot[b].x, G.bot[b].y);
+    any = 1;
+  }
+  top_text(s);
+  {
+    int i, same = 1;
+    for (i = 0; same && i <= TEXT_COLS; i++) if (s[i] != U.top_shown[i]) same = 0;
+    if (!same) { ask(rect(0, 0, SCREEN_W, TOP_H)); any = 1; }
+  }
+  bottom_msg(&msg, &fg);
+  pad(s, msg, TEXT_COLS);
+  {
+    int i, same = fg == U.msg_fg && order_sig() == U.order_shown;
+    for (i = 0; same && i <= TEXT_COLS; i++) if (s[i] != U.msg_shown[i]) same = 0;
+    if (!same) { ask(rect(0, BOTTOM_Y, SCREEN_W, SCREEN_H - BOTTOM_Y)); any = 1; }
+  }
+  return any;
 }
 
 static int app_tick(void *st, uint32_t now) {
   uint32_t dt, per;
-  int steps = 0, b, changed = 0;
+  int steps = 0;
   (void)st;
 
   if (!U.last_ms) { U.last_ms = now; U.last_save = now; }
@@ -974,36 +1217,28 @@ static int app_tick(void *st, uint32_t now) {
   U.acc_ms += dt;
   per = 1000u / (uint32_t)(steps_per_s() * (U.fast ? 4 : 1));
   if (per < 1) per = 1;
-  remember_bots();
   while (U.acc_ms >= per && steps < 8) {
     U.acc_ms -= per;
-    if (sim_step()) changed = 1;
+    sim_step();
     steps++;
   }
   if (U.acc_ms > per * 8) U.acc_ms = 0;          /* never run to catch up */
-
-  if (changed) {
-    for (b = 0; b < G.nbots; b++) {
-      damage_tile(U.prev_x[b], U.prev_y[b]);
-      damage_tile(G.bot[b].x, G.bot[b].y);
-    }
-  }
-  if (G.credits != U.shown_credits || G.orders != U.shown_orders || changed)
-    api->damage(rect(0, 0, SCREEN_W, TOP_H));
-  if (G.norder != U.shown_norder || changed)
-    api->damage(rect(0, BOTTOM_Y, SCREEN_W, SCREEN_H - BOTTOM_Y));
-  return changed;
+  if (G.nbots != U.drawn_n) { U.full = 1; return 1; }
+  return ask_changes();
 }
 
 static void go_view(int v) {
   if (U.view == VIEW_CODE && v != VIEW_CODE) apply_program();
   U.view = v;
+  U.full = 1;
   if (v == VIEW_CODE) {
     ed_check();
     if (G.err_line > 0 && G.err_line <= E.nlines) { E.cy = G.err_line - 1; E.cx = 0; }
   }
   if (v != VIEW_MAP && G.dirty) save_all();
 }
+
+static int map_key(unsigned char k);
 
 static int app_key(void *st, unsigned char k) {
   (void)st;
@@ -1032,6 +1267,11 @@ static int app_key(void *st, unsigned char k) {
     default: return 0;
     }
   }
+  if (map_key(k)) { ask_changes(); return 1; }
+  return 0;
+}
+
+static int map_key(unsigned char k) {
   switch (k) {
   case 'e': case 'E': case CAPP_KEY_ENTER: go_view(VIEW_CODE); return 1;
   case 's': case 'S': go_view(VIEW_SHOP); return 1;
@@ -1041,8 +1281,7 @@ static int app_key(void *st, unsigned char k) {
     G.paused = !G.paused;
     return 1;
   case 'f': case 'F': U.fast = !U.fast; return 1;
-  case CAPP_KEY_ESC: return 0;                  /* the top: the shell's */
-  default: return 0;
+  default: return 0;                          /* Escape too: the shell's */
   }
 }
 
@@ -1079,8 +1318,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   place_bots();
   new_order();
   apply_program();
-  U.shown_credits = -1;
-  U.shown_norder = -1;
+  U.full = 1;
 
   UI.paint = app_paint;
   UI.key = app_key;

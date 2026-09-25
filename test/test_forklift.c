@@ -414,6 +414,8 @@ static void dump(const char *name) {
   FAKE.fill = d_fill;
   FAKE.frame = d_frame;
   FAKE.text = d_text;
+  FAKE.paint_area = 0;
+  U.full = 1;                    /* a view switch paints everything */
   app_paint(0, all);
   snprintf(path, sizeof path, "%s/%s.ppm", dir, name);
   f = fopen(path, "wb");
@@ -445,4 +447,120 @@ void test_forklift_dump_screens(void) {
   U.view = VIEW_REF; dump("ref");
   U.view = VIEW_MAP;
   CHECK(1);
+}
+
+/* ---- flicker: no pixel drawn twice in one paint ------------------------------
+ *
+ * There is no back buffer, so a pixel cleared and then drawn over is a flash
+ * on the panel. The first version cleared the whole map every step. These
+ * count writes per pixel through a paint and want one at most. */
+
+static uint8_t WRITES[135][240];
+static int OVERDRAWN;
+
+static void w_px(int x, int y) {
+  if (x < 0 || y < 0 || x >= 240 || y >= 135) return;
+  if (++WRITES[y][x] == 2) OVERDRAWN++;
+}
+static void w_fill(CRect r, uint16_t c) {
+  int x, y;
+  (void)c;
+  for (y = r.y; y < r.y + r.h; y++) for (x = r.x; x < r.x + r.w; x++) w_px(x, y);
+}
+static void w_frame(CRect r, uint16_t c) {
+  int x, y;
+  (void)c;
+  for (x = r.x; x < r.x + r.w; x++) { w_px(x, r.y); w_px(x, r.y + r.h - 1); }
+  for (y = r.y + 1; y < r.y + r.h - 1; y++) { w_px(r.x, y); w_px(r.x + r.w - 1, y); }
+}
+static void w_text(int16_t x, int16_t y, const char *s, uint16_t fg, uint16_t bg) {
+  (void)fg; (void)bg;
+  for (; *s; s++, x += 6) w_fill(rect(x, y, 6, 8), 0);
+}
+static CRect PAINT_AREA;
+static CRect w_area(void) { return PAINT_AREA; }
+static CRect DAMAGE;
+static int NDAMAGE;
+static void w_damage(CRect r) {
+  if (!NDAMAGE++) { DAMAGE = r; return; }
+  {
+    int x0 = DAMAGE.x < r.x ? DAMAGE.x : r.x, y0 = DAMAGE.y < r.y ? DAMAGE.y : r.y;
+    int x1 = DAMAGE.x + DAMAGE.w > r.x + r.w ? DAMAGE.x + DAMAGE.w : r.x + r.w;
+    int y1 = DAMAGE.y + DAMAGE.h > r.y + r.h ? DAMAGE.y + DAMAGE.h : r.y + r.h;
+    DAMAGE = rect(x0, y0, x1 - x0, y1 - y0);
+  }
+}
+
+/* One tick and the paint the shell would do for it: clipped to the union of
+ * the damage, the way capprun unions it. Returns how many pixels were
+ * written twice. */
+static int tick_and_paint(void) {
+  CRect all = { 0, 0, 240, 135 };
+  memset(WRITES, 0, sizeof WRITES);
+  OVERDRAWN = 0;
+  NDAMAGE = 0;
+  NOW += 600;
+  if (app_tick(0, NOW) || NDAMAGE) {
+    PAINT_AREA = NDAMAGE ? DAMAGE : all;
+    app_paint(0, all);
+  }
+  return OVERDRAWN;
+}
+
+static void watch_writes(void) {
+  FAKE.fill = w_fill;
+  FAKE.frame = w_frame;
+  FAKE.text = w_text;
+  FAKE.damage = w_damage;
+  FAKE.paint_area = w_area;
+}
+
+void test_forklift_the_map_never_draws_a_pixel_twice_in_a_step(void) {
+  int i, worst = 0;
+  CRect all = { 0, 0, 240, 135 };
+  fresh_card();
+  boot();
+  watch_writes();
+  PAINT_AREA = all;
+  app_paint(0, all);                              /* the first, full paint */
+  for (i = 0; i < 200; i++) {
+    int o = tick_and_paint();
+    if (o > worst) worst = o;
+  }
+  CHECK_EQ(0, worst);
+  CHECK(G.orders >= 1);                           /* and it was doing things */
+}
+
+void test_forklift_a_bigger_warehouse_with_three_robots_does_not_flicker(void) {
+  int i, worst = 0;
+  CRect all = { 0, 0, 240, 135 };
+  fresh_card();
+  boot();
+  G.credits = 100000;
+  buy(3); buy(3); buy(2); buy(2); buy(0); buy(1);
+  watch_writes();
+  PAINT_AREA = all;
+  U.full = 1;
+  app_paint(0, all);
+  for (i = 0; i < 200; i++) {
+    int o = tick_and_paint();
+    if (o > worst) worst = o;
+  }
+  CHECK_EQ(0, worst);
+}
+
+void test_forklift_typing_redraws_the_editor_without_clearing_it(void) {
+  CRect all = { 0, 0, 240, 135 };
+  fresh_card();
+  boot();
+  go_view(VIEW_CODE);
+  watch_writes();
+  PAINT_AREA = all;
+  app_paint(0, all);                              /* entering the view */
+  memset(WRITES, 0, sizeof WRITES);
+  OVERDRAWN = 0;
+  ed_key('x');
+  app_paint(0, all);                              /* a key: a repaint, no damage */
+  /* Only the cursor's one-pixel bar lands on a character already drawn. */
+  CHECK(OVERDRAWN <= 8);
 }

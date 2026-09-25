@@ -118,6 +118,7 @@ static struct {
   int   hud_meter;                   /* the meter as last drawn, in pixels */
   int   hud_state;                   /* the line as last drawn */
   int   still;                       /* frames with nothing moving */
+  int   asked;                       /* damage marked since the last paint */
 
   uint32_t last_ms, acc_ms;
   uint32_t seed;
@@ -557,20 +558,36 @@ static int hud_state(void) {
   return 10 + N.mic_state;
 }
 
-static void paint_hud(void) {
-  int m = iround(N.A * (float)METER_W), st = hud_state();
+/* The strip, drawn without drawing any pixel twice: the frame and ground
+ * once, the meter as its lit part and its dark part side by side, the line
+ * only when it changes and padded to the edge. Clearing it and drawing it
+ * again was a flash every frame while anyone blew. */
+static void paint_hud(int full) {
+  int m = iround(N.A * (float)METER_W), st = hud_state(), i;
   const char *line;
-  api->fill(rect(N.c.x, N.c.y + HUD_Y, SCREEN_W, HUD_H), C_HUD_BG);
-  api->frame(rect(N.c.x + 3, N.c.y + HUD_Y + 3, METER_W + 2, 8), C_HUD_DIM);
-  if (m > 0) api->fill(rect(N.c.x + 4, N.c.y + HUD_Y + 4, m, 6), C_METER);
-  switch (N.mic_state) {
-  case MIC_ON:      line = st == 2 ? "whoosh!" : "blow on the mic"; break;
-  case MIC_BUSY:    line = "mic busy -- space puffs"; break;
-  case MIC_REFUSED: line = "no mic -- space puffs"; break;
-  default:          line = "no mic here -- space puffs"; break;
+  char s[40];
+  int x = N.c.x + METER_W + 10, cols = (SCREEN_W - METER_W - 10) / 6;
+  if (full) {
+    api->fill(rect(N.c.x, N.c.y + HUD_Y, SCREEN_W, HUD_H), C_HUD_BG);
+    api->frame(rect(N.c.x + 3, N.c.y + HUD_Y + 3, METER_W + 2, 8), C_HUD_DIM);
   }
-  api->text((short)(N.c.x + METER_W + 10), (short)(N.c.y + HUD_Y + 3), line,
-            C_HUD_FG, C_HUD_BG);
+  if (full || m != N.hud_meter) {
+    if (m > 0) api->fill(rect(N.c.x + 4, N.c.y + HUD_Y + 4, m, 6), C_METER);
+    if (m < METER_W) api->fill(rect(N.c.x + 4 + m, N.c.y + HUD_Y + 4, METER_W - m, 6), C_HUD_BG);
+  }
+  if (full || st != N.hud_state) {
+    switch (N.mic_state) {
+    case MIC_ON:      line = st == 2 ? "whoosh!" : "blow on the mic"; break;
+    case MIC_BUSY:    line = "mic busy -- space puffs"; break;
+    case MIC_REFUSED: line = "no mic -- space puffs"; break;
+    default:          line = "no mic here -- space puffs"; break;
+    }
+    if (cols > (int)sizeof s - 1) cols = (int)sizeof s - 1;
+    for (i = 0; line[i] && i < cols; i++) s[i] = line[i];
+    for (; i < cols; i++) s[i] = ' ';
+    s[cols] = 0;
+    api->text((short)x, (short)(N.c.y + HUD_Y + 3), s, C_HUD_FG, C_HUD_BG);
+  }
   N.hud_meter = m;
   N.hud_state = st;
 }
@@ -618,10 +635,10 @@ static int app_tick(void *st, uint32_t now) {
     b = box_union(N.was, N.box);
     b = clip_box(b);
     if (b.x1 > b.x0 && b.y1 > b.y0)
-      api->damage(rect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0));
+      { api->damage(rect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0)); N.asked = 1; }
   }
   if (iround(N.A * (float)METER_W) != N.hud_meter || hud_state() != N.hud_state)
-    api->damage(rect(0, HUD_Y, SCREEN_W, HUD_H));
+    { api->damage(rect(0, HUD_Y, SCREEN_W, HUD_H)); N.asked = 1; }
   return 1;
 }
 
@@ -641,10 +658,11 @@ static void app_paint(void *st, CRect c) {
     Box above = b;
     above.y1 = HUD_Y;
     if (above.y1 > above.y0) render(above);
-    paint_hud();
+    paint_hud(!N.asked);        /* not asked for: the screen was not ours */
   } else {
     render(b);
   }
+  N.asked = 0;
 }
 
 static int app_key(void *st, unsigned char k) {
@@ -663,6 +681,7 @@ static int app_key(void *st, unsigned char k) {
     N.still = 0;
     build();
     api->damage(rect(N.box.x0, N.box.y0, N.box.x1 - N.box.x0, N.box.y1 - N.box.y0));
+    N.asked = 1;
     return 1;
   default:
     return 0;
