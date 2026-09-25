@@ -28,6 +28,21 @@ static int  s_token_read;
 
 const char *update_error(void) { return s_error; }
 
+/* Set by platformio.ini's release env. The server is asked for the same
+ * flavor by name, so a debug device is never handed a release build by
+ * accident, or the other way round. */
+#ifdef CARDOS_RELEASE
+#define OWN_FLAVOR "release"
+#else
+#define OWN_FLAVOR "debug"
+#endif
+
+const char *update_flavor(void) { return OWN_FLAVOR; }
+
+int update_flavor_valid(const char *flavor) {
+  return flavor && (!strcmp(flavor, "debug") || !strcmp(flavor, "release"));
+}
+
 const char *update_base(void) {
   const char *v = env_get("PROXY");
   return (v && *v) ? v : DEFAULT_BASE;
@@ -114,7 +129,9 @@ static void capp_path(const char *name, char *out, size_t size) {
   snprintf(out, size, "%s/%s.capp", ICONS_DIR, name);
 }
 
-int update_check(UpdateCheck *out) {
+int update_check(UpdateCheck *out) { return update_check_as(out, OWN_FLAVOR); }
+
+int update_check_as(UpdateCheck *out, const char *flavor) {
   static char text[MANIFEST_MAX];
   char url[160];
   ManifestLocal local;
@@ -129,7 +146,8 @@ int update_check(UpdateCheck *out) {
     return -1;
   }
 
-  snprintf(url, sizeof url, "%s/update", update_base());
+  if (!update_flavor_valid(flavor)) flavor = OWN_FLAVOR;
+  snprintf(url, sizeof url, "%s/update?flavor=%s", update_base(), flavor);
   n = http_request("GET", url, NULL, NULL, bearer(), text, sizeof text, 15000);
   if (n < 0) {
     if (n == -403)
@@ -255,6 +273,10 @@ static void flash_progress(void *p, int pct) {
 }
 
 int update_firmware(UpdateLog log, void *ctx) {
+  return update_firmware_as(OWN_FLAVOR, log, ctx);
+}
+
+int update_firmware_as(const char *flavor, UpdateLog log, void *ctx) {
   char url[160], line[96];
   Prog pr = { log, ctx, -1 };
   LaunchResult r;
@@ -262,7 +284,8 @@ int update_firmware(UpdateLog log, void *ctx) {
 
   s_error[0] = 0;
   fs_mkdir(UPDATE_DIR);
-  snprintf(url, sizeof url, "%s/update/firmware", update_base());
+  if (!update_flavor_valid(flavor)) flavor = OWN_FLAVOR;
+  snprintf(url, sizeof url, "%s/update/firmware?flavor=%s", update_base(), flavor);
   n = http_download_ex(url, FIRMWARE_PATH, bearer(), dl_progress, &pr, 120000);
   if (n < 0) {
     snprintf(s_error, sizeof s_error, "download failed (%d)", n);

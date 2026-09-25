@@ -53,6 +53,7 @@
 #include "kernel/sys/alarm.h"
 #include "kernel/sys/agent.h"
 #include "kernel/net/httpq.h"
+#include "kernel/net/update.h"
 #include "kernel/sys/power.h"
 #include "kernel/drv/battery.h"
 #include "kernel/sys/hotkeys.h"
@@ -1153,7 +1154,7 @@ void app_main(void) {
   display_backlight(1);
 
   con_set_color(COLOR_WHITE);
-  con_write("CardOS 0.1\n");
+  con_printf("CardOS 0.1 (%s)\n", update_flavor());
   con_set_color(COLOR_GREY);
   con_write("kernel core: memory + swap\n\n");
   con_set_color(COLOR_GREEN);

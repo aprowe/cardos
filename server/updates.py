@@ -6,6 +6,12 @@ whitespace separated, because the device has no JSON parser:
     firmware <sha256 of the ELF, hex> <size>
     app <name> <fnv1a32 of the file, hex> <size>
 
+There are two firmware builds, and ?flavor= picks which one the manifest and
+/update/firmware are about: "debug" (the `cardputer` env, -Og) or "release"
+(`-e release`, -O2). A device asks for the flavor it is running unless told
+otherwise (`update all debug`). No flavor at all is firmware older than the
+split, and it is given release. The apps are the same for both.
+
 Identity is a hash, never a version number. The firmware hash is the one
 every ESP-IDF image already carries in its esp_app_desc_t -- the device reads
 its own with esp_app_get_description() and compares -- so nothing has to be
@@ -21,7 +27,29 @@ import sys
 import struct
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIRMWARE = os.path.join(ROOT, ".pio", "build", "cardputer", "firmware.bin")
+FIRMWARE = os.path.join(ROOT, ".pio", "build", "cardputer", "firmware.bin")   # debug
+FIRMWARE_RELEASE = os.path.join(ROOT, ".pio", "build", "release", "firmware.bin")
+
+FLAVORS = ("release", "debug")
+DEFAULT_FLAVOR = "release"
+
+
+def flavor_arg(args):
+    """The ?flavor= of a request, or the default. Anything else is refused
+    rather than quietly served the default: a device that asked for a
+    flavor must get that one or be told."""
+    raw = (args.get("flavor") or [""])[0]
+    if not raw:
+        return DEFAULT_FLAVOR
+    if raw not in FLAVORS:
+        raise ValueError("flavor=%r is not one of %s" % (raw, ", ".join(FLAVORS)))
+    return raw
+
+
+def firmware_path(flavor):
+    """The build tree's image for a flavor. Read from the module at call
+    time, so a test can point FIRMWARE somewhere else."""
+    return FIRMWARE if flavor == "debug" else FIRMWARE_RELEASE
 APPS_DIR = os.path.join(ROOT, "build", "apps")
 # Which folder each app belongs in. Shared with tools/build_apps.py, which
 # seeds the firmware from it; the manifest carries it so a first install
@@ -124,9 +152,11 @@ def app_path(name, apps_dir=None):
 # reads from here exactly as it would read a build tree -- same manifest,
 # same hashes -- but never a half-written one.
 
-def store_paths(store):
-    """(firmware, apps_dir) inside a store directory."""
-    return os.path.join(store, "firmware.bin"), os.path.join(store, "apps")
+def store_paths(store, flavor=DEFAULT_FLAVOR):
+    """(firmware, apps_dir) inside a store directory. The debug image keeps
+    the name it had before there were two."""
+    name = "firmware.bin" if flavor == "debug" else "firmware-release.bin"
+    return os.path.join(store, name), os.path.join(store, "apps")
 
 
 def check_artifact(kind, data):
@@ -159,19 +189,20 @@ def put_artifact(path, data):
 # the token.
 
 def get_manifest(h, path, args):
-    """what can be installed: firmware sha, app hashes"""
-    firmware, apps_dir = h.update_files()
+    """what can be installed: firmware sha, app hashes (?flavor=debug|release)"""
+    firmware, apps_dir = h.update_files(flavor_arg(args))
     h.text(manifest(firmware=firmware, apps_dir=apps_dir))
 
 
 def get_firmware(h, path, args):
-    """the firmware image"""
-    firmware, _ = h.update_files()
+    """the firmware image (?flavor=debug|release)"""
+    flavor = flavor_arg(args)
+    firmware, _ = h.update_files(flavor)
     if not os.path.isfile(firmware):
-        h.text("no firmware built\n", 404)
+        h.text("no %s firmware built\n" % flavor, 404)
         return
     h.file(firmware)
-    sys.stderr.write("update: sent firmware\n")
+    sys.stderr.write("update: sent %s firmware\n" % flavor)
 
 
 def get_app(h, path, args):

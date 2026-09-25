@@ -96,7 +96,22 @@ in `/desktop`; the firmware goes to the card and then through the same
 `launcher.c` path guests use, into whichever OTA slot is not running.
 `factory` is USB-only and is where a bad update rolls back to; if a USB flash
 puts a newer build in `factory`, boot notices and switches to it. Design in
-`docs/superpowers/specs/2026-09-11-remote-update-design.md`. The partition
+`docs/superpowers/specs/2026-09-11-remote-update-design.md`.
+
+**There are two firmware builds, debug and release** (2026-09-25). The
+`cardputer` env is debug (-Og, INFO logs); it is `default_envs`, so a plain
+`platformio run` or a USB upload is still debug. `-e release` is -O2 with
+WARN logs: `sdkconfig.release.defaults` layered on `sdkconfig.defaults`,
+generated into `sdkconfig.release`, and `-DCARDOS_RELEASE`. At -O2,
+`format-truncation` and `stringop-truncation` stay warnings, not errors,
+because every bounded `snprintf` in the tree trips them. The server offers
+both (`/update?flavor=debug|release`; the store's debug image keeps the name
+`firmware.bin`, the release one is `firmware-release.bin`). A device updates
+to the flavor it is running (`update_flavor()`; `bootinfo` and the boot
+banner say which), and `update os|all debug` or `... release` switches.
+Firmware older than this asks for no flavor and is given release. Build on
+the droplet builds and publishes both. A laptop server offers release only
+after `-e release` has been built there. The partition
 table changed for this (two OTA slots; `factory` is 2.75 MB and `spiffs`
 700 KB since 2026-09-12, see the comments in `partitions.csv`), so the
 first flash after it needs the whole table: `python -m platformio run -t
@@ -519,7 +534,8 @@ The `` ` `` key (labelled ESC) is the universal escape. Arrow keys are the
   `--show` renders the table back out; edit the pictures, never the hex.
 - `python tools/mapsize.py` says where the flash and RAM went, per component.
 - PlatformIO is installed under the user Python: **`python -m platformio`**
-  (there is no `pio` on PATH). `python -m platformio run -t upload --upload-port COM3`.
+  (there is no `pio` on PATH). `python -m platformio run -t upload --upload-port COM3`
+  flashes the debug build; add `-e release` for the release one.
 - For CardOS use `framework = espidf`, **not** Arduino.
 - The device enumerates as **COM3** (USB VID:PID 303A:1001).
 

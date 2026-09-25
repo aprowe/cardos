@@ -64,7 +64,7 @@ setup() {
     # The compiler build_apps.py uses arrives with the platform, so first.
     $VENV/bin/python -m platformio pkg install -e cardputer 2>&1 | tail -2
     $VENV/bin/python tools/build_apps.py | tail -3
-    $VENV/bin/python -m platformio run 2>&1 | grep -E 'RAM:|Flash:|SUCCESS|FAILED|rror' | tail -8"
+    $VENV/bin/python -m platformio run -e cardputer -e release 2>&1 | grep -E 'RAM:|Flash:|SUCCESS|FAILED|rror' | tail -8"
 
   echo "== 6. the store, filled from that build"
   ssh "$HOST" "install -d -m 750 -o cardos -g cardos /var/lib/cardos $STORE"
@@ -102,11 +102,12 @@ unit_and_restart() {
 build_and_publish() {
   as_cardos "set -e; cd $CLONE
     $VENV/bin/python tools/build_apps.py | tail -1
-    $VENV/bin/python -m platformio run 2>&1 | grep -E 'Flash:|SUCCESS|FAILED|rror' | tail -4
+    $VENV/bin/python -m platformio run -e cardputer -e release 2>&1 | grep -E 'Flash:|SUCCESS|FAILED|rror' | tail -6
     $VENV/bin/python -c '
 import sys; sys.path.insert(0, \".\")
 from server import build, updates
-print(\"   published:\", \", \".join(build.publish(\"$STORE\", updates.FIRMWARE, updates.APPS_DIR, True)) or \"nothing\")'"
+fws = {\"debug\": updates.FIRMWARE, \"release\": updates.FIRMWARE_RELEASE}
+print(\"   published:\", \", \".join(build.publish(\"$STORE\", fws, updates.APPS_DIR, True)) or \"nothing\")'"
 }
 
 update() {

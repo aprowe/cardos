@@ -294,9 +294,14 @@ def google_card():
 
 def status_card(h):
     from . import app, updates                 # app imports this module
-    firmware, apps_dir = h.update_files()
+    firmware, apps_dir = h.update_files("release")
     try:
         man = updates.manifest(firmware=firmware, apps_dir=apps_dir)
+        man = man.replace("firmware ", "firmware release ", 1)
+        debug_fw, _ = h.update_files("debug")
+        # Only its firmware line: the apps are the same for both.
+        debug = updates.manifest(firmware=debug_fw, apps_dir=os.devnull)
+        man = debug.replace("firmware ", "firmware debug ", 1) + man
     except Exception as e:
         man = "error %s: %s\n" % (type(e).__name__, e)
     c = h.chat

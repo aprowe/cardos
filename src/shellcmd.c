@@ -250,7 +250,8 @@ static void boot_progress(void *ctx, int percent) {
 void cmd_bootinfo(void) {
   LauncherInfo info;
   launcher_info(&info);
-  con_printf("running from %s\n", info.running[0] ? info.running : "?");
+  con_printf("running from %s, %s build\n", info.running[0] ? info.running : "?",
+             update_flavor());
   if (info.guest_valid)
     con_printf("guest slot: %s %s %uK\n",
                info.guest_name[0] ? info.guest_name : "?",
@@ -443,16 +444,31 @@ static void update_say(void *ctx, const char *line) {
  * update all    -- both, apps first so they survive if the restart does not */
 void cmd_update(const char *arg) {
   UpdateCheck c;
+  char what[8] = "", flavor[8] = "";
   int i, apps = 0, os = 0;
 
-  if (arg && !strcmp(arg, "apps")) apps = 1;
-  else if (arg && !strcmp(arg, "os")) os = 1;
-  else if (arg && !strcmp(arg, "all")) apps = os = 1;
-  else if (arg && *arg) { con_write("usage: update [apps|os|all]\n"); return; }
+  /* `update [apps|os|all] [debug|release]`. The flavor is which build of the
+   * firmware to compare against and install; unsaid, it is the one running. */
+  if (arg && *arg && sscanf(arg, "%7s %7s", what, flavor) < 1) what[0] = 0;
+  if (!flavor[0] && update_flavor_valid(what)) {       /* `update debug` */
+    snprintf(flavor, sizeof flavor, "%s", what);
+    what[0] = 0;
+  }
+  if (!flavor[0]) snprintf(flavor, sizeof flavor, "%s", update_flavor());
+
+  if (!strcmp(what, "apps")) apps = 1;
+  else if (!strcmp(what, "os")) os = 1;
+  else if (!strcmp(what, "all")) apps = os = 1;
+  else if (what[0] || !update_flavor_valid(flavor)) {
+    con_write("usage: update [apps|os|all] [debug|release]\n");
+    return;
+  }
 
   if (!fs_mounted()) { err("update", "no card mounted"); return; }
   con_printf("asking %s\n", update_base());
-  if (update_check(&c) != 0) { err("update", update_error()); return; }
+  if (strcmp(flavor, update_flavor()))
+    con_printf("running %s, comparing with %s\n", update_flavor(), flavor);
+  if (update_check_as(&c, flavor) != 0) { err("update", update_error()); return; }
 
   if (!c.nstale_apps && !c.firmware_stale) {
     con_write("everything is current\n");
@@ -461,10 +477,10 @@ void cmd_update(const char *arg) {
   for (i = 0; i < c.m.napps; i++)
     if (c.stale[i]) con_printf("  app %s\n", c.m.app[i].name);
   if (c.firmware_stale)
-    con_printf("  firmware %uK\n", (unsigned)(c.m.firmware_size / 1024));
+    con_printf("  firmware (%s) %uK\n", flavor, (unsigned)(c.m.firmware_size / 1024));
 
   if (!apps && !os) {
-    con_write("update apps | os | all installs\n");
+    con_write("update apps | os | all installs; add debug or release\n");
     return;
   }
   if (apps && c.nstale_apps) {
@@ -475,7 +491,7 @@ void cmd_update(const char *arg) {
     con_set_color(COLOR_AMBER);
     con_write("this restarts when it is done\n");
     con_set_color(COLOR_GREEN);
-    update_firmware(update_say, NULL);
+    update_firmware_as(flavor, update_say, NULL);
     err("update", update_error());           /* only reached on failure */
   }
 }

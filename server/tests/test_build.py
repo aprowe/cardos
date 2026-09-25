@@ -95,6 +95,28 @@ class Publish(unittest.TestCase):
         self.assertEqual(build.publish(self.store, self.fw, self.apps, False), ["a"])
         self.assertFalse(os.path.exists(os.path.join(self.store, "firmware.bin")))
 
+    def test_both_flavors(self):
+        self.put("fw.bin", firmware_image(b"d"))
+        self.put("rel.bin", firmware_image(b"r"))
+        self.put("apps/a.capp", app_image())
+        fws = {"debug": self.fw, "release": os.path.join(self.out, "rel.bin")}
+        pub = lambda: build.publish(self.store, fws, self.apps, True)
+        self.assertEqual(sorted(pub()), ["a", "firmware", "firmware-release"])
+        self.assertEqual(pub(), [])
+        dbg, _ = updates.store_paths(self.store, "debug")
+        rel, _ = updates.store_paths(self.store, "release")
+        for path, tag in ((dbg, b"d"), (rel, b"r")):
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), firmware_image(tag))
+        # One flavor rebuilt differently: only that one goes.
+        self.put("rel.bin", firmware_image(b"R"))
+        self.assertEqual(pub(), ["firmware-release"])
+
+    def test_a_flavor_not_built_is_skipped(self):
+        self.put("fw.bin", firmware_image(b"d"))
+        fws = {"debug": self.fw, "release": os.path.join(self.out, "none.bin")}
+        self.assertEqual(build.publish(self.store, fws, self.apps, True), ["firmware"])
+
     def test_refuses_garbage_and_leaves_no_temp(self):
         self.put("apps/bad.capp", b"not an elf")
         with self.assertRaises(ValueError):

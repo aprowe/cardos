@@ -74,7 +74,14 @@ def main():
                            bool(sha) and sha != "00" * 32, True)
 
     print("the routes:")
+    # Two images that differ, so which one was served is visible.
+    fake_rel = bytearray(fake)
+    fake_rel[32 + 144:32 + 176] = bytes(range(100, 132))
+    fw_rel = os.path.join(tmp, "firmware-release.bin")
+    with open(fw_rel, "wb") as f:
+        f.write(fake_rel)
     updates.FIRMWARE = fw
+    updates.FIRMWARE_RELEASE = fw_rel
     updates.APPS_DIR = apps
     app.Handler.chat = chatmod.ChatService(claude="stub")
     srv = ThreadingHTTPServer(("127.0.0.1", 8138), app.Handler)
@@ -86,8 +93,34 @@ def main():
                        "app pinball e40c292c 1 Games")
     fails += not check("/update/app/NAME is the file",
                        get(base + "/update/app/pinball"), b"a")
-    fails += not check("/update/firmware is the image",
-                       get(base + "/update/firmware"), bytes(fake))
+    fails += not check("no flavor is firmware older than the split: release",
+                       r.split("\n")[0],
+                       "firmware " + bytes(range(100, 132)).hex() + " 400")
+    fails += not check("?flavor=debug is the debug build's manifest",
+                       get(base + "/update?flavor=debug").decode().split("\n")[0],
+                       "firmware " + bytes(range(32)).hex() + " 400")
+    fails += not check("and the apps are the same for both",
+                       get(base + "/update?flavor=debug").decode().split("\n")[1:],
+                       r.split("\n")[1:])
+    fails += not check("/update/firmware is the release image",
+                       get(base + "/update/firmware"), bytes(fake_rel))
+    fails += not check("/update/firmware?flavor=release too",
+                       get(base + "/update/firmware?flavor=release"), bytes(fake_rel))
+    fails += not check("/update/firmware?flavor=debug is the debug image",
+                       get(base + "/update/firmware?flavor=debug"), bytes(fake))
+    try:
+        get(base + "/update/firmware?flavor=nightly")
+        fails += not check("an unknown flavor is refused", "served", "refused")
+    except urllib.error.HTTPError as e:
+        fails += not check("an unknown flavor is refused", e.code, 500)
+    os.remove(fw_rel)
+    try:
+        get(base + "/update/firmware")
+        fails += not check("a flavor not built is 404", "served", 404)
+    except urllib.error.HTTPError as e:
+        fails += not check("a flavor not built is 404", e.code, 404)
+    fails += not check("and its manifest offers no firmware",
+                       get(base + "/update").decode().split("\n")[0][:4], "app ")
     try:
         get(base + "/update/app/../../etc/passwd")
         fails += not check("a path is not a name", "served", "refused")
@@ -107,7 +140,8 @@ def main():
     except urllib.error.HTTPError as e:
         fails += not check("no token, no manifest", e.code, 403)
     fails += not check("with the token it is served",
-                       get(base + "/update", token="swordfish").decode()[:3], "fir")
+                       get(base + "/update?flavor=debug", token="swordfish").decode()[:3],
+                       "fir")
 
     srv.shutdown()
     shutil.rmtree(tmp)
