@@ -42,6 +42,13 @@
 static const char *TAG = "fs";
 static sdmmc_card_t *s_card;
 static int           s_mounted;
+static void        (*s_on_change)(const char *path);
+
+void fs_on_change(void (*fn)(const char *path)) { s_on_change = fn; }
+
+static void changed(const char *path) {
+  if (s_on_change) s_on_change(path);
+}
 static FILE         *s_open[FS_MAX_OPEN];
 
 /* The share server opens files from its own task while the shell may be
@@ -171,6 +178,7 @@ int fs_open(const char *path, int flags) {
 
   f = fopen(real, mode);
   if (!f) { free_fd(fd); return -1; }
+  if (flags & (FS_O_WRITE | FS_O_CREATE | FS_O_APPEND | FS_O_TRUNC)) changed(path);
 
   s_open[fd] = f;
   return fd;
@@ -287,7 +295,8 @@ int fs_mkdir(const char *path) {
   char real[FS_PATH_MAX + 8];
   if (!s_mounted) return -1;
   if (real_path(path, real, sizeof real) != 0) return -1;
-  if (mkdir(real, 0777) != 0 && errno != EEXIST) return -1;
+  if (mkdir(real, 0777) != 0) return errno == EEXIST ? 0 : -1;
+  changed(path);                 /* only one that was not already there */
   return 0;
 }
 
@@ -296,8 +305,13 @@ int fs_remove(const char *path) {
   FsStat st;
   if (!s_mounted) return -1;
   if (real_path(path, real, sizeof real) != 0) return -1;
-  if (fs_stat(path, &st) == 0 && st.is_dir) return rmdir(real) == 0 ? 0 : -1;
-  return unlink(real) == 0 ? 0 : -1;
+  if (fs_stat(path, &st) == 0 && st.is_dir) {
+    if (rmdir(real) != 0) return -1;
+  } else if (unlink(real) != 0) {
+    return -1;
+  }
+  changed(path);
+  return 0;
 }
 
 int fs_rename(const char *from, const char *to) {
@@ -305,7 +319,10 @@ int fs_rename(const char *from, const char *to) {
   if (!s_mounted) return -1;
   if (real_path(from, rf, sizeof rf) != 0) return -1;
   if (real_path(to, rt, sizeof rt) != 0) return -1;
-  return rename(rf, rt) == 0 ? 0 : -1;
+  if (rename(rf, rt) != 0) return -1;
+  changed(from);
+  changed(to);
+  return 0;
 }
 
 int fs_ensure_layout(void) {

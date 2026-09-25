@@ -140,6 +140,20 @@ pass of the shell's loop, ~5 ms, return 1 to repaint — the only way anything
 moves on its own) and `mouse` (position, held buttons, wheel; the pointer is
 drawn over fullscreen apps by repainting the square it left).
 
+**Boot does not load the apps any more** (2026-09-25). The icon scan used to
+load every `.capp` (read it, relocate it, free it) to learn each app's name,
+icon, flags and commands, and it ran twice on a boot into the launcher, since
+`main.c` and `launchui_init` both scanned. Now only the shell scans, and
+`/cache/apps.idx` (`kernel/app/appidx.c`, host-tested) remembers what each
+file said, keyed by path, size and date. The whole file is keyed by the API
+version and `CAPP_BLOB_STAMP`, which `build_apps.py` works out so boot no
+longer hashes the blobs. **Any change under `/apps` deletes the index**:
+`fs_on_change` in `fs_fat.c` tells `capprun`. That only covers writes that
+go through `fs_*`, so anything that writes the card any other way must delete
+it too. Seeding lists each directory once instead of opening every file. The
+safe-mode check waits 60 ms, not 400. The CPU runs at 240 MHz rather than 160;
+power management is off, so that is also the idle clock.
+
 **Redundant redrawing is an OS problem, not an app problem.** The shell used
 to hand every app its whole rectangle as the clip on every event, so a
 keypress redrew a screen — and three apps grew their own `expect_paint`

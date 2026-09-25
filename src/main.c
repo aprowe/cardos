@@ -1211,7 +1211,10 @@ void app_main(void) {
    * from which `defaults` clears the lot. Nothing is written here; a safe boot
    * changes nothing on its own, so it can be tried without committing to
    * losing anything. */
-  s_safe_mode = keyboard_held(KEY_ESC, 400);
+  /* 60 ms, not the 400 it was: a key held through power-on is down on the
+   * first scan, so the rest was only ever spent waiting on every boot. Four
+   * scans (0, 20, 40, 60 ms) leave room for one that misreads. */
+  s_safe_mode = keyboard_held(KEY_ESC, 60);
   if (s_safe_mode) {
     display_set_brightness_now(100);
     con_set_color(COLOR_AMBER);
@@ -1235,7 +1238,9 @@ void app_main(void) {
   if (fs_mount() == 0) {
     uint64_t total = 0, freeb = 0;
     static const HotkeyStore FILE_STORE = { hotkey_file_load, hotkey_file_save };
-    int moved = fs_migrate_layout();   /* an old card into the new folders; before ensure, so the trees can rename */
+    int moved;
+    capprun_watch_apps();        /* before anything below can touch /apps */
+    moved = fs_migrate_layout();   /* an old card into the new folders; before ensure, so the trees can rename */
     fs_ensure_layout();
     if (moved) con_printf("card layout: moved %d into /apps /sys /config /cache /home /var\n", moved);
     hotkeys_init(&FILE_STORE);   /* after the mount: the table is on the card */
@@ -1302,9 +1307,12 @@ void app_main(void) {
    * firmware's apps to the card (seed_capps) and the command catalog, and it
    * used to run only when the launcher did -- so a device that booted into
    * the console kept its old apps through every flash, and `do` found none
-   * of the new commands (2026-09-23). The launcher skips its own scan when
-   * this one has run. */
-  if (fs_mounted()) icons_reload();
+   * of the new commands (2026-09-23).
+   *
+   * Only for the console, though: launchui_init and desktop_init each scan
+   * as they come up, so doing it here as well scanned the card twice on
+   * every boot that went to a painted shell -- which is nearly all of them. */
+  if (fs_mounted() && (s_safe_mode || ui_saved_shell() == UI_NONE)) icons_reload();
   /* Asked for rather than waited on: if WiFi is already up this is answered
    * in a second, and if it is not the job simply finds nothing. Either way
    * the shell starts now. */

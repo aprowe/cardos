@@ -33,8 +33,15 @@ static int  s_nvisible;   /* everything with an icon, sorted to the front */
  * that the copies on the card are stale. Presence alone is not enough: the
  * first version of this only wrote a .capp when the file was missing, and an
  * API version bump then left three unloadable binaries on the card with no
- * way to notice. */
+ * way to notice.
+ *
+ * tools/build_apps.py works it out; hashing 200 KB of flash on every boot to
+ * learn a constant was a boot cost. The loop stays for a header generated
+ * before the stamp was in it. */
 static uint32_t blob_stamp(void) {
+#ifdef CAPP_BLOB_STAMP
+  return CAPP_BLOB_STAMP;
+#else
   uint32_t h = 2166136261u;
   size_t i, j;
   for (i = 0; i < CAPP_BLOB_COUNT; i++) {
@@ -44,6 +51,113 @@ static uint32_t blob_stamp(void) {
     }
   }
   return h;
+#endif
+}
+
+/* What is already on the card, for seeding: each directory the seeds go into
+ * listed once, instead of an open, a seek and a close for every file the
+ * firmware carries -- three per app, with the folder check, and about a
+ * hundred a boot all told, for files that were almost always there.
+ *
+ * A hash of the lowercased path (FAT does not care about case) and the size.
+ * Without the memory for it, every question goes to the card as before. */
+typedef struct { uint32_t h, size; uint8_t is_dir; } Seen;
+#define SEEN_MAX 256
+static Seen *s_seen;
+static int   s_nseen;
+
+static uint32_t path_hash(const char *p) {
+  uint32_t h = 2166136261u;
+  for (; *p; p++) {
+    char c = *p;
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    h = (h ^ (uint8_t)c) * 16777619u;
+  }
+  return h;
+}
+
+static void seen_add(const char *path, uint32_t size, int is_dir) {
+  if (!s_seen || s_nseen >= SEEN_MAX) return;
+  s_seen[s_nseen].h = path_hash(path);
+  s_seen[s_nseen].size = size;
+  s_seen[s_nseen].is_dir = (uint8_t)(is_dir != 0);
+  s_nseen++;
+}
+
+/* Everything in `dir`, and `dir` itself; the names of its folders into
+ * `sub`, when asked. 1 if it was there to list. */
+#define SEEN_SUBS 12
+static int seen_list(const char *dir, char (*sub)[40], int *nsub) {
+  FsDir d;
+  FsEntry e;
+  char path[96];
+  if (fs_opendir(dir, &d) != 0) return 0;
+  seen_add(dir, 0, 1);
+  while (fs_readdir(&d, &e) == 1) {
+    snprintf(path, sizeof path, "%s/%s", dir, e.name);
+    seen_add(path, e.size, e.is_dir);
+    if (sub && e.is_dir && *nsub < SEEN_SUBS && strlen(e.name) < 40)
+      memcpy(sub[(*nsub)++], e.name, strlen(e.name) + 1);
+  }
+  fs_closedir(&d);
+  return 1;
+}
+
+static const Seen *seen_find(const char *path) {
+  uint32_t h = path_hash(path);
+  int i;
+  for (i = 0; i < s_nseen; i++) if (s_seen[i].h == h) return &s_seen[i];
+  return NULL;
+}
+
+static int file_size(const char *path) {
+  int fd = fs_open(path, FS_O_READ);
+  int n;
+  if (fd < 0) return -1;
+  n = fs_seek(fd, 0, FS_SEEK_END);
+  fs_close(fd);
+  return n;
+}
+
+/* file_size, answered from the listing when there is one. */
+static int have_size(const char *path) {
+  const Seen *s;
+  if (!s_seen) return file_size(path);
+  s = seen_find(path);
+  return s && !s->is_dir ? (int)s->size : -1;
+}
+
+/* fs_mkdir, skipped when the listing says it is there. */
+static void have_dir(const char *path) {
+  const Seen *s = s_seen ? seen_find(path) : NULL;
+  if (s && s->is_dir) return;
+  if (fs_mkdir(path) != 0) { /* already there, or no card */ }
+  seen_add(path, 0, 1);
+}
+
+/* /apps and its folders (the colour icons among them), the fonts and the
+ * example: every directory a seed goes into. Freed by seed_dir. */
+static void seen_begin(void) {
+  char sub[SEEN_SUBS][40], path[96];
+  int nsub = 0, i;
+  s_nseen = 0;
+  s_seen = malloc(SEEN_MAX * sizeof *s_seen);
+  if (!s_seen) return;
+  /* Folders after their parent is closed: one directory open at a time, as
+   * the scan below does. */
+  seen_list(ICONS_DIR, sub, &nsub);
+  for (i = 0; i < nsub; i++) {
+    snprintf(path, sizeof path, "%s/%s", ICONS_DIR, sub[i]);
+    seen_list(path, NULL, NULL);
+  }
+  seen_list(FONTS_DIR, NULL, NULL);
+  seen_list(ASM_DIR, NULL, NULL);
+}
+
+static void seen_end(void) {
+  free(s_seen);
+  s_seen = NULL;
+  s_nseen = 0;
 }
 
 /* fs_write returns -1 on a short write, and the bytes it did manage are
@@ -66,15 +180,6 @@ static int write_all(int fd, const uint8_t *data, size_t size) {
   return 0;
 }
 
-static int file_size(const char *path) {
-  int fd = fs_open(path, FS_O_READ);
-  int n;
-  if (fd < 0) return -1;
-  n = fs_seek(fd, 0, FS_SEEK_END);
-  fs_close(fd);
-  return n;
-}
-
 /* Make room for a blob whose name carries a folder ("Games/mines.capp"), and
  * bring any copy left at the top level in with it.
  *
@@ -94,14 +199,15 @@ static void settle_folder(const char *rel) {
   if (!slash) return;                       /* top level: nothing to do */
 
   snprintf(dir, sizeof dir, "%s/%.*s", ICONS_DIR, (int)(slash - rel), rel);
-  if (fs_mkdir(dir) != 0) { /* already there, or no card */ }
+  have_dir(dir);
 
   snprintf(flat, sizeof flat, "%s/%s", ICONS_DIR, slash + 1);
-  if (file_size(flat) < 0) return;
+  if (have_size(flat) < 0) return;
 
   snprintf(full, sizeof full, "%s/%s", ICONS_DIR, rel);
-  if (file_size(full) >= 0) fs_remove(flat);
-  else if (fs_rename(flat, full) != 0) fs_remove(flat);
+  if (have_size(full) >= 0) fs_remove(flat);
+  else if (fs_rename(flat, full) == 0) seen_add(full, (uint32_t)have_size(flat), 0);
+  else fs_remove(flat);
 }
 
 static void seed_capps(void) {
@@ -132,7 +238,7 @@ static void seed_capps(void) {
      * the one this firmware carries, and it must survive the next boot. (The
      * size used to be checked too, from when the stamp was written even after
      * a failure and edit.capp stayed truncated at 650 bytes across reboots.) */
-    if (have == want && file_size(path) >= 0) continue;
+    if (have == want && have_size(path) >= 0) continue;
 
     fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
     if (fd < 0) { all_ok = 0; continue; }
@@ -161,10 +267,10 @@ static void seed_fonts(void) {
   char path[64];
   int fd, ok;
 
-  fs_mkdir(FONTS_DIR);
+  have_dir(FONTS_DIR);
   for (i = 0; i < FONT_BLOB_COUNT; i++) {
     snprintf(path, sizeof path, "%s/%s", FONTS_DIR, FONT_BLOBS[i].name);
-    if (file_size(path) == (int)FONT_BLOBS[i].size) continue;
+    if (have_size(path) == (int)FONT_BLOBS[i].size) continue;
     fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
     if (fd < 0) continue;
     ok = write_all(fd, FONT_BLOBS[i].data, FONT_BLOBS[i].size) == 0;
@@ -182,11 +288,11 @@ static void seed_colour_icons(void) {
   char path[96];
   int fd;
 
-  if (fs_mkdir(ICON_DIR) != 0) { /* already there, or no card */ }
+  have_dir(ICON_DIR);
 
   for (i = 0; i < CIC_BLOB_COUNT; i++) {
     snprintf(path, sizeof path, "%s/%s", ICON_DIR, CIC_BLOBS[i].name);
-    if (file_size(path) == (int)CIC_BLOBS[i].size) continue;
+    if (have_size(path) == (int)CIC_BLOBS[i].size) continue;
 
     fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
     if (fd < 0) continue;
@@ -224,9 +330,8 @@ static void seed_example(void) {
     "        halt\n";
 
   int fd;
-  if (fs_mkdir(ASM_DIR) != 0) { /* already there, or no card */ }
-  fd = fs_open(ASM_DIR "/sum.s", FS_O_READ);
-  if (fd >= 0) { fs_close(fd); return; }
+  have_dir(ASM_DIR);
+  if (have_size(ASM_DIR "/sum.s") >= 0) return;
   fd = fs_open(ASM_DIR "/sum.s", FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
   if (fd < 0) return;
   write_all(fd, (const uint8_t *)PROG, sizeof PROG - 1);
@@ -244,13 +349,13 @@ static void seed_dir(void) {
   size_t i;
   char path[80];
 
-  if (fs_mkdir(ICONS_DIR) != 0) { /* already there, or no card */ }
+  seen_begin();
+  have_dir(ICONS_DIR);
 
   for (i = 0; i < sizeof seed / sizeof seed[0]; i++) {
     int fd;
     snprintf(path, sizeof path, "%s/%s", ICONS_DIR, seed[i]);
-    fd = fs_open(path, FS_O_READ);
-    if (fd >= 0) { fs_close(fd); continue; }
+    if (have_size(path) >= 0) continue;
     fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
     if (fd >= 0) { fs_write(fd, "cardos app", 10); fs_close(fd); }
   }
@@ -259,6 +364,7 @@ static void seed_dir(void) {
   seed_colour_icons();
   seed_fonts();
   seed_example();
+  seen_end();
 }
 
 static int ends_with(const char *name, size_t n, const char *ext) {
@@ -313,13 +419,12 @@ static void scan(const char *dir, int bin_only, int parent) {
     } else if (bin_only) {
       continue;
     } else if (ends_with(e.name, n, ".capp")) {
-      /* Loaded eagerly and left loaded: the label under the icon and the icon
-       * itself are the app's own, and asking it is the only way to know
-       * them. */
       /* Loaded, but not run: the name and icon come from the descriptor,
        * which is exactly why the descriptor exists. Running a program to find
-       * out what it is called is the wrong way round. */
-      ic->slot = capprun_load(ic->path);
+       * out what it is called is the wrong way round. And loaded only when
+       * the app index does not already know this file at this size and
+       * date -- see capprun_scan_load. */
+      ic->slot = capprun_scan_load(ic->path, e.size, e.mtime);
       if (ic->slot < 0) continue;
       ic->kind = ICON_CAPP;
       ic->cli = capprun_is_cli(ic->slot);
@@ -429,7 +534,7 @@ void icons_reload(void) {
   if (!fs_mounted()) return;
 
   seed_dir();
-  capprun_catalog_begin();        /* every load in the scan adds its commands */
+  capprun_catalog_begin(blob_stamp());   /* every load in the scan adds its commands */
   scan(ICONS_DIR, 0, -1);
   capprun_catalog_end();
   scan_firmware_folder();
