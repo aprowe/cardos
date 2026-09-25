@@ -289,6 +289,26 @@ ICONS = {
         "................",
     ],
 
+    # A forklift, amber, with a blue crate up on its forks: the mast and
+    # the forks are what say forklift rather than truck.
+    "Forklift": [
+        "................",
+        "................",
+        ".K..............",
+        ".K........KKKKK.",
+        ".K........KbbbK.",
+        ".KKKKK....KbnbK.",
+        ".KyyyK....KbbbK.",
+        ".KyWyK.K..KKKKK.",
+        ".KyyyKKKKKKKKK..",
+        ".KyyyyyyK.K.....",
+        ".KyyyyyyK.K.....",
+        ".KyyyyyyKKKKK...",
+        ".KKKKKKKK.......",
+        "..KDK..KDK......",
+        "..KKK..KKK......",
+        "................",
+    ],
     # A tube man mid-flail on his fan: yellow hair, googly eyes, one arm up
     # and one out. The fan under him is what makes him a tube man and not a
     # red worm.
