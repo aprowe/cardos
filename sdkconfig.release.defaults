@@ -1,0 +1,10 @@
+# The release build: what differs from the debug one (sdkconfig.cardputer).
+# Read after sdkconfig.defaults, for `platformio run -e release`.
+#
+# Optimised for speed rather than for stepping through; assertions stay on,
+# because a check that fails on the device is still worth a reboot and a line
+# in the log. Logging drops to warnings, app and bootloader both: every INFO
+# line is time on the USB port that a pocket device has no one reading.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y

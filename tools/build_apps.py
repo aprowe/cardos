@@ -344,6 +344,14 @@ def emit_header(built):
     lines.append("")
     lines.append("#define CAPP_BLOB_COUNT (sizeof CAPP_BLOBS / sizeof CAPP_BLOBS[0])")
     lines.append("")
+    # FNV-1a over every blob in table order: which set of apps this firmware
+    # carries. Worked out here rather than hashed over 200 KB at every boot.
+    stamp = 2166136261
+    for name, path in built:
+        for b in open(path, "rb").read():
+            stamp = ((stamp ^ b) * 16777619) & 0xFFFFFFFF
+    lines.append("#define CAPP_BLOB_STAMP 0x%08Xu" % stamp)
+    lines.append("")
     lines.append("#endif /* CARDOS_CAPP_BLOBS_H */")
 
     with open(HEADER, "w", newline="\n") as f:

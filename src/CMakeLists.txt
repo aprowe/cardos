@@ -76,6 +76,7 @@ idf_component_register(
     "../kernel/app/elfload.c"
     "../kernel/app/cardapi.c"
     "../kernel/app/capprun.c"
+    "../kernel/app/appidx.c"
   INCLUDE_DIRS
     "."
     ".."      # CardOS headers are included as "kernel/..."

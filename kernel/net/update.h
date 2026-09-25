@@ -33,9 +33,21 @@ const char *update_base(void);
 /* The bearer token from /claude.token, or "" if there is none. */
 const char *update_token(void);
 
+/* Which build this firmware is: "debug" (-Og, the `cardputer` env) or
+ * "release" (-O2, `-e release`). The server publishes both, and this is the
+ * one updates follow unless told otherwise. */
+const char *update_flavor(void);
+
+/* 1 if `flavor` is "debug" or "release". */
+int update_flavor_valid(const char *flavor);
+
 /* Fetch and compare. 0 on success, negative on failure; update_error() says
- * why in words. */
+ * why in words. The firmware is compared against this build's own flavor. */
 int update_check(UpdateCheck *out);
+
+/* The same, against another flavor's firmware -- `update all debug` on a
+ * release device. The apps are the same whichever it is. */
+int update_check_as(UpdateCheck *out, const char *flavor);
 
 /* One line of progress at a time -- "pinball.capp 19672 bytes" -- for
  * whichever screen is listening. */
@@ -49,6 +61,9 @@ int update_apps(const UpdateCheck *c, UpdateLog log, void *ctx);
  * restarts into the new image. On failure, returns negative and the old
  * firmware carries on. */
 int update_firmware(UpdateLog log, void *ctx);
+
+/* The same, for the named flavor. */
+int update_firmware_as(const char *flavor, UpdateLog log, void *ctx);
 
 const char *update_error(void);
 

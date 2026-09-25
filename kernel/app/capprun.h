@@ -33,6 +33,12 @@
  * entry, which is what every function here taking `slot` means -- or -1. */
 int capprun_load(const char *path);
 
+/* For the icon scan, between catalog_begin and _end: capprun_load, unless the
+ * app index (/cache/apps.idx, appidx.h) remembers this file at this size and
+ * date -- then the entry comes from there and nothing is loaded. `size` and
+ * `mtime` are what the directory listing said. */
+int capprun_scan_load(const char *path, uint32_t size, uint32_t mtime);
+
 /* The same, for one run of a program the scan did not list (`./prog`, Files
  * opening one): the image stays loaded for the capprun_start that follows,
  * and the entry goes when that run does. */
@@ -56,7 +62,13 @@ int  capprun_headless(void);                 /* api->headless */
  * built on this file, not under it. */
 void capprun_set_opener(int (*open)(const char *app, const char *args));
 void capprun_command_done(int rc, const char *out);   /* api->command_done */
-void capprun_catalog_begin(void);
+/* Around the icon scan. `stamp` names the apps this firmware carries; with
+ * the API version it keys the app index, so the first scan after a new
+ * firmware loads everything once. */
+void capprun_catalog_begin(uint32_t stamp);
+/* From the mount on, any change under /apps deletes the index: whoever made
+ * it, the index no longer knows what is there. */
+void capprun_watch_apps(void);
 void capprun_catalog_end(void);
 
 void capprun_unload_all(void);

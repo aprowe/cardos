@@ -100,32 +100,47 @@ def errors_tail(log):
     return text[-ERROR_TAIL:]
 
 
-def publish(store, firmware_path, apps_dir, firmware):
+def publish(store, firmwares, apps_dir, firmware):
     """Copy into the store whatever differs from it. Returns the names
-    published ("firmware" or an app's name). The firmware only when this turn
-    built it: see build_plan."""
-    store_fw, store_apps = updates.store_paths(store)
-    have = updates.manifest(firmware=store_fw, apps_dir=store_apps)
-    want = updates.manifest(firmware=firmware_path if firmware else os.devnull,
-                            apps_dir=apps_dir)
-    have = set(have.splitlines())
+    published ("firmware" for debug, "firmware-release", or an app's name).
+
+    `firmwares` is {flavor: image}; a bare path is the debug one alone, which
+    is what there was before the release build. The firmware only when this
+    turn built it: see build_plan. A flavor whose image is missing is skipped
+    rather than failed, so a tree that has only built one still publishes it."""
+    if isinstance(firmwares, str):
+        firmwares = {"debug": firmwares}
     sent = []
-    for line in want.splitlines():
+    # Every artifact is checked before any is written: a bad one must not
+    # leave the store half updated.
+    todo = []
+    for flavor in updates.FLAVORS:
+        src = firmwares.get(flavor)
+        if not firmware or not src or not os.path.isfile(src):
+            continue
+        store_fw, _ = updates.store_paths(store, flavor)
+        have = updates.manifest(firmware=store_fw, apps_dir=os.devnull)
+        want = updates.manifest(firmware=src, apps_dir=os.devnull)
+        if want and want != have:
+            todo.append(("firmware" if flavor == "debug" else "firmware-" + flavor,
+                         src, store_fw, "firmware"))
+    _, store_apps = updates.store_paths(store)
+    have = set(updates.manifest(firmware=os.devnull, apps_dir=store_apps).splitlines())
+    for line in updates.manifest(firmware=os.devnull, apps_dir=apps_dir).splitlines():
         if line in have:
             continue
-        f = line.split()
-        if f[0] == "firmware":
-            src, dst, kind, name = firmware_path, store_fw, "firmware", "firmware"
-        else:
-            name = f[1]
-            src = os.path.join(apps_dir, name + ".capp")
-            dst = os.path.join(store_apps, name + ".capp")
-            kind = "app"
+        name = line.split()[1]
+        todo.append((name, os.path.join(apps_dir, name + ".capp"),
+                     os.path.join(store_apps, name + ".capp"), "app"))
+    blobs = []
+    for name, src, dst, kind in todo:
         with open(src, "rb") as fh:
             data = fh.read()
         why = updates.check_artifact(kind, data)
         if why:
             raise ValueError("%s: %s" % (name, why))
+        blobs.append((name, dst, data))
+    for name, dst, data in blobs:
         updates.put_artifact(dst, data)
         sent.append(name)
     return sent
@@ -140,7 +155,9 @@ class BuildingChat(ChatService):
     def __init__(self, store, firmware=None, apps_dir=None, **kw):
         super().__init__(**kw)
         self.store = store
-        self.firmware = firmware or updates.FIRMWARE
+        # {flavor: image}. Both are built for a firmware change; see build().
+        self.firmware = firmware or {"debug": updates.FIRMWARE,
+                                     "release": updates.FIRMWARE_RELEASE}
         self.apps_dir = apps_dir or updates.APPS_DIR
         # The whole turn, build included, is one unit: a second message must
         # not start editing while the first one's build is reading the tree.
@@ -157,7 +174,10 @@ class BuildingChat(ChatService):
         if apps:
             steps.append([sys.executable, os.path.join("tools", "build_apps.py")])
         if firmware:
-            steps.append([sys.executable, "-m", "platformio", "run"])
+            # Both flavors: the device updates to whichever it runs, so a
+            # change that reached only one would leave the other behind.
+            steps.append([sys.executable, "-m", "platformio", "run",
+                          "-e", "cardputer", "-e", "release"])
         log = ""
         for cmd in steps:
             try:

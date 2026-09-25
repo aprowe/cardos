@@ -201,11 +201,11 @@ class Handler(BaseHTTPRequestHandler):
         self.text("unauthorised\n", 403)
         return False
 
-    def update_files(self):
-        """(firmware, apps_dir) that /update serves."""
+    def update_files(self, flavor=updates.DEFAULT_FLAVOR):
+        """(firmware, apps_dir) that /update serves for a flavor."""
         if self.store:
-            return updates.store_paths(self.store)
-        return updates.FIRMWARE, updates.APPS_DIR
+            return updates.store_paths(self.store, flavor)
+        return updates.firmware_path(flavor), updates.APPS_DIR
 
     # ---- dispatch ----------------------------------------------------------
 

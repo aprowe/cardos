@@ -3,6 +3,7 @@
 #include "kernel/app/capprun.h"
 #include "kernel/sys/input.h"
 #include "kernel/app/elfload.h"
+#include "kernel/app/appidx.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/http.h"
 #include "kernel/net/httpq.h"
@@ -15,6 +16,7 @@
 #include "kernel/sys/power.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -352,25 +354,131 @@ void capprun_install_ui(const CappUi *ui) {
  * docs/superpowers/specs/2026-09-23-app-commands-design.md. */
 static int s_catalog_fd = -1;
 
-void capprun_catalog_begin(void) {
+/* The app index, /cache/apps.idx (appidx.h): the same scan's findings, kept
+ * so the next one need not load an app to learn them again. Loading every
+ * .capp -- read it off the card, relocate it, free it -- was the icon scan's
+ * whole cost, and it ran on every boot, twice when the boot went to the
+ * launcher.
+ *
+ * The scan reads the old index whole and writes a new one as it goes, from
+ * what it loaded or remembered; the new one replaces the old at the end. An
+ * app that did not load is not in it, so it is tried again next time. */
+#define APPIDX_PATH     CAPP_CACHE "/apps.idx"
+#define APPIDX_TMP      CAPP_CACHE "/apps.idx.tmp"
+#define APPIDX_READ_MAX (32 * 1024)       /* 32 apps is about 6 KB */
+
+static char       *s_idx_old;             /* the previous index, for the scan */
+static const char *s_idx_body;            /* past its header, if the key matched */
+static int         s_idx_fd = -1;         /* the one being written */
+static int         s_idx_ok;              /* every record so far made it in */
+/* Could the file on the card describe /apps right now? Cleared by any change
+ * there, which also deletes the file; set when a scan writes a new one. */
+static int         s_idx_live = 1;
+
+/* The catalog lines of the app being loaded, for its index record. */
+static char        s_idx_cmds[1024];
+static size_t      s_idx_cmds_len;
+static int         s_idx_cmds_full;
+
+/* Something under /apps changed: `update apps`, Share, Build, Files. A size
+ * and date that happen to match -- no clock, a rebuild the same length --
+ * would hide it, so the index is not trusted for anything after this. */
+static void apps_changed(const char *path) {
+  const char *a = CAPP_APPS;
+  size_t i;
+  for (i = 0; a[i]; i++) {
+    char c = path[i];
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');   /* FAT does not care */
+    if (c != a[i]) return;
+  }
+  if (path[i] != '/' && path[i] != 0) return;
+  s_idx_ok = 0;                           /* a scan under way is stale too */
+  if (!s_idx_live) return;
+  s_idx_live = 0;
+  fs_remove(APPIDX_PATH);
+}
+
+void capprun_watch_apps(void) { fs_on_change(apps_changed); }
+
+void capprun_catalog_begin(uint32_t stamp) {
+  char key[32], head[48];
+  FsStat st;
+  int fd, n;
+
+  capprun_watch_apps();          /* in case boot did not */
   if (s_catalog_fd >= 0) fs_close(s_catalog_fd);
   s_catalog_fd = fs_open(CAPPRUN_CATALOG, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+
+  /* The API version, because an index from another one lists apps this
+   * firmware refuses; the stamp, because a firmware with other apps has
+   * rewritten them. */
+  snprintf(key, sizeof key, "%d-%08lx", CAPP_API_VERSION, (unsigned long)stamp);
+
+  free(s_idx_old);
+  s_idx_old = NULL;
+  s_idx_body = NULL;
+  if (s_idx_live && fs_stat(APPIDX_PATH, &st) == 0 && st.size > 0 &&
+      st.size < APPIDX_READ_MAX && (s_idx_old = malloc(st.size + 1)) != NULL) {
+    fd = fs_open(APPIDX_PATH, FS_O_READ);
+    n = fd >= 0 ? fs_read(fd, s_idx_old, st.size) : -1;
+    if (fd >= 0) fs_close(fd);
+    s_idx_old[n > 0 ? n : 0] = 0;
+    s_idx_body = appidx_body(s_idx_old, key);
+  }
+
+  n = appidx_header(head, sizeof head, key);
+  s_idx_fd = fs_open(APPIDX_TMP, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+  s_idx_ok = s_idx_fd >= 0 && n > 0 && fs_write(s_idx_fd, head, (size_t)n) == n;
 }
 
 void capprun_catalog_end(void) {
   if (s_catalog_fd >= 0) fs_close(s_catalog_fd);
   s_catalog_fd = -1;
+
+  free(s_idx_old);
+  s_idx_old = NULL;
+  s_idx_body = NULL;
+  if (s_idx_fd < 0) return;
+  fs_close(s_idx_fd);
+  s_idx_fd = -1;
+  /* The card's rename will not replace a file, so the old one goes first. A
+   * cut between the two costs one slow boot, never a wrong one. */
+  if (s_idx_ok) {
+    fs_remove(APPIDX_PATH);
+    if (fs_rename(APPIDX_TMP, APPIDX_PATH) == 0) s_idx_live = 1;
+  } else {
+    fs_remove(APPIDX_TMP);
+  }
+}
+
+/* One app's record into the index being written. */
+static void idx_write(const Entry *e, uint32_t size, uint32_t mtime, const char *cmds) {
+  static char line[1400];
+  AppIdxRec r;
+  int n;
+  if (s_idx_fd < 0 || !s_idx_ok || !mtime) return;
+  memset(&r, 0, sizeof r);
+  r.size = size;
+  r.mtime = mtime;
+  r.flags = e->flags;
+  memcpy(r.icon, e->icon, sizeof r.icon);
+  snprintf(r.path, sizeof r.path, "%s", e->path);
+  snprintf(r.name, sizeof r.name, "%s", e->name);
+  n = appidx_record(line, sizeof line, &r, cmds);
+  /* Too big to remember is not an error: that one app is loaded next time. */
+  if (n > 0 && fs_write(s_idx_fd, line, (size_t)n) != n) s_idx_ok = 0;
 }
 
 /* The app's name in the catalog is its file's, "todo" for .../todo.capp --
  * what `do todo` types and what the server's catalog, keyed by the same
- * files, calls it. */
+ * files, calls it. Kept for the index as well, which is how a remembered app
+ * still gets its commands into the catalog. */
 static void catalog_add(const char *path, const CappInfo *info) {
   char app[24], line[200];
   const char *base = strrchr(path, '/');
   size_t n;
   int i;
-  if (s_catalog_fd < 0 || !info->commands || !info->ncommands) return;
+  if (!info->commands || !info->ncommands) return;
   base = base ? base + 1 : path;
   n = strcspn(base, ".");
   snprintf(app, sizeof app, "%.*s", (int)n, base);
@@ -379,7 +487,14 @@ static void catalog_add(const char *path, const CappInfo *info) {
     cmdline_catalog_line(app, &info->commands[i], line, sizeof line - 1);
     n = strlen(line);
     line[n++] = '\n';
-    fs_write(s_catalog_fd, line, n);
+    if (s_catalog_fd >= 0) fs_write(s_catalog_fd, line, n);
+    if (s_idx_cmds_len + n < sizeof s_idx_cmds) {
+      memcpy(s_idx_cmds + s_idx_cmds_len, line, n);
+      s_idx_cmds_len += n;
+      s_idx_cmds[s_idx_cmds_len] = 0;
+    } else {
+      s_idx_cmds_full = 1;
+    }
   }
 }
 
@@ -465,6 +580,37 @@ static int load_entry(const char *path, int transient, int keep) {
 }
 
 int capprun_load(const char *path) { return load_entry(path, 0, 0); }
+
+int capprun_scan_load(const char *path, uint32_t size, uint32_t mtime) {
+  static char cmds[sizeof s_idx_cmds];
+  AppIdxRec r;
+  int i;
+
+  /* Remembered, and the file has not changed since: the entry, without the
+   * load. */
+  if (s_idx_body && appidx_find(s_idx_body, path, size, mtime, &r, cmds, sizeof cmds)) {
+    for (i = 0; i < CAPPRUN_APPS; i++) if (!s_entry[i].used) break;
+    if (i < CAPPRUN_APPS) {
+      Entry *e = &s_entry[i];
+      memset(e, 0, sizeof *e);
+      memcpy(e->name, r.name, sizeof e->name - 1);
+      memcpy(e->icon, r.icon, sizeof e->icon);
+      e->flags = r.flags;
+      snprintf(e->path, sizeof e->path, "%s", path);
+      e->used = 1;
+      if (s_catalog_fd >= 0 && cmds[0]) fs_write(s_catalog_fd, cmds, strlen(cmds));
+      idx_write(e, size, mtime, cmds);
+      return i;
+    }
+  }
+
+  s_idx_cmds_len = 0;
+  s_idx_cmds[0] = 0;
+  s_idx_cmds_full = 0;
+  i = load_entry(path, 0, 0);
+  if (i >= 0 && !s_idx_cmds_full) idx_write(&s_entry[i], size, mtime, s_idx_cmds);
+  return i;
+}
 
 /* For one run of a program the scan did not list: loaded now, kept for the
  * start that follows, and gone with that run. */

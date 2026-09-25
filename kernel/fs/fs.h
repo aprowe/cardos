@@ -84,6 +84,13 @@ int  fs_mkdir(const char *path);
 int  fs_remove(const char *path);
 int  fs_rename(const char *from, const char *to);
 
+/* Told the path of anything written, created, removed or renamed (both
+ * names), after it happened -- or, for an open to write, as it is opened.
+ * One listener: the app index (kernel/app/capprun.c), which must forget
+ * what it knows about /apps the moment anything there changes, whoever
+ * changed it -- `update apps`, Share, Build, Files. NULL to stop. */
+void fs_on_change(void (*fn)(const char *path));
+
 /* Create the directory layout (capp.h: /sys, /config, /cache, /home, /apps,
  * /var). Idempotent. */
 int  fs_ensure_layout(void);
