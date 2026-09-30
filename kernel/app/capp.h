@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 32
+#define CAPP_API_VERSION 33
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -724,6 +724,18 @@ typedef struct {
    * hold the screen for ever; hold it while it matters. */
   void (*keep_awake)(int on);
   void (*wake)(void);
+
+  /* ---- another app's command (API 33) ----
+   *
+   * What `do APP LINE` does at the console, from inside an app: run_command
+   * ("calendar", "today", out, n). The other app answers with its open
+   * instance if it has one, or is started headless and let go after, as for
+   * any command (see CappAction.cmd). 0 and its text in `out`, or <0 and why.
+   * It blocks while the command runs -- a network one can take seconds -- so
+   * call it from tick, one at a time, not from paint; never for yourself
+   * (an app whose code is running is busy). This is how the Today app
+   * gathers the day: every section is some app's command. */
+  int (*run_command)(const char *app, const char *line, char *out, size_t n);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

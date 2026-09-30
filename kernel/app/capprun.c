@@ -905,10 +905,10 @@ static int find_capp(const char *app, char *out, size_t n) {
   return -1;
 }
 
-int capprun_command(const char *app, const char *cmd, int nwords,
-                    const char *const *words, char *out, size_t n) {
+static int command_inner(const char *app, const char *cmd, int nwords,
+                         const char *const *words, char *out, size_t n) {
   extern const CardApi *cardos_api(void);
-  static char join[CAPPRUN_CMD_TEXT];
+  char join[CAPPRUN_CMD_TEXT];         /* argv points in here: one per call */
   const char *argv[CAPP_CMD_ARGS_MAX];
   const CappAction *a;
   Entry *e;
@@ -1023,6 +1023,38 @@ finish:
     s->has_damage = 0;
   }
   return rc;
+}
+
+/* A command may run a command: the Today app, asked to `print` by voice,
+ * runs `calendar today` from inside its own. Everything a command keeps
+ * between its start and its end is saved around the inner one and put back,
+ * so the outer finishes as if nothing had happened in the middle. */
+int capprun_command(const char *app, const char *cmd, int nwords,
+                    const char *const *words, char *out, size_t n) {
+  int headless = s_headless, waiting = s_cmd_waiting, crc = s_cmd_rc, rc;
+  char *cout = s_cmd_out;
+  size_t cn = s_cmd_n;
+  Run *running = s_running;
+  rc = command_inner(app, cmd, nwords, words, out, n);
+  s_headless = headless;
+  s_cmd_waiting = waiting;
+  s_cmd_rc = crc;
+  s_cmd_out = cout;
+  s_cmd_n = cn;
+  s_running = running;
+  return rc;
+}
+
+/* One line, "today" or "show Chores", as the console's `do` takes it after
+ * the app: split and checked the same way. For api->run_command. */
+int capprun_command_line(const char *app, const char *line, char *out, size_t n) {
+  char buf[CAPPRUN_CMD_TEXT];
+  const char *w[2 + CAPP_CMD_ARGS_MAX + 8];
+  int k;
+  if (!app || !line || !out || !n) return -1;
+  k = cmdline_split(line, buf, sizeof buf, w, (int)(sizeof w / sizeof w[0]));
+  if (k < 1) { snprintf(out, n, "no command"); return -1; }
+  return capprun_command(app, w[0], k - 1, w + 1, out, n);
 }
 
 int capprun_caps_ok(void) { return s_caps_ok; }

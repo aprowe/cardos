@@ -310,3 +310,16 @@ void test_habits_commands(void) {
                      "- Water: not yet today, 0 day streak"));
   wipe();
 }
+
+/* `habits today` is for paper: a box per habit, ticked if done today. */
+void test_habits_today_is_boxes_to_tick(void) {
+  char out[256];
+  wipe();
+  s_synced = 2; s_y = 2026; s_m = 9; s_d = 24;
+  put(HABITS_PATH, "Read\nStretch\n");
+  put(DIR "/Read.log", "20260922\n20260923\n20260924\n");
+  open_app();
+  CHECK_EQ(app_command(0, ACT_TODAY, 0, NULL, out, sizeof out), 0);
+  CHECK(!strcmp(out, "[x] Read  (3 days)\n[ ] Stretch"));
+  wipe();
+}

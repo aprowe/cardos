@@ -321,6 +321,15 @@ static int same(const char *a, const char *b) {
   return !*a && !*b;
 }
 
+static int same_ci(const char *a, const char *b) {
+  for (;; a++, b++) {
+    char x = (*a >= 'A' && *a <= 'Z') ? (char)(*a + 32) : *a;
+    char y = (*b >= 'A' && *b <= 'Z') ? (char)(*b + 32) : *b;
+    if (x != y) return 0;
+    if (!x) return 1;
+  }
+}
+
 static void lists_save(void) {
   char line[ID_MAX + NAME_MAX + 4];
   int fd, i, n;
@@ -1139,7 +1148,7 @@ static void paint_add(CRect c) {
  * menu, which is why an editor's save did nothing in a window. */
 enum { ACT_ADD = 1, ACT_TICK, ACT_DELETE, ACT_SYNC, ACT_LISTS, ACT_ALL,
        ACT_SAVE, ACT_CANCEL, ACT_OPEN, ACT_GOTO, ACT_PRINT,
-       ACT_DONE, ACT_LIST, ACT_NEWLIST };
+       ACT_DONE, ACT_LIST, ACT_NEWLIST, ACT_SHOW };
 
 /* Commands as well as actions (CAPP_CMD_YES): what `do todo ...`, voice and
  * an AI can ask for, with no screen. `done` and `list` have no menu entry --
@@ -1149,6 +1158,8 @@ static const CappParam P_TEXT[]  = { { "text",  CAPP_ARG_TEXT, "what the task sa
 static const CappParam P_TITLE[] = { { "title", CAPP_ARG_TEXT,
                                        "the task, or enough of it to match" } };
 static const CappParam P_NAME[]  = { { "name",  CAPP_ARG_TEXT, "what the list is called" } };
+static const CappParam P_LIST[]  = { { "list",  CAPP_ARG_TEXT,
+                                       "the list's name, or enough of it to match" } };
 
 static const CappAction LIST_ACTIONS[] = {
   { "add",    "Add",      "Task", 0x01, ACT_ADD,       /* ctrl-a */
@@ -1157,7 +1168,8 @@ static const CappAction LIST_ACTIONS[] = {
   { "delete", "Delete",   "Task", 0x04, ACT_DELETE },  /* ctrl-d */
   { "sync",   "Sync now", "List", 0x13, ACT_SYNC,      /* ctrl-s */
     "sync every list with Google", 0, 0, CAPP_CMD_YES | CAPP_CMD_NET },
-  { "lists",  "Lists...", "List", 0x0C, ACT_LISTS },   /* ctrl-l */
+  { "lists",  "Lists...", "List", 0x0C, ACT_LISTS,    /* ctrl-l */
+    "the names of every task list; * marks the current one", 0, 0, CAPP_CMD_YES },
   { "newlist", "New list...", "List", 0x0E, ACT_NEWLIST,   /* ctrl-n */
     "make a new task list and switch to it", P_NAME, 1, CAPP_CMD_YES | CAPP_CMD_NET },
   { "all",    "All lists", "List", 0x0F, ACT_ALL },   /* ctrl-o */
@@ -1166,6 +1178,8 @@ static const CappAction LIST_ACTIONS[] = {
     "tick off the task whose title matches", P_TITLE, 1, CAPP_CMD_YES },
   { "list",   "List",     0,      0,    ACT_LIST,
     "the open tasks in the current list", 0, 0, CAPP_CMD_YES },
+  { "show",   "Show",     0,      0,    ACT_SHOW,
+    "the open tasks of any list, as boxes to tick on paper", P_LIST, 1, CAPP_CMD_YES },
 };
 
 /* The overview. Reading, and a way into the list a row belongs to. */
@@ -1550,6 +1564,40 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
     cache_save();
     api->fmt(out, n, "ticked off \"%s\"", T.item[hit].title);
     return 0;
+
+  case ACT_LISTS:
+    if (!T.nlists) { api->fmt(out, n, "no lists yet: open Todo once to sync them"); return 0; }
+    for (i = 0; i < T.nlists && o + 4 < n; i++)
+      o += (size_t)api->fmt(out + o, n - o, "%s%s%s", i ? "\n" : "",
+                            i == T.cur ? "* " : "", T.lists[i].name);
+    return 0;
+
+  case ACT_SHOW: {
+    /* A list by name: exactly, else the only one containing the words. The
+     * current one from memory (it may hold edits not yet in its file), any
+     * other from its cache, as the overview reads it. "[ ] title" lines --
+     * the print markup, since the Today app puts them straight on paper. */
+    int li = -1;
+    for (i = 0; i < T.nlists; i++) if (same_ci(T.lists[i].name, argv[0])) li = i;
+    if (li < 0)
+      for (i = 0; i < T.nlists; i++) if (contains(T.lists[i].name, argv[0])) { li = i; hits++; }
+    if (hits > 1) { api->fmt(out, n, "%d lists match \"%s\"; say more", hits, argv[0]); return -1; }
+    if (li < 0)   { api->fmt(out, n, "no list matches \"%s\"", argv[0]); return -1; }
+    if (li == T.cur) {
+      for (i = 0; i < T.n && o + 8 < n; i++) {
+        if (T.item[i].done || T.item[i].deleted) continue;
+        o += (size_t)api->fmt(out + o, n - o, "%s[ ] %s", o ? "\n" : "", T.item[i].title);
+      }
+    } else {
+      T.nover = 0;
+      T.over_full = 0;
+      over_scan(li);
+      for (i = 0; i < T.nover && o + 8 < n; i++)
+        o += (size_t)api->fmt(out + o, n - o, "%s[ ] %s", o ? "\n" : "", T.over[i].title);
+    }
+    if (!o) api->fmt(out, n, "nothing left to do in %s", T.lists[li].name);
+    return 0;
+  }
 
   case ACT_NEWLIST:
     if (start_newlist(argv[0]) != 0) { api->fmt(out, n, "%s", T.status); return -1; }

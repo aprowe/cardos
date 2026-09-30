@@ -769,7 +769,8 @@ static const CappAction ACTIONS[] = {
   { "down",   "Move down",    "Habit", 0, ACT_DOWN },
   { "info",   "Details",      "View",  0, ACT_INFO },
   { "all",    "All habits",   "View",  0, ACT_ALL },
-  { "today",  "Today",        "View",  0, ACT_TODAY },
+  { "today",  "Today",        "View",  0, ACT_TODAY,
+    "every habit, a box ticked if it is done today, and its streak", 0, 0, CAPP_CMD_YES },
 };
 #define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
 
@@ -850,6 +851,17 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
     }
     if (toggle(i, H.today) != 0) { api->fmt(out, n, "could not write to the card"); return -1; }
     api->fmt(out, n, "%s: done today, %d day streak", H.habit[i].name, streak(i));
+    return 0;
+  case ACT_TODAY:
+    /* The print markup: the Today app puts these straight on paper, where a
+     * box is something to tick with a pen. */
+    if (!H.n) { api->fmt(out, n, "no habits yet"); return 0; }
+    for (i = 0; i < H.n && o + 8 < n; i++) {
+      int s = streak(i);
+      o += (size_t)api->fmt(out + o, n - o, "%s[%c] %s", i ? "\n" : "",
+                            is_done(i, H.today) ? 'x' : ' ', H.habit[i].name);
+      if (s > 1 && o + 16 < n) o += (size_t)api->fmt(out + o, n - o, "  (%d days)", s);
+    }
     return 0;
   case ACT_LIST:
     if (!H.n) { api->fmt(out, n, "no habits yet"); return 0; }

@@ -462,6 +462,25 @@ ICONS = {
         "...KK......KK...",
         "................",
     ],
+    # A page of the day with the sun coming up behind it.
+    "Today": [
+        ".......yy.......",
+        "..y....yy....y..",
+        "...y........y...",
+        "......yyyy......",
+        "..yy.yyyyyy.yy..",
+        ".....yyyyyy.....",
+        ".KKKKKKKKKKKKKK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KWggWDDDDDDDWK.",
+        ".KWggWWWWWWWWWK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KWKKWDDDDDWWWK.",
+        ".KWKKWWWWWWWWWK.",
+        ".KWWWWWWWWWWWWK.",
+        ".KKKKKKKKKKKKKK.",
+        "................",
+    ],
     # A rounded badge with a plus in it: one more.
     "Counter": [
         "................",

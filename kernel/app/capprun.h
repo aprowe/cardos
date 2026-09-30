@@ -57,6 +57,9 @@ int capprun_command(const char *app, const char *cmd, int nwords,
                     const char *const *words, char *out, size_t n);
 int  capprun_headless(void);                 /* api->headless */
 
+/* The same from one line, "show Chores" -- api->run_command (API 33). */
+int capprun_command_line(const char *app, const char *line, char *out, size_t n);
+
 /* How a CAPP_CMD_OPEN command opens its app: the shell's runner, set once at
  * boot (launchui_run). A hook rather than a call because the launcher is
  * built on this file, not under it. */
