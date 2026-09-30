@@ -80,6 +80,11 @@ static struct {
   CRect   content;
 } D;
 
+/* What an app answered. One buffer for every question: they are asked one
+ * at a time, and three of them were 2 KB this app's data did not need while
+ * it loads the apps it asks (2026-09-29). */
+static char s_answer[ANSWER_MAX];
+
 static CRect rect(int x, int y, int w, int h) {
   CRect r;
   r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
@@ -142,9 +147,9 @@ static int save_sections(void) {
 
 /* The todo list Todo has open: the line `todo lists` marks with a star. */
 static int current_list(char *out, int n) {
-  static char answer[ANSWER_MAX];
+  char *answer = s_answer;
   const char *p = answer;
-  if (api->run_command("todo", "lists", answer, sizeof answer) != 0) return -1;
+  if (api->run_command("todo", "lists", answer, ANSWER_MAX) != 0) return -1;
   while (*p) {
     const char *e = p;
     while (*e && *e != '\n') e++;
@@ -219,11 +224,11 @@ static void begin_page(void) {
 /* One section: its heading, and the app's answer line by line. A section
  * whose app could not answer says so, in its own place, and the rest go on. */
 static void gather_one(int i) {
-  static char answer[ANSWER_MAX];
+  char *answer = s_answer;
   char head[HEAD_MAX + 8];
   int rc;
   answer[0] = 0;
-  rc = api->run_command(D.sect[i].app, D.sect[i].line, answer, sizeof answer);
+  rc = api->run_command(D.sect[i].app, D.sect[i].line, answer, ANSWER_MAX);
   api->fmt(head, sizeof head, "\n## %s\n", D.sect[i].head);
   put(head);
   if (rc != 0) { put("("); put(answer[0] ? answer : "no answer"); put(")\n"); return; }
@@ -367,7 +372,23 @@ static int print_page(void) {
   return rc;
 }
 
+static void load_fonts(void) {
+  if (D.f_ui < 0) D.f_ui = api->font_load("ui13");
+  if (D.f_uib < 0) D.f_uib = api->font_load("ui13b");
+}
+
+/* Gathering loads Calendar and Todo -- 30 KB each with their data -- beside
+ * this app, and they need one unbroken block for their code. The fonts wait
+ * until they have been and gone; the screen says "asking..." in 6x8 until
+ * then, and nothing is lost by that. */
+static void unload_fonts(void) {
+  if (D.f_ui >= 0) api->font_free(D.f_ui);
+  if (D.f_uib >= 0) api->font_free(D.f_uib);
+  D.f_ui = D.f_uib = -1;
+}
+
 static void regather(void) {
+  unload_fonts();
   begin_page();
   D.top = 0;
   api->fmt(D.status, sizeof D.status, "gathering");
@@ -375,11 +396,11 @@ static void regather(void) {
 
 /* The todo lists, from Todo, to pick one. */
 static void open_lists(void) {
-  static char answer[ANSWER_MAX];
+  char *answer = s_answer;
   const char *p = answer;
   D.nlists = 0;
   D.lsel = 0;
-  if (api->run_command("todo", "lists", answer, sizeof answer) == 0)
+  if (api->run_command("todo", "lists", answer, ANSWER_MAX) == 0)
     while (*p && D.nlists < MAX_LISTS) {
       const char *e = p;
       int star = p[0] == '*' && p[1] == ' ';
@@ -508,6 +529,7 @@ static int app_tick(void *st, uint32_t now) {
   if (D.next >= 0) {
     if (D.next >= D.nsect) {
       end_page();
+      load_fonts();
       api->fmt(D.status, sizeof D.status, "fn-p prints");
       return 1;
     }
@@ -557,10 +579,8 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   D.next = -1;
   load_sections();
   if (!api->headless()) {
-    D.f_ui = api->font_load("ui13");
-    D.f_uib = api->font_load("ui13b");
     toolbar_init(api, ACTIONS, NACT, 0, 0);
-    regather();                 /* in tick, one section at a time */
+    regather();                 /* in tick, one section at a time; fonts after */
   }
   UI.paint = app_paint;
   UI.key = app_key;

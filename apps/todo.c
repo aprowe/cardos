@@ -828,6 +828,7 @@ static void sync_tick(void) {
       /* 401 from the server is its Google login gone -- signed out at
        * the dashboard, or a Testing-mode token past its seven days. */
       say(n == -401 ? "sign in to Google at the dashboard (/dash)"
+          : n == -403 ? "no Tasks permission: sign in at /dash, allow Tasks"
           : n < 0 ? "cannot reach the server" : "no task lists on this account");
       logf("lists failed (%d)", n);
       T.stage = SYNC_IDLE;
