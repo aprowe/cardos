@@ -336,6 +336,15 @@ static int api_http_start(const char *method, const char *url, const char *body,
    * app that sets nothing up (a command's capp_main returning at once) still
    * has an identity here; only kernel code calling through the table would
    * not, and none does. */
+  /* A request to this device's own server carries the device's token --
+   * Calendar and Todo sync through it now (server/google.py) and no app
+   * should have to read /config/claude.token to say who it is. Only to that
+   * server: the token is never offered to anywhere else. */
+  if ((!bearer || !bearer[0]) && url) {
+    const char *base = update_base(), *tok = update_token();
+    size_t n = strlen(base);
+    if (n && *tok && !strncmp(url, base, n) && (url[n] == '/' || !url[n])) bearer = tok;
+  }
   return httpq_start(capprun_executing(), method, url, body, content_type,
                      bearer, timeout_ms);
 }

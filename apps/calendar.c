@@ -74,7 +74,14 @@
 #define DAY_SECS    86400u
 #define WINDOW_DAYS 60          /* how far ahead a sync looks */
 
-#define EVENTS_URL "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+/* Google Calendar through the server (server/google.py): it holds the login
+ * and does the HTTPS and the JSON; this gets an event a line, "id <tab> start
+ * <tab> end <tab> summary", start and end as Google wrote them so
+ * rfc3339_parse reads what it always read. Plain HTTP to api->proxy(), signed
+ * by the kernel with the device's token. (2026-09-29; it was TLS and JSON
+ * here, and the second-largest app on the device for it.) */
+#define EVENTS_URL "%s/calendar/events?from=%s&to=%s"
+#define EVENT_URL  "%s/calendar/event"
 
 #define CLR_BG      CAPP_RGB(20, 22, 28)
 #define CLR_ROW     CAPP_RGB(28, 31, 38)
@@ -370,62 +377,23 @@ static int32_t today_day(void) {
   return days_from_civil(C.today_y, C.today_m, C.today_d);
 }
 
-/* ---- JSON ---------------------------------------------------------------- */
+/* ---- the server's replies ---------------------------------------------------- */
 
-static char *find_pat(char *from, const char *pat) {
-  int plen = (int)api->str_len(pat), j;
-  char *q = from;
-  if (!from) return 0;
-  while (*q) {
-    for (j = 0; j < plen && q[j] == pat[j]; j++) { }
-    if (j == plen) return q;
-    q++;
-  }
-  return 0;
-}
-
-/* The string value of `name`, if it is the next thing that looks like one. */
-static int json_str(char *from, const char *name, char *out, int n) {
-  char pat[24];
-  char *p;
-  int i = 0;
-
-  out[0] = 0;
-  api->fmt(pat, sizeof pat, "\"%s\"", name);
-  p = find_pat(from, pat);
-  if (!p) return 0;
-  p += api->str_len(pat);
-  while (*p == ' ' || *p == ':') p++;
-  if (*p != '"') return 0;
-  p++;
-  while (*p && *p != '"' && i + 1 < n) {
-    if (*p == '\\' && p[1]) {
-      p++;
-      if (*p == 'n' || *p == 't') { out[i++] = ' '; p++; continue; }
-      if (*p == 'u') { out[i++] = '?'; p += 5; continue; }
-    }
-    out[i++] = *p++;
-  }
-  out[i] = 0;
-  return i > 0;
-}
-
-/* start and end are objects holding either "dateTime" or "date". Whichever
- * appears first in the slice is the one meant -- the quotes in the pattern
- * keep "date" from matching the front of "dateTime". */
-static int json_when(char *from, uint32_t *out, int *all_day) {
-  char buf[40];
-  char *dt = find_pat(from, "\"dateTime\"");
-  char *da = find_pat(from, "\"date\"");
-  char *use;
-
-  if (!dt && !da) return 0;
-  if (!dt) use = da;
-  else if (!da) use = dt;
-  else use = (dt < da) ? dt : da;
-
-  if (!json_str(use, (use == dt) ? "dateTime" : "date", buf, sizeof buf)) return 0;
-  return rfc3339_parse(buf, out, all_day) == 0;
+/* The next line of a reply, cut at its tabs in place: the fields, how many;
+ * 0 at the end. */
+static int reply_line(char **pos, char **f, int max) {
+  char *p = *pos, *e;
+  int n = 0;
+  while (*p == '\n' || *p == '\r') p++;
+  if (!*p) { *pos = p; return 0; }
+  for (e = p; *e && *e != '\n'; e++) {}
+  if (*e) *e++ = 0;
+  *pos = e;
+  f[n++] = p;
+  for (; *p && n < max; p++)
+    if (*p == '\t') { *p = 0; f[n++] = p + 1; }
+  for (p = f[n - 1]; *p; p++) if (*p == '\r') *p = 0;
+  return n;
 }
 
 /* ---- the list ------------------------------------------------------------ */
@@ -590,17 +558,6 @@ static int sending_index(void) {
   return -1;
 }
 
-/* The summary as a JSON string's insides. A title that came from Google can
- * hold a quote or a backslash even though the keyboard here refuses them. */
-static void json_escape(const char *in, char *out, int n) {
-  int o = 0;
-  for (; *in && o + 2 < n; in++) {
-    if (*in == '"' || *in == '\\') out[o++] = '\\';
-    out[o++] = *in;
-  }
-  out[o] = 0;
-}
-
 /* "2026-09-25", the whole of an all-day event's start or end. */
 static void rfc3339_date(uint32_t t, char *out, int n) {
   int y, m, d;
@@ -609,9 +566,8 @@ static void rfc3339_date(uint32_t t, char *out, int n) {
 }
 
 static int start_push(const char *tok, int i) {
-  char body[SUMMARY_MAX * 2 + 160], title[SUMMARY_MAX * 2 + 2], s[24], e[24];
+  char body[SUMMARY_MAX + 96], s[24], e[24];
   char url[URL_MAX];
-  const char *kind = C.ev[i].all_day ? "date" : "dateTime";
   if (C.ev[i].all_day) {
     rfc3339_date(C.ev[i].start, s, sizeof s);
     rfc3339_date(C.ev[i].end, e, sizeof e);
@@ -619,19 +575,17 @@ static int start_push(const char *tok, int i) {
     rfc3339_utc(C.ev[i].start, s, sizeof s);
     rfc3339_utc(C.ev[i].end, e, sizeof e);
   }
-  json_escape(C.ev[i].summary, title, sizeof title);
-  api->fmt(body, sizeof body,
-           "{\"summary\":\"%s\",\"start\":{\"%s\":\"%s\"},"
-           "\"end\":{\"%s\":\"%s\"}}",
-           title, kind, s, kind, e);
-  /* Google has it already: change that one. A PATCH touches only the fields
-   * sent, so the attendees and reminders set elsewhere survive. */
+  /* key=value lines; an all-day event is a bare date, and the server
+   * turns that into Google's "date" rather than "dateTime". */
+  api->fmt(body, sizeof body, "start=%s\nend=%s\nsummary=%s\n", s, e, C.ev[i].summary);
+  /* Google has it already: change that one. The server PATCHes, touching
+   * only these fields, so attendees and reminders set elsewhere survive. */
   if (C.ev[i].id[0]) {
-    api->fmt(url, sizeof url, "%s/%s", EVENTS_URL, C.ev[i].id);
-    return api->http_start("PATCH", url, body, "application/json", tok, 15000);
+    api->fmt(url, sizeof url, EVENT_URL "?id=%s", api->proxy(), C.ev[i].id);
+    return api->http_start("POST", url, body, "text/plain", tok, 15000);
   }
-  return api->http_start("POST", EVENTS_URL, body, "application/json", tok,
-                         15000);
+  api->fmt(url, sizeof url, EVENT_URL, api->proxy());
+  return api->http_start("POST", url, body, "text/plain", tok, 15000);
 }
 
 static int start_fetch(const char *tok) {
@@ -642,11 +596,7 @@ static int start_fetch(const char *tok) {
   rfc3339_utc((uint32_t)((base + WINDOW_DAYS) * (int32_t)DAY_SECS), tmax,
               sizeof tmax);
 
-  /* fields= is the whole reason this fits in memory. See the file header. */
-  api->fmt(url, sizeof url,
-           "%s?singleEvents=true&orderBy=startTime&maxResults=%d"
-           "&timeMin=%s&timeMax=%s&fields=items(id,summary,start,end)",
-           EVENTS_URL, MAX_EVENTS, tmin, tmax);
+  api->fmt(url, sizeof url, EVENTS_URL, api->proxy(), tmin, tmax);
   return api->http_start("GET", url, 0, 0, tok, 20000);
 }
 
@@ -668,7 +618,7 @@ static int kept_id(int n, const char *id) {
  * deletion made in a browser disappears here too. An edit still queued wins
  * over Google's copy of the same event: it is newer, and it is on its way. */
 static int absorb(void) {
-  char *p;
+  char *p, *f[4];
   int got = 0;
   int i, keep = 0, added = 0;
 
@@ -679,30 +629,14 @@ static int absorb(void) {
   }
   C.n = keep;
 
-  p = find_pat(C.reply, "\"id\"");
-  while (p && C.n < MAX_EVENTS) {
-    char *next = find_pat(p + 4, "\"id\"");
-    char saved = 0;
+  p = C.reply;
+  while (C.n < MAX_EVENTS && reply_line(&p, f, 4) == 4) {
     Event *e = &C.ev[C.n];
-    char *sp, *ep;
-
-    if (next) { saved = *next; *next = 0; }
-
     api->mem_set(e, 0, sizeof *e);
-    json_str(p, "id", e->id, ID_MAX);
-    if (!json_str(p, "summary", e->summary, SUMMARY_MAX + 1))
-      api->fmt(e->summary, sizeof e->summary, "%s", "(no title)");
-
-    sp = find_pat(p, "\"start\"");
-    ep = find_pat(p, "\"end\"");
-    if (sp) {
-      char keep2 = 0;
-      if (ep && ep > sp) { keep2 = *ep; *ep = 0; }
-      if (json_when(sp, &e->start, &got)) e->all_day = (uint8_t)got;
-      if (ep && ep > sp) *ep = keep2;
-    }
-    if (ep) json_when(ep, &e->end, &got);
-    if (!e->end) e->end = e->start + 3600u;
+    api->fmt(e->id, ID_MAX, "%s", f[0]);
+    api->fmt(e->summary, sizeof e->summary, "%s", f[3][0] ? f[3] : "(no title)");
+    if (rfc3339_parse(f[1], &e->start, &got) == 0) e->all_day = (uint8_t)got;
+    if (rfc3339_parse(f[2], &e->end, &got) != 0 || !e->end) e->end = e->start + 3600u;
 
     if (e->id[0] && kept_id(keep, e->id)) e->id[0] = 0;     /* edited here */
     /* The form is open on this one: the flag lives on the struct, and the
@@ -710,8 +644,6 @@ static int absorb(void) {
     if (e->id[0] && C.form_edit && C.edit_id[0] && same(e->id, C.edit_id))
       e->editing = 1;
     if (e->id[0] && e->start) { C.n++; added++; }
-    if (next) *next = saved;
-    p = next;
   }
 
   sort_events();
@@ -729,8 +661,8 @@ static void sync_failed(int n) {
   /* The code matters here more than usual: -403 with a good token means the
    * Calendar API is not enabled on the project, which is a different switch
    * from the OAuth scope and a different thing to go and fix. */
-  if (n == -403)      say("403: enable the Calendar API");
-  else if (n == -401) say("401: sign in again on the PC");
+  if (n == -403)      say("403: the Calendar API is off for the server's login");
+  else if (n == -401) say("sign in to Google at the dashboard (/dash)");
   else if (n == -4) {
     /* The kernel refused the request before it was sent, and it knows why --
      * usually "not enough memory: 37 KB free, TLS needs about 33", which
@@ -789,14 +721,9 @@ static void sync_begin(const char *why) {
     C.next_auto = api->ticks_ms() + RETRY_MS;
     return;
   }
-  tok = api->google_token();
-  if (!tok || !tok[0]) {
-    say(api->google_status());
-    api->fmt(m, sizeof m, "sync: no token (%s)", api->google_status());
-    logline(m);
-    C.next_auto = api->ticks_ms() + RETRY_MS;
-    return;
-  }
+  /* No Google token here: the server holds the login, and the kernel signs
+   * a request to the server with the device's own token. */
+  tok = "";
 
   /* The clock usually arrives from NTP a few seconds after boot, and opening
    * the calendar in those seconds used to poison every sync for the life of
@@ -859,7 +786,7 @@ static void sync_tick(void) {
   if (n < 0) { sync_failed(n); return; }
 
   if (C.stage == SYNC_PUSH) {
-    const char *tok = api->google_token();
+    const char *tok = "";            /* the kernel signs it for the server */
     int i = sending_index();
     /* It exists at Google now, so it is no longer queued. The id comes back
      * on the next fetch rather than being read out of the reply -- one place
@@ -867,18 +794,6 @@ static void sync_tick(void) {
     if (i >= 0) { C.ev[i].dirty = 0; C.ev[i].sending = 0; }
     cache_save();
 
-    /* A token that expired mid-sync, or a queue that someone else took while
-     * this was in the air, used to drop straight to SYNC_IDLE without a word
-     * and with the next attempt ten minutes away -- a sync that pushed one
-     * event and then silently did nothing else. */
-    if (!tok || !tok[0]) {
-      say(api->google_status());
-      api->fmt(m, sizeof m, "sync: token gone mid-sync (%s)", api->google_status());
-      logline(m);
-      C.stage = SYNC_IDLE;
-      C.next_auto = api->ticks_ms() + RETRY_MS;
-      return;
-    }
     i = next_dirty();
     if (i >= 0) {
       if (start_push(tok, i) != 0) { start_refused(); return; }

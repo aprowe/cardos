@@ -24,7 +24,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 
-from . import chat, dash, shots, tz, updates, voice
+from . import chat, dash, google, shots, tz, updates, voice
 from .chat import ROOT as ROOT_DIR
 
 
@@ -104,6 +104,7 @@ def _normalise(routes):
 
 ALL_ROUTES = _normalise(SERVER_ROUTES + chat.ROUTES + updates.ROUTES +
                         voice.ROUTES + shots.ROUTES + tz.ROUTES + dash.ROUTES +
+                        google.ROUTES +
                         _render_routes() +
                         _screen_routes())
 
@@ -214,6 +215,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._dispatch("POST")
+
+    def do_PATCH(self):
+        self._dispatch("PATCH")
+
+    def do_DELETE(self):
+        self._dispatch("DELETE")
 
     def _dispatch(self, method):
         # An exception inside a route used to close the socket with no status

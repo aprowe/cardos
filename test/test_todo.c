@@ -164,6 +164,7 @@ void test_todo_cache_round_trips_every_field(void) {
 static uint32_t    fake_ticks(void)        { return 1000; }
 static int         fake_net_ready(void)    { return 1; }
 static const char *fake_token(void)        { return "ya29.token"; }
+static const char *fake_proxy(void)        { return "http://server:8080"; }
 static int fake_start_refused(const char *m, const char *u, const char *b,
                               const char *ct, const char *tok, int ms) {
   (void)m; (void)u; (void)b; (void)ct; (void)tok; (void)ms;
@@ -175,6 +176,7 @@ void test_todo_a_refused_start_says_so_and_retries_soon(void) {
   FAKE.ticks_ms = fake_ticks;
   FAKE.net_ready = fake_net_ready;
   FAKE.google_token = fake_token;
+  FAKE.proxy = fake_proxy;
   FAKE.http_start = fake_start_refused;
   snprintf(T.status, sizeof T.status, "%s", "2 tasks");
 
@@ -188,10 +190,9 @@ void test_todo_a_refused_start_says_so_and_retries_soon(void) {
 /* ---- more than one list -------------------------------------------------- */
 
 static const char LISTS_REPLY[] =
-  "{\"kind\":\"tasks#taskLists\",\"items\":["
-  "{\"kind\":\"tasks#taskList\",\"id\":\"listA\",\"title\":\"My Tasks\"},"
-  "{\"kind\":\"tasks#taskList\",\"id\":\"listB\",\"title\":\"Groceries\"},"
-  "{\"kind\":\"tasks#taskList\",\"id\":\"listC\",\"title\":\"Work\"}]}";
+  "listA\tMy Tasks\n"
+  "listB\tGroceries\n"
+  "listC\tWork\n";
 
 void test_todo_the_lists_reply_fills_the_table_and_keeps_the_current_one(void) {
   use_fake_api();
@@ -284,7 +285,7 @@ void test_todo_left_and_right_cycle_the_lists(void) {
 }
 
 static int fake_poll_done(char *out, size_t n) {
-  snprintf(out, n, "%s", "{\"items\":[{\"id\":\"x\",\"title\":\"From the old list\"}]}");
+  snprintf(out, n, "%s", "x\t0\tFrom the old list\n");
   return 40;
 }
 
@@ -292,6 +293,7 @@ void test_todo_switching_during_a_pull_drops_that_reply(void) {
   use_fake_api();
   FAKE.ticks_ms = fake_ticks;
   FAKE.google_token = fake_token;
+  FAKE.proxy = fake_proxy;
   FAKE.http_poll = fake_poll_done;
   snprintf(T.reply, sizeof T.reply, "%s", LISTS_REPLY);
   absorb_lists();
@@ -396,6 +398,7 @@ static void use_script_api(void) {
   FAKE.ticks_ms = script_ticks;
   FAKE.net_ready = script_net;
   FAKE.google_token = script_token;
+  FAKE.proxy = fake_proxy;
   FAKE.http_start = script_start;
   FAKE.http_poll = script_poll;
   FAKE.damage = script_damage;
@@ -426,18 +429,13 @@ static int url_has(int i, const char *needle) {
 }
 
 static const char THREE_LISTS[] =
-  "{\"items\":["
-  "{\"id\":\"listA\",\"title\":\"My Tasks\"},"
-  "{\"id\":\"listB\",\"title\":\"Groceries\"},"
-  "{\"id\":\"listC\",\"title\":\"Work\"}]}";
+  "listA\tMy Tasks\n"
+  "listB\tGroceries\n"
+  "listC\tWork\n";
 
-static const char TASKS_A[] =
-  "{\"items\":[{\"id\":\"a1\",\"title\":\"Fix the bike\",\"status\":\"needsAction\"}]}";
-static const char TASKS_B[] =
-  "{\"items\":[{\"id\":\"b1\",\"title\":\"Eggs\",\"status\":\"needsAction\"},"
-  "{\"id\":\"b2\",\"title\":\"Milk\",\"status\":\"completed\"}]}";
-static const char TASKS_C[] =
-  "{\"items\":[{\"id\":\"c1\",\"title\":\"Ship it\",\"status\":\"needsAction\"}]}";
+static const char TASKS_A[] = "a1\t0\tFix the bike\n";
+static const char TASKS_B[] = "b1\t0\tEggs\nb2\t1\tMilk\n";
+static const char TASKS_C[] = "c1\t0\tShip it\n";
 
 /* One open, one sweep: the lists, then the list on screen, then the rest.
  * Every list ends up fetched, which is what makes the overview real. */
@@ -452,10 +450,10 @@ void test_todo_one_open_syncs_every_list_once(void) {
   CHECK(settle(400) >= 0);
 
   CHECK_EQ(S.asked, 4);
-  CHECK(url_has(0, "users/@me/lists"));
-  CHECK(url_has(1, "lists/listA/tasks"));
-  CHECK(url_has(2, "lists/listB/tasks"));
-  CHECK(url_has(3, "lists/listC/tasks"));
+  CHECK(url_has(0, "/todo/lists"));
+  CHECK(url_has(1, "tasks?list=listA"));
+  CHECK(url_has(2, "tasks?list=listB"));
+  CHECK(url_has(3, "tasks?list=listC"));
   CHECK_EQ(T.stage, SYNC_IDLE);
   CHECK_EQ(T.online, 1);
   host_clean();
@@ -528,7 +526,7 @@ void test_todo_one_list_failing_does_not_abandon_the_rest(void) {
   CHECK(settle(400) >= 0);
 
   CHECK_EQ(S.asked, 4);
-  CHECK(url_has(3, "lists/listC/tasks"));
+  CHECK(url_has(3, "tasks?list=listC"));
   CHECK(host_exists("/cache/todo/listC.cache"));
   host_clean();
 }
@@ -538,7 +536,7 @@ void test_todo_one_list_failing_does_not_abandon_the_rest(void) {
 void test_todo_pending_edits_are_pushed_before_the_sweep_pulls(void) {
   use_script_api();
   script_add(THREE_LISTS, 200);
-  script_add("{\"id\":\"new1\"}", 200);   /* the push */
+  script_add("new1\n", 200);   /* the push */
   script_add(TASKS_A, 200);
   script_add(TASKS_B, 200);
   script_add(TASKS_C, 200);
@@ -548,7 +546,7 @@ void test_todo_pending_edits_are_pushed_before_the_sweep_pulls(void) {
   CHECK(settle(400) >= 0);
 
   CHECK(!strcmp(S.method[1], "POST"));
-  CHECK(url_has(1, "lists/listA/tasks"));
+  CHECK(url_has(1, "/todo/task?list=listA"));
   CHECK(!strcmp(S.method[2], "GET"));
   host_clean();
 }
@@ -704,13 +702,12 @@ void test_todo_escape_while_typing_abandons_the_draft_only(void) {
 }
 
 
-/* A task object from Google is three hundred bytes of etag, selfLink,
- * position and updated, and forty of them do not fit in the reply buffer --
- * nor in the kernel's, which fills up and cannot tell a body that ended from
- * one that was cut off. The list came back short with nothing saying so.
- * Asking only for the fields that are read is what makes the arithmetic
- * work, so the mask is the thing worth pinning down. */
-void test_todo_the_urls_ask_google_for_only_the_fields_that_are_read(void) {
+/* Every request goes to the device's own server, which holds the Google
+ * login and answers in lines (server/google.py) -- none to Google itself,
+ * whose TLS and JSON were most of this app's size. The server fetches every
+ * page and sends only id, done and title, so the reply fits. */
+void test_todo_sync_goes_through_the_server(void) {
+  int i;
   use_script_api();
   script_add(THREE_LISTS, 200);
   script_add(TASKS_A, 200);
@@ -719,9 +716,9 @@ void test_todo_the_urls_ask_google_for_only_the_fields_that_are_read(void) {
   sync_begin();
   CHECK(settle(400) >= 0);
 
-  CHECK(url_has(0, "fields=items(id,title)"));
-  CHECK(url_has(1, "fields=items(id,title,status)"));
-  CHECK(url_has(2, "fields=items(id,title,status)"));
+  CHECK(url_has(0, "http://server:8080/todo/lists"));
+  CHECK(url_has(1, "http://server:8080/todo/tasks?list=listA"));
+  for (i = 0; i < S.asked; i++) CHECK(!url_has(i, "googleapis"));
 
   /* Forty trimmed tasks have to leave room in the buffer they land in. */
   CHECK(40 * 64 < REPLY_MAX);

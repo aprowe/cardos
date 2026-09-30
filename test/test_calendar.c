@@ -51,8 +51,14 @@ static CardApi FAKE;
  * that only formats strings is no longer enough to drive the keys. */
 static void fake_damage(CRect r) { (void)r; }
 
+/* No card: a parse test's absorb() saves its cache, and there is nowhere to. */
+static int fake_no_card(const char *p, int f) { (void)p; (void)f; return -1; }
+static const char *fake_proxy(void) { return "http://server:8080"; }
+
 static void use_fake_api(void) {
   memset(&FAKE, 0, sizeof FAKE);
+  FAKE.open = fake_no_card;
+  FAKE.proxy = fake_proxy;
   FAKE.fmt = fake_fmt;
   FAKE.mem_set = fake_memset;
   FAKE.mem_cpy = fake_memcpy;
@@ -224,52 +230,18 @@ void test_formatting_and_parsing_are_inverses(void) {
 
 /* ---- reading a reply ------------------------------------------------------- */
 
-/* Exactly the shape `fields=items(id,summary,start,end)` returns. */
+/* What the server sends (server/google.py): an event a line, id, start, end
+ * and summary, start and end as Google wrote them. */
 static const char REPLY[] =
-  "{\"items\":["
-  "{\"id\":\"aaa111\",\"summary\":\"Standup\","
-  "\"start\":{\"dateTime\":\"2026-09-13T09:30:00+01:00\"},"
-  "\"end\":{\"dateTime\":\"2026-09-13T09:45:00+01:00\"}},"
-  "{\"id\":\"bbb222\",\"summary\":\"Dentist\","
-  "\"start\":{\"dateTime\":\"2026-09-13T14:00:00+01:00\"},"
-  "\"end\":{\"dateTime\":\"2026-09-13T15:00:00+01:00\"}},"
-  "{\"id\":\"ccc333\",\"summary\":\"Birthday\","
-  "\"start\":{\"date\":\"2026-09-14\"},"
-  "\"end\":{\"date\":\"2026-09-15\"}}"
-  "]}";
+  "aaa111\t2026-09-13T09:30:00+01:00\t2026-09-13T09:45:00+01:00\tStandup\n"
+  "bbb222\t2026-09-13T14:00:00+01:00\t2026-09-13T15:00:00+01:00\tDentist\n"
+  "ccc333\t2026-09-14\t2026-09-15\tBirthday\n";
 
-/* The parse loop out of fetch(), with the network taken out of it. */
-static void parse_reply(const char *json) {
-  char *p;
-  int got = 0;
-  snprintf(C.reply, sizeof C.reply, "%s", json);
+/* The app's own absorb, over a reply put where the network would. */
+static void parse_reply(const char *lines) {
+  snprintf(C.reply, sizeof C.reply, "%s", lines);
   C.n = 0;
-  p = find_pat(C.reply, "\"id\"");
-  while (p && C.n < MAX_EVENTS) {
-    char *next = find_pat(p + 4, "\"id\"");
-    char saved = 0;
-    Event *e = &C.ev[C.n];
-    char *sp, *ep;
-    if (next) { saved = *next; *next = 0; }
-    memset(e, 0, sizeof *e);
-    json_str(p, "id", e->id, ID_MAX);
-    if (!json_str(p, "summary", e->summary, SUMMARY_MAX + 1))
-      snprintf(e->summary, sizeof e->summary, "(no title)");
-    sp = find_pat(p, "\"start\"");
-    ep = find_pat(p, "\"end\"");
-    if (sp) {
-      char keep2 = 0;
-      if (ep && ep > sp) { keep2 = *ep; *ep = 0; }
-      if (json_when(sp, &e->start, &got)) e->all_day = (uint8_t)got;
-      if (ep && ep > sp) *ep = keep2;
-    }
-    if (ep) json_when(ep, &e->end, &got);
-    if (!e->end) e->end = e->start + 3600u;
-    if (e->id[0] && e->start) C.n++;
-    if (next) *next = saved;
-    p = next;
-  }
-  sort_events();
+  absorb();
 }
 
 void test_a_reply_yields_one_event_per_item(void) {
@@ -296,15 +268,13 @@ void test_an_all_day_item_is_recognised_by_its_shape(void) {
   parse_reply(REPLY);
   CHECK_EQ(0, C.ev[0].all_day);
   CHECK_EQ(1, C.ev[2].all_day);
-  /* "date" must not be matched by the front of "dateTime". */
+  /* A bare date is an all-day event, starting at its midnight UTC. */
   CHECK_EQ((int)(20710u * 86400u), (int)C.ev[2].start);
 }
 
 void test_an_item_with_no_summary_still_appears(void) {
   use_fake_api();
-  parse_reply("{\"items\":[{\"id\":\"zzz\","
-              "\"start\":{\"dateTime\":\"2026-09-13T09:00:00Z\"},"
-              "\"end\":{\"dateTime\":\"2026-09-13T10:00:00Z\"}}]}");
+  parse_reply("zzz\t2026-09-13T09:00:00Z\t2026-09-13T10:00:00Z\t\n");
   CHECK_EQ(1, C.n);
   CHECK(strcmp(C.ev[0].summary, "(no title)") == 0);
 }
@@ -312,10 +282,8 @@ void test_an_item_with_no_summary_still_appears(void) {
 void test_a_truncated_reply_does_not_run_off_the_end(void) {
   use_fake_api();
   /* The buffer filled mid-event, which is what a 40-event day would do. */
-  parse_reply("{\"items\":[{\"id\":\"aaa\",\"summary\":\"Fine\","
-              "\"start\":{\"dateTime\":\"2026-09-13T09:00:00Z\"},"
-              "\"end\":{\"dateTime\":\"2026-09-13T10:00:00Z\"}},"
-              "{\"id\":\"bbb\",\"summ");
+  parse_reply("aaa\t2026-09-13T09:00:00Z\t2026-09-13T10:00:00Z\tFine\n"
+              "bbb\t2026-09-13T1");
   /* The whole event survives; the fragment is dropped for want of a start. */
   CHECK_EQ(1, C.n);
   CHECK(strcmp(C.ev[0].summary, "Fine") == 0);
@@ -325,13 +293,8 @@ void test_events_come_out_in_time_order(void) {
   use_fake_api();
   /* Deliberately out of order, which orderBy=startTime should prevent and a
    * queued local event will cause anyway. */
-  parse_reply("{\"items\":["
-              "{\"id\":\"b\",\"summary\":\"Later\","
-              "\"start\":{\"dateTime\":\"2026-09-13T15:00:00Z\"},"
-              "\"end\":{\"dateTime\":\"2026-09-13T16:00:00Z\"}},"
-              "{\"id\":\"a\",\"summary\":\"Earlier\","
-              "\"start\":{\"dateTime\":\"2026-09-13T09:00:00Z\"},"
-              "\"end\":{\"dateTime\":\"2026-09-13T10:00:00Z\"}}]}");
+  parse_reply("b\t2026-09-13T15:00:00Z\t2026-09-13T16:00:00Z\tLater\n"
+              "a\t2026-09-13T09:00:00Z\t2026-09-13T10:00:00Z\tEarlier\n");
   CHECK_EQ(2, C.n);
   CHECK(strcmp(C.ev[0].summary, "Earlier") == 0);
   CHECK(strcmp(C.ev[1].summary, "Later") == 0);
@@ -738,13 +701,17 @@ void test_calendar_a_refused_start_is_logged_as_a_busy_queue(void) {
   CHECK_EQ((int)(1000 + RETRY_MS), (int)C.next_auto);
 }
 
-void test_calendar_a_missing_token_is_logged_with_what_google_said(void) {
+/* The Google login is the server's now (server/google.py): no token here to
+ * be missing, and the server says 401 when its own is gone. That is the one
+ * thing only the owner can fix, so the status says where. */
+void test_calendar_the_servers_401_says_where_to_sign_in(void) {
   use_sync_api();
-  FAKE.google_token = fake_no_token;
   sync_begin("opened");
-  CHECK_EQ(0, STARTS);
-  CHECK(logged_has("not signed in on the PC"));
-  CHECK_EQ((int)(1000 + RETRY_MS), (int)C.next_auto);
+  CHECK_EQ(1, STARTS);
+  POLL_RESULT = -401;
+  sync_tick();
+  CHECK(strstr(C.status, "/dash") != NULL);
+  CHECK_EQ(SYNC_IDLE, C.stage);
 }
 
 /* The bug behind "it works some mornings": the clock arrives from NTP a few
@@ -770,7 +737,7 @@ void test_calendar_a_clock_that_arrives_late_is_picked_up(void) {
   CHECK_EQ(1, C.have_clock);
   CHECK_EQ(2026, C.today_y);
   CHECK_EQ(1, STARTS);
-  CHECK(strstr(LAST_URL, "timeMin=2026-09-13") != NULL);
+  CHECK(strstr(LAST_URL, "from=2026-09-13") != NULL);
 }
 
 /* The other silent one: a POST was remembered by its index into the list, and
@@ -797,7 +764,7 @@ void test_calendar_a_push_is_matched_to_its_event_not_its_index(void) {
   sort_events();
 
   POLL_RESULT = 2;
-  POLL_BODY = "{}";
+  POLL_BODY = "";
   START_RESULT = -1;                  /* stop the chain here; the bookkeeping
                                          is what is under test */
   sync_tick();
@@ -824,7 +791,7 @@ void test_calendar_a_refused_push_mid_sync_says_so_and_retries_soon(void) {
   sync_begin("s");
   CHECK_EQ(SYNC_PUSH, C.stage);
   POLL_RESULT = 2;
-  POLL_BODY = "{}";
+  POLL_BODY = "";
   START_RESULT = -1;
   sync_tick();
 
@@ -841,7 +808,7 @@ void test_calendar_absorbing_a_shorter_list_pulls_the_scroll_back(void) {
   parse_reply(REPLY);
   C.sel = 2;
   C.top = 2;
-  snprintf(C.reply, sizeof C.reply, "%s", "{\"items\":[]}");
+  snprintf(C.reply, sizeof C.reply, "%s", "");
   CHECK_EQ(0, absorb());
   CHECK_EQ(0, C.n);
   CHECK_EQ(0, C.sel);
@@ -953,11 +920,11 @@ void test_calendar_an_edit_is_sent_as_a_patch_and_keeps_the_length(void) {
 
   CHECK_EQ(VIEW_AGENDA, C.view);
   CHECK_EQ(0, C.form_edit);
-  CHECK(strcmp(LAST_METHOD, "PATCH") == 0);
-  CHECK(strstr(LAST_URL, "/events/aaa111") != NULL);
-  CHECK(strstr(LAST_BODY, "\"summary\":\"Standup\"") != NULL);
-  CHECK(strstr(LAST_BODY, "\"dateTime\":\"2026-09-14T09:30:00Z\"") != NULL);
-  CHECK(strstr(LAST_BODY, "\"dateTime\":\"2026-09-14T09:45:00Z\"") != NULL);
+  CHECK(strcmp(LAST_METHOD, "POST") == 0);
+  CHECK(strstr(LAST_URL, "/calendar/event?id=aaa111") != NULL);
+  CHECK(strstr(LAST_BODY, "summary=Standup\n") != NULL);
+  CHECK(strstr(LAST_BODY, "start=2026-09-14T09:30:00Z\n") != NULL);
+  CHECK(strstr(LAST_BODY, "end=2026-09-14T09:45:00Z\n") != NULL);
 }
 
 void test_calendar_a_new_event_is_still_a_post(void) {
@@ -965,7 +932,7 @@ void test_calendar_a_new_event_is_still_a_post(void) {
   add_event("Lunch", days_from_civil(2026, 9, 13), 12, 0);
   sync_begin("s");
   CHECK(strcmp(LAST_METHOD, "POST") == 0);
-  CHECK(strstr(LAST_URL, "/events/") == NULL);
+  CHECK(strstr(LAST_URL, "?id=") == NULL);
 }
 
 void test_calendar_an_all_day_event_stays_all_day(void) {
@@ -979,19 +946,19 @@ void test_calendar_an_all_day_event_stays_all_day(void) {
   key_add('\t');
   key_add(CAPP_KEY_RIGHT);                    /* the 15th */
   key_add(CAPP_KEY_ENTER);
-  CHECK(strstr(LAST_BODY, "\"start\":{\"date\":\"2026-09-15\"}") != NULL);
-  CHECK(strstr(LAST_BODY, "\"end\":{\"date\":\"2026-09-16\"}") != NULL);
+  CHECK(strstr(LAST_BODY, "start=2026-09-15\n") != NULL);     /* a bare date */
+  CHECK(strstr(LAST_BODY, "end=2026-09-16\n") != NULL);
 }
 
-/* The title can come from Google with a quote in it, which the keyboard here
- * would never have typed -- and unescaped it breaks the body. */
-void test_calendar_a_quote_in_a_title_is_escaped(void) {
+/* A title from Google can hold a quote. The body is lines now, not JSON, so
+ * it goes as it is -- the server makes the JSON. */
+void test_calendar_a_quote_in_a_title_goes_as_it_is(void) {
   synced_three_events();
   snprintf(C.ev[1].summary, sizeof C.ev[1].summary, "%s", "Say \"hi\"");
   C.sel = 1;
   key_agenda('e');
   key_add(CAPP_KEY_ENTER);
-  CHECK(strstr(LAST_BODY, "\"summary\":\"Say \\\"hi\\\"\"") != NULL);
+  CHECK(strstr(LAST_BODY, "summary=Say \"hi\"\n") != NULL);
 }
 
 /* A fetch that lands while an edit is still queued must not undo it. */
@@ -1027,7 +994,7 @@ void test_calendar_the_form_follows_its_event_through_a_sync(void) {
     while (*t) key_add((unsigned char)*t++);
   }
   key_add(CAPP_KEY_ENTER);
-  CHECK(strstr(LAST_URL, "/events/bbb222") != NULL);
+  CHECK(strstr(LAST_URL, "?id=bbb222") != NULL);
   CHECK(strstr(LAST_BODY, "Dentist 2") != NULL);
 }
 
@@ -1037,9 +1004,9 @@ void test_calendar_a_patch_to_a_deleted_event_is_dropped(void) {
   synced_three_events();
   C.ev[1].dirty = 1;
   sync_begin("s");
-  CHECK(strcmp(LAST_METHOD, "PATCH") == 0);
+  CHECK(strstr(LAST_URL, "?id=bbb222") != NULL);
   POLL_RESULT = -404;
-  POLL_BODY = "{}";
+  POLL_BODY = "";
   sync_tick();
   CHECK_EQ(0, C.ev[1].dirty);
   CHECK_EQ(SYNC_FETCH, C.stage);              /* and it carries on */

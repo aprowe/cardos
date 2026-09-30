@@ -42,7 +42,10 @@
 #define TITLE_MAX  38
 #define ID_MAX     56
 #define ROW_H      11
-#define REPLY_MAX  6000
+/* 40 tasks as the server sends them: an id (Google's are 22), a flag, a
+ * title cut at 60, two tabs and a newline -- under 90 bytes each. It was
+ * 6000 for Google's JSON. */
+#define REPLY_MAX  3700
 #define MAX_LISTS  8
 #define NAME_MAX   24
 
@@ -67,12 +70,18 @@
  * fields actually read brings a task to about sixty bytes, and forty of them
  * to well under the buffer. apps/calendar.c says the same thing about the
  * same problem; Todo simply never had it done. */
-#define LIST_URL "https://tasks.googleapis.com/tasks/v1/users/@me/lists?fields=items(id,title)"
-#define TASKS_URL "https://tasks.googleapis.com/tasks/v1/lists/%s/tasks?showCompleted=true&showHidden=false&maxResults=40&fields=items(id,title,status)"
-#define TASK_URL "https://tasks.googleapis.com/tasks/v1/lists/%s/tasks/%s"
-#define ADD_URL  "https://tasks.googleapis.com/tasks/v1/lists/%s/tasks"
+/* Google Tasks through the server (server/google.py): it holds the login and
+ * speaks HTTPS and JSON to Google, and answers in lines -- a list a line,
+ * "id <tab> title"; a task a line, "id <tab> 0|1 <tab> title". Plain HTTP to
+ * api->proxy(), which the kernel signs with the device's server token. This
+ * app used to do the TLS and the JSON itself, and was the largest on the
+ * device for it (2026-09-29). */
+#define LIST_URL  "%s/todo/lists"
+#define TASKS_URL "%s/todo/tasks?list=%s&max=40"   /* MAX_ITEMS */
+#define TASK_URL  "%s/todo/task?list=%s&id=%s"
+#define ADD_URL   "%s/todo/task?list=%s"
 /* A new list. fields= as everywhere here: the reply is what the buffer holds. */
-#define NEWLIST_URL "https://tasks.googleapis.com/tasks/v1/users/@me/lists?fields=id,title"
+#define NEWLIST_URL "%s/todo/lists"
 
 #define CLR_BG      CAPP_RGB(22, 24, 30)
 #define CLR_ROW     CAPP_RGB(30, 33, 40)
@@ -202,44 +211,31 @@ static void say(const char *s) { api->fmt(T.status, sizeof T.status, "%s", s); }
  * every .capp to a new API version to save four lines here. */
 #define logf(...) do { char lb_[120];                        api->fmt(lb_, sizeof lb_, __VA_ARGS__);                        api->log(lb_); } while (0)
 
-/* ---- the smallest JSON reader that answers the question ------------------ */
+/* ---- the server's replies ------------------------------------------------- */
 
-/* The value of "name" as a string, starting the search at `from`. Returns a
- * pointer just past the value so the caller can walk a list, or NULL. */
-static const char *json_str_at(const char *from, const char *name,
-                               char *out, int n) {
-  char pat[32];
-  const char *p;
-  int i = 0;
+/* The next line of a reply, cut at its tabs in place: the fields, and how
+ * many. 0 at the end. The reply buffer is this app's own and read once. */
+static int reply_line(char **pos, char **f, int max) {
+  char *p = *pos, *e;
+  int n = 0;
+  while (*p == '\n' || *p == '\r') p++;
+  if (!*p) { *pos = p; return 0; }
+  for (e = p; *e && *e != '\n'; e++) {}
+  if (*e) *e++ = 0;
+  *pos = e;
+  f[n++] = p;
+  for (; *p && n < max; p++)
+    if (*p == '\t') { *p = 0; f[n++] = p + 1; }
+  for (p = f[n - 1]; *p; p++) if (*p == '\r') *p = 0;
+  return n;
+}
 
-  api->fmt(pat, sizeof pat, "\"%s\"", name);
-  p = from;
-  for (;;) {
-    const char *q = p;
-    int j, plen = (int)api->str_len(pat);
-    /* No strstr in the API table, and writing one here is four lines. */
-    while (*q) {
-      for (j = 0; j < plen && q[j] == pat[j]; j++) { }
-      if (j == plen) break;
-      q++;
-    }
-    if (!*q) return 0;
-    p = q + api->str_len(pat);
-    while (*p == ' ' || *p == ':') p++;
-    if (*p != '"') continue;           /* a field of that name, wrong shape */
-    p++;
-    while (*p && *p != '"' && i + 1 < n) {
-      if (*p == '\\' && p[1]) {
-        /* Only the escapes Google actually emits in a title. */
-        p++;
-        if (*p == 'n' || *p == 't') { out[i++] = ' '; p++; continue; }
-        if (*p == 'u') { out[i++] = '?'; p += 5; continue; }
-      }
-      out[i++] = *p++;
-    }
-    out[i] = 0;
-    return *p ? p + 1 : p;
-  }
+/* The first line of a reply: the id a POST answers with. */
+static void reply_id(char *out, int n) {
+  int i;
+  for (i = 0; T.reply[i] && T.reply[i] != '\n' && T.reply[i] != '\r' && i < n - 1; i++)
+    out[i] = T.reply[i];
+  out[i] = 0;
 }
 
 /* ---- the cache ----------------------------------------------------------
@@ -386,15 +382,13 @@ static void lists_load(void) {
  * and whatever tasks are in memory go with it: on a first run they are the
  * ones added before any sync, and they belong to the only list there was. */
 static void absorb_lists(void) {
-  const char *p = T.reply;
+  char *p = T.reply, *f[2];
   int count = 0, i;
 
-  while (count < MAX_LISTS) {
+  while (count < MAX_LISTS && reply_line(&p, f, 2) == 2) {
     TList *l = &T.lists[count];
-    const char *after_id = json_str_at(p, "id", l->id, ID_MAX);
-    if (!after_id) break;
-    if (!json_str_at(after_id, "title", l->name, NAME_MAX)) break;
-    p = after_id;
+    api->fmt(l->id, ID_MAX, "%s", f[0]);
+    api->fmt(l->name, NAME_MAX, "%s", f[1]);
     if (l->id[0]) count++;
   }
   T.nlists = count;
@@ -458,17 +452,20 @@ static int start_newlist(const char *name) {
     return -1;
   }
   if (T.stage != SYNC_IDLE) { say("syncing -- try again in a moment"); return -1; }
-  tok = api->google_token();
-  if (!tok || !tok[0]) { say(api->google_status()); return -1; }
+  tok = "";                        /* the kernel signs it for the server */
 
-  /* The name goes into JSON, so no quote or backslash, as for a task. */
+  /* One line of text: a line break would end it. */
   for (i = 0, j = 0; name[i] && j < NAME_MAX - 1; i++)
-    T.newlist_name[j++] = (name[i] == '"' || name[i] == '\\') ? '\'' : name[i];
+    T.newlist_name[j++] = (name[i] == '\n' || name[i] == '\r' || name[i] == '\t') ? ' ' : name[i];
   T.newlist_name[j] = 0;
-  api->fmt(body, sizeof body, "{\"title\":\"%s\"}", T.newlist_name);
-  if (api->http_start("POST", NEWLIST_URL, body, "application/json", tok, 15000) != 0) {
-    say("busy -- another request is running");
-    return -1;
+  api->fmt(body, sizeof body, "%s", T.newlist_name);
+  {
+    char url[160];
+    api->fmt(url, sizeof url, NEWLIST_URL, api->proxy());
+    if (api->http_start("POST", url, body, "text/plain", tok, 15000) != 0) {
+      say("busy -- another request is running");
+      return -1;
+    }
   }
   T.stage = SYNC_NEWLIST;
   say("making the list...");
@@ -478,8 +475,10 @@ static int start_newlist(const char *name) {
 /* The reply to start_newlist: the list, switched to, or why not. */
 static void newlist_done(int n) {
   char id[ID_MAX], msg[64];
+  id[0] = 0;                       /* not = "": that is a memset, and apps have none */
   T.stage = SYNC_IDLE;
-  if (n < 0 || !json_str_at(T.reply, "id", id, ID_MAX) || !id[0]) {
+  if (n >= 0) reply_id(id, ID_MAX);
+  if (n < 0 || !id[0]) {
     api->fmt(msg, sizeof msg, "could not make the list (%d)", n);
     say(msg);
     if (T.cmd_newlist) { T.cmd_newlist = 0; api->command_done(-1, msg); }
@@ -634,12 +633,14 @@ static int next_dirty(void) {
 }
 
 static int start_list(const char *tok) {
-  return api->http_start("GET", LIST_URL, 0, 0, tok, 15000);
+  char url[160];
+  api->fmt(url, sizeof url, LIST_URL, api->proxy());
+  return api->http_start("GET", url, 0, 0, tok, 15000);
 }
 
 static int start_pull(const char *tok) {
   char url[256];
-  api->fmt(url, sizeof url, TASKS_URL, T.list_id);
+  api->fmt(url, sizeof url, TASKS_URL, api->proxy(), T.list_id);
   return api->http_start("GET", url, 0, 0, tok, 20000);
 }
 
@@ -648,40 +649,31 @@ static int start_push(const char *tok, int i) {
   char url[256], body[TITLE_MAX + 64];
 
   if (it->deleted && it->id[0]) {
-    api->fmt(url, sizeof url, TASK_URL, T.list_id, it->id);
+    api->fmt(url, sizeof url, TASK_URL, api->proxy(), T.list_id, it->id);
     return api->http_start("DELETE", url, 0, 0, tok, 15000);
   }
   if (!it->id[0]) {
-    api->fmt(url, sizeof url, ADD_URL, T.list_id);
-    api->fmt(body, sizeof body, "{\"title\":\"%s\"}", it->title);
-    return api->http_start("POST", url, body, "application/json", tok, 15000);
+    api->fmt(url, sizeof url, ADD_URL, api->proxy(), T.list_id);
+    api->fmt(body, sizeof body, "%s", it->title);
+    return api->http_start("POST", url, body, "text/plain", tok, 15000);
   }
-  api->fmt(url, sizeof url, TASK_URL, T.list_id, it->id);
-  api->fmt(body, sizeof body, "{\"status\":\"%s\"}",
-           it->done ? "completed" : "needsAction");
-  return api->http_start("PATCH", url, body, "application/json", tok, 15000);
+  api->fmt(url, sizeof url, TASK_URL, api->proxy(), T.list_id, it->id);
+  api->fmt(body, sizeof body, "done=%d", it->done ? 1 : 0);
+  return api->http_start("PATCH", url, body, "text/plain", tok, 15000);
 }
 
 static void absorb_tasks(void) {
-  const char *p = T.reply;
-  char status[16];
+  char *p = T.reply, *f[3];
   int count = 0;
 
-  while (count < MAX_ITEMS) {
+  /* "id <tab> 0|1 <tab> title", a task a line. */
+  while (count < MAX_ITEMS && reply_line(&p, f, 3) == 3) {
     Item *it = &T.item[count];
-    const char *after_id = json_str_at(p, "id", it->id, ID_MAX);
-    if (!after_id) break;
-    if (!json_str_at(after_id, "title", it->title, TITLE_MAX + 1)) break;
-
-    /* Google sends "status" after "title" for each task, so reading forward
-     * from the title keeps the three fields on the same item. */
-    status[0] = 0;
-    json_str_at(after_id, "status", status, sizeof status);
-    it->done = (status[0] == 'c');
+    api->fmt(it->id, ID_MAX, "%s", f[0]);
+    api->fmt(it->title, TITLE_MAX + 1, "%s", f[2]);
+    it->done = f[1][0] == '1';
     it->dirty = 0;
     it->deleted = 0;
-
-    p = after_id;
     if (it->title[0]) count++;
   }
   T.n = count;
@@ -706,27 +698,19 @@ static void absorb_tasks(void) {
  * survives in the file until then.
  */
 static int absorb_into(const char *list_id, int *count_out) {
-  const char *p = T.reply;
+  char *p = T.reply, *f[3];
   char path[ID_MAX + 16], line[ID_MAX + TITLE_MAX + 16];
-  char id[ID_MAX], title[TITLE_MAX + 1], status[16];
   int fd, count = 0;
 
   api->fmt(path, sizeof path, CACHE_FMT, list_id);
   fd = api->open(path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
   if (fd < 0) return -1;
 
-  while (count < MAX_ITEMS) {
-    const char *after_id = json_str_at(p, "id", id, ID_MAX);
-    int n, done;
-    if (!after_id) break;
-    if (!json_str_at(after_id, "title", title, TITLE_MAX + 1)) break;
-    status[0] = 0;
-    json_str_at(after_id, "status", status, sizeof status);
-    done = (status[0] == 'c');
-    p = after_id;
-    if (!title[0]) continue;
-    n = api->fmt(line, sizeof line, "%d %d %d %s %s\n",
-                 done, 0, 0, id[0] ? id : "-", title);
+  while (count < MAX_ITEMS && reply_line(&p, f, 3) == 3) {
+    int n;
+    if (!f[2][0]) continue;
+    n = api->fmt(line, sizeof line, "%d %d %d %s %.*s\n",
+                 f[1][0] == '1', 0, 0, f[0][0] ? f[0] : "-", TITLE_MAX, f[2]);
     api->write(fd, line, (size_t)n);
     count++;
   }
@@ -769,7 +753,7 @@ static void sweep_step(const char *tok) {
   char url[256];
 
   if (i < 0) { sweep_done(); return; }
-  api->fmt(url, sizeof url, TASKS_URL, T.lists[i].id);
+  api->fmt(url, sizeof url, TASKS_URL, api->proxy(), T.lists[i].id);
   if (api->http_start("GET", url, 0, 0, tok, 20000) != 0) {
     /* The queue is busy. One list missing from the overview is not worth
      * wedging the sweep over: stop here and let `s` try again. */
@@ -800,14 +784,10 @@ static void sync_begin(void) {
     logf("offline: %s", api->net_status ? api->net_status() : "no radio");
     return;
   }
-  tok = api->google_token();
-  if (!tok || !tok[0]) {
-    T.online = 0;
-    say(api->google_status());
-    T.next_auto = api->ticks_ms() + RETRY_MS;
-    logf("no token: %s", api->google_status());
-    return;
-  }
+  /* No Google token here any more: the server holds the login, and the
+   * kernel signs a request to the server with the device's token. "" is
+   * "no bearer of my own". */
+  tok = "";
 
   /* Always the lists first, even on a second sweep: a list renamed or added
    * on a phone should show up without restarting the app. */
@@ -839,13 +819,16 @@ static void sync_tick(void) {
     return;
   }
 
-  tok = api->google_token();
+  tok = "";                        /* the kernel signs it for the server */
 
   if (T.stage == SYNC_LIST) {
     if (n >= 0) absorb_lists();
     if (n < 0 || !T.nlists) {
       T.online = 0;
-      say(n < 0 ? "cannot reach Google" : "no task lists on this account");
+      /* 401 from the server is its Google login gone -- signed out at
+       * the dashboard, or a Testing-mode token past its seven days. */
+      say(n == -401 ? "sign in to Google at the dashboard (/dash)"
+          : n < 0 ? "cannot reach the server" : "no task lists on this account");
       logf("lists failed (%d)", n);
       T.stage = SYNC_IDLE;
       return;
@@ -868,7 +851,7 @@ static void sync_tick(void) {
         Item *it = &T.item[T.pushing];
         if (it->deleted) drop(T.pushing);
         else {
-          if (!it->id[0]) json_str_at(T.reply, "id", it->id, ID_MAX);
+          if (!it->id[0]) reply_id(it->id, ID_MAX);
           it->dirty = 0;
         }
       }
