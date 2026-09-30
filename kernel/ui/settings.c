@@ -437,11 +437,10 @@ static void paint_pass(SettingsState *st, Rect c) {
   draw_text((int16_t)(c.x + PAD_X), (int16_t)(c.y + ROW_H + 2),
             "password, then enter", S_DIM, S_BG);
 
-  /* Shown as dots with the last character in clear: on a keyboard this small,
-   * typing a passphrase blind is how you end up believing the password is
-   * wrong. */
+  /* Shown in clear: on a keyboard this small, typing a passphrase blind is
+   * how you end up believing the password is wrong. */
   for (i = 0; i < st->pass_len; i++)
-    shown[i] = (i == st->pass_len - 1) ? st->pass[i] : '*';
+    shown[i] = st->pass[i];
   shown[st->pass_len] = '_';
   shown[st->pass_len + 1] = 0;
 
