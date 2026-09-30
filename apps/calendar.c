@@ -61,7 +61,9 @@
 
 #define MAX_EVENTS  40
 #define SUMMARY_MAX 34
-#define ID_MAX      56
+/* The server's short id (server/google.py): "e" and eleven characters.
+ * Google's own run to 200, which is why the server hands these out. */
+#define ID_MAX      16
 #define REPLY_MAX   6000
 #define URL_MAX     320
 #define CACHE_PATH  CAPP_CACHE "/calendar.cache"

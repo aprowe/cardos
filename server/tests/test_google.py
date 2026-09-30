@@ -71,6 +71,7 @@ class Routes(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         os.environ["CARDOS_STATE"] = self.dir
         google._access.update(token=None, until=0)
+        google._ids = None
         google.save_creds("cid", "secret", "good")
         self.g = FakeGoogle()
         google.http = self.g
@@ -96,21 +97,39 @@ class Routes(unittest.TestCase):
     def test_events_every_page_as_lines(self):
         s, text = self.req("GET", "/calendar/events?from=2026-09-29T00:00:00Z&to=2026-11-28T00:00:00Z")
         self.assertEqual(s, 200)
+        e1, e2 = google.short_ids(["e1", "e2"])
         self.assertEqual(text,
-            "e1\t2026-09-29T13:00:00-07:00\t2026-09-29T14:00:00-07:00\tInterview\n"
-            "e2\t2026-09-30\t2026-10-01\tDinner\n")
+            e1 + "\t2026-09-29T13:00:00-07:00\t2026-09-29T14:00:00-07:00\tInterview\n" +
+            e2 + "\t2026-09-30\t2026-10-01\tDinner\n")
 
     def test_event_add_and_change(self):
         s, text = self.req("POST", "/calendar/event",
                            "start=2026-09-30T17:00:00Z\nend=2026-09-30T18:00:00Z\nsummary=Gym")
-        self.assertEqual((s, text), (200, "new1\n"))
+        self.assertEqual((s, text), (200, google.short_ids(["new1"])[0] + "\n"))
         sent = [c for c in self.g.calls if c[0] == "POST" and c[1] == google.CAL][0][2]
         self.assertEqual(sent, {"summary": "Gym", "start": {"dateTime": "2026-09-30T17:00:00Z"},
                                 "end": {"dateTime": "2026-09-30T18:00:00Z"}})
-        s, text = self.req("POST", "/calendar/event?id=e1",
+        e1 = google.short_ids(["e1"])[0]
+        s, text = self.req("POST", "/calendar/event?id=" + e1,
                            "start=2026-09-30\nend=2026-10-01\nsummary=All day")
-        self.assertEqual((s, text), (200, "e1\n"))
+        self.assertEqual((s, text), (200, e1 + "\n"))
+        self.assertTrue(self.g.calls[-1][1].endswith("/e1"))
         self.assertEqual(self.g.calls[-1][2]["start"], {"date": "2026-09-30"})
+
+    def test_a_long_id_is_short_on_the_device_and_long_at_google(self):
+        long = "_60q30c1g60o30e1i60o4ac1g60rj8gpl88rj2c1h84s34h9g60s30c1g" * 3 + "_20260930T003000Z"
+        s = google.short_ids([long])[0]
+        self.assertEqual(len(s), 12)
+        self.assertEqual(google.short_ids([long])[0], s)          # the same every time
+        google._ids = None                                         # a restart
+        self.assertEqual(google.long_id(s), long)                  # read back from ids.json
+        self.req("POST", "/calendar/event?id=" + s, "start=2026-09-30\nend=2026-10-01")
+        self.assertTrue(self.g.calls[-1][1].endswith("/" + long))
+
+    def test_an_id_it_never_gave_out_goes_as_it_is(self):
+        # An edit queued on a device before the ids were short.
+        self.req("POST", "/calendar/event?id=e1", "start=2026-09-30\nend=2026-10-01")
+        self.assertTrue(self.g.calls[-1][1].endswith("/e1"))
 
     def test_lists_and_tasks(self):
         self.assertEqual(self.req("GET", "/todo/lists"), (200, "L1\tChores\nL2\tPacking\n"))

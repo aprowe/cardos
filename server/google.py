@@ -23,6 +23,14 @@ lines over the plain HTTP it already speaks to this server.
     POST /google/credentials       body: client id, secret, refresh token
     GET  /google/status
 
+Calendar ids are short. Google's run to 200 characters (a recurring
+event's instance is its series id plus a timestamp) and the device keeps 16,
+so an edit to one of those used to go nowhere. The device sees "e" and eleven
+characters of a hash of the real id -- the same event always gets the same
+one -- and ids.json in CARDOS_STATE maps them back. An id the map has never
+seen is passed to Google as it is, which is what an edit queued on a device
+before this was written still holds.
+
 Every page is fetched, so a long list is whole rather than cut at the
 device's buffer. A tab or newline in a title becomes a space. Google's own
 status passes through -- a 404 here is a 404 there -- so the apps' handling
@@ -34,6 +42,8 @@ on the server, used here for the device's data and handed out by
 /google/creds as before. /google/credentials is the other way in, for a
 login that already exists on a device (`google push` in its console).
 """
+import base64
+import hashlib
 import json
 import os
 import sys
@@ -59,6 +69,62 @@ class GoogleError(Exception):
         Exception.__init__(self, why)
         self.status = status
         self.why = why
+
+
+# ---- short calendar ids ------------------------------------------------------
+
+KEEP_IDS = 180 * 86400        # an event not listed for half a year is forgotten
+_ids = None                   # short -> [long, last seen], loaded on first use
+
+
+def _ids_path():
+    return os.path.join(dash.state_dir(), "ids.json")
+
+
+def _ids_load():
+    global _ids
+    if _ids is None:
+        try:
+            with open(_ids_path()) as f:
+                _ids = json.load(f)
+        except (OSError, ValueError):
+            _ids = {}
+    return _ids
+
+
+def _ids_save():
+    now = time.time()
+    for k in [k for k, v in _ids.items() if now - v[1] > KEEP_IDS]:
+        del _ids[k]
+    os.makedirs(dash.state_dir(), mode=0o700, exist_ok=True)
+    tmp = _ids_path() + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(_ids, f)
+    os.replace(tmp, _ids_path())
+
+
+def short_ids(longs):
+    """The device's name for each of Google's ids, remembered for long_id."""
+    out, changed, now = [], False, time.time()
+    with _lock:
+        ids = _ids_load()
+        for l in longs:
+            h = hashlib.sha1(l.encode()).digest()
+            s = "e" + base64.b32encode(h).decode()[:11].lower()
+            v = ids.get(s)
+            if v is None or v[0] != l or now - v[1] > 86400:
+                ids[s] = [l, now]      # last seen, refreshed a day at a time
+                changed = True
+            out.append(s)
+        if changed:
+            _ids_save()
+    return out
+
+
+def long_id(s):
+    with _lock:
+        v = _ids_load().get(s)
+    return v[0] if v else s
 
 
 # ---- the network, in one place, so the tests can stand in for Google ---------
@@ -199,15 +265,15 @@ def get_events(h, args):
         if not v:
             raise ValueError("%s= is needed" % k)
         q["timeMin" if k == "from" else "timeMax"] = v
-    lines = []
+    rows = []
     for e in pages(CAL + "?" + urllib.parse.urlencode(q)):
         s, en = e.get("start") or {}, e.get("end") or {}
         start = s.get("dateTime") or s.get("date") or ""
         end = en.get("dateTime") or en.get("date") or ""
         if e.get("id") and start:
-            lines.append("%s\t%s\t%s\t%s" % (e["id"], start, end,
-                                             clean(e.get("summary")) or "(no title)"))
-    return "".join(l + "\n" for l in lines)
+            rows.append((e["id"], start, end, clean(e.get("summary")) or "(no title)"))
+    shorts = short_ids([r[0] for r in rows])
+    return "".join("%s\t%s\t%s\t%s\n" % ((s,) + r[1:]) for s, r in zip(shorts, rows))
 
 
 def _when(v):
@@ -223,10 +289,10 @@ def post_event(h, args):
     ev = {"summary": f.get("summary", ""), "start": _when(f["start"]), "end": _when(f["end"])}
     eid = _arg(args, "id")
     if eid:
-        j = call("PATCH", CAL + "/" + urllib.parse.quote(eid), ev)
+        j = call("PATCH", CAL + "/" + urllib.parse.quote(long_id(eid)), ev)
     else:
         j = call("POST", CAL, ev)
-    return "%s\n" % j.get("id", "")
+    return "%s\n" % (short_ids([j["id"]])[0] if j.get("id") else "")
 
 
 @_route
