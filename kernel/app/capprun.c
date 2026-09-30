@@ -248,10 +248,23 @@ static int tr_mouse(void *state, int16_t x, int16_t y, int buttons, int wheel) {
   return r;
 }
 
+/* The app running other apps' commands, for whom the loader keeps the last
+ * one's code block (capp_hold_code), and when it last ran one. Let go when
+ * that app goes, or a second passes without a command -- Today asks one
+ * per tick while it gathers, and the block is heap nothing else can use. */
+static Run     *s_hold_owner;
+static uint32_t s_hold_ms;
+
+static void hold_end(void) {
+  s_hold_owner = NULL;
+  capp_hold_code(0);
+}
+
 static int tr_tick(void *state, uint32_t now_ms) {
   Run *s = (Run *)state, *prev;
   int r;
   if (IMAGE_GONE(s)) return 0;
+  if (s == s_hold_owner && now_ms - s_hold_ms > 1000) hold_end();
   prev = s_active;
   s_active = s;
   r = s->ui.tick ? s->ui.tick(s->ui.state, now_ms) : 0;
@@ -637,6 +650,7 @@ static void release_image(Run *s) {
    * queue, that reply refused every sync on the device until the next
    * reboot -- see httpq.h. */
   httpq_abandon(s);
+  if (s == s_hold_owner) hold_end();
   fontres_release_owner(s);          /* and the fonts it asked for */
   power_release_owner(s);            /* and the screen, if it held it on */
   if (s->loaded) capp_unload(&s->la);
@@ -1054,7 +1068,14 @@ int capprun_command_line(const char *app, const char *line, char *out, size_t n)
   if (!app || !line || !out || !n) return -1;
   k = cmdline_split(line, buf, sizeof buf, w, (int)(sizeof w / sizeof w[0]));
   if (k < 1) { snprintf(out, n, "no command"); return -1; }
-  return capprun_command(app, w[0], k - 1, w + 1, out, n);
+  /* An app asking: hold code blocks between its questions (see s_hold_owner). */
+  if (s_active && (!s_hold_owner || s_hold_owner == s_active)) {
+    s_hold_owner = s_active;
+    capp_hold_code(1);
+  }
+  k = capprun_command(app, w[0], k - 1, w + 1, out, n);
+  s_hold_ms = (uint32_t)(esp_timer_get_time() / 1000);
+  return k;
 }
 
 int capprun_caps_ok(void) { return s_caps_ok; }

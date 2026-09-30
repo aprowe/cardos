@@ -486,6 +486,13 @@ today print` is "Carlos, print my day". Gathering is one command a tick, so
 the screen says what it is waiting on. `capprun_command` is re-entrant for
 this: a command running a command saves and restores what the outer one
 keeps (`command_inner` and its wrapper).
+The apps it asks are loaded and closed one at a time, but executable RAM
+is part of the general heap: the small allocations a request leaves behind
+split the 14 KB block Calendar freed, and Todo then found 24 KB free in
+7.5 KB pieces. So while an app runs commands the loader keeps the last
+code block (`capp_hold_code`, elfload.c) and loads the next app into it;
+capprun lets it go when that app closes or a second passes without a
+command (2026-09-30).
 
 **Credentials survive a reflash** (2026-09-19). WiFi and Google credentials
 live in NVS at runtime, and a full-table flash wipes NVS -- one day it cost the

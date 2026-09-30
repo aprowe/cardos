@@ -63,6 +63,59 @@ typedef struct {
 #define CAPP_MAX_CODE (96u * 1024u)
 #define CAPP_MAX_DATA (96u * 1024u)
 
+/* See capp_hold_code. One block: the largest one let go while holding. */
+#define SPARE_WANT (16u * 1024u)   /* what a first load asks for when holding */
+static void    *s_spare;
+static uint32_t s_spare_size;
+static int      s_hold;
+
+void capp_hold_code(int on) {
+  s_hold = on;
+  if (!on && s_spare) {
+    heap_caps_free(s_spare);
+    s_spare = NULL;
+    s_spare_size = 0;
+  }
+}
+
+/* A code block of at least n bytes: the spare if it fits, else the heap. */
+static void *code_alloc(uint32_t n, uint32_t *cap) {
+  void *p;
+  if (s_spare && s_spare_size >= n) {
+    p = s_spare;
+    *cap = s_spare_size;
+    s_spare = NULL;
+    s_spare_size = 0;
+    return p;
+  }
+  /* Holding: ask for room enough for the apps that follow, while there may
+   * still be a block that big. Not there is no failure; the exact size is. */
+  if (s_hold && n < SPARE_WANT && (p = heap_caps_malloc(SPARE_WANT, MALLOC_CAP_EXEC))) {
+    *cap = SPARE_WANT;
+    return p;
+  }
+  p = heap_caps_malloc(n, MALLOC_CAP_EXEC);
+  if (!p && s_spare) {                  /* too small to use, big enough to be in the way */
+    heap_caps_free(s_spare);
+    s_spare = NULL;
+    s_spare_size = 0;
+    p = heap_caps_malloc(n, MALLOC_CAP_EXEC);
+  }
+  *cap = n;
+  return p;
+}
+
+static void code_free(void *p, uint32_t cap) {
+  if (!p) return;
+  if (s_hold && cap > s_spare_size) {
+    if (s_spare) heap_caps_free(s_spare);
+    s_spare = p;
+    s_spare_size = cap;
+    return;
+  }
+  heap_caps_free(p);
+}
+
 uint32_t capp_exec_free(void) {
   return (uint32_t)heap_caps_get_free_size(MALLOC_CAP_EXEC);
 }
@@ -88,7 +141,7 @@ CappResult capp_load(const char *path, LoadedApp *out) {
   Elf32_Ehdr eh;
   Elf32_Shdr *sh = NULL;
   uint8_t *code = NULL, *code_w = NULL, *data = NULL;
-  uint32_t code_size = 0, data_size = 0;
+  uint32_t code_size = 0, data_size = 0, code_cap = 0;
   int code_sec = -1, data_sec = -1;
   int fd, i, fsize;
   CappResult rc = CAPP_ERR_OPEN;
@@ -145,7 +198,7 @@ CappResult capp_load(const char *path, LoadedApp *out) {
     goto done;
   }
 
-  code = heap_caps_malloc(code_size, MALLOC_CAP_EXEC);
+  code = code_alloc(code_size, &code_cap);
   if (!code) {
     ESP_LOGE(TAG, "want %u bytes of exec RAM, %u free (largest block %u)",
              (unsigned)code_size, (unsigned)capp_exec_free(),
@@ -287,6 +340,7 @@ CappResult capp_load(const char *path, LoadedApp *out) {
     out->code = code;
     out->data = data;
     out->code_size = code_size;
+    out->code_cap = code_cap;
     out->data_size = data_size;
     code = NULL;                 /* handed over */
     data = NULL;
@@ -296,7 +350,7 @@ CappResult capp_load(const char *path, LoadedApp *out) {
 done:
   fs_close(fd);
   free(sh);
-  if (code) heap_caps_free(code);
+  code_free(code, code_cap);
   if (data) heap_caps_free(data);
   if (rc == CAPP_OK)
     ESP_LOGI(TAG, "loaded %s (%s): %u code, %u data, exec free %u",
@@ -309,7 +363,7 @@ done:
 
 void capp_unload(LoadedApp *la) {
   if (!la) return;
-  if (la->code) heap_caps_free(la->code);
+  code_free(la->code, la->code_cap);
   if (la->data) heap_caps_free(la->data);
   memset(la, 0, sizeof *la);
 }

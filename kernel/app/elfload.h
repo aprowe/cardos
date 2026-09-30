@@ -31,6 +31,7 @@ typedef struct {
   void           *data;      /* ordinary heap: rodata, data and bss */
   uint32_t        code_size;
   uint32_t        data_size;
+  uint32_t        code_cap;  /* the block's size, which a spare may exceed */
 
   /* Read from the image without running it -- name, icon and flags are needed
    * to draw an icon, and executing a program to find out what it is called is
@@ -58,6 +59,17 @@ typedef enum {
 CappResult capp_load(const char *path, LoadedApp *out);
 void       capp_unload(LoadedApp *la);
 const char *capp_strerror(CappResult r);
+
+/* Keep code blocks for the next load (capp_hold_code(1)) instead of giving
+ * them back to the heap; 0 frees what was kept and stops keeping.
+ *
+ * Executable RAM is part of the general heap, and every small allocation a
+ * network request leaves behind lands in it too. An app that runs other apps'
+ * commands one after another -- Today asks Calendar, then Todo, then Habits --
+ * freed a 14 KB block after the first and found it in pieces for the second:
+ * 24 KB free, largest block 7.5 KB, "not enough memory" (2026-09-30). A kept
+ * block cannot be split, so the next app loads into it. */
+void capp_hold_code(int on);
 
 /* Free executable memory, which is what bounds app size. Worth reporting: it
  * is a different pool from the general heap and much smaller. */
