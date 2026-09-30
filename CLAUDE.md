@@ -360,6 +360,19 @@ the item array, because the array is what is on display. `o` is the overview:
 every list's open tasks under its own heading, read from those files. `d`
 toggles a pending delete rather than only setting it.
 
+**Calendar and Todo get Google through the server** (2026-09-29). The
+server holds the Google login -- the one the dashboard's sign-in at /dash
+writes to google.json -- and `server/google.py` does the HTTPS and the JSON,
+answering in tab-separated lines: `/calendar/events`, `/calendar/event`,
+`/todo/lists`, `/todo/tasks?list=&max=`, `/todo/task`. The apps keep their
+caches, screens and sync state machines; they call `api->proxy()` over
+plain HTTP, and the kernel signs a request to its own server with the
+device's token (cardapi.c) -- never to anywhere else. No TLS on the device
+for either app any more. Syncing now needs the droplet; the caches still
+show offline. **A 403 from `/todo` means the dashboard login lacks the
+Tasks scope** -- sign in at /dash again and allow Tasks. The history below
+is why: the device doing it itself was the largest memory cost it had.
+
 **`fields=` is not an optimisation, it is why the reply fits.** Todo asked
 Google for whole task objects -- etag, selfLink, position, updated, three
 hundred bytes each -- against a 6 KB app buffer and the kernel's 8 KB. The
