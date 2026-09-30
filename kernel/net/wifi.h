@@ -43,9 +43,9 @@ int wifi_connect(const char *ssid, const char *pass, int timeout_ms);
 /* Connect using whatever was saved. Returns -1 if nothing was. */
 int wifi_connect_saved(int timeout_ms);
 
-/* When NVS has no network but /config/wifi.txt (SSID, then password, one per
- * line) does, take the file's. Called once at boot after the card mounts.
- * Returns 1 if it did. */
+/* When NVS has no networks but /config/wifi.txt (SSID, then password, on
+ * alternate lines -- one pair is the old single-network file) does, take the
+ * file's. Called once at boot after the card mounts. Returns how many. */
 int wifi_restore_from_card(void);
 
 /* Blocking scan. Fills `out` with up to `max` networks, strongest first, and
@@ -56,8 +56,14 @@ WifiState   wifi_state(void);
 int         wifi_is_connected(void);
 const char *wifi_status(void);        /* human-readable, one line */
 const char *wifi_ip(void);            /* "0.0.0.0" when not connected */
-const char *wifi_saved_ssid(void);    /* "" if nothing is saved */
-void        wifi_forget(void);
+/* The saved networks (kernel/net/wifilist.h): up to eight, newest first.
+ * wifi_connect adds or refreshes one; wifi_connect_saved joins whichever is
+ * in range. */
+const char *wifi_saved_ssid(void);    /* the newest, "" if nothing is saved */
+int         wifi_saved_count(void);
+const char *wifi_saved_name(int i);   /* 0 is the newest; "" past the end */
+int         wifi_forget_one(const char *ssid);   /* 1 if it was saved */
+void        wifi_forget(void);        /* every one */
 
 uint32_t wifi_heap_cost(void);
 

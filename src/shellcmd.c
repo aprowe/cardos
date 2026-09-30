@@ -370,10 +370,12 @@ void cmd_wifi(const char *arg) {
 
   if (!arg || !*arg) {
     con_printf("wifi: %s\n", wifi_status());
-    if (wifi_saved_ssid()[0])
-      con_printf("saved: %s\n", wifi_saved_ssid());
+    if (wifi_saved_count())
+      con_printf("saved: %s%s\n", wifi_saved_ssid(),
+                 wifi_saved_count() > 1 ? " and more (wifi list)" : "");
     con_printf("radio cost %u KB\n", (unsigned)(wifi_heap_cost() / 1024));
-    con_write("wifi scan | wifi SSID PASS | wifi saved | wifi forget | wifi off\n");
+    con_write("wifi scan | wifi SSID PASS | wifi saved | wifi list\n"
+              "wifi forget [SSID] | wifi off\n");
     return;
   }
 
@@ -390,7 +392,17 @@ void cmd_wifi(const char *arg) {
   }
 
   if (!strcmp(arg, "off"))    { wifi_stop(); con_write("radio off\n"); return; }
-  if (!strcmp(arg, "forget")) { wifi_forget(); con_write("forgotten\n"); return; }
+  if (!strcmp(arg, "forget")) { wifi_forget(); con_write("every saved network forgotten\n"); return; }
+  if (!strncmp(arg, "forget ", 7)) {
+    con_printf("%s\n", wifi_forget_one(arg + 7) ? "forgotten" : "not saved");
+    return;
+  }
+  if (!strcmp(arg, "list")) {
+    int i, n = wifi_saved_count();
+    if (!n) { con_write("nothing saved\n"); return; }
+    for (i = 0; i < n; i++) con_printf("  %d %s\n", i + 1, wifi_saved_name(i));
+    return;
+  }
   if (!strcmp(arg, "saved")) {
     con_write("joining saved network...\n");
     wifi_connect_saved(20000);

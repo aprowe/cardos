@@ -30,6 +30,7 @@ idf_component_register(
     "../kernel/ui/cfont.c"
     "../kernel/ui/fontres.c"
     "../kernel/sys/kvtext.c"
+    "../kernel/net/wifilist.c"
     "../kernel/sys/prefs.c"
     "../kernel/sys/alarm.c"
     "../kernel/sys/env.c"

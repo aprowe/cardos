@@ -142,7 +142,8 @@ static void act_wifi_saved(SettingsState *st) {
     snprintf(st->note, sizeof st->note, "nothing saved yet");
     return;
   }
-  snprintf(st->note, sizeof st->note, "joining %s...", wifi_saved_ssid());
+  if (wifi_saved_count() > 1) snprintf(st->note, sizeof st->note, "joining a saved network...");
+  else snprintf(st->note, sizeof st->note, "joining %s...", wifi_saved_ssid());
   settings_paint_now();
   wifi_connect_saved(20000);
   snprintf(st->note, sizeof st->note, "%s", wifi_status());
@@ -234,8 +235,10 @@ static void v_mouse(char *b, size_t n) { snprintf(b, n, "%s", bthid_status(BTHID
 static void v_kbd(char *b, size_t n)   { snprintf(b, n, "%s", bthid_status(BTHID_KEYBOARD)); }
 static void v_wifi(char *b, size_t n)  { snprintf(b, n, "%s", wifi_status()); }
 static void v_saved(char *b, size_t n) {
-  const char *ssid = wifi_saved_ssid();
-  snprintf(b, n, "%s", ssid[0] ? ssid : "none");
+  int k = wifi_saved_count();
+  if (!k) snprintf(b, n, "none");
+  else if (k == 1) snprintf(b, n, "%s", wifi_saved_ssid());
+  else snprintf(b, n, "%d networks", k);
 }
 static void v_btboot(char *b, size_t n) {
   snprintf(b, n, "%s", bthid_autostart() ? "on" : "off");

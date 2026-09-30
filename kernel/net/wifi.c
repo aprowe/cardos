@@ -2,14 +2,17 @@
 
 #include "kernel/net/wifi.h"
 #include "kernel/sys/conf.h"
+#include "kernel/net/wifilist.h"
 #include "kernel/app/capp.h"   /* CAPP_CONFIG */
 
 #include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "nvs.h"
@@ -180,27 +183,112 @@ void wifi_stop(void) {
   snprintf(s_detail, sizeof s_detail, "off");
 }
 
-/* NVS for the runtime, and the same two lines in /config/wifi.txt so a flash
- * that wipes NVS does not cost the network. See kernel/sys/conf.h. */
+/* The saved networks (kernel/net/wifilist.h): a list in NVS for the runtime,
+ * and the same text -- SSID and password on alternate lines -- in
+ * /config/wifi.txt, so a flash that wipes NVS does not cost the networks.
+ * The old single-network keys still hold the newest one, for anything that
+ * reads them and for a firmware from before the list. */
 #define WIFI_CONF CAPP_CONFIG "/wifi.txt"
+#define NVS_LIST  "wifi_list"
 
-static void save(const char *ssid, const char *pass) {
+static WifiList s_list;          /* scratch: one list at a time, not on a stack */
+
+/* The text form's buffer is the heap's for the moment it is needed: the list
+ * is read when joining, not held -- 800 bytes a copy was 4 KB of .bss. */
+#define LIST_TEXT (WIFILIST_MAX * (WIFILIST_SSID + WIFILIST_PASS + 2) + 1)
+
+static void load_list(WifiList *l) {
+  char *text = (char *)malloc(LIST_TEXT);
   nvs_handle_t h;
-  const char *lines[2] = { ssid, pass };
-  if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-  nvs_set_str(h, NVS_SSID, ssid);
-  nvs_set_str(h, NVS_PASS, pass);
-  nvs_commit(h);
+  size_t n = LIST_TEXT;
+  memset(l, 0, sizeof *l);
+  if (!text) return;
+  if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) { free(text); return; }
+  if (nvs_get_str(h, NVS_LIST, text, &n) == ESP_OK) {
+    wifilist_parse(l, text);
+  } else {
+    /* From before the list: the one network, as a list of one. */
+    size_t ns = sizeof l->net[0].ssid, np = sizeof l->net[0].pass;
+    if (nvs_get_str(h, NVS_SSID, l->net[0].ssid, &ns) == ESP_OK && l->net[0].ssid[0]) {
+      if (nvs_get_str(h, NVS_PASS, l->net[0].pass, &np) != ESP_OK) l->net[0].pass[0] = 0;
+      l->n = 1;
+    }
+  }
   nvs_close(h);
-  conf_write(WIFI_CONF, lines, 2);
+  free(text);
+}
+
+static void save_list(const WifiList *l) {
+  char *text = (char *)malloc(LIST_TEXT);
+  const char *lines[2 * WIFILIST_MAX];
+  nvs_handle_t h;
+  int i;
+  if (!text) return;
+  if (wifilist_format(l, text, LIST_TEXT) < 0) { free(text); return; }
+  if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+    nvs_set_str(h, NVS_LIST, text);
+    if (l->n) {
+      nvs_set_str(h, NVS_SSID, l->net[0].ssid);
+      nvs_set_str(h, NVS_PASS, l->net[0].pass);
+    } else {
+      nvs_erase_key(h, NVS_SSID);
+      nvs_erase_key(h, NVS_PASS);
+    }
+    nvs_commit(h);
+    nvs_close(h);
+  }
+  for (i = 0; i < l->n; i++) { lines[2 * i] = l->net[i].ssid; lines[2 * i + 1] = l->net[i].pass; }
+  if (l->n) conf_write(WIFI_CONF, lines, 2 * l->n);
+  else conf_remove(WIFI_CONF);
+  free(text);
+}
+
+/* Joined: to the front of the list, keeping the rest. */
+static void save(const char *ssid, const char *pass) {
+  load_list(&s_list);
+  wifilist_remember(&s_list, ssid, pass);
+  save_list(&s_list);
 }
 
 int wifi_restore_from_card(void) {
-  char lines[2][WIFI_PASS_MAX];
-  if (wifi_saved_ssid()[0]) return 0;            /* NVS has one: it wins */
-  if (conf_read(WIFI_CONF, &lines[0][0], 2, WIFI_PASS_MAX) < 1 || !lines[0][0]) return 0;
-  save(lines[0], lines[1]);
-  return 1;
+  char (*lines)[WIFI_PASS_MAX];
+  int n, i;
+  load_list(&s_list);
+  if (s_list.n) return 0;                        /* NVS has some: it wins */
+  lines = (char (*)[WIFI_PASS_MAX])malloc(2 * WIFILIST_MAX * WIFI_PASS_MAX);
+  if (!lines) return 0;
+  n = conf_read(WIFI_CONF, &lines[0][0], 2 * WIFILIST_MAX, WIFI_PASS_MAX);
+  if (n < 1 || !lines[0][0]) { free(lines); return 0; }
+  memset(&s_list, 0, sizeof s_list);
+  for (i = 0; i + 1 <= n && s_list.n < WIFILIST_MAX; i += 2) {
+    if (!lines[i][0]) continue;
+    snprintf(s_list.net[s_list.n].ssid, sizeof s_list.net[0].ssid, "%.32s", lines[i]);
+    snprintf(s_list.net[s_list.n].pass, sizeof s_list.net[0].pass, "%s",
+             i + 1 < n ? lines[i + 1] : "");
+    s_list.n++;
+  }
+  free(lines);
+  if (!s_list.n) return 0;
+  save_list(&s_list);
+  return s_list.n;
+}
+
+int wifi_saved_count(void) { load_list(&s_list); return s_list.n; }
+
+const char *wifi_saved_name(int i) {
+  static char name[WIFI_SSID_MAX];
+  load_list(&s_list);
+  name[0] = 0;
+  if (i >= 0 && i < s_list.n) snprintf(name, sizeof name, "%s", s_list.net[i].ssid);
+  return name;
+}
+
+int wifi_forget_one(const char *ssid) {
+  int gone;
+  load_list(&s_list);
+  gone = wifilist_forget(&s_list, ssid);
+  if (gone) save_list(&s_list);
+  return gone;
 }
 
 int wifi_connect(const char *ssid, const char *pass, int timeout_ms) {
@@ -265,26 +353,63 @@ static int connect_driver_config(int timeout_ms) {
   return (bits & BIT_GOT_IP) ? 0 : -1;
 }
 
+/* The saved networks, the one in range first. One saved: straight at it, as
+ * before -- a scan costs two seconds for nothing. Several: a scan, then the
+ * ones it saw, strongest first, each with a share of the time; if it saw none
+ * (a hidden network, or away from all of them), every one in turn, most
+ * recent first, until the time is up. */
 int wifi_connect_saved(int timeout_ms) {
-  nvs_handle_t h;
-  char ssid[WIFI_SSID_MAX] = "", pass[WIFI_PASS_MAX] = "";
-  size_t ns = sizeof ssid, np = sizeof pass;
+  /* On the heap, not the stack: this is called from cardos-bg, whose 4 KB
+   * stack a list and a scan (1.4 KB) overflowed -- a reboot loop on the
+   * first join after boot (2026-09-29). See CLAUDE.md on cardos-bg. */
+  typedef struct {
+    WifiList l;
+    WifiAp   aps[WIFI_MAX_SCAN];
+    const char *seen[WIFI_MAX_SCAN];
+    int8_t   rssi[WIFI_MAX_SCAN];
+    int      order[WIFILIST_MAX];
+  } Work;
+  Work *w;
+  int nseen, n, i, rc = -1, total;
+  int64_t until;
 
   if (wifi_start() != 0) return -1;
+  if ((w = (Work *)calloc(1, sizeof *w)) == NULL) return -1;
+  load_list(&w->l);
+  total = w->l.n;
 
-  if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-    if (nvs_get_str(h, NVS_SSID, ssid, &ns) != ESP_OK) ssid[0] = 0;
-    nvs_get_str(h, NVS_PASS, pass, &np);
-    nvs_close(h);
+  if (total == 1) {
+    rc = wifi_connect(w->l.net[0].ssid, w->l.net[0].pass, timeout_ms);
+    free(w);
+    return rc;
+  }
+  if (total == 0) {
+    free(w);
+    if (connect_driver_config(timeout_ms) == 0) return 0;
+    /* Nothing saved anywhere. Say so as a sentence: "no network" on its own
+     * sends the reader looking at the router. */
+    snprintf(s_detail, sizeof s_detail, "%s", "no saved network -- join one in Settings");
+    s_state = WIFI_FAILED;
+    return -1;
   }
 
-  if (ssid[0]) return wifi_connect(ssid, pass, timeout_ms);
-  if (connect_driver_config(timeout_ms) == 0) return 0;
-
-  /* Nothing saved anywhere. Say so as a sentence: "no network" on its own
-   * sends the reader looking at the router. */
-  snprintf(s_detail, sizeof s_detail, "%s",
-           "no saved network -- join one in Settings");
+  until = esp_timer_get_time() / 1000 + timeout_ms;
+  nseen = wifi_scan(w->aps, WIFI_MAX_SCAN);
+  for (i = 0; i < nseen; i++) { w->seen[i] = w->aps[i].ssid; w->rssi[i] = w->aps[i].rssi; }
+  n = wifilist_order(&w->l, w->seen, w->rssi, nseen, w->order);
+  for (i = 0; i < n; i++) {
+    int64_t left = until - esp_timer_get_time() / 1000;
+    int share = (int)(left / (n - i));
+    if (left < 2000) break;
+    if (share < 8000) share = (int)(left < 8000 ? left : 8000);  /* a join needs a few seconds */
+    if (wifi_connect(w->l.net[w->order[i]].ssid, w->l.net[w->order[i]].pass, share) == 0) {
+      rc = 0;
+      break;
+    }
+  }
+  free(w);
+  if (rc == 0) return 0;
+  snprintf(s_detail, sizeof s_detail, "none of %d saved networks answered", total);
   s_state = WIFI_FAILED;
   return -1;
 }
@@ -364,23 +489,19 @@ const char *wifi_status(void) {
   return buf;
 }
 
-const char *wifi_saved_ssid(void) {
-  static char ssid[WIFI_SSID_MAX];
-  nvs_handle_t h;
-  size_t n = sizeof ssid;
-  ssid[0] = 0;
-  if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return ssid;
-  if (nvs_get_str(h, NVS_SSID, ssid, &n) != ESP_OK) ssid[0] = 0;
-  nvs_close(h);
-  return ssid;
-}
+/* The newest saved network, or "". */
+const char *wifi_saved_ssid(void) { return wifi_saved_name(0); }
 
+/* All of them, NVS and the card. */
 void wifi_forget(void) {
-  nvs_handle_t h;
-  conf_remove(WIFI_CONF);
-  if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-  nvs_erase_key(h, NVS_SSID);
-  nvs_erase_key(h, NVS_PASS);
-  nvs_commit(h);
-  nvs_close(h);
+  memset(&s_list, 0, sizeof s_list);
+  save_list(&s_list);
+  {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+      nvs_erase_key(h, NVS_LIST);
+      nvs_commit(h);
+      nvs_close(h);
+    }
+  }
 }
