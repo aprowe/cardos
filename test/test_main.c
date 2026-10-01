@@ -579,6 +579,8 @@ void test_write_past_the_end_of_swap_is_refused(void);
 void test_device_errors_are_propagated(void);
 void test_today_reads_a_section_line(void);
 void test_today_builds_the_page_from_the_answers(void);
+void test_today_tomorrow_asks_for_tomorrow(void);
+void test_today_tomorrow_crosses_the_month_and_the_year(void);
 void test_today_first_page_uses_todos_current_list(void);
 void test_todo_cache_round_trips_every_field(void);
 void test_todo_a_refused_start_says_so_and_retries_soon(void);
@@ -1291,6 +1293,8 @@ int main(void) {
   printf("-- today --\n");
   RUN(test_today_reads_a_section_line);
   RUN(test_today_builds_the_page_from_the_answers);
+  RUN(test_today_tomorrow_asks_for_tomorrow);
+  RUN(test_today_tomorrow_crosses_the_month_and_the_year);
   RUN(test_today_first_page_uses_todos_current_list);
   printf("-- todo --\n");
   RUN(test_todo_cache_round_trips_every_field);
