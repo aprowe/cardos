@@ -300,5 +300,13 @@ int update_firmware_as(const char *flavor, UpdateLog log, void *ctx) {
   pr.last = -1;
   r = launcher_boot(FIRMWARE_PATH, flash_progress, &pr);
   snprintf(s_error, sizeof s_error, "%s", launcher_strerror(r));
+  /* "not a bootable image" was all it said when a 2517 KB image met a
+   * 2304 KB slot (2026-10-01). The parser knows which check failed. */
+  if (r == LAUNCH_ERR_IMAGE) {
+    AppImageInfo info;
+    AppImageResult why;
+    launcher_check(FIRMWARE_PATH, &info, &why);
+    snprintf(s_error, sizeof s_error, "%s: %s", launcher_strerror(r), appimage_strerror(why));
+  }
   return -2;
 }
