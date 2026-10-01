@@ -1,0 +1,1317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CardOS Dashboard</title>
+<style>
+:root{
+  --bg:#f2eee5; --panel:#fbf9f4; --panel2:#f6f2ea; --ink:#1e1c18; --ink2:#5b554a; --ink3:#8e877a;
+  --line:#e0d9cb; --line2:#d2c9b8; --accent:#c4471a; --accent-ink:#fff; --accent-soft:#f8e4d9;
+  --ok:#2e7a48; --ok-soft:#e0f0e4; --warn:#a86a12; --warn-soft:#f7ead2; --bad:#b3261e; --bad-soft:#f8e1de;
+  --screen:#0e110d; --screen-ink:#cfe9be; --screen-dim:#6f8a62; --screen-hi:#ffb26b;
+  --shell:#2b2c2f; --shadow:0 1px 0 rgba(0,0,0,.04),0 8px 24px -12px rgba(40,30,10,.18);
+  --mono:ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#151412; --panel:#1d1c19; --panel2:#22211d; --ink:#ece6da; --ink2:#b4ac9e; --ink3:#7e776b;
+    --line:#2e2c27; --line2:#3b3832; --accent:#f07a3e; --accent-ink:#1a0f08; --accent-soft:#3a2418;
+    --ok:#6cc58a; --ok-soft:#1c2e22; --warn:#e3a94e; --warn-soft:#33281a; --bad:#f17366; --bad-soft:#3a1f1c;
+    --shell:#0b0b0c; --shadow:0 1px 0 rgba(0,0,0,.3),0 10px 30px -14px rgba(0,0,0,.7);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#151412; --panel:#1d1c19; --panel2:#22211d; --ink:#ece6da; --ink2:#b4ac9e; --ink3:#7e776b;
+  --line:#2e2c27; --line2:#3b3832; --accent:#f07a3e; --accent-ink:#1a0f08; --accent-soft:#3a2418;
+  --ok:#6cc58a; --ok-soft:#1c2e22; --warn:#e3a94e; --warn-soft:#33281a; --bad:#f17366; --bad-soft:#3a1f1c;
+  --shell:#0b0b0c; --shadow:0 1px 0 rgba(0,0,0,.3),0 10px 30px -14px rgba(0,0,0,.7);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:auto}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+a{color:inherit}
+.mono{font-family:var(--mono);font-size:.92em}
+.dim{color:var(--ink2)} .faint{color:var(--ink3)}
+.hidden{display:none!important}
+svg.i{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* shell: sidebar + views */
+.shell{display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh}
+.side{position:sticky;top:0;height:100vh;overflow-y:auto;border-right:1px solid var(--line);padding:18px 14px 14px;display:flex;flex-direction:column;gap:16px;background:color-mix(in srgb,var(--panel) 55%,var(--bg))}
+.mark{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.01em;text-decoration:none;padding:0 6px}
+.mark .px{width:22px;height:14px;border-radius:3px;background:var(--shell);position:relative;box-shadow:0 0 0 1px var(--line2)}
+.mark .px::after{content:"";position:absolute;inset:3px 4px 3px 3px;background:var(--accent);border-radius:1px}
+.mark small{font:500 11px var(--mono);color:var(--ink3);letter-spacing:.06em;text-transform:uppercase}
+.side .device{max-width:none;padding:8px 8px 9px;border-radius:12px}
+.side .screen{font-size:7.4px;padding:4px 6px}
+.side .screen .hd{margin:-4px -6px 3px;padding:1px 6px}
+.side .screen .bart{width:80px}
+.side .keys{height:30px;margin-top:7px}
+.side .device-cap{margin-top:6px;font-size:12px;line-height:1.35}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav a{display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:9px;text-decoration:none;color:var(--ink2);font-size:14.5px}
+.nav a:hover{background:var(--panel2);color:var(--ink)}
+.nav a.on{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:inset 0 0 0 1px var(--line),var(--shadow)}
+.nav a.on svg.i{color:var(--accent)}
+.nav .end{margin-left:auto;display:flex;align-items:center;gap:6px}
+.nav .dot{width:7px;height:7px;box-shadow:none}
+.badge{font:600 11px var(--mono);background:var(--accent);color:var(--accent-ink);border-radius:99px;padding:1px 6px;min-width:18px;text-align:center}
+.side-foot{margin-top:auto;border-top:1px solid var(--line);padding:12px 6px 0;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink2)}
+.side-foot .btn{margin-left:auto}
+.mtop,.bnav{display:none}
+main{max-width:1000px;width:100%;padding:30px 36px 120px;min-height:calc(100vh - 40px)}
+.view{display:none}
+.view.on{display:block;animation:fade .18s}
+.page-head{margin-bottom:20px}
+.page-head h1{margin:0;font-size:26px;letter-spacing:-.02em;font-weight:650}
+.page-head p{margin:4px 0 0;color:var(--ink2);font-size:14.5px}
+@media (max-width:860px){
+  .shell{grid-template-columns:1fr}
+  .side{display:none}
+  .mtop{display:flex;position:sticky;top:0;z-index:30;align-items:center;gap:10px;padding:10px 16px;background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .mtop .where{font-weight:600;color:var(--ink2)}
+  .mtop .where::before{content:"/";margin-right:8px;color:var(--ink3);font-weight:400}
+  .mtop .end{margin-left:auto;display:flex;align-items:center;gap:8px}
+  main{padding:20px 16px 110px}
+  .page-head h1{font-size:22px}
+  .bnav{display:grid;grid-template-columns:repeat(6,1fr);position:fixed;z-index:40;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:4px 2px calc(4px + env(safe-area-inset-bottom))}
+  .bnav a{display:flex;flex-direction:column;align-items:center;gap:2px;text-decoration:none;color:var(--ink3);font-size:10.5px;padding:5px 0;border-radius:8px;position:relative}
+  .bnav a.on{color:var(--accent);font-weight:600}
+  .bnav a .dot,.bnav a .badge{position:absolute;top:3px;left:calc(50% + 8px)}
+  .bnav a .dot{width:7px;height:7px;box-shadow:none}
+  .bnav a .badge{font-size:9.5px;padding:0 4px;min-width:0}
+}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line2);background:var(--panel);padding:7px 13px;border-radius:9px;font-size:14px;font-weight:500;line-height:1.2;transition:background .12s,border-color .12s}
+.btn:hover{background:var(--panel2);border-color:var(--ink3)}
+.btn:focus-visible,.icon-btn:focus-visible,.row-main:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,var(--line2))}
+.btn.danger:hover{background:var(--bad-soft)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--ink2)}
+.btn.ghost:hover{background:var(--panel2);color:var(--ink)}
+.btn.sm{padding:5px 10px;font-size:13px;border-radius:8px}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.icon-btn{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:8px;border:0;background:transparent;color:var(--ink2)}
+.icon-btn:hover{background:var(--panel2);color:var(--ink)}
+
+/* status dots / pills */
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--ink3);flex:none}
+.dot.ok{background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
+.dot.bad{background:var(--bad);box-shadow:0 0 0 3px var(--bad-soft)}
+.dot.warn{background:var(--warn);box-shadow:0 0 0 3px var(--warn-soft)}
+.dot.off{background:var(--ink3)}
+.dot.live{animation:pulse 2s infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 6px transparent}}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;padding:3px 9px;border-radius:99px;background:var(--panel2);color:var(--ink2);white-space:nowrap}
+.pill.ok{background:var(--ok-soft);color:var(--ok)} .pill.bad{background:var(--bad-soft);color:var(--bad)} .pill.warn{background:var(--warn-soft);color:var(--warn)}
+
+
+/* hero */
+.hero{display:block}
+.hero-dev{display:none}
+.device{width:100%;max-width:300px;justify-self:center;background:var(--shell);border-radius:16px;padding:12px 12px 14px;box-shadow:0 18px 40px -20px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.07)}
+.screen{aspect-ratio:240/135;background:var(--screen);border-radius:4px;color:var(--screen-ink);font:9.6px/1.32 var(--mono);padding:6px 8px;overflow:hidden;white-space:pre;position:relative;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
+.screen .hd{display:flex;justify-content:space-between;background:#1f3a24;color:#e5f7d9;margin:-6px -8px 4px;padding:2px 8px}
+.screen .sel{background:var(--screen-hi);color:#1b0e04;animation:blink 1.2s steps(2) infinite}
+.screen .d{color:var(--screen-dim)}
+.screen .bar{display:inline-block;height:6px;background:var(--screen-ink);vertical-align:middle}
+.screen .bart{display:inline-block;width:110px;height:6px;outline:1px solid var(--screen-dim);vertical-align:middle;margin-right:4px}
+@keyframes blink{50%{background:transparent;color:var(--screen-hi)}}
+.keys{height:66px;margin-top:11px;border-radius:6px;background-image:radial-gradient(circle at 50% 50%,#55575d 0 3.1px,transparent 3.6px);background-size:calc(100%/14) 25%}
+.device-cap{font-size:12.5px;color:var(--ink3);text-align:center;margin-top:10px}
+.glance h1{font-size:clamp(22px,3.2vw,30px);line-height:1.15;letter-spacing:-.02em;margin:0 0 16px;font-weight:650}
+.glance h1 em{font-style:normal;color:var(--accent)}
+.glist{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+.glist li{border-bottom:1px solid var(--line)}
+.glist a{display:grid;grid-template-columns:86px 14px 1fr auto;gap:10px;align-items:center;padding:10px 4px;text-decoration:none}
+.glist a:hover{background:var(--panel2)}
+.glist .k{font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+.glist .v{min-width:0}
+.glist .go{color:var(--ink3);font-size:13px}
+.home-more{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:22px}
+.qcard{padding:14px 16px;text-decoration:none;display:flex;flex-direction:column;gap:4px;text-align:left;font:inherit;color:inherit}
+.qcard:hover{border-color:var(--line2);background:var(--panel2)}
+.qcard .k{font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+.qcard b{font-size:15px}
+.qcard span{font-size:13px;color:var(--ink2)}
+@media (max-width:860px){
+  .hero-dev{display:block;margin-bottom:22px}
+  .hero-dev .device{max-width:280px;margin:0 auto}
+  .glist a{grid-template-columns:70px 12px 1fr}
+  .glist .go{display:none}
+}
+
+/* sections */
+section.block{margin-top:0}
+.sec-head{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px 16px;margin-bottom:12px}
+.sec-head h2{margin:0;font-size:21px;letter-spacing:-.015em;font-weight:650}
+.sec-head .lab{font:600 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:2px}
+.sec-head .side-info{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink2)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:860px){.two{grid-template-columns:1fr}}
+
+/* files */
+.fbar{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.crumbs{display:flex;align-items:center;gap:2px;min-width:0;flex:1 1 220px;overflow-x:auto;scrollbar-width:none;font-family:var(--mono);font-size:13.5px}
+.crumbs::-webkit-scrollbar{display:none}
+.crumbs button{border:0;background:none;padding:4px 6px;border-radius:6px;color:var(--ink2);white-space:nowrap}
+.crumbs button:hover{background:var(--panel2);color:var(--ink)}
+.crumbs button.cur{color:var(--ink);font-weight:600}
+.crumbs .sep{color:var(--ink3)}
+.factions{display:flex;gap:6px}
+.fmeta{padding:7px 16px;font-size:12.5px;color:var(--ink3);border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px}
+.flist{list-style:none;margin:0;padding:4px 0;min-height:120px;position:relative}
+.frow{display:grid;grid-template-columns:1fr 92px 40px 40px;align-items:center;gap:2px;padding:0 8px 0 4px}
+.frow:hover{background:var(--panel2)}
+.row-main{display:flex;align-items:center;gap:12px;border:0;background:none;text-align:left;padding:9px 8px;border-radius:8px;min-width:0}
+.row-main .ic{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;background:var(--panel2);color:var(--ink2);flex:none}
+.row-main .ic.dir{background:var(--accent-soft);color:var(--accent)}
+.row-main .nm{min-width:0;display:flex;flex-direction:column}
+.row-main .nm b{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row-main .nm small{font-size:12px;color:var(--ink3)}
+.frow .sz{font:12.5px var(--mono);color:var(--ink2);text-align:right;padding-right:8px}
+.frow.busy{opacity:.55;pointer-events:none}
+.frow.busy .nm small{color:var(--accent)}
+.frow.hl{animation:hl 1.6s}
+@keyframes hl{0%{background:var(--accent-soft)}100%{background:transparent}}
+.sz-sm{display:none}
+@media (max-width:600px){
+  .frow{grid-template-columns:1fr 38px 38px}
+  .frow .sz{display:none}
+  .sz-sm{display:inline}
+}
+.fempty{padding:34px 16px;text-align:center;color:var(--ink3)}
+.loading-veil{position:absolute;inset:0;background:color-mix(in srgb,var(--panel) 70%,transparent);display:grid;place-items:center;font-size:13.5px;color:var(--ink2)}
+.spin{display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid var(--line2);border-top-color:var(--accent);animation:spin .8s linear infinite;vertical-align:-2px;margin-right:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.drop .flist{outline:2px dashed var(--accent);outline-offset:-6px;background:var(--accent-soft)}
+.drop-hint{display:none}
+.drop .drop-hint{display:block;position:absolute;inset:auto 0 12px;text-align:center;font-weight:600;color:var(--accent)}
+
+/* unreachable */
+.away{display:grid;grid-template-columns:auto 1fr;gap:22px;padding:24px}
+.away h3{margin:0 0 4px;font-size:18px}
+.away ol{margin:14px 0 6px;padding:0;list-style:none;counter-reset:s}
+.away li{counter-increment:s;display:flex;gap:12px;align-items:baseline;padding:6px 0}
+.away li::before{content:counter(s);font:600 12px var(--mono);width:22px;height:22px;border-radius:50%;display:inline-grid;place-items:center;background:var(--accent-soft);color:var(--accent);flex:none;transform:translateY(-1px)}
+.kbd{font:600 12px var(--mono);border:1px solid var(--line2);border-bottom-width:2px;border-radius:5px;padding:0 5px;background:var(--panel2)}
+.away .watch{margin-top:12px;font-size:13px;color:var(--ink3);display:flex;align-items:center;gap:8px}
+.away-ic{width:56px;height:56px;border-radius:14px;background:var(--warn-soft);color:var(--warn);display:grid;place-items:center}
+.away-ic svg.i{width:28px;height:28px}
+@media (max-width:600px){.away{grid-template-columns:1fr;padding:18px}}
+
+/* transfers */
+.xfers{margin-top:12px}
+.xhead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;color:var(--ink2)}
+.xhead b{color:var(--ink);font-weight:600}
+.xlist{list-style:none;margin:0;padding:0}
+.xrow{display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
+.xrow:last-child{border-bottom:0}
+.xrow .nm{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.xrow .st{font-size:12.5px;color:var(--ink2);font-variant-numeric:tabular-nums}
+.xrow.failed .st{color:var(--bad)} .xrow.done .st{color:var(--ok)}
+.prog{height:4px;border-radius:4px;background:var(--line);margin-top:6px;overflow:hidden}
+.prog i{display:block;height:100%;background:var(--accent);width:0;transition:width .2s linear}
+.xrow.done .prog i{background:var(--ok)} .xrow.failed .prog i{background:var(--bad)}
+.xrow.waiting .prog i{background:var(--ink3)}
+
+/* accounts */
+.acct{padding:18px 18px 16px;display:flex;flex-direction:column;gap:14px}
+.acct-top{display:flex;align-items:center;gap:12px}
+.logo{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;font-weight:800;font-size:18px;flex:none}
+.logo.g{background:var(--panel2);box-shadow:inset 0 0 0 1px var(--line)}
+.logo.t{background:#e57cd8;color:#2c1029}
+.acct-top h3{margin:0;font-size:16px}
+.acct-top .sub{font-size:13px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis}
+.acct-top .pill{margin-left:auto}
+.facts{margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:14px}
+.facts dt{color:var(--ink3)} .facts dd{margin:0;min-width:0}
+.perm{display:inline-flex;align-items:center;gap:5px;margin-right:12px}
+.perm .yes{color:var(--ok)} .perm .no{color:var(--bad)}
+.note{border-radius:10px;padding:10px 12px;font-size:13.5px;background:var(--panel2)}
+.note.bad{background:var(--bad-soft);color:var(--ink)} .note.bad b{color:var(--bad)}
+.note.warn{background:var(--warn-soft)} .note.warn b{color:var(--warn)}
+.acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto}
+.running{display:flex;align-items:center;gap:12px;border-radius:12px;background:var(--panel2);padding:12px 14px}
+.running .clk{font:600 24px var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.running .clk small{font-size:13px;color:var(--ink3);font-weight:500}
+.running .what{min-width:0;flex:1}
+.running .what b{display:block}
+.running .what span{font-size:13px;color:var(--ink2)}
+.proj-dot{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:0}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:13px;font-weight:600}
+.field .hint{font-size:12.5px;color:var(--ink3)}
+.inp{width:100%;padding:9px 11px;border-radius:9px;border:1px solid var(--line2);background:var(--bg);font-family:var(--mono);font-size:14px}
+.inp:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+.inp-row{display:flex;gap:8px}
+.ferr{color:var(--bad);font-size:13px;min-height:0}
+
+/* server */
+.checks{list-style:none;margin:0;padding:0}
+.checks li{display:grid;grid-template-columns:18px 160px 96px 1fr;gap:12px;align-items:center;padding:13px 18px;border-bottom:1px solid var(--line)}
+.checks li:last-child{border-bottom:0}
+.checks .nm{font-weight:600}
+.checks .det{font-size:13px;color:var(--ink2);min-width:0;overflow-wrap:anywhere}
+.checks .st{font-size:13px;font-weight:600}
+.checks .st.ok{color:var(--ok)} .checks .st.bad{color:var(--bad)} .checks .st.off{color:var(--ink3)}
+@media (max-width:640px){
+  .checks li{grid-template-columns:18px 1fr auto;row-gap:2px}
+  .checks .det{grid-column:2 / 4}
+}
+
+/* published */
+.fw{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+.fwc{padding:14px 16px;display:flex;align-items:center;gap:12px}
+.fwc .lab{font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+.fwc .hash{font:600 18px var(--mono);letter-spacing:.02em}
+.fwc .hash span{color:var(--ink3);font-weight:500}
+.fwc .icon-btn{margin-left:auto}
+@media (max-width:600px){.fw{grid-template-columns:1fr}}
+.abar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--line)}
+.chips{display:flex;gap:4px;flex-wrap:wrap}
+.chip{border:1px solid var(--line2);background:transparent;border-radius:99px;padding:4px 11px;font-size:13px;color:var(--ink2)}
+.chip.on{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+.chip span{opacity:.6;margin-left:4px;font-size:12px}
+.abar .inp{max-width:200px;padding:6px 10px;font-size:13px;margin-left:auto}
+@media (max-width:600px){.abar .inp{max-width:none;margin-left:0}}
+.agrid{list-style:none;margin:0;padding:6px 0;display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));column-gap:22px}
+.agrid li{display:grid;grid-template-columns:minmax(0,1fr) 60px 44px;gap:10px;align-items:center;padding:7px 16px;font-size:14px}
+.agrid .an{font-family:var(--mono);font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agrid .af{font-size:11.5px;color:var(--ink3);margin-left:6px;font-family:var(--sans);font-weight:500}
+.agrid .meter{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.agrid .meter i{display:block;height:100%;background:var(--ink2);border-radius:3px}
+.agrid .meter i.big{background:var(--accent)}
+.agrid .ak{font:12.5px var(--mono);text-align:right;color:var(--ink2)}
+.afoot{padding:10px 16px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink3);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+
+/* settings */
+.set{display:flex;flex-direction:column;gap:16px}
+.set .panel{padding:18px}
+.set h3{margin:0 0 4px;font-size:16px}
+.set p{margin:0;color:var(--ink2);font-size:14px}
+.set-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.set-row .grow{flex:1;min-width:200px}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:10px;padding:3px;gap:2px;background:var(--bg)}
+.seg button{border:0;background:none;padding:6px 14px;border-radius:7px;font-size:13.5px;color:var(--ink2)}
+.seg button.on{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:var(--shadow)}
+
+/* menu */
+.menu{position:fixed;z-index:60;min-width:190px;background:var(--panel);border:1px solid var(--line2);border-radius:11px;box-shadow:0 14px 40px -12px rgba(0,0,0,.35);padding:5px}
+.menu button{display:flex;width:100%;align-items:center;gap:10px;border:0;background:none;padding:8px 10px;border-radius:7px;text-align:left;font-size:14px}
+.menu button:hover,.menu button:focus-visible{background:var(--panel2);outline:none}
+.menu button.danger{color:var(--bad)}
+.menu hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
+
+/* modal */
+.veil{position:fixed;inset:0;z-index:70;background:rgba(20,16,10,.42);display:grid;place-items:center;padding:16px;animation:fade .15s}
+@keyframes fade{from{opacity:0}}
+.dlg{width:min(440px,100%);background:var(--panel);border-radius:16px;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);padding:20px;animation:rise .18s}
+@keyframes rise{from{transform:translateY(8px);opacity:0}}
+.dlg h3{margin:0 0 8px;font-size:17px}
+.dlg .body{font-size:14.5px;color:var(--ink2)}
+.dlg .body p{margin:0 0 10px}
+.dlg .dacts{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;flex-wrap:wrap}
+.consent{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0}
+.consent label{display:flex;gap:10px;align-items:flex-start;padding:6px 0;color:var(--ink)}
+.consent input{margin-top:4px;accent-color:var(--accent)}
+.standin{font:600 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);border:1px dashed var(--line2);border-radius:6px;padding:2px 6px;display:inline-block;margin-bottom:10px}
+
+/* editor */
+.ed{position:fixed;inset:0;z-index:65;background:rgba(20,16,10,.42);display:grid;place-items:center;padding:20px;animation:fade .15s}
+.ed-win{width:min(900px,100%);height:min(720px,100%);background:var(--panel);border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5)}
+.ed-head{display:flex;align-items:center;gap:10px;padding:10px 12px 10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.ed-head .path{font:600 14px var(--mono);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 160px}
+.ed-state{font-size:12.5px;color:var(--ink3);display:flex;align-items:center;gap:6px;white-space:nowrap}
+.ed-state.dirty{color:var(--warn)}
+.ed-state.dirty::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--warn)}
+.ed-banner{padding:9px 16px;font-size:13.5px;background:var(--bad-soft);border-bottom:1px solid var(--line)}
+.ed-banner b{color:var(--bad)}
+.ed textarea{flex:1;border:0;resize:none;padding:14px 16px;background:var(--bg);font:13.5px/1.6 var(--mono);tab-size:4;outline:none;white-space:pre;overflow:auto}
+.ed-foot{display:flex;gap:16px;padding:7px 16px;border-top:1px solid var(--line);font:12px var(--mono);color:var(--ink3);flex-wrap:wrap}
+.ed-foot .r{margin-left:auto}
+@media (max-width:600px){.ed{padding:0}.ed-win{height:100%;border-radius:0}}
+
+/* toasts */
+.toasts{position:fixed;z-index:80;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;align-items:flex-end;max-width:min(380px,calc(100vw - 32px))}
+.toast{display:flex;gap:10px;align-items:flex-start;background:var(--ink);color:var(--bg);padding:10px 12px 10px 14px;border-radius:11px;font-size:14px;box-shadow:0 12px 30px -10px rgba(0,0,0,.4);animation:rise .2s}
+.toast .tdot{width:8px;height:8px;border-radius:50%;margin-top:7px;flex:none;background:#7fd39b}
+.toast.err .tdot{background:#ff8a7a} .toast.info .tdot{background:#bdb5a6}
+.toast button{border:0;background:none;color:inherit;opacity:.6;padding:0 2px;margin-left:4px}
+@media (max-width:600px){.toasts{left:16px;right:16px;bottom:72px;align-items:stretch;max-width:none}}
+
+footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font-size:12.5px}
+.prog.ind{position:relative}
+.prog.ind i{width:35%!important;position:absolute;left:0;animation:ind 1.4s ease-in-out infinite}
+@keyframes ind{0%{left:-35%}100%{left:100%}}
+.xrow.writing .st{color:var(--ink)}
+.offline{background:var(--bad-soft);color:var(--ink);padding:9px 16px;font-size:13.5px;border-bottom:1px solid var(--line)}
+.sec-head .side-info{flex-wrap:wrap;justify-content:flex-end}
+.qcard{cursor:pointer}
+</style>
+</head>
+<body>
+
+<div id="app" class="shell">
+  <aside class="side" aria-label="Dashboard">
+    <a class="mark" href="#/home"><span class="px"></span>CardOS <small>dash</small></a>
+    <div><div class="device" aria-hidden="true"><div class="screen js-screen"></div><div class="keys"></div></div><div class="device-cap js-devcap"></div></div>
+    <nav class="nav" aria-label="Views">
+      <a href="#/home" data-view="home"><svg class="i" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/></svg>Overview</a>
+      <a href="#/files" data-view="files"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M10 3v4M13 3v4"/></svg>SD card<span class="end"><span class="badge js-xbadge hidden"></span><span class="dot js-nd-files"></span></span></a>
+      <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts &amp; keys<span class="end"><span class="dot js-nd-accounts"></span></span></a>
+      <a href="#/server" data-view="server"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>Server<span class="end"><span class="dot js-nd-server"></span></span></a>
+      <a href="#/updates" data-view="updates"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
+      <a href="#/settings" data-view="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>Settings</a>
+    </nav>
+    <div class="side-foot"><span class="dot ok"></span>Signed in<button class="btn sm" data-act="logout">Log out</button></div>
+  </aside>
+
+  <div style="min-width:0">
+    <header class="mtop"><a class="mark" href="#/home"><span class="px"></span>CardOS</a><span class="where" id="m-where">Overview</span><span class="end"><span class="badge js-xbadge hidden"></span></span></header>
+    <div class="offline hidden" id="offline" role="alert">Can’t reach the CardOS server right now. Retrying every few seconds; nothing here is up to date until it answers.</div>
+    <main>
+      <div class="view" id="v-home">
+        <div class="hero-dev"><div class="device" aria-hidden="true"><div class="screen js-screen"></div><div class="keys"></div></div><div class="device-cap js-devcap"></div></div>
+        <div class="glance">
+          <h1 id="headline">Checking…</h1>
+          <ul class="glist" id="glist"></ul>
+        </div>
+        <div class="lab" style="font:600 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-top:28px">Often opened</div>
+        <div class="home-more" style="margin-top:10px">
+          <button class="panel qcard" data-act="goto" data-path="/config/today.txt"><span class="k">/config</span><b>today.txt</b><span>What the Today app prints</span></button>
+          <button class="panel qcard" data-act="goto" data-path="/home/memos" data-dir="1"><span class="k">/home</span><b>Voice memos</b><span>Recordings from the Memo app</span></button>
+          <button class="panel qcard" data-act="goto" data-path="/home/notes.md"><span class="k">/home</span><b>notes.md</b><span>Your notes file</span></button>
+          <button class="panel qcard" data-act="goto" data-path="/cache/app.log"><span class="k">/cache</span><b>app.log</b><span>What apps logged</span></button>
+        </div>
+      </div>
+
+      <section class="view block" id="v-files">
+        <div class="sec-head">
+          <div><span class="lab">remote</span><h2>The SD card</h2></div>
+          <div class="side-info" id="card-side"></div>
+        </div>
+        <div class="panel" id="card-body"></div>
+        <div class="panel xfers hidden" id="xfers"></div>
+      </section>
+
+      <section class="view block" id="v-accounts">
+        <div class="sec-head">
+          <div><span class="lab">connections</span><h2>Accounts &amp; keys</h2></div>
+          <div class="side-info"><span>The server holds these logins; the device never sees a password.</span><button class="btn sm" data-act="state-refresh">Check again</button></div>
+        </div>
+        <div class="two">
+          <div class="panel acct" id="google"></div>
+          <div class="panel acct" id="toggl"></div>
+        </div>
+      </section>
+
+      <section class="view block" id="v-server">
+        <div class="sec-head">
+          <div><span class="lab">this machine</span><h2>Server</h2></div>
+          <div class="side-info"><span id="srv-checked"></span><button class="btn sm" data-act="state-refresh">Check again</button></div>
+        </div>
+        <div class="panel"><ul class="checks" id="checks"></ul></div>
+      </section>
+
+      <section class="view block" id="v-updates">
+        <div class="sec-head">
+          <div><span class="lab">published</span><h2>Updates for the device</h2></div>
+          <div class="side-info">What <span class="mono">update</span> on the device installs from.</div>
+        </div>
+        <div class="fw" id="fw"></div>
+        <div class="panel">
+          <div class="abar"><div class="chips" id="achips"></div><input class="inp" id="asearch" placeholder="Find an app" aria-label="Find an app"></div>
+          <ul class="agrid" id="agrid"></ul>
+          <div class="afoot" id="afoot"></div>
+        </div>
+      </section>
+
+      <section class="view block" id="v-settings">
+        <div class="sec-head"><div><span class="lab">this dashboard</span><h2>Settings</h2></div></div>
+        <div class="set">
+          <div class="panel"><div class="set-row"><div class="grow"><h3>Session</h3><p id="sess-text">Signed in with the dashboard password.</p></div><button class="btn danger" data-act="logout">Log out</button></div></div>
+          <div class="panel"><div class="set-row"><div class="grow"><h3>Appearance</h3><p>Follow this computer’s light or dark setting, or pick one. Remembered in this browser.</p></div>
+            <div class="seg" role="group" aria-label="Theme"><button data-act="theme" data-t="">System</button><button data-act="theme" data-t="light">Light</button><button data-act="theme" data-t="dark">Dark</button></div></div></div>
+          <div class="panel"><div class="set-row"><div class="grow"><h3>How the card is reached</h3><p>Through the <b>Remote Files</b> app on the device (launcher → Net). It does one job at a time at roughly 10–30 KB/s, so big files take minutes; the SD card view keeps the queue and says how long is left, even while you look at other views.</p></div></div></div>
+        </div>
+      </section>
+    </main>
+    <footer>CardOS dashboard</footer>
+  </div>
+
+  <nav class="bnav" aria-label="Views">
+    <a href="#/home" data-view="home"><svg class="i" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/></svg>Overview</a>
+    <a href="#/files" data-view="files"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M10 3v4M13 3v4"/></svg>Card<span class="badge js-xbadge hidden"></span><span class="dot js-nd-files"></span></a>
+    <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts<span class="dot js-nd-accounts"></span></a>
+    <a href="#/server" data-view="server"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/></svg>Server<span class="dot js-nd-server"></span></a>
+    <a href="#/updates" data-view="updates"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
+    <a href="#/settings" data-view="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>Settings</a>
+  </nav>
+</div>
+
+<div class="menu hidden" id="menu" role="menu"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<input type="file" id="upfile" multiple class="hidden">
+
+<script>
+"use strict";
+/* ---------- helpers ---------- */
+const $=(s,r=document)=>r.querySelector(s);
+const $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const enc=new TextEncoder();
+const blen=s=>enc.encode(s).length;
+const now=()=>Date.now();
+const qp=s=>encodeURIComponent(s);
+const ICONS={
+  folder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  file:'<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
+  text:'<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h4"/>',
+  audio:'<path d="M5 10v4M8.5 7v10M12 4v16M15.5 8v8M19 11v2"/>',
+  app:'<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M9 9h6v6H9z"/>',
+  font:'<path d="M5 19l5.5-14h3L19 19M7.5 13.5h9"/>',
+  down:'<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+  up:'<path d="M12 16V5M7 10l5-5 5 5M5 20h14"/>',
+  more:'<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
+  back:'<path d="M15 18l-6-6 6-6"/>',
+  newdir:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6M9 13h6"/>',
+  pencil:'<path d="M4 20h4L19 9l-4-4L4 16z"/>',
+  move:'<path d="M4 12h12M12 8l4 4-4 4M20 5v14"/>',
+  trash:'<path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/>',
+  x:'<path d="M6 6l12 12M18 6L6 18"/>',
+  check:'<path d="M5 12l5 5 9-10"/>',
+  copy:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
+  plug:'<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/>',
+  refresh:'<path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/>',
+  warn:'<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
+};
+const ic=n=>`<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg>`;
+function fmtSize(n){ n=Math.max(0,Math.floor(n||0)); if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(1).replace(/\.0$/,'')+' KB'; return (n/1048576).toFixed(2)+' MB'; }
+function fmtAgo(ms){ const s=Math.max(0,Math.round(ms/1000)); if(s<3) return 'just now'; if(s<60) return s+' s ago'; const m=Math.floor(s/60); if(m<60) return m+' min ago'; const h=Math.floor(m/60); if(h<24) return h+' h '+(m%60)+' min ago'; return Math.floor(h/24)+' days ago'; }
+function fmtDate(d){ return d.toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'})+', '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}); }
+const fmtEpoch=e=>e?fmtDate(new Date(e*1000)):'—';
+function fmtDur(s){ s=Math.max(0,Math.round(s)); if(s<60) return s+' s'; const m=Math.floor(s/60); if(m<60) return m+' min '+String(s%60).padStart(2,'0')+' s'; return Math.floor(m/60)+' h '+(m%60)+' min'; }
+const EDITABLE=['txt','md','c','h','py','js','json','ini','cfg','log','csv'];
+const ext=n=>{ const i=n.lastIndexOf('.'); return i>0?n.slice(i+1).toLowerCase():''; };
+const isText=n=>EDITABLE.includes(ext(n));
+const split=p=>p.split('/').filter(Boolean);
+const joinp=(d,n)=>(d==='/'?'':d)+'/'+n;
+const parentOf=p=>{ const a=split(p); a.pop(); return '/'+a.join('/'); };
+const baseOf=p=>split(p).pop()||'';
+function badName(n){ if(!n||!n.trim()) return 'A name is needed.'; if(/[\\/:*?"<>|]/.test(n)) return 'Names can’t contain \\ / : * ? " < > |'; if(n==='.'||n==='..') return 'That name is reserved.'; return ''; }
+function kindOf(e){ if(e.dir) return 'folder'; const x=ext(e.name); if(isText(e.name)) return 'text'; if(x==='wav') return 'audio'; if(x==='capp') return 'app'; if(x==='cfnt') return 'font'; return 'file'; }
+// Rough speed range of the card link, used only before a transfer has measured its own.
+const SLOW=10*1024, FAST=30*1024;
+const etaRange=b=>{ const a=fmtDur(b/FAST), z=fmtDur(b/SLOW); return a===z?a:a+'–'+z; };
+
+/* ---------- state ---------- */
+const S={
+  st:null, stAt:0, stLoading:false, stErr:'',
+  dev:{connected:false,last_seen:null,known:false},
+  serverDown:false,
+  cwd:'/', listing:null, loading:false, lsErr:'', busy:{}, hl:null,
+  xfers:[], xid:0, lastRate:0,
+  editor:null,
+  appFilter:'All', appQuery:'',
+  tStart:0,
+};
+
+/* ---------- talking to the server ---------- */
+let leaving=false;
+function signedOut(){ if(leaving) return; leaving=true; location.href='/dash'; }
+class ApiError extends Error{}
+function netError(e){ if(e&&e.name==='AbortError') return new ApiError('Cancelled.'); return new ApiError('Couldn’t reach the CardOS server. Check this computer’s connection and try again.'); }
+async function failFrom(r){
+  if(r.status===403){ signedOut(); return new ApiError('You’re signed out.'); }
+  let j=null; try{ j=await r.json(); }catch(e){}
+  if(j&&j.gone) markGone();
+  if(j&&j.error) return new ApiError(j.error);
+  if(r.status===503) return new ApiError('The card isn’t reachable — Remote Files isn’t open on the device.');
+  if(r.status===413) return new ApiError('That file is too big for the server to take (16 MB at most).');
+  return new ApiError(`The server answered “${r.status} ${r.statusText||'error'}”.`);
+}
+async function api(method,url,body,opts={}){
+  let r;
+  try{ r=await fetch(url,{method,credentials:'same-origin',headers:body!==undefined?{'Content-Type':'application/json'}:undefined,body:body!==undefined?JSON.stringify(body):undefined,signal:opts.signal}); }
+  catch(e){ throw netError(e); }
+  if(!r.ok) throw await failFrom(r);
+  let j; try{ j=await r.json(); }catch(e){ throw new ApiError('The server sent an answer this page couldn’t read.'); }
+  if(j&&j.ok===false) throw new ApiError(j.error||j.msg||'The server said it didn’t work.');
+  return j;
+}
+
+/* ---------- toasts ---------- */
+function toast(msg,kind='ok'){
+  const t=document.createElement('div'); t.className='toast '+kind; t.setAttribute('role',kind==='err'?'alert':'status');
+  t.innerHTML=`<span class="tdot"></span><span>${esc(msg)}</span><button aria-label="Dismiss">✕</button>`;
+  t.querySelector('button').onclick=()=>t.remove();
+  $('#toasts').appendChild(t);
+  setTimeout(()=>t.remove(),kind==='err'?9000:4500);
+}
+
+/* ---------- modal ---------- */
+function modal({title,html='',input=null,actions,validate}){
+  return new Promise(resolve=>{
+    const v=document.createElement('div'); v.className='veil';
+    v.innerHTML=`<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <h3>${esc(title)}</h3><div class="body">${html}
+      ${input?`<div class="field" style="margin-top:6px"><label for="dlg-in">${esc(input.label)}</label><input class="inp" id="dlg-in" value="${esc(input.value||'')}" spellcheck="false" autocomplete="off">${input.hint?`<span class="hint">${esc(input.hint)}</span>`:''}<div class="ferr" id="dlg-err"></div></div>`:''}
+      </div><div class="dacts">${actions.map((a,i)=>`<button class="btn ${a.kind||''}" data-i="${i}">${esc(a.label)}</button>`).join('')}</div></div>`;
+    const prevFocus=document.activeElement;
+    const close=val=>{ v.remove(); document.removeEventListener('keydown',onKey,true); if(prevFocus&&prevFocus.focus) prevFocus.focus(); resolve(val); };
+    const fire=i=>{
+      const a=actions[i]; if(a.value==null){ close(null); return; }
+      const inp=$('#dlg-in',v), val=inp?inp.value.trim():null;
+      if(validate&&a.kind==='primary'){ const err=validate(val); if(err){ $('#dlg-err',v).textContent=err; if(inp) inp.focus(); return; } }
+      close({value:a.value,input:val});
+    };
+    const onKey=e=>{ if(e.key==='Escape'){ e.stopPropagation(); close(null); } if(e.key==='Enter'&&e.target.tagName==='INPUT'){ e.preventDefault(); const p=actions.findIndex(a=>a.kind==='primary'); if(p>=0) fire(p); } };
+    document.addEventListener('keydown',onKey,true);
+    v.addEventListener('click',e=>{ if(e.target===v) close(null); const b=e.target.closest('[data-i]'); if(b) fire(+b.dataset.i); });
+    document.body.appendChild(v);
+    const inp=$('#dlg-in',v);
+    if(inp){ inp.focus(); const dot=inp.value.lastIndexOf('.'), sl=inp.value.lastIndexOf('/'); inp.setSelectionRange(sl+1,dot>sl+1?dot:inp.value.length); }
+    else { const p=$('.btn.primary',v)||$('.btn',v); if(p) p.focus(); }
+  });
+}
+
+/* ---------- whole-dashboard state (/dash/api/state) ---------- */
+async function loadState(quiet){
+  S.stLoading=true; renderStateBits();
+  try{
+    const st=await api('GET','/dash/api/state');
+    S.st=st; S.stAt=now(); S.stErr='';
+    if(st.device) setDevice(st.device);
+    if(st.toggl&&st.toggl.running) S.tStart=st.toggl.running.start*1000;
+    S.serverDown=false;
+  }catch(e){ S.stErr=e.message; if(!quiet) toast(e.message,'err'); }
+  S.stLoading=false; renderAll();
+}
+function renderStateBits(){ $$('[data-act="state-refresh"]').forEach(b=>{ b.disabled=S.stLoading; }); if(S.stLoading) $('#srv-checked').innerHTML='<span class="spin"></span>Checking…'; }
+
+/* ---------- device presence (/dash/files/status, every 3 s) ---------- */
+let connWaiters=[];
+function setDevice(d){
+  const was=S.dev.connected, known=S.dev.known;
+  S.dev.connected=!!d.connected; S.dev.last_seen=d.last_seen||null; S.dev.known=true;
+  if(known&&was!==S.dev.connected){
+    if(S.dev.connected){ toast('Remote Files is open on the device — the card is reachable.','info'); S.listing=null; S.lsErr=''; }
+    else toast('The device went quiet — Remote Files was closed or lost WiFi.','err');
+  }
+  if(S.dev.connected){ const w=connWaiters; connWaiters=[]; w.forEach(f=>f()); }
+  if(!known||was!==S.dev.connected){ renderScreen(); renderGlance(); renderCard(); renderXfers(); }
+}
+function markGone(){ if(S.dev.connected) setDevice({connected:false,last_seen:S.dev.last_seen}); }
+function waitConnected(x){ return new Promise(res=>{ connWaiters.push(res); if(x) x.cancelWait=res; }); }
+async function pollStatus(){
+  try{
+    const r=await fetch('/dash/files/status',{credentials:'same-origin',cache:'no-store'});
+    if(r.status===403){ signedOut(); return; }
+    if(!r.ok) throw new Error();
+    const d=await r.json();
+    if(S.serverDown){ S.serverDown=false; $('#offline').classList.add('hidden'); toast('The server is answering again.','info'); }
+    setDevice(d);
+  }catch(e){
+    if(!S.serverDown){ S.serverDown=true; $('#offline').classList.remove('hidden'); }
+  }
+}
+const lastHeardMs=()=>S.dev.last_seen?now()-S.dev.last_seen*1000:null;
+const heardText=()=>{ const ms=lastHeardMs(); return ms==null?'never':fmtAgo(ms); };
+
+/* ---------- one job at a time for the device ---------- */
+const Q={busy:false,list:[]};
+function devJob(run,x){ return new Promise((res,rej)=>{ Q.list.push({run,x,res,rej}); pumpQ(); }); }
+async function pumpQ(){
+  if(Q.busy) return;
+  const job=Q.list.shift(); if(!job) return;
+  Q.busy=true;
+  try{
+    if(job.x){
+      if(job.x.status==='cancelled') throw new ApiError('Cancelled.');
+      if(!S.dev.connected){ renderXfers(); await waitConnected(job.x); }
+      if(job.x.status==='cancelled') throw new ApiError('Cancelled.');
+    }
+    job.res(await job.run());
+  }catch(e){ job.rej(e); }
+  finally{ Q.busy=false; renderLoadingVeil(); pumpQ(); }
+}
+const queueBusy=()=>Q.busy||Q.list.length>0;
+
+/* ---------- device drawing & overview ---------- */
+const activeXfer=()=>S.xfers.find(x=>x.status==='active'||x.status==='writing');
+function renderScreen(){
+  const t=new Date().toTimeString().slice(0,5);
+  if(S.dev.connected){
+    const x=activeXfer(); let body;
+    if(x&&x.status==='writing') body=`recv ${esc(x.name.slice(0,22))}\n<span class="d">writing to the card…</span>\n<span class="d">${fmtSize(x.total)}</span>`;
+    else if(x){ const pct=x.total?Math.floor(x.done/x.total*100):0; body=`${x.dir==='down'?'send':'recv'} ${esc(x.name.slice(0,22))}\n<span class="bart"><span class="bar" style="width:${Math.round(pct*1.1)}px"></span></span>${pct}%\n<span class="d">${fmtSize(x.done)} of ${fmtSize(x.total)}</span>`; }
+    else body=`<span class="d">waiting for the dashboard</span>\n\nlinked: cardos server`;
+    $$('.js-screen').forEach(el=>el.innerHTML=`<div class="hd"><span>Remote Files</span><span>${t}</span></div>${body}\n\n<span class="d">fn-\` close</span>`);
+    $$('.js-devcap').forEach(e=>e.textContent='Remote Files is open — the card is reachable.');
+  } else {
+    $$('.js-screen').forEach(el=>el.innerHTML=`<div class="hd"><span>Net</span><span>${t}</span></div> build    claude   <span class="sel">rfiles</span>\n screen   share    stocks\n toggl    web\n\n<span class="d">Remote Files — enter to open</span>`);
+    $$('.js-devcap').forEach(e=>e.textContent=S.dev.known?'Remote Files isn’t open. Launcher → Net → Remote Files.':'Checking for the device…');
+  }
+}
+function googleState(){ const g=S.st&&S.st.google; if(!g) return 'unknown'; if(!g.configured) return 'unset'; if(!g.signed_in) return 'out'; if(!g.ok||g.client_mismatch) return 'broken'; if(!g.tasks||!g.calendar) return 'partial'; return 'ok'; }
+const SRV=[['claude','Claude agent','Available','Not available'],['builds','Builds','Enabled','Disabled'],['voice','Voice (whisper)','Ready','Not ready'],['render','Web renderer','Available','Not available']];
+// Builds being off is a choice (a laptop server has none), not a fault.
+function srvProblems(){ const s=S.st&&S.st.server; if(!s) return []; return SRV.filter(([k])=>k!=='builds'&&s[k]&&!s[k].ok).map(r=>r[1]); }
+function togglLine(t){ const r=t.running; return `${esc(r.description||'(no description)')}${r.project?' — '+esc(r.project):''}`; }
+function renderGlance(){
+  const d=S.dev, st=S.st;
+  $$('.js-nd-files').forEach(e=>e.className='dot js-nd-files '+(d.connected?'ok':'warn'));
+  if(!st){
+    $('#headline').textContent=S.stErr?'Couldn’t load the dashboard.':'Checking…';
+    $('#glist').innerHTML=S.stErr?`<li><a href="#/home" data-act="state-refresh"><span class="k">Server</span><span class="dot bad"></span><span class="v">${esc(S.stErr)} <u>Try again</u></span><span class="go"></span></a></li>`:'';
+    return;
+  }
+  const gs=googleState(), t=st.toggl||{}, probs=srvProblems(), fw=(st.updates&&st.updates.firmware)||{}, apps=(st.updates&&st.updates.apps)||[];
+  let issues=0; if(!d.connected) issues++; if(gs!=='ok') issues++; if(probs.length) issues++; if(t.error) issues++;
+  $('#headline').innerHTML= issues===0?'Everything is <em>working</em>.':issues===1?'One thing needs <em>you</em>.':`${issues} things need <em>you</em>.`;
+  const g=st.google||{};
+  const gText={ok:`${esc(g.email)} — working`,partial:`Working, but missing the ${!g.tasks?'Tasks':'Calendar'} permission — ${!g.tasks?'Todo':'Calendar'} can’t sync`,broken:'Login broken — sign in again',out:'Not signed in — Calendar and Todo can’t sync',unset:'Google sign-in isn’t set up on this server'}[gs];
+  const rows=[
+    ['SD card',d.connected?'ok live':'warn',d.connected?`Reachable — Remote Files is open, heard from <span class="js-heard">${heardText()}</span>`:`Not reachable — open Remote Files on the device (last heard <span class="js-heard">${heardText()}</span>)`,'#/files'],
+    ['Google',gs==='ok'?'ok':gs==='partial'?'warn':'bad',gText,'#/accounts'],
+    ['Toggl',t.error?'warn':t.connected?'ok':'off',t.connected?(t.error?'Connected, but Toggl didn’t answer just now':t.running?`Running: ${togglLine(t)}, <span class="js-toggl-short mono">${elapsedShort()}</span>`:`Connected as ${esc(t.name)}, nothing running`):'Not connected','#/accounts'],
+    ['Server',probs.length?'bad':'ok',probs.length?`${probs.length} problem${probs.length>1?'s':''}: ${probs.join(', ')}`:'All checks pass','#/server'],
+    ['Updates','ok',`${fw.release?`Firmware <span class="mono">${esc(fw.release.slice(0,8))}</span> · `:fw.debug?`Firmware <span class="mono">${esc(fw.debug.slice(0,8))}</span> (debug) · `:'No firmware published · '}${apps.length} apps published`,'#/updates'],
+  ];
+  $('#glist').innerHTML=rows.map(r=>`<li><a href="${r[3]}"><span class="k">${r[0]}</span><span class="dot ${r[1]}"></span><span class="v">${r[2]}</span><span class="go">→</span></a></li>`).join('');
+  $$('.js-nd-accounts').forEach(e=>e.className='dot js-nd-accounts '+(gs==='ok'&&!t.error?'ok':gs==='partial'||t.error?'warn':'bad'));
+  $$('.js-nd-server').forEach(e=>e.className='dot js-nd-server '+(probs.length?'bad':'ok'));
+}
+
+/* ---------- the card ---------- */
+function renderCardSide(){
+  const d=S.dev;
+  $('#card-side').innerHTML=d.connected
+    ?`<span class="pill ok"><span class="dot ok live"></span>Connected</span><span>heard from <span class="js-heard">${heardText()}</span></span>`
+    :`<span class="pill warn"><span class="dot warn"></span>Not reachable</span><span>last heard <span class="js-heard">${heardText()}</span></span>`;
+}
+function renderCard(){
+  renderCardSide();
+  const body=$('#card-body');
+  if(!S.dev.connected){
+    body.innerHTML=`<div class="away">
+      <div class="away-ic">${ic('plug')}</div>
+      <div>
+        <h3>${S.dev.known?'The card can’t be reached right now':'Looking for the device…'}</h3>
+        <div class="dim">The dashboard can only see the SD card while the <b>Remote Files</b> app is open on the Cardputer. ${S.dev.last_seen?`It was last heard from <span class="js-heard">${heardText()}</span>.`:'It hasn’t been heard from since the server started.'}</div>
+        <ol>
+          <li><span>On the Cardputer, get to the launcher. If an app is open, press <span class="kbd">fn</span> + <span class="kbd">\`</span> to leave it.</span></li>
+          <li><span>Open the <b>Net</b> folder.</span></li>
+          <li><span>Open <b>Remote Files</b> and leave it on screen while you work here.</span></li>
+        </ol>
+        <div class="watch"><span class="spin"></span>Watching for it — this page notices on its own, no need to reload.</div>
+      </div></div>`;
+    return;
+  }
+  if(currentView()==='files'&&!S.listing&&!S.loading&&!S.lsErr) cd(S.cwd);
+  const path=S.listing?S.listing.path:S.cwd, parts=split(path);
+  const crumbs=[`<button data-act="cd" data-path="/" class="${parts.length?'':'cur'}">card</button>`].concat(parts.map((p,i)=>{ const pp='/'+parts.slice(0,i+1).join('/'); return `<span class="sep">/</span><button data-act="cd" data-path="${esc(pp)}" class="${i===parts.length-1?'cur':''}">${esc(p)}</button>`; })).join('');
+  let listHtml, meta='';
+  if(S.lsErr&&!S.listing){
+    listHtml=`<li class="fempty"><b style="color:var(--bad)">Couldn’t list ${esc(S.cwd)}.</b><br>${esc(S.lsErr)}<br><br><button class="btn sm" data-act="cd" data-path="${esc(S.cwd)}">Try again</button>${S.cwd!=='/'?` <button class="btn sm ghost" data-act="cd" data-path="/">Go to the top</button>`:''}</li>`;
+  } else if(!S.listing){
+    listHtml='';
+  } else {
+    const ents=S.listing.entries;
+    const dirs=ents.filter(e=>e.dir).length, files=ents.length-dirs, bytes=ents.reduce((a,e)=>a+(e.dir?0:e.size||0),0);
+    meta=`${dirs?dirs+' folder'+(dirs>1?'s':'')+', ':''}${files} file${files===1?'':'s'}${files?' · '+fmtSize(bytes):''}`;
+    listHtml=ents.map(n=>{
+      const p=joinp(path,n.name), k=kindOf(n), busy=S.busy[p];
+      const m=n.dir?'folder':k==='text'?'text · click to edit':k==='audio'?(path.startsWith('/home/memos')?`voice memo · about ${Math.max(1,Math.round((n.size-44)/32000))} s`:'audio'):k==='app'?'app':k==='font'?'font':'file';
+      return `<li class="frow ${busy?'busy':''} ${S.hl===p?'hl':''}">
+        <button class="row-main" data-act="open" data-path="${esc(p)}" data-dir="${n.dir?1:''}" data-size="${n.size||0}" title="${n.dir?'Open folder':k==='text'?'Edit':'Download'}">
+          <span class="ic ${n.dir?'dir':''}">${ic(k==='folder'?'folder':k)}</span>
+          <span class="nm"><b>${esc(n.name)}</b><small>${busy?esc(busy):m}${n.dir?'':`<span class="sz-sm"> · ${fmtSize(n.size)}</span>`}</small></span>
+        </button>
+        <span class="sz">${n.dir?'':fmtSize(n.size)}</span>
+        ${n.dir?'<span></span>':`<button class="icon-btn" data-act="dl" data-path="${esc(p)}" data-size="${n.size||0}" title="Download" aria-label="Download ${esc(n.name)}">${ic('down')}</button>`}
+        <button class="icon-btn" data-act="menu" data-path="${esc(p)}" data-dir="${n.dir?1:''}" data-size="${n.size||0}" title="More" aria-label="More for ${esc(n.name)}">${ic('more')}</button>
+      </li>`; }).join('')||'<li class="fempty">Empty folder. Drop files here, or use Upload.</li>';
+  }
+  body.innerHTML=`<div class="fbar">
+      ${parts.length?`<button class="icon-btn" data-act="cd" data-path="${esc(parentOf(path))}" title="Up a folder" aria-label="Up a folder">${ic('back')}</button>`:''}
+      <div class="crumbs">${crumbs}</div>
+      <div class="factions">
+        <button class="icon-btn" data-act="cd" data-path="${esc(path)}" title="Refresh this folder" aria-label="Refresh this folder">${ic('refresh')}</button>
+        <button class="btn sm" data-act="mkdir">${ic('newdir')}<span>New folder</span></button>
+        <button class="btn sm primary" data-act="upload">${ic('up')}<span>Upload</span></button>
+      </div></div>
+    <div class="fmeta"><span>${meta||'&nbsp;'}</span><span class="faint">drop files here to upload</span></div>
+    <ul class="flist" id="flist">${listHtml}<li class="loading-veil hidden" id="ls-veil"></li><li class="drop-hint">Drop to upload into ${esc(path)}</li></ul>`;
+  S.hl=null;
+  renderLoadingVeil();
+}
+function renderLoadingVeil(){
+  const v=$('#ls-veil'); if(!v) return;
+  v.classList.toggle('hidden',!S.loading);
+  if(S.loading) v.innerHTML=`<span><span class="spin"></span>${activeXfer()?'Waiting for the current transfer to finish…':'Asking the card…'}</span>`;
+}
+async function cd(path){
+  if(!requireCard()) return;
+  S.loading=true; S.cwd=path; renderLoadingVeil(); if(!$('#ls-veil')) renderCard();
+  try{
+    const j=await devJob(()=>api('GET','/dash/files/ls?path='+qp(path)));
+    S.listing={path:j.path||path,entries:j.entries||[]}; S.cwd=S.listing.path; S.lsErr='';
+  }catch(e){
+    S.lsErr=e.message;
+    if(S.listing&&S.listing.path!==path){ toast(`Couldn’t open ${path}: ${e.message}`,'err'); S.cwd=S.listing.path; S.lsErr=''; }
+    else if(S.listing){ toast(`Couldn’t refresh ${path}: ${e.message}`,'err'); S.lsErr=''; }
+  }
+  S.loading=false; renderCard();
+}
+const reloadIf=dir=>{ if(S.dev.connected&&S.cwd===dir) cd(dir); };
+function requireCard(){ if(S.dev.connected) return true; toast('The card isn’t reachable. Open Remote Files on the device (launcher → Net) first.','err'); return false; }
+const entryIn=(dir,name)=>S.listing&&S.listing.path===dir?S.listing.entries.find(e=>e.name===name):null;
+
+/* ---------- transfers ---------- */
+function transfer(x,run){
+  x.id=++S.xid; x.done=0; x.status='waiting'; x.rate=0; x.err='';
+  S.xfers.push(x); renderXfers();
+  return devJob(async()=>{ x.status='active'; x.started=now(); renderXfers(); renderScreen(); return run(x); },x)
+    .then(v=>{ x.status='done'; x.ended=now(); if(x.rate) S.lastRate=x.rate; renderXfers(); renderScreen(); return v; },
+          e=>{ if(x.status!=='cancelled'){ x.status='failed'; x.err=e.message; } x.ended=now(); renderXfers(); renderScreen(); throw e; });
+}
+function cancelX(id){
+  const x=S.xfers.find(x=>x.id===id); if(!x) return;
+  if(x.status==='waiting'){ x.status='cancelled'; x.err='Cancelled.'; if(x.cancelWait) x.cancelWait(); renderXfers(); }
+  else if(x.status==='active'){ x.status='cancelled'; x.err='Cancelled.'; if(x.abort) x.abort(); renderXfers(); }
+}
+function speedOf(x,t){
+  if(!x.lastT){ x.lastT=t; x.lastB=x.done; return; }
+  const dt=(t-x.lastT)/1000; if(dt<1) return;
+  const inst=(x.done-x.lastB)/dt; x.rate=x.rate?x.rate*.6+inst*.4:inst; x.lastT=t; x.lastB=x.done;
+}
+function xferLine(x){
+  if(x.status==='waiting') return S.dev.connected?'Waiting — the device does one job at a time':'Paused — waiting for Remote Files to be opened on the device';
+  if(x.status==='active'){
+    if(x.dir==='up'){ return `Sending to the server — ${fmtSize(x.sent||0)} of ${fmtSize(x.total)}`; }
+    if(!x.done) return 'Asking the card…';
+    const left=x.total-x.done;
+    return `${fmtSize(x.done)} of ${fmtSize(x.total)}${x.rate?` · ${(x.rate/1024).toFixed(1)} KB/s · about ${fmtDur(left/x.rate)} left`:''}`;
+  }
+  if(x.status==='writing'){ const s=(now()-x.writingSince)/1000; return `Writing to the card… ${fmtDur(s)} so far · ${fmtSize(x.total)} usually takes ${etaRange(x.total)}`; }
+  if(x.status==='done') return `Done — ${fmtSize(x.total)} in ${fmtDur((x.ended-x.started)/1000)}`;
+  return x.err;
+}
+function xferPct(x){ if(x.status==='done') return 100; if(x.dir==='up') return x.status==='active'?Math.floor((x.sent||0)/Math.max(1,x.total)*100):0; return x.total?Math.floor(x.done/x.total*100):0; }
+function renderXfers(){
+  const pend=S.xfers.filter(x=>['waiting','active','writing'].includes(x.status));
+  $$('.js-xbadge').forEach(b=>{ b.textContent=pend.length; b.classList.toggle('hidden',!pend.length); b.title=pend.length+' transfer'+(pend.length===1?'':'s')+' in progress'; });
+  $$('.mtop .js-xbadge').forEach(b=>b.textContent=pend.length+(pend.length===1?' transfer':' transfers'));
+  const el=$('#xfers');
+  if(!S.xfers.length){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const left=pend.reduce((a,x)=>a+x.total-(x.dir==='down'?x.done:0),0);
+  const rate=S.lastRate||(activeXfer()&&activeXfer().rate);
+  el.innerHTML=`<div class="xhead"><b>Transfers</b><span>${pend.length?`${pend.length} to go · ${fmtSize(left)} · roughly ${rate?fmtDur(left/rate)+` at ~${(rate/1024).toFixed(0)} KB/s`:etaRange(left)+' at 10–30 KB/s'}`:'All finished'}</span>
+    <span style="margin-left:auto"></span>${S.xfers.some(x=>!['waiting','active','writing'].includes(x.status))?'<button class="btn sm ghost" data-act="xclear">Clear finished</button>':''}</div>
+    <ul class="xlist">${S.xfers.map(x=>`<li class="xrow ${x.status}" data-xid="${x.id}">
+      <span class="faint">${ic(x.dir==='down'?'down':'up')}</span>
+      <div style="min-width:0"><div class="nm">${esc(x.name)} <span class="faint" style="font-weight:400">${x.dir==='down'?'from':'to'} ${esc(x.where)}</span></div>
+        <div class="st">${esc(xferLine(x))}</div><div class="prog ${x.status==='writing'||(x.status==='active'&&x.dir==='down'&&!x.done)?'ind':''}"><i style="width:${xferPct(x)}%"></i></div></div>
+      ${x.status==='waiting'||x.status==='active'?`<button class="btn sm ghost" data-act="xcancel" data-id="${x.id}">Cancel</button>`:x.status==='writing'?'<span class="faint" style="font-size:12px" title="The server already has the file and is writing it; stopping here would leave the card half-written">can’t stop now</span>':x.status==='failed'&&x.retry?`<button class="btn sm" data-act="xretry" data-id="${x.id}">Retry</button>`:'<span></span>'}
+    </li>`).join('')}</ul>`;
+}
+function updateXferRow(x){
+  const r=$(`.xrow[data-xid="${x.id}"]`); if(!r) return;
+  $('.st',r).textContent=xferLine(x);
+  const pg=$('.prog',r); pg.classList.toggle('ind',x.status==='writing'||(x.status==='active'&&x.dir==='down'&&!x.done));
+  $('i',pg).style.width=xferPct(x)+'%';
+}
+function saveBlob(name,blob){
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),10000);
+}
+// Fetch a file off the card with real progress. Resolves to a Blob.
+function fetchFile(path,size,quiet){
+  const x={dir:'down',name:baseOf(path),where:parentOf(path),total:size||0,path};
+  if(!quiet) x.retry=()=>download(path,size);
+  let lastPaint=0;
+  return transfer(x,async x=>{
+    const ac=new AbortController(); x.abort=()=>ac.abort();
+    let r; try{ r=await fetch('/dash/files/get?path='+qp(path),{credentials:'same-origin',signal:ac.signal,cache:'no-store'}); }catch(e){ throw netError(e); }
+    if(!r.ok) throw await failFrom(r);
+    const len=+r.headers.get('Content-Length'); if(len) x.total=len;
+    if(!r.body||!r.body.getReader){ const b=await r.blob(); x.done=b.size; return b; }
+    const rd=r.body.getReader(), parts=[];
+    for(;;){
+      let c; try{ c=await rd.read(); }catch(e){ if(e&&e.name==='AbortError') throw netError(e); throw new ApiError(`The transfer broke off at ${fmtSize(x.done)}${x.total?' of '+fmtSize(x.total):''} — the device or the connection stopped answering.`); }
+      if(c.done) break;
+      parts.push(c.value); x.done+=c.value.length;
+      const t=now(); speedOf(x,t);
+      if(t-lastPaint>200){ lastPaint=t; updateXferRow(x); renderScreen(); }
+    }
+    if(x.total&&x.done<x.total) throw new ApiError(`The device stopped sending at ${fmtSize(x.done)} of ${fmtSize(x.total)}.`);
+    if(!x.total) x.total=x.done;
+    return new Blob(parts);
+  });
+}
+function download(path,size){
+  if(!requireCard()) return;
+  if(size>100*1024) toast(`${baseOf(path)} is ${fmtSize(size)} — about ${etaRange(size)} at the card’s speed.`,'info');
+  fetchFile(path,size).then(b=>{ saveBlob(baseOf(path),b); toast(`Downloaded ${baseOf(path)}.`); },
+    e=>{ if(e.message!=='Cancelled.') toast(`Download of ${baseOf(path)} failed. ${e.message}`,'err'); });
+}
+// Send bytes to the card. Resolves to the server's {ok,size}.
+function putFile(path,body,size,opts={}){
+  const x={dir:'up',name:baseOf(path),where:parentOf(path),total:size,path};
+  if(opts.retry) x.retry=opts.retry;
+  return transfer(x,x=>new Promise((res,rej)=>{
+    const xhr=new XMLHttpRequest(); x.abort=()=>xhr.abort();
+    xhr.open('POST','/dash/files/put?path='+qp(path));
+    xhr.setRequestHeader('Content-Type','application/octet-stream');
+    xhr.upload.onprogress=e=>{ x.sent=e.loaded; updateXferRow(x); };
+    xhr.upload.onload=()=>{ if(x.status==='active'){ x.status='writing'; x.writingSince=now(); renderXfers(); renderScreen(); } };
+    xhr.onload=()=>{
+      let j=null; try{ j=JSON.parse(xhr.responseText); }catch(e){}
+      if(xhr.status===403){ signedOut(); rej(new ApiError('You’re signed out.')); return; }
+      if(xhr.status>=200&&xhr.status<300&&j&&j.ok!==false){ res(j); return; }
+      if(j&&j.gone) markGone();
+      rej(new ApiError(j&&j.error?j.error:xhr.status===413?'That file is too big for the server to take (16 MB at most).':xhr.status===503?'The card isn’t reachable — Remote Files isn’t open on the device.':`The server answered “${xhr.status} ${xhr.statusText||'error'}”.`));
+    };
+    xhr.onerror=()=>rej(new ApiError(x.status==='writing'?'Lost touch with the server while it was writing to the card. The file may or may not have arrived — refresh the folder to check.':'Couldn’t reach the CardOS server. Check this computer’s connection and try again.'));
+    xhr.onabort=()=>rej(new ApiError('Cancelled.'));
+    xhr.send(body);
+  }));
+}
+
+/* ---------- uploads ---------- */
+const MAX_PUT=16*1024*1024;
+async function upload(files,dirPath){
+  if(!requireCard()||!files.length) return;
+  files=[...files];
+  const big=files.filter(f=>f.size>MAX_PUT);
+  if(big.length){ toast(`Skipped ${big.map(f=>f.name).join(', ')} — the server takes 16 MB at most.`,'err'); files=files.filter(f=>!big.includes(f)); }
+  const asDir=files.filter(f=>{ const e=entryIn(dirPath,f.name); return e&&e.dir; });
+  if(asDir.length){ toast(`Skipped ${asDir.map(f=>f.name).join(', ')} — a folder has that name.`,'err'); files=files.filter(f=>!asDir.includes(f)); }
+  const clash=files.filter(f=>entryIn(dirPath,f.name));
+  if(clash.length){
+    const r=await modal({title:clash.length===1?`Replace ${clash[0].name}?`:`${clash.length} files already exist`,
+      html:`<p>${clash.length===1?`There’s already a <b>${esc(clash[0].name)}</b>`:'These are already'} in <span class="mono">${esc(dirPath)}</span>${clash.length>1?': '+clash.map(f=>`<b>${esc(f.name)}</b>`).join(', '):''}. Replacing can’t be undone.</p>`,
+      actions:[{label:'Cancel'},...(files.length>clash.length?[{label:'Skip those',value:'skip'}]:[]),{label:'Replace',value:'replace',kind:'primary'}]});
+    if(!r) return;
+    if(r.value==='skip') files=files.filter(f=>!clash.includes(f));
+  }
+  if(!files.length) return;
+  const total=files.reduce((a,f)=>a+f.size,0);
+  if(files.length>1||total>100*1024) toast(`${files.length} file${files.length>1?'s':''}, ${fmtSize(total)} — about ${etaRange(total)} to write to the card.`,'info');
+  for(const f of files){
+    const p=joinp(dirPath,f.name);
+    putFile(p,f,f.size,{retry:()=>upload([f],dirPath)}).then(()=>{ S.hl=p; toast(`Uploaded ${f.name} to ${dirPath}.`); reloadIf(dirPath); },
+      e=>{ if(e.message!=='Cancelled.') toast(`Upload of ${f.name} failed. ${e.message}`,'err'); });
+  }
+}
+
+/* ---------- file operations ---------- */
+async function op(path,label,fn,dirToReload){
+  S.busy[path]=label; renderCard();
+  try{ await devJob(fn); return true; }
+  catch(e){ toast(e.message,'err'); return false; }
+  finally{ delete S.busy[path]; renderCard(); }
+}
+async function mkdir(){
+  if(!requireCard()) return;
+  const dirPath=S.cwd;
+  const r=await modal({title:'New folder',html:`<p>In <span class="mono">${esc(dirPath)}</span></p>`,input:{label:'Name',value:''},
+    validate:v=>badName(v)||(entryIn(dirPath,v)?`Something called ${v} is already here.`:''),
+    actions:[{label:'Cancel'},{label:'Create',value:1,kind:'primary'}]});
+  if(!r) return;
+  const p=joinp(dirPath,r.input);
+  if(await op(p,'creating…',()=>api('POST','/dash/files/mkdir?path='+qp(p)))){ S.hl=p; toast(`Made folder ${r.input}.`); reloadIf(dirPath); }
+}
+async function renameMove(path,isDir){
+  if(!requireCard()) return;
+  const name=baseOf(path);
+  const r=await modal({title:`Rename or move ${isDir?'folder':'file'}`,
+    html:`<p>Change the name, or the whole path to move it — for example <span class="mono">/home/${esc(name)}</span>.</p>`,
+    input:{label:'Full path',value:path,hint:'Folders along the way must already exist.'},
+    validate:v=>{
+      if(!v.startsWith('/')) return 'Start the path with /';
+      const e=badName(baseOf(v)); if(e) return e;
+      if(v===path) return 'That’s where it already is.';
+      if(isDir&&(parentOf(v)+'/').startsWith(path+'/')) return 'A folder can’t go inside itself.';
+      if(entryIn(parentOf(v),baseOf(v))) return `${v} already exists.`;
+      return '';
+    },
+    actions:[{label:'Cancel'},{label:'Save',value:1,kind:'primary'}]});
+  if(!r) return;
+  const to=r.input.replace(/\/+$/,'');
+  if(await op(path,'moving…',()=>api('POST',`/dash/files/mv?from=${qp(path)}&to=${qp(to)}`))){
+    if(parentOf(to)===S.cwd) S.hl=to;
+    toast(parentOf(to)===parentOf(path)?`Renamed to ${baseOf(to)}.`:`Moved to ${to}.`);
+    reloadIf(parentOf(path));
+  }
+}
+async function del(path,isDir,size){
+  if(!requireCard()) return;
+  const name=baseOf(path);
+  const warn=path.startsWith('/config/')?'<p>This is a settings file the device reads. Deleting it may reset something on the device.</p>':path.startsWith('/apps/')?'<p>The app will disappear from the launcher; <span class="mono">update apps</span> on the device brings it back.</p>':'';
+  const r=await modal({title:`Delete ${name}?`,html:`<p><span class="mono">${esc(path)}</span>${isDir?' (a folder must be empty to delete)':' · '+fmtSize(size)} will be removed from the card. There’s no undo.</p>${warn}`,
+    actions:[{label:'Cancel'},{label:'Delete',value:1,kind:'danger'}]});
+  if(!r) return;
+  S.busy[path]='deleting…'; renderCard();
+  try{
+    await devJob(()=>api('POST','/dash/files/rm?path='+qp(path)));
+    toast(`Deleted ${name}.`); reloadIf(parentOf(path));
+  }catch(e){
+    if(isDir&&S.dev.connected){
+      const r2=await modal({title:`Couldn’t delete ${name}`,html:`<p>The device said: “${esc(e.message)}”</p><p>The card only deletes empty folders — open it and move or delete what’s inside first.</p>`,actions:[{label:'Close'},{label:'Open folder',value:1,kind:'primary'}]});
+      if(r2) cd(path);
+    } else toast(`Couldn’t delete ${name}. ${e.message}`,'err');
+  }finally{ delete S.busy[path]; renderCard(); }
+}
+function openItem(path,isDir,size){
+  if(isDir) return cd(path);
+  if(isText(path)) return openEditor(path,size);
+  download(path,size);
+}
+
+/* ---------- row menu ---------- */
+function openMenu(btn,path,isDir,size){
+  const m=$('#menu'), a=`data-path="${esc(path)}" data-dir="${isDir?1:''}" data-size="${size}"`;
+  m.innerHTML=`${isDir?`<button data-act="cd" ${a}>${ic('folder')}Open</button>`:isText(path)?`<button data-act="edit" ${a}>${ic('pencil')}Edit</button>`:''}
+    ${isDir?'':`<button data-act="dl" ${a}>${ic('down')}Download · ${fmtSize(size)}</button>`}
+    <button data-act="rename" ${a}>${ic('move')}Rename or move…</button><hr>
+    <button class="danger" data-act="del" ${a}>${ic('trash')}Delete${isDir?' (must be empty)':''}…</button>`;
+  m.classList.remove('hidden');
+  const r=btn.getBoundingClientRect(), mw=m.offsetWidth, mh=m.offsetHeight;
+  m.style.left=Math.max(8,Math.min(r.right-mw,innerWidth-mw-8))+'px';
+  m.style.top=(r.bottom+mh+8>innerHeight?r.top-mh-4:r.bottom+4)+'px';
+  $('button',m).focus();
+}
+const closeMenu=()=>$('#menu').classList.add('hidden');
+
+/* ---------- editor ---------- */
+let opening=false;
+async function openEditor(path,size){
+  if(!requireCard()) return;
+  if(S.editor||opening){ toast('Finish with the open file first.','info'); return; }
+  opening=true;
+  if(size>8*1024) toast(`Fetching ${baseOf(path)} (${fmtSize(size)}) before it opens — ${etaRange(size)} or so.`,'info');
+  try{
+    const b=await fetchFile(path,size,true);
+    const buf=new Uint8Array(await b.arrayBuffer());
+    let text; try{ text=new TextDecoder('utf-8',{fatal:true}).decode(buf); }
+    catch(e){ toast(`${baseOf(path)} isn’t plain UTF-8 text, so it can’t be edited here. Download it instead.`,'err'); return; }
+    showEditor(path,text);
+  }catch(e){ if(e.message!=='Cancelled.') toast(`Couldn’t open ${baseOf(path)}. ${e.message}`,'err'); }
+  finally{ opening=false; }
+}
+function showEditor(path,text){
+  const w=document.createElement('div'); w.className='ed'; w.id='ed';
+  w.innerHTML=`<div class="ed-win" role="dialog" aria-modal="true" aria-label="Editing ${esc(baseOf(path))}">
+    <div class="ed-head"><span class="ic">${ic('text')}</span><span class="path" title="${esc(path)}">${esc(path)}</span>
+      <span class="ed-state" id="ed-state"></span>
+      <button class="btn sm ghost" data-act="ed-dl" title="Save a copy of what’s in the editor to this computer">${ic('down')}<span>Copy to computer</span></button>
+      <button class="btn sm primary" data-act="ed-save">Save</button>
+      <button class="icon-btn" data-act="ed-close" aria-label="Close">${ic('x')}</button></div>
+    <div class="ed-banner hidden" id="ed-banner"></div>
+    <textarea id="ed-ta" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+    <div class="ed-foot"><span id="ed-pos">Ln 1, Col 1</span><span id="ed-bytes"></span><span class="r">Ctrl+S saves · Esc closes</span></div></div>`;
+  document.body.appendChild(w);
+  const ta=$('#ed-ta'); ta.value=text;
+  S.editor={path,original:text,saving:false,saveX:null,err:''};
+  ta.addEventListener('input',renderEdState);
+  ta.addEventListener('keyup',edPos); ta.addEventListener('click',edPos);
+  ta.addEventListener('keydown',e=>{ if(e.key==='Tab'&&!e.shiftKey){ e.preventDefault(); ta.setRangeText('    ',ta.selectionStart,ta.selectionEnd,'end'); renderEdState(); } });
+  renderEdState(); ta.focus(); ta.setSelectionRange(0,0); ta.scrollTop=0;
+}
+function edPos(){ const ta=$('#ed-ta'); if(!ta) return; const b=ta.value.slice(0,ta.selectionStart).split('\n'); $('#ed-pos').textContent=`Ln ${b.length}, Col ${b[b.length-1].length+1}`; }
+const edDirty=()=>!!(S.editor&&$('#ed-ta')&&$('#ed-ta').value!==S.editor.original);
+function renderEdState(){
+  const e=S.editor; if(!e||!$('#ed-ta')) return;
+  const ta=$('#ed-ta'), st=$('#ed-state'), dirty=edDirty();
+  $('#ed-bytes').textContent=fmtSize(blen(ta.value))+' · '+ta.value.split('\n').length+' lines';
+  if(e.saving){ const x=e.saveX; st.className='ed-state'; st.innerHTML=`<span class="spin"></span>${!x||x.status==='waiting'?'Waiting for the card…':x.status==='writing'?'Writing to the card…':'Saving…'}`; }
+  else { st.className='ed-state'+(dirty?' dirty':''); st.textContent=dirty?'Unsaved changes':'Saved on the card'; }
+  $('[data-act="ed-save"]').disabled=e.saving||!dirty;
+  const bn=$('#ed-banner');
+  if(e.err){ bn.classList.remove('hidden'); bn.innerHTML=`<b>Didn’t save.</b> ${esc(e.err)} Your edits are still here — save again once the card is reachable, or copy them to this computer.`; } else bn.classList.add('hidden');
+  edPos();
+}
+function edSave(){
+  const e=S.editor; if(!e||e.saving||!edDirty()) return;
+  if(!S.dev.connected){ e.err='The card isn’t reachable — Remote Files isn’t open on the device.'; renderEdState(); return; }
+  const text=$('#ed-ta').value, bytes=enc.encode(text), name=baseOf(e.path);
+  e.err=''; e.saving=true;
+  const p=putFile(e.path,new Blob([bytes]),bytes.length);
+  e.saveX=S.xfers[S.xfers.length-1];
+  const tick=setInterval(()=>{ if(S.editor===e) renderEdState(); },500);
+  renderEdState();
+  p.then(()=>{ clearInterval(tick); e.saving=false; e.saveX=null; e.original=text; if(S.editor===e) renderEdState(); toast(`Saved ${name}.`); reloadIf(parentOf(e.path)); },
+         err=>{ clearInterval(tick); e.saving=false; e.saveX=null; if(S.editor===e){ e.err=err.message; renderEdState(); } else toast(`Saving ${name} failed. ${err.message}`,'err'); });
+}
+async function edClose(){
+  const e=S.editor; if(!e) return;
+  if(e.saving){
+    const r=await modal({title:'Still saving',html:'<p>The save carries on if you close the editor; the transfer list shows when it’s done. If it fails, your edits will be lost.</p>',actions:[{label:'Keep waiting',kind:'primary',value:null},{label:'Close anyway',value:1,kind:'danger'}]});
+    if(!r) return;
+  } else if(edDirty()){
+    const r=await modal({title:`Discard changes to ${baseOf(e.path)}?`,html:'<p>Your edits haven’t been saved to the card.</p>',actions:[{label:'Keep editing'},{label:'Discard',value:'discard',kind:'danger'},{label:'Save',value:'save',kind:'primary'}]});
+    if(!r) return;
+    if(r.value==='save'){ edSave(); return; }
+  }
+  const w=$('#ed'); if(w) w.remove(); S.editor=null;
+}
+
+/* ---------- Google ---------- */
+function renderGoogle(){
+  const el=$('#google'), g=S.st&&S.st.google, gs=googleState();
+  const head=`<div class="acct-top"><div class="logo g"><span style="color:#4285f4">G</span></div><div style="min-width:0"><h3>Google</h3><div class="sub">For the device’s Calendar and Todo</div></div>
+    ${gs==='ok'?'<span class="pill ok">Working</span>':gs==='partial'?'<span class="pill warn">Partly working</span>':gs==='broken'?'<span class="pill bad">Broken</span>':gs==='unknown'?'':gs==='unset'?'<span class="pill">Not set up</span>':'<span class="pill">Signed out</span>'}</div>`;
+  if(!g){ el.innerHTML=head+`<p class="dim" style="margin:0">${S.stErr?esc(S.stErr):'<span class="spin"></span>Loading…'}</p>`; return; }
+  if(!g.configured){ el.innerHTML=head+`<p class="dim" style="margin:0">This server has no Google client set up, so it can’t sign in to Google. Calendar and Todo on the device only show what they last cached.</p>`; return; }
+  if(!g.signed_in){
+    el.innerHTML=head+`<p class="dim" style="margin:0">No Google account is signed in. Calendar and Todo on the device only show what they last cached.</p>
+      <div class="acts"><button class="btn primary" data-act="g-signin">Sign in with Google</button></div>`; return;
+  }
+  const perm=(ok,name)=>`<span class="perm">${ok?`<span class="yes">${ic('check')}</span>`:`<span class="no">${ic('x')}</span>`}${name}</span>`;
+  el.innerHTML=head+`
+    <dl class="facts">
+      <dt>Account</dt><dd>${esc(g.email||'(unknown)')}</dd>
+      <dt>Login</dt><dd>${g.ok?`<span style="color:var(--ok)">Working</span> <span class="faint">· checked <span class="js-stat">${fmtAgo(now()-S.stAt)}</span></span>`:'<span style="color:var(--bad)">Not working</span>'}</dd>
+      <dt>Allowed</dt><dd>${perm(g.calendar,'Calendar')}${perm(g.tasks,'Tasks')}</dd>
+      <dt>Signed in</dt><dd>${fmtEpoch(g.signed_in_at)}</dd>
+    </dl>
+    ${!g.ok?`<div class="note bad"><b>${g.why?`Google says: “${esc(g.why)}”`:'Google refused the login.'}</b><br>Calendar and Todo on the device can’t sync until you sign in again.</div>`:''}
+    ${g.client_mismatch?'<div class="note warn"><b>Signed in with a different Google client.</b> This login was made with a client the server no longer uses. Sign in again so the server and the login match.</div>':''}
+    ${g.ok&&!g.tasks?'<div class="note warn"><b>Todo can’t sync.</b> The login doesn’t include the Tasks permission. Sign in again and leave “Tasks” ticked on Google’s page.</div>':''}
+    ${g.ok&&!g.calendar?'<div class="note warn"><b>Calendar can’t sync.</b> The login doesn’t include the Calendar permission. Sign in again and leave it ticked on Google’s page.</div>':''}
+    <div class="acts"><button class="btn ${gs==='ok'?'':'primary'}" data-act="g-signin">Sign in again</button><button class="btn ghost" data-act="g-signout">Sign out</button></div>`;
+}
+async function gSignIn(){
+  if(edDirty()||queueBusy()){
+    const r=await modal({title:'Leave for Google?',html:`<p>Signing in leaves this page for Google’s. ${edDirty()?'Unsaved edits will be lost. ':''}${queueBusy()?'Transfers still running will stop. ':''}</p>`,actions:[{label:'Stay'},{label:'Go to Google',value:1,kind:'primary'}]});
+    if(!r) return;
+  }
+  leaving=true; location.href='/dash/google/start';
+}
+async function gSignOut(){
+  const r=await modal({title:'Sign out of Google?',html:'<p>The server forgets this login. Calendar and Todo on the device stop syncing and keep showing their caches until you sign in again.</p>',actions:[{label:'Cancel'},{label:'Sign out',value:1,kind:'danger'}]});
+  if(!r) return;
+  try{ const j=await api('POST','/dash/api/google/forget'); toast(j.msg||'Signed out of Google.'); }
+  catch(e){ toast(`Couldn’t sign out of Google. ${e.message}`,'err'); }
+  loadState(true);
+}
+
+/* ---------- Toggl ---------- */
+function elapsed(){ if(!S.tStart) return [0,0,0]; const s=Math.max(0,Math.floor((now()-S.tStart)/1000)); return [Math.floor(s/3600),Math.floor(s/60)%60,s%60]; }
+function elapsedShort(){ const [h,m]=elapsed(); return `${h}:${String(m).padStart(2,'0')}`; }
+let tChecking=false;
+function renderToggl(){
+  const el=$('#toggl'), t=S.st&&S.st.toggl;
+  const head=`<div class="acct-top"><div class="logo t">⏻</div><div style="min-width:0"><h3>Toggl Track</h3><div class="sub">For the device’s Toggl app</div></div>${!t?'':t.connected?'<span class="pill ok">Connected</span>':'<span class="pill">Not connected</span>'}</div>`;
+  if(!t){ el.innerHTML=head+`<p class="dim" style="margin:0">${S.stErr?esc(S.stErr):'<span class="spin"></span>Loading…'}</p>`; return; }
+  if(t.connected){
+    const [h,m,s]=elapsed(), r=t.running;
+    el.innerHTML=head+`
+      ${t.error?`<div class="note warn"><b>Couldn’t ask Toggl what’s running.</b> ${esc(t.error)}</div>`
+      :r?`<div class="running"><span class="dot ok live"></span><div class="what"><b>${esc(r.description||'(no description)')}</b><span>${r.project?`<i class="proj-dot" style="background:#e57cd8"></i>${esc(r.project)}`:'No project'}</span></div><div class="clk js-toggl">${h}:${String(m).padStart(2,'0')}<small>:${String(s).padStart(2,'0')}</small></div></div>`
+      :'<div class="running"><span class="dot off"></span><div class="what"><b>Nothing running</b><span>Start a timer from the device or Toggl itself.</span></div></div>'}
+      <dl class="facts"><dt>Account</dt><dd>${esc(t.name||'(unknown)')}</dd><dt>Connected</dt><dd>${fmtEpoch(t.since)}</dd></dl>
+      <div class="acts"><button class="btn ghost" data-act="t-disconnect">Disconnect</button></div>`;
+    return;
+  }
+  el.innerHTML=head+`
+    <p class="dim" style="margin:0">Paste your Toggl API token and the server will check it with Toggl. The device then shows and controls the running timer.</p>
+    <form class="field" id="t-form" autocomplete="off">
+      <label for="t-token">API token</label>
+      <div class="inp-row"><input class="inp" id="t-token" type="password" placeholder="Paste the token" spellcheck="false" ${tChecking?'disabled':''}>
+        <button type="button" class="btn sm ghost" data-act="t-show" aria-label="Show token">Show</button></div>
+      <span class="hint">Find it at the bottom of your profile page on track.toggl.com.</span>
+      <div class="ferr" id="t-err" role="alert"></div>
+      <div class="acts"><button class="btn primary" type="submit" ${tChecking?'disabled':''}>${tChecking?'<span class="spin"></span>Checking with Toggl…':'Connect'}</button></div>
+    </form>`;
+}
+async function tConnect(){
+  const v=$('#t-token').value.trim();
+  if(!v){ $('#t-err').textContent='Paste a token first.'; $('#t-token').focus(); return; }
+  tChecking=true; renderToggl(); $('#t-token').value=v;
+  try{
+    const j=await api('POST','/dash/api/toggl/token',{token:v});
+    tChecking=false; toast(`Toggl connected as ${j.name||'your account'}.`);
+    await loadState(true);
+  }catch(e){
+    tChecking=false; renderToggl(); $('#t-token').value=v;
+    $('#t-err').textContent=e.message; toast('Toggl refused the token.','err');
+  }
+}
+async function tDisconnect(){
+  const r=await modal({title:'Disconnect Toggl?',html:'<p>The server forgets the API token. Toggl itself is untouched — a running timer keeps running there.</p>',actions:[{label:'Cancel'},{label:'Disconnect',value:1,kind:'danger'}]});
+  if(!r) return;
+  try{ await api('POST','/dash/api/toggl/forget'); toast('Toggl disconnected.'); }
+  catch(e){ toast(`Couldn’t disconnect Toggl. ${e.message}`,'err'); }
+  loadState(true);
+}
+
+/* ---------- server ---------- */
+function renderServer(){
+  const s=S.st&&S.st.server;
+  if(!s){ $('#checks').innerHTML=`<li><span class="dot ${S.stErr?'bad':'off'}"></span><span class="nm">Server</span><span class="st ${S.stErr?'bad':'off'}">${S.stErr?'Unknown':'…'}</span><span class="det">${S.stErr?esc(S.stErr):'Loading…'}</span></li>`; }
+  else {
+    const rows=SRV.map(([k,name,yes,no])=>{ const c=s[k]||{ok:false,detail:'The server didn’t report this.'}; return {name,state:c.ok?'ok':k==='builds'?'off':'bad',st:c.ok?yes:no,det:esc(c.detail||'')}; });
+    rows.splice(1,0,{name:'Claude session',state:s.session?'ok':'off',st:s.session?'Open':'None',det:s.session?`<span class="mono">${esc(s.session)}</span>`:'The next message from the device starts a new one.'});
+    $('#checks').innerHTML=rows.map(c=>`<li><span class="dot ${c.state}"></span><span class="nm">${c.name}</span><span class="st ${c.state}">${c.st}</span><span class="det">${c.det}</span></li>`).join('');
+  }
+  if(!S.stLoading) $('#srv-checked').innerHTML=S.stAt?`Checked <span class="js-stat">${fmtAgo(now()-S.stAt)}</span>`:'';
+  renderStateBits();
+}
+
+/* ---------- updates ---------- */
+function renderUpdates(){
+  const u=S.st&&S.st.updates, fw=(u&&u.firmware)||{}, apps=(u&&u.apps)||[];
+  const fwCard=(lab,h)=>`<div class="panel fwc"><div><div class="lab">Firmware · ${lab}</div><div class="hash">${h?`${esc(h.slice(0,8))}<span>${esc(h.slice(8))}</span>`:'<span>not published</span>'}</div></div>${h?`<button class="icon-btn" data-act="copy" data-v="${esc(h)}" title="Copy hash" aria-label="Copy ${lab} hash">${ic('copy')}</button>`:''}</div>`;
+  $('#fw').innerHTML=u?fwCard('release',fw.release)+fwCard('debug',fw.debug):'';
+  const folders=[...new Set(apps.map(a=>a.folder).filter(Boolean))].sort();
+  const groups=['All',...folders,...(apps.some(a=>!a.folder)?['Top level']:[])];
+  if(!groups.includes(S.appFilter)) S.appFilter='All';
+  const inG=(a,g)=>g==='All'||(g==='Top level'?!a.folder:a.folder===g);
+  $('#achips').innerHTML=groups.map(g=>`<button class="chip ${S.appFilter===g?'on':''}" data-act="afilter" data-g="${esc(g)}">${esc(g)}<span>${apps.filter(a=>inG(a,g)).length}</span></button>`).join('');
+  const q=S.appQuery.toLowerCase();
+  const list=apps.filter(a=>inG(a,S.appFilter)&&(!q||a.name.toLowerCase().includes(q))).sort((a,b)=>b.size-a.size);
+  const max=Math.max(1,...apps.map(a=>a.size));
+  $('#agrid').innerHTML=!u?`<li class="faint" style="grid-column:1/-1">${S.stErr?esc(S.stErr):'Loading…'}</li>`:list.map(a=>`<li><span class="an">${esc(a.name)}<span class="af">${esc(a.folder||'top level')}</span></span><span class="meter"><i class="${a.size>60*1024?'big':''}" style="width:${a.size/max*100}%"></i></span><span class="ak">${(a.size/1024).toFixed(1)}</span></li>`).join('')||`<li class="faint" style="grid-column:1/-1">${apps.length?'No app by that name.':'No apps are published.'}</li>`;
+  const sum=list.reduce((s,a)=>s+a.size,0);
+  $('#afoot').innerHTML=u?`<span>${list.length} app${list.length===1?'':'s'} · ${(sum/1024).toFixed(1)} KB · sizes in KB, largest first</span><span>Orange: over 60 KB</span>`:'';
+}
+
+/* ---------- settings / session ---------- */
+function renderSession(){
+  const s=S.st&&S.st.session;
+  $('#sess-text').textContent=s&&s.expires?`Signed in with the dashboard password. This sign-in lasts until ${fmtEpoch(s.expires)}.`:'Signed in with the dashboard password.';
+}
+function setTheme(t,save){
+  if(t) document.documentElement.dataset.theme=t; else delete document.documentElement.dataset.theme;
+  $$('.seg [data-act="theme"]').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+  if(save){ try{ localStorage.setItem('cardos-dash-theme',t); }catch(e){} }
+}
+async function logout(){
+  if(edDirty()||queueBusy()){
+    const r=await modal({title:'Log out now?',html:`<p>${edDirty()?'You have unsaved edits. ':''}${queueBusy()?'Transfers still running will stop. ':''}</p>`,actions:[{label:'Stay'},{label:'Log out anyway',value:1,kind:'danger'}]});
+    if(!r) return;
+  }
+  try{ await api('POST','/dash/api/logout'); }
+  catch(e){ toast(`Couldn’t log out. ${e.message}`,'err'); return; }
+  leaving=true; location.href='/dash';
+}
+
+/* ---------- render everything ---------- */
+function renderAll(){ renderScreen(); renderGlance(); renderCard(); renderXfers(); renderGoogle(); renderToggl(); renderServer(); renderUpdates(); renderSession(); }
+function tick(){
+  $$('.js-heard').forEach(e=>e.textContent=heardText());
+  $$('.js-stat').forEach(e=>e.textContent=fmtAgo(now()-S.stAt));
+  const t=S.st&&S.st.toggl;
+  if(t&&t.connected&&t.running){ const [h,m,s]=elapsed(); $$('.js-toggl').forEach(e=>e.innerHTML=`${h}:${String(m).padStart(2,'0')}<small>:${String(s).padStart(2,'0')}</small>`); $$('.js-toggl-short').forEach(e=>e.textContent=elapsedShort()); }
+  if(!activeXfer()) renderScreen();
+  S.xfers.filter(x=>x.status==='waiting'||x.status==='writing').forEach(updateXferRow);
+}
+
+/* ---------- routing ---------- */
+const VIEWS={home:'Overview',files:'SD card',accounts:'Accounts & keys',server:'Server',updates:'Updates',settings:'Settings'};
+function currentView(){ const v=(location.hash.match(/^#\/(\w+)/)||[])[1]; return VIEWS[v]?v:'home'; }
+function route(){
+  const v=currentView();
+  $$('.view').forEach(el=>el.classList.toggle('on',el.id==='v-'+v));
+  $$('[data-view]').forEach(a=>{ const on=a.dataset.view===v; a.classList.toggle('on',on); if(on) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current'); });
+  $('#m-where').textContent=VIEWS[v];
+  document.title=(v==='home'?'':VIEWS[v]+' · ')+'CardOS Dashboard';
+  closeMenu(); window.scrollTo(0,0);
+  if(v==='files') renderCard();
+}
+window.addEventListener('hashchange',route);
+
+/* ---------- events ---------- */
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-act]');
+  if(!e.target.closest('#menu')&&!(b&&b.dataset.act==='menu')) closeMenu();
+  if(!b) return;
+  const a=b.dataset.act, p=b.dataset.path, isDir=!!b.dataset.dir, size=+b.dataset.size||0;
+  if(b.closest('#menu')) closeMenu();
+  switch(a){
+    case 'logout': logout(); break;
+    case 'cd': e.preventDefault(); cd(p); break;
+    case 'open': openItem(p,isDir,size); break;
+    case 'edit': openEditor(p,size); break;
+    case 'dl': download(p,size); break;
+    case 'menu': { const m=$('#menu'); if(!m.classList.contains('hidden')&&m.dataset.for===p){ closeMenu(); break; } m.dataset.for=p; openMenu(b,p,isDir,size); break; }
+    case 'rename': renameMove(p,isDir); break;
+    case 'del': del(p,isDir,size); break;
+    case 'mkdir': mkdir(); break;
+    case 'upload': if(requireCard()) $('#upfile').click(); break;
+    case 'xcancel': cancelX(+b.dataset.id); break;
+    case 'xretry': { const x=S.xfers.find(x=>x.id===+b.dataset.id); if(x){ S.xfers=S.xfers.filter(y=>y!==x); renderXfers(); x.retry(); } break; }
+    case 'xclear': S.xfers=S.xfers.filter(x=>['waiting','active','writing'].includes(x.status)); renderXfers(); break;
+    case 'ed-save': edSave(); break;
+    case 'ed-close': edClose(); break;
+    case 'ed-dl': saveBlob(baseOf(S.editor.path),new Blob([enc.encode($('#ed-ta').value)])); toast('Copied to this computer. The card is unchanged.','info'); break;
+    case 'g-signin': gSignIn(); break;
+    case 'g-signout': gSignOut(); break;
+    case 't-disconnect': tDisconnect(); break;
+    case 't-show': { const i=$('#t-token'); i.type=i.type==='password'?'text':'password'; b.textContent=i.type==='password'?'Show':'Hide'; break; }
+    case 'state-refresh': e.preventDefault(); loadState(false); break;
+    case 'theme': setTheme(b.dataset.t,true); break;
+    case 'afilter': S.appFilter=b.dataset.g; renderUpdates(); break;
+    case 'goto': {
+      location.hash='#/files';
+      if(!requireCard()) break;
+      if(isDir) cd(p);
+      else { const dir=parentOf(p); cd(dir).then(()=>{ if(!S.listing||S.listing.path!==dir) return; const n=entryIn(dir,baseOf(p)); if(n) openItem(p,n.dir,n.size); else toast(`There’s no ${baseOf(p)} in ${dir} on the card.`,'err'); }); }
+      break; }
+    case 'copy': {
+      const v=b.dataset.v, done=()=>toast(`Copied ${v}.`);
+      if(navigator.clipboard&&window.isSecureContext) navigator.clipboard.writeText(v).then(done,()=>fallbackCopy(v,done)); else fallbackCopy(v,done);
+      break; }
+  }
+});
+function fallbackCopy(v,done){ const t=document.createElement('textarea'); t.value=v; document.body.appendChild(t); t.select(); let ok=false; try{ ok=document.execCommand('copy'); }catch(e){} t.remove(); if(ok) done(); else toast(`Couldn’t reach the clipboard. The hash is ${v}.`,'err'); }
+document.addEventListener('submit',e=>{ if(e.target.id==='t-form'){ e.preventDefault(); tConnect(); } });
+$('#upfile').onchange=e=>{ upload(e.target.files,S.cwd); e.target.value=''; };
+$('#asearch').oninput=e=>{ S.appQuery=e.target.value.trim(); renderUpdates(); };
+document.addEventListener('keydown',e=>{
+  if(S.editor&&(e.ctrlKey||e.metaKey)&&(e.key||'').toLowerCase()==='s'){ e.preventDefault(); edSave(); return; }
+  if(e.key==='Escape'){ if(!$('#menu').classList.contains('hidden')){ closeMenu(); return; } if(S.editor&&!$('.veil')){ edClose(); return; } }
+});
+let dragDepth=0;
+const cardEl=$('#card-body');
+cardEl.addEventListener('dragenter',e=>{ if(!S.dev.connected||!S.listing||!e.dataTransfer.types.includes('Files')) return; e.preventDefault(); dragDepth++; cardEl.classList.add('drop'); });
+cardEl.addEventListener('dragover',e=>{ if(S.dev.connected&&e.dataTransfer.types.includes('Files')) e.preventDefault(); });
+cardEl.addEventListener('dragleave',()=>{ if(--dragDepth<=0){ dragDepth=0; cardEl.classList.remove('drop'); } });
+cardEl.addEventListener('drop',e=>{ e.preventDefault(); dragDepth=0; cardEl.classList.remove('drop'); if(e.dataTransfer.files.length) upload(e.dataTransfer.files,S.cwd); });
+window.addEventListener('beforeunload',e=>{ if(leaving) return; if(edDirty()||queueBusy()){ e.preventDefault(); e.returnValue=''; } });
+window.addEventListener('scroll',closeMenu,{passive:true});
+
+/* ---------- start ---------- */
+(function(){
+  let t=''; try{ t=localStorage.getItem('cardos-dash-theme')||''; }catch(e){}
+  setTheme(t,false);
+  const u=new URL(location.href), msg=u.searchParams.get('msg');
+  if(msg){
+    toast(msg,/fail|error|denied|refus|couldn|can.t|not /i.test(msg)?'err':'ok');
+    u.searchParams.delete('msg'); history.replaceState(null,'',u.pathname+(u.search||'')+u.hash);
+  }
+  route(); renderAll();
+  loadState(false);
+  pollStatus(); setInterval(pollStatus,3000);
+  setInterval(tick,1000);
+})();
+</script>
+</body>
+</html>

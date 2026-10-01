@@ -55,6 +55,7 @@ SCOPES = ["openid", "email",
           "https://www.googleapis.com/auth/tasks",
           "https://www.googleapis.com/auth/calendar.events"]
 CALLBACK = "/dash/google/callback"
+PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
 
 COOKIE = "cardos_dash"
 SESSION_DAYS = 30
@@ -314,156 +315,6 @@ def _google_check():
         return False, "could not check: %s" % e
 
 
-def google_card():
-    cid, csec = client()
-    c = load_creds()
-    head = "<div class=card-head><h2>Google</h2></div>"
-    if not cid or not csec:
-        return ("<section>%s<p class=bad>No Web client configured.</p>"
-                "<p class=dim>Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in the "
-                "server's environment. The client's redirect URI must be "
-                "<code>%s</code>.</p></section>" % (head, html.escape(base_url() + CALLBACK)))
-    if not c:
-        return ("<section>%s<p class=big><span class='dot bad'></span>Not signed in</p>"
-                "<p class=dim>Calendar and Todo on the device get their Google data "
-                "through this server, with this login.</p>"
-                "<div class=actions><a class='btn primary' href=/dash/google/start>"
-                "Sign in with Google</a></div></section>" % head)
-    ok, why = _google_check()
-    scope = c.get("scope", "")
-    has = lambda s: ("<span class=ok>yes</span>" if s in scope
-                     else "<span class=bad>no &mdash; sign in again and allow it</span>")
-    stale = c.get("client_id") != cid
-    return ("<section>%s<p class=big><span class='dot %s'></span>%s</p>"
-            "<p class=dim>%s</p><dl>"
-            "<dt>Account</dt><dd>%s</dd>"
-            "<dt>Calendar</dt><dd>%s</dd>"
-            "<dt>Tasks</dt><dd>%s</dd>"
-            "<dt>Signed in</dt><dd>%s</dd>%s</dl>"
-            "<div class=actions><a class=btn href=/dash/google/start>Sign in again</a>"
-            "<form method=post action=/dash/google/forget>"
-            "<button>Sign out</button></form></div></section>"
-            % (head, "ok" if ok else "bad",
-               "Working" if ok else "Not working",
-               "Calendar and Todo on the device get their Google data through this "
-               "server, with this login." if ok else html.escape(why),
-               html.escape(c.get("email") or "unknown"),
-               has("calendar"), has("tasks"), _when(c.get("issued_at")),
-               "<dt>Client</dt><dd class=bad>not the configured client: sign in again</dd>"
-               if stale else ""))
-
-
-def toggl_card():
-    """The Toggl token: who it belongs to, or a box to paste one into. Not
-    checked against Toggl on every page load -- its hourly quota is small,
-    and the device needs it more."""
-    from . import toggl
-    c = toggl.load()
-    head = "<div class=card-head><h2>Toggl</h2></div>"
-    if not c:
-        return ("<section>%s<p class=big><span class=dot></span>Not connected</p>"
-                "<p class=dim>Paste your API token from the bottom of "
-                "<a href='https://track.toggl.com/profile' target=_blank rel=noopener>"
-                "your Toggl profile</a>. The Toggl app on the device then starts and "
-                "stops timers through this server.</p>"
-                "<form method=post action=/dash/toggl/token style='display:block'>"
-                "<input name=token autocomplete=off placeholder='API token'>"
-                "<button class=primary>Connect</button></form></section>" % head)
-    return ("<section>%s<p class=big><span class='dot ok'></span>Connected</p>"
-            "<dl><dt>Account</dt><dd>%s</dd><dt>Connected</dt><dd>%s</dd></dl>"
-            "<div class=actions><form method=post action=/dash/toggl/forget>"
-            "<button>Disconnect</button></form></div></section>"
-            % (head, html.escape(c.get("name") or "?"), _when(c.get("saved_at"))))
-
-
-def device_card():
-    """Whether Remote Files is open on the device, and the way to the card."""
-    from . import files
-    b = files.broker
-    on = b.connected()
-    seen = ("never this run" if not b.last_seen else
-            "just now" if on else _ago(b.last_seen))
-    return ("<section><div class=card-head><h2>Device</h2></div>"
-            "<p class=big><span class='dot %s'></span>%s</p><p class=dim>%s</p>"
-            "<dl><dt>Last heard</dt><dd>%s</dd></dl>"
-            "<div class=actions><a class='btn primary' href=/dash/files>Open files</a></div>"
-            "</section>"
-            % ("ok" if on else "", "Card reachable" if on else "Card not reachable",
-               "Browse, upload, download and edit what is on the SD card." if on else
-               "Open <b>Remote Files</b> (Net folder) on the device to browse its card "
-               "from here.", seen))
-
-
-def _ago(t):
-    s = int(time.time() - t)
-    if s < 90:
-        return "%d s ago" % s
-    if s < 5400:
-        return "%d min ago" % (s // 60)
-    if s < 129600:
-        return "%d h ago" % (s // 3600)
-    return _when(t)
-
-
-def published_card(man):
-    """The /update manifest as a summary and a table, rather than the raw
-    lines the device reads."""
-    fw, apps, other = [], [], []
-    for line in man.splitlines():
-        f = line.split()
-        if len(f) >= 3 and f[0] == "firmware":
-            fw.append((f[1], f[2][:12]))
-        elif len(f) >= 4 and f[0] == "app":
-            apps.append((f[1], f[4] if len(f) > 4 else "", int(f[3]) if f[3].isdigit() else 0))
-        elif line.strip():
-            other.append(line)
-    rows = "".join("<tr><td>%s</td><td class=dim>%s</td><td class=dim>%.1f KB</td></tr>"
-                   % (html.escape(n), html.escape(folder or "top"), size / 1024.0)
-                   for n, folder, size in apps)
-    firm = "".join("<dt>Firmware %s</dt><dd><code>%s</code></dd>"
-                   % (html.escape(k), html.escape(s)) for k, s in fw)
-    return ("<section><div class=card-head><h2>Published for update</h2></div>"
-            "<p class=dim>What <code>update</code> on the device compares itself with.</p>"
-            "<dl>%s<dt>Apps</dt><dd>%d</dd></dl>%s"
-            "<details><summary class=dim>Every app</summary>"
-            "<table class=apps>%s</table></details></section>"
-            % (firm, len(apps),
-               "".join("<p class=bad>%s</p>" % html.escape(o) for o in other), rows))
-
-
-def status_card(h):
-    from . import app, updates                 # app imports this module
-    firmware, apps_dir = h.update_files("release")
-    try:
-        man = updates.manifest(firmware=firmware, apps_dir=apps_dir)
-        man = man.replace("firmware ", "firmware release ", 1)
-        debug_fw, _ = h.update_files("debug")
-        # Only its firmware line: the apps are the same for both.
-        debug = updates.manifest(firmware=debug_fw, apps_dir=os.devnull)
-        man = debug.replace("firmware ", "firmware debug ", 1) + man
-    except Exception as e:
-        man = "error %s: %s\n" % (type(e).__name__, e)
-    c = h.chat
-    render = any(r[1].startswith("/render") for r in app.ALL_ROUTES)
-    voice = h.voice.ready() if h.voice else False
-
-    def yn(ok, good, bad):
-        return "<span class=%s>%s</span>" % ("ok" if ok else "bad", good if ok else bad)
-    return ("<section><div class=card-head><h2>Server</h2></div><dl>"
-            "<dt>Claude</dt><dd>%s</dd>"
-            "<dt>Session</dt><dd class=dim>%s</dd>"
-            "<dt>Builds</dt><dd>%s</dd>"
-            "<dt>Voice</dt><dd>%s</dd>"
-            "<dt>Render</dt><dd>%s</dd></dl></section>"
-            "%s"
-            % (yn(c and c.claude, html.escape(str(c.claude if c else "")), "not found"),
-               html.escape(c.session_id if c and c.session_id else "none yet"),
-               yn(getattr(c, "store", None), "yes, into " + html.escape(str(h.store)), "no"),
-               yn(voice, "whisper ready", "not found"),
-               yn(render, "available", "unavailable"),
-               published_card(man)))
-
-
 # ---- routes -----------------------------------------------------------------
 #
 # The /dash routes are "open" to the bearer check and do their own, with the
@@ -489,10 +340,15 @@ def get_dash(h, path, args):
     if not logged_in(h):
         h.html(login_page())
         return
-    msg = (args.get("msg") or [""])[0]
-    note = "<p class=msg>%s</p>" % html.escape(msg) if msg else ""
-    h.html(_page("CardOS", note + "<div class=grid>" + device_card() + google_card() + toggl_card() +
-                 status_card(h) + "</div>", here="/dash"))
+    # One file of HTML and script; everything it shows comes from
+    # /dash/api/state (server/dashapi.py) and /dash/files/*. Read each time,
+    # so editing it needs no restart.
+    try:
+        with open(PAGE_FILE, encoding="utf-8") as f:
+            h.html(f.read())
+    except OSError as e:
+        h.html(_page("CardOS", "<h1>CardOS</h1><p class=bad>%s is missing: %s</p>"
+                     % (html.escape(PAGE_FILE), html.escape(str(e)))), 500)
 
 
 def post_login(h, path, args):
@@ -599,40 +455,6 @@ def post_google_forget(h, path, args):
     h.redirect("/dash?msg=" + urllib.parse.quote(msg))
 
 
-def post_toggl_token(h, path, args):
-    """connect Toggl: check a token and keep it"""
-    from . import toggl
-    if not _need_token(h):
-        return
-    if not logged_in(h):
-        h.redirect("/dash")
-        return
-    token = (_form(h).get("token") or [""])[0].strip()
-    if not token:
-        h.redirect("/dash?msg=" + urllib.parse.quote("Paste a token first."))
-        return
-    try:
-        name, wid = toggl.check_token(token)
-    except toggl.TogglError as e:
-        h.redirect("/dash?msg=" + urllib.parse.quote(e.why))
-        return
-    toggl.save({"token": token, "name": name, "workspace": wid, "saved_at": int(time.time())})
-    sys.stderr.write("dash: toggl connected\n")
-    h.redirect("/dash?msg=" + urllib.parse.quote("Toggl connected as %s." % name))
-
-
-def post_toggl_forget(h, path, args):
-    """disconnect Toggl"""
-    from . import toggl
-    if not _need_token(h):
-        return
-    if not logged_in(h):
-        h.redirect("/dash")
-        return
-    toggl.forget()
-    h.redirect("/dash?msg=" + urllib.parse.quote("Toggl disconnected."))
-
-
 def get_creds(h, path, args):
     """Google client id, secret, refresh token, a line each"""
     # Every other route is open when there is no token; this one never is.
@@ -657,7 +479,5 @@ ROUTES = [
     ("GET", "/dash/google/start", get_google_start, "open"),
     ("GET", CALLBACK, get_google_callback, "open"),
     ("POST", "/dash/google/forget", post_google_forget, "open"),
-    ("POST", "/dash/toggl/token", post_toggl_token, "open"),
-    ("POST", "/dash/toggl/forget", post_toggl_forget, "open"),
     ("GET", "/google/creds", get_creds),
 ]

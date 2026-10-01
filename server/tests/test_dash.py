@@ -7,7 +7,7 @@ import urllib.error, urllib.parse, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))             # the repository root
 
-from server import app, dash
+from server import app, dash, google
 from server import chat as chatmod
 from http.server import ThreadingHTTPServer
 
@@ -126,8 +126,8 @@ class Doors(Server):
         for flag in ("HttpOnly", "Secure", "SameSite=Lax", "Path=/dash"):
             self.assertIn(flag, hdrs["Set-Cookie"])
         code, _, body = self.req("/dash", cookie=self.login())
-        self.assertIn("Log out", body)
-        self.assertIn("Server", body)
+        self.assertEqual(code, 200)
+        self.assertIn("/dash/api/state", body)          # the page, which asks the API
 
     def test_the_token_is_not_the_password(self):
         code, _, _ = self.req("/dash/login", {"password": TOKEN})
@@ -173,8 +173,10 @@ class Google(Server):
                          [("abc", "cid.apps", "csec", "https://dash.example/dash/google/callback")])
         self.assertEqual(os.stat(dash.creds_path()).st_mode & 0o077 if os.name != "nt" else 0, 0)
 
-        _, _, page = self.req("/dash", cookie=cookie)
-        self.assertIn("me@example.com", page)
+        google.access_token = lambda: "a"               # no Google in a test
+        _, _, state = self.req("/dash/api/state", cookie=cookie)
+        g = json.loads(state)["google"]
+        self.assertEqual((g["email"], g["ok"], g["tasks"]), ("me@example.com", True, False))
 
         code, _, body = self.req("/google/creds", bearer=TOKEN)
         self.assertEqual((code, body), (200, "cid.apps\ncsec\nr-abc\n"))
@@ -225,6 +227,78 @@ class Google(Server):
         self.req("/dash/google/forget", {}, cookie=cookie)
         self.assertEqual(self.revoked, ["r-abc"])
         self.assertIsNone(dash.load_creds())
+
+
+class Api(Server):
+    """/dash/api: what the page reads and does, behind the same cookie."""
+
+    def api(self, path, body=None, cookie=None):
+        r = urllib.request.Request(self.base + path, method="POST" if body is not None else "GET",
+                                   data=json.dumps(body).encode() if body is not None else None)
+        if cookie:
+            r.add_header("Cookie", "%s=%s" % (dash.COOKIE, cookie))
+        try:
+            resp = OPENER.open(r, timeout=10)
+        except urllib.error.HTTPError as e:
+            resp = e
+        return (resp.status if hasattr(resp, "status") else resp.code,
+                dict(resp.headers), json.loads(resp.read() or b"null"))
+
+    def test_signed_out_is_a_403_for_every_call(self):
+        for path, body in (("/dash/api/state", None), ("/dash/api/toggl/token", {"token": "x"}),
+                           ("/dash/api/toggl/forget", {}), ("/dash/api/google/forget", {})):
+            self.assertEqual(self.api(path, body)[0], 403, path)
+
+    def test_state_has_every_part(self):
+        from server import toggl
+        toggl.forget()
+        code, _, st = self.api("/dash/api/state", cookie=self.login())
+        self.assertEqual(code, 200)
+        self.assertEqual(set(st), {"session", "device", "google", "toggl", "server", "updates"})
+        self.assertGreater(st["session"]["expires"], time.time())
+        self.assertEqual(st["device"], {"connected": False, "last_seen": None})
+        self.assertEqual((st["google"]["configured"], st["google"]["signed_in"]), (True, False))
+        self.assertEqual(st["toggl"]["connected"], False)
+        self.assertEqual(set(st["server"]), {"claude", "session", "builds", "voice", "render"})
+        self.assertIn("apps", st["updates"])
+
+    def test_toggl_token_is_checked_then_kept_then_forgotten(self):
+        from server import toggl
+        seen = []
+
+        def fake_check(token):
+            seen.append(token)
+            if token != "good":
+                raise toggl.TogglError(401, "Toggl refused the token")
+            return "Alex", 5
+        real = toggl.check_token
+        toggl.check_token = fake_check
+        try:
+            cookie = self.login()
+            code, _, j = self.api("/dash/api/toggl/token", {"token": " bad "}, cookie)
+            self.assertEqual((code, j["error"]), (400, "Toggl refused the token"))
+            self.assertIsNone(toggl.load())
+            code, _, j = self.api("/dash/api/toggl/token", {"token": "good"}, cookie)
+            self.assertEqual((code, j), (200, {"ok": True, "name": "Alex"}))
+            self.assertEqual(toggl.load()["token"], "good")
+            self.assertEqual(seen, ["bad", "good"])
+            self.assertEqual(self.api("/dash/api/toggl/forget", {}, cookie)[0], 200)
+            self.assertIsNone(toggl.load())
+        finally:
+            toggl.check_token = real
+
+    def test_google_forget_revokes(self):
+        cookie = self.login()
+        self.signed_in(cookie)
+        code, _, j = self.api("/dash/api/google/forget", {}, cookie)
+        self.assertEqual(code, 200)
+        self.assertEqual(self.revoked, ["r-abc"])
+        self.assertIsNone(dash.load_creds())
+
+    def test_logout_clears_the_cookie(self):
+        code, hdrs, _ = self.api("/dash/api/logout", {}, self.login())
+        self.assertEqual(code, 200)
+        self.assertIn("Max-Age=0", hdrs["Set-Cookie"])
 
 
 class NoPassword(Server):
