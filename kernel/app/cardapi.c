@@ -188,11 +188,26 @@ static int api_net_connect(int timeout_ms) {
   return wifi_connect_saved(timeout_ms);
 }
 
+/* A request to this device's own server carries the device's token --
+ * Calendar, Todo and Toggl get their data through it (server/) and no app
+ * should have to read /config/claude.token to say who it is. Only to that
+ * server: the token is never offered to anywhere else. Both HTTP calls go
+ * through this; for a while only http_start did, and a command using the
+ * blocking one reached the server unsigned and was refused. */
+static const char *own_bearer(const char *url, const char *bearer) {
+  if ((!bearer || !bearer[0]) && url) {
+    const char *base = update_base(), *tok = update_token();
+    size_t n = strlen(base);
+    if (n && *tok && !strncmp(url, base, n) && (url[n] == '/' || !url[n])) return tok;
+  }
+  return bearer;
+}
+
 static int api_http(const char *method, const char *url, const char *body,
                     const char *content_type, const char *bearer,
                     char *out, size_t out_size, int timeout_ms) {
-  return http_request(method, url, body, content_type, bearer, out, out_size,
-                      timeout_ms);
+  return http_request(method, url, body, content_type, own_bearer(url, bearer), out,
+                      out_size, timeout_ms);
 }
 
 static const char *api_google_token(void)  { return gauth_token(); }
@@ -336,17 +351,8 @@ static int api_http_start(const char *method, const char *url, const char *body,
    * app that sets nothing up (a command's capp_main returning at once) still
    * has an identity here; only kernel code calling through the table would
    * not, and none does. */
-  /* A request to this device's own server carries the device's token --
-   * Calendar and Todo sync through it now (server/google.py) and no app
-   * should have to read /config/claude.token to say who it is. Only to that
-   * server: the token is never offered to anywhere else. */
-  if ((!bearer || !bearer[0]) && url) {
-    const char *base = update_base(), *tok = update_token();
-    size_t n = strlen(base);
-    if (n && *tok && !strncmp(url, base, n) && (url[n] == '/' || !url[n])) bearer = tok;
-  }
   return httpq_start(capprun_executing(), method, url, body, content_type,
-                     bearer, timeout_ms);
+                     own_bearer(url, bearer), timeout_ms);
 }
 
 static int api_http_poll(char *out, size_t n) { return httpq_poll(out, n); }
