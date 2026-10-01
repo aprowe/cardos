@@ -33,7 +33,8 @@ typedef enum {
   BG_TIME_SYNC,          /* ask the network what time it is */
   BG_BT_PAIR_MOUSE,      /* scan for a new mouse and bond it */
   BG_BT_PAIR_KBD,        /* the same for a keyboard */
-  BG_RECONNECT_ALL       /* the saved network and whatever was paired */
+  BG_RECONNECT_ALL,      /* the saved network and whatever was paired */
+  BG_BT_RADIO_DOWN       /* give the radio's memory back: a print is done */
 } BgJob;
 
 /* Start the task. Called once at boot, after the radios' own init. */

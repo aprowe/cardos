@@ -73,6 +73,13 @@ static void run_job(BgJob job) {
      * annoyance the freeze was, in a different form. */
     break;
   }
+  case BG_BT_RADIO_DOWN:
+    /* Here rather than in the print job: this is the task the scans run on,
+     * so a teardown can never land in the middle of one. Silent: nobody
+     * asked, and the radio coming down is the absence of a cost. */
+    if (!bthid_autostart()) bt_radio_down();
+    break;
+
   case BG_TIME_SYNC:
     /* Waits on a UDP round trip, which is exactly the sort of second the
      * shell should not spend. Silent on failure: a device with no network

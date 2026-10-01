@@ -39,6 +39,7 @@
 #include "host/ble_uuid.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
+#include "esp_bt.h"
 
 /* Provided by NimBLE's store_config, which has no public header. */
 void ble_store_config_init(void);
@@ -574,6 +575,37 @@ int bt_radio_up(void) {
   s_inited = 1;
   s_heap_cost = (uint32_t)(heap_before - esp_get_free_heap_size());
   kbd_hid_init(&s_kbd);
+  return 0;
+}
+
+int bt_radio_down(void) {
+  size_t before;
+  int i;
+  if (!s_inited) return 0;
+  for (i = 0; i < MAX_LINKS; i++)
+    if (s_link[i].used && (s_link[i].state == BTH_CONNECTED ||
+                           s_link[i].state == BTH_CONNECTING))
+      return -1;
+  before = esp_get_free_heap_size();
+  /* nimble_port_run returns, and the host task deletes itself on the way
+   * out (nimble_host_task). Then the reverse of esp_hid_gap_init. */
+  if (nimble_port_stop() != 0) {
+    ESP_LOGW(TAG, "radio down: the host would not stop");
+    return -1;
+  }
+  esp_nimble_deinit();
+  esp_bt_controller_disable();
+  esp_bt_controller_deinit();
+  esp_hid_gap_deinit();
+  for (i = 0; i < MAX_LINKS; i++) {
+    s_link[i].used = 0;
+    s_link[i].conn = BLE_HS_CONN_HANDLE_NONE;
+    s_link[i].state = BTH_OFF;
+  }
+  kbd_hid_init(&s_kbd);
+  s_inited = 0;
+  ESP_LOGI(TAG, "radio down: %u KB back",
+           (unsigned)((esp_get_free_heap_size() - before) / 1024));
   return 0;
 }
 

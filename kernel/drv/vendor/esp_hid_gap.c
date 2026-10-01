@@ -1143,6 +1143,23 @@ static esp_err_t init_low_level(uint8_t mode)
 }
 #endif
 
+/* Declared by the vendor header and never written there. CardOS needs it:
+ * bt_radio_down (bthid.c) gives the radio's memory back after a print. The
+ * stack and the controller are taken down by the caller; this is what init
+ * made here beyond them. */
+esp_err_t esp_hid_gap_deinit(void)
+{
+    if (bt_hidh_cb_semaphore) {
+        vSemaphoreDelete(bt_hidh_cb_semaphore);
+        bt_hidh_cb_semaphore = NULL;
+    }
+    if (ble_hidh_cb_semaphore) {
+        vSemaphoreDelete(ble_hidh_cb_semaphore);
+        ble_hidh_cb_semaphore = NULL;
+    }
+    return ESP_OK;
+}
+
 esp_err_t esp_hid_gap_init(uint8_t mode)
 {
     esp_err_t ret;

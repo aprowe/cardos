@@ -6,6 +6,7 @@
 #include "kernel/ui/fontres.h"
 #include "kernel/drv/bthid.h"
 #include "kernel/net/httpq.h"
+#include "kernel/sys/bg.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -130,6 +131,9 @@ out:
     applogf("print", "failed after %d rows: %s", sent, why ? why : "?");
   }
   ESP_LOGI(TAG, "%s", s_status);
+  /* The radio came up for this print. Unless Bluetooth is wanted at boot,
+   * it goes back down: 67 KB is a third of what the apps have. */
+  bg_submit(BG_BT_RADIO_DOWN);
   if (j->done) j->done(j->ctx);
   free(j);
   s_busy = 0;

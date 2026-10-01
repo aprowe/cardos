@@ -158,7 +158,8 @@ static void cmd_mem(void) {
   else
     con_printf("handle arena          0 B  reserved on first use (%u KB)\n",
                (unsigned)(CARDOS_HEAP_BYTES / 1024));
-  con_printf("bluetooth        %6u B\n", (unsigned)bthid_heap_cost());
+  con_printf("bluetooth        %6u B%s\n", bthid_radio_on() ? (unsigned)bthid_heap_cost() : 0u,
+             bthid_radio_on() ? "" : "  (radio off)");
   con_printf("wifi             %6u B\n", (unsigned)wifi_heap_cost());
   /* The settings store, because when it fills up the next boot erases it
    * and every credential with it -- which looks like Google forgetting you
