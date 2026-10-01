@@ -38,6 +38,20 @@ button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 a{color:inherit}
 .mono{font-family:var(--mono);font-size:.92em}
+.term{padding:0;overflow:hidden}
+.term-out{background:var(--screen);color:var(--screen-ink);font:13px/1.45 var(--mono);padding:12px 14px;height:min(58vh,520px);overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+.term-out .cmd{color:var(--screen-hi)}
+.term-out .run{color:var(--screen-dim)}
+.term-out .refused{color:#f0a35a}
+.term-out .err{color:#f17366}
+.term-out .tnote{color:var(--screen-dim)}
+.term-in{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--line);background:var(--panel)}
+.term-ps{font:600 13px var(--mono);color:var(--accent)}
+.term-in input{flex:1;min-width:0;font:13px var(--mono);border:0;background:transparent;color:var(--ink);outline:none;padding:6px 0}
+.term-sug{display:flex;flex-wrap:wrap;gap:6px;padding:0 10px 10px;background:var(--panel)}
+.term-sug button{font:12px var(--mono);border:1px solid var(--line2);background:var(--panel2);color:var(--ink2);border-radius:99px;padding:3px 10px;cursor:pointer}
+.term-sug button:hover{color:var(--ink);border-color:var(--ink3)}
+.term-note{margin-top:10px;font-size:13px}
 .dim{color:var(--ink2)} .faint{color:var(--ink3)}
 .hidden{display:none!important}
 svg.i{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
@@ -81,8 +95,8 @@ main{max-width:1000px;width:100%;padding:30px 36px 120px;min-height:calc(100vh -
   .mtop .end{margin-left:auto;display:flex;align-items:center;gap:8px}
   main{padding:20px 16px 110px}
   .page-head h1{font-size:22px}
-  .bnav{display:grid;grid-template-columns:repeat(6,1fr);position:fixed;z-index:40;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:4px 2px calc(4px + env(safe-area-inset-bottom))}
-  .bnav a{display:flex;flex-direction:column;align-items:center;gap:2px;text-decoration:none;color:var(--ink3);font-size:10.5px;padding:5px 0;border-radius:8px;position:relative}
+  .bnav{display:grid;grid-template-columns:repeat(7,1fr);position:fixed;z-index:40;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:4px 2px calc(4px + env(safe-area-inset-bottom))}
+  .bnav a{display:flex;flex-direction:column;align-items:center;gap:2px;text-decoration:none;color:var(--ink3);font-size:10px;min-width:0;white-space:nowrap;padding:5px 0;border-radius:8px;position:relative}
   .bnav a.on{color:var(--accent);font-weight:600}
   .bnav a .dot,.bnav a .badge{position:absolute;top:3px;left:calc(50% + 8px)}
   .bnav a .dot{width:7px;height:7px;box-shadow:none}
@@ -370,7 +384,8 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
     <nav class="nav" aria-label="Views">
       <a href="#/home" data-view="home"><svg class="i" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/></svg>Overview</a>
       <a href="#/files" data-view="files"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M10 3v4M13 3v4"/></svg>SD card<span class="end"><span class="badge js-xbadge hidden"></span><span class="dot js-nd-files"></span></span></a>
-      <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts &amp; keys<span class="end"><span class="dot js-nd-accounts"></span></span></a>
+      <a href="#/term" data-view="term"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Terminal<span class="end"><span class="dot js-nd-files"></span></span></a>
+    <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts &amp; keys<span class="end"><span class="dot js-nd-accounts"></span></span></a>
       <a href="#/server" data-view="server"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>Server<span class="end"><span class="dot js-nd-server"></span></span></a>
       <a href="#/updates" data-view="updates"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
       <a href="#/settings" data-view="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>Settings</a>
@@ -404,6 +419,23 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
         </div>
         <div class="panel" id="card-body"></div>
         <div class="panel xfers hidden" id="xfers"></div>
+      </section>
+
+      <section class="view block" id="v-term">
+        <div class="sec-head">
+          <div><span class="lab">console</span><h2>Terminal</h2></div>
+          <div class="side-info"><span id="term-side"></span><button class="btn sm" data-act="term-clear">Clear</button></div>
+        </div>
+        <div class="panel term">
+          <div class="term-out" id="term-out" aria-live="polite"></div>
+          <form class="term-in" id="term-form" autocomplete="off">
+            <span class="term-ps">/&gt;</span>
+            <input id="term-line" maxlength="200" spellcheck="false" autocapitalize="off" aria-label="Console command">
+            <button class="btn sm" id="term-run">Run</button>
+          </form>
+          <div class="term-sug" id="term-sug"></div>
+        </div>
+        <p class="faint term-note">Commands run on the device's console, one at a time, and answer when they finish &mdash; an <span class="mono">update</span> can take minutes. Lines that would take over its screen (<span class="mono">launch</span>, <span class="mono">desk</span>, <span class="mono">run</span>) are refused.</p>
       </section>
 
       <section class="view block" id="v-accounts">
@@ -444,7 +476,7 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
           <div class="panel"><div class="set-row"><div class="grow"><h3>Session</h3><p id="sess-text">Signed in with the dashboard password.</p></div><button class="btn danger" data-act="logout">Log out</button></div></div>
           <div class="panel"><div class="set-row"><div class="grow"><h3>Appearance</h3><p>Follow this computer’s light or dark setting, or pick one. Remembered in this browser.</p></div>
             <div class="seg" role="group" aria-label="Theme"><button data-act="theme" data-t="">System</button><button data-act="theme" data-t="light">Light</button><button data-act="theme" data-t="dark">Dark</button></div></div></div>
-          <div class="panel"><div class="set-row"><div class="grow"><h3>How the card is reached</h3><p>Through the <b>Remote Files</b> app on the device (launcher → Net). It does one job at a time at roughly 10–30 KB/s, so big files take minutes; the SD card view keeps the queue and says how long is left, even while you look at other views.</p></div></div></div>
+          <div class="panel"><div class="set-row"><div class="grow"><h3>How the card is reached</h3><p>Through the <b>Dashboard Link</b> app on the device (launcher → Net). It does one job at a time at roughly 10–30 KB/s, so big files take minutes; the SD card view keeps the queue and says how long is left, even while you look at other views.</p></div></div></div>
         </div>
       </section>
     </main>
@@ -454,6 +486,7 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
   <nav class="bnav" aria-label="Views">
     <a href="#/home" data-view="home"><svg class="i" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/></svg>Overview</a>
     <a href="#/files" data-view="files"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M10 3v4M13 3v4"/></svg>Card<span class="badge js-xbadge hidden"></span><span class="dot js-nd-files"></span></a>
+    <a href="#/term" data-view="term"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Term</a>
     <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts<span class="dot js-nd-accounts"></span></a>
     <a href="#/server" data-view="server"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/></svg>Server<span class="dot js-nd-server"></span></a>
     <a href="#/updates" data-view="updates"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
@@ -538,7 +571,7 @@ async function failFrom(r){
   let j=null; try{ j=await r.json(); }catch(e){}
   if(j&&j.gone) markGone();
   if(j&&j.error) return new ApiError(j.error);
-  if(r.status===503) return new ApiError('The card isn’t reachable — Remote Files isn’t open on the device.');
+  if(r.status===503) return new ApiError('The card isn’t reachable — Dashboard Link isn’t open on the device.');
   if(r.status===413) return new ApiError('That file is too big for the server to take (16 MB at most).');
   return new ApiError(`The server answered “${r.status} ${r.statusText||'error'}”.`);
 }
@@ -607,11 +640,11 @@ function setDevice(d){
   const was=S.dev.connected, known=S.dev.known;
   S.dev.connected=!!d.connected; S.dev.last_seen=d.last_seen||null; S.dev.known=true;
   if(known&&was!==S.dev.connected){
-    if(S.dev.connected){ toast('Remote Files is open on the device — the card is reachable.','info'); S.listing=null; S.lsErr=''; }
-    else toast('The device went quiet — Remote Files was closed or lost WiFi.','err');
+    if(S.dev.connected){ toast('Dashboard Link is open on the device — the card is reachable.','info'); S.listing=null; S.lsErr=''; }
+    else toast('The device went quiet — Dashboard Link was closed or lost WiFi.','err');
   }
   if(S.dev.connected){ const w=connWaiters; connWaiters=[]; w.forEach(f=>f()); }
-  if(!known||was!==S.dev.connected){ renderScreen(); renderGlance(); renderCard(); renderXfers(); }
+  if(!known||was!==S.dev.connected){ renderScreen(); renderGlance(); renderCard(); renderXfers(); renderTerm(); }
 }
 function markGone(){ if(S.dev.connected) setDevice({connected:false,last_seen:S.dev.last_seen}); }
 function waitConnected(x){ return new Promise(res=>{ connWaiters.push(res); if(x) x.cancelWait=res; }); }
@@ -658,11 +691,11 @@ function renderScreen(){
     if(x&&x.status==='writing') body=`recv ${esc(x.name.slice(0,22))}\n<span class="d">writing to the card…</span>\n<span class="d">${fmtSize(x.total)}</span>`;
     else if(x){ const pct=x.total?Math.floor(x.done/x.total*100):0; body=`${x.dir==='down'?'send':'recv'} ${esc(x.name.slice(0,22))}\n<span class="bart"><span class="bar" style="width:${Math.round(pct*1.1)}px"></span></span>${pct}%\n<span class="d">${fmtSize(x.done)} of ${fmtSize(x.total)}</span>`; }
     else body=`<span class="d">waiting for the dashboard</span>\n\nlinked: cardos server`;
-    $$('.js-screen').forEach(el=>el.innerHTML=`<div class="hd"><span>Remote Files</span><span>${t}</span></div>${body}\n\n<span class="d">fn-\` close</span>`);
-    $$('.js-devcap').forEach(e=>e.textContent='Remote Files is open — the card is reachable.');
+    $$('.js-screen').forEach(el=>el.innerHTML=`<div class="hd"><span>Dashboard Link</span><span>${t}</span></div>${body}\n\n<span class="d">fn-\` close</span>`);
+    $$('.js-devcap').forEach(e=>e.textContent='Dashboard Link is open — the card is reachable.');
   } else {
-    $$('.js-screen').forEach(el=>el.innerHTML=`<div class="hd"><span>Net</span><span>${t}</span></div> build    claude   <span class="sel">rfiles</span>\n screen   share    stocks\n toggl    web\n\n<span class="d">Remote Files — enter to open</span>`);
-    $$('.js-devcap').forEach(e=>e.textContent=S.dev.known?'Remote Files isn’t open. Launcher → Net → Remote Files.':'Checking for the device…');
+    $$('.js-screen').forEach(el=>el.innerHTML=`<div class="hd"><span>Net</span><span>${t}</span></div> build    claude   <span class="sel">dashlink</span>\n screen   share    stocks\n toggl    web\n\n<span class="d">Dashboard Link — enter to open</span>`);
+    $$('.js-devcap').forEach(e=>e.textContent=S.dev.known?'Dashboard Link isn’t open. Launcher → Net → Dashboard Link.':'Checking for the device…');
   }
 }
 function googleState(){ const g=S.st&&S.st.google; if(!g) return 'unknown'; if(!g.configured) return 'unset'; if(!g.signed_in) return 'out'; if(!g.ok||g.client_mismatch) return 'broken'; if(!g.tasks||!g.calendar) return 'partial'; return 'ok'; }
@@ -684,7 +717,7 @@ function renderGlance(){
   const g=st.google||{};
   const gText={ok:`${esc(g.email)} — working`,partial:`Working, but missing the ${!g.tasks?'Tasks':'Calendar'} permission — ${!g.tasks?'Todo':'Calendar'} can’t sync`,broken:'Login broken — sign in again',out:'Not signed in — Calendar and Todo can’t sync',unset:'Google sign-in isn’t set up on this server'}[gs];
   const rows=[
-    ['SD card',d.connected?'ok live':'warn',d.connected?`Reachable — Remote Files is open, heard from <span class="js-heard">${heardText()}</span>`:`Not reachable — open Remote Files on the device (last heard <span class="js-heard">${heardText()}</span>)`,'#/files'],
+    ['SD card',d.connected?'ok live':'warn',d.connected?`Reachable — Dashboard Link is open, heard from <span class="js-heard">${heardText()}</span>`:`Not reachable — open Dashboard Link on the device (last heard <span class="js-heard">${heardText()}</span>)`,'#/files'],
     ['Google',gs==='ok'?'ok':gs==='partial'?'warn':'bad',gText,'#/accounts'],
     ['Toggl',t.error?'warn':t.connected?'ok':'off',t.connected?(t.error?'Connected, but Toggl didn’t answer just now':t.running?`Running: ${togglLine(t)}, <span class="js-toggl-short mono">${elapsedShort()}</span>`:`Connected as ${esc(t.name)}, nothing running`):'Not connected','#/accounts'],
     ['Server',probs.length?'bad':'ok',probs.length?`${probs.length} problem${probs.length>1?'s':''}: ${probs.join(', ')}`:'All checks pass','#/server'],
@@ -710,11 +743,11 @@ function renderCard(){
       <div class="away-ic">${ic('plug')}</div>
       <div>
         <h3>${S.dev.known?'The card can’t be reached right now':'Looking for the device…'}</h3>
-        <div class="dim">The dashboard can only see the SD card while the <b>Remote Files</b> app is open on the Cardputer. ${S.dev.last_seen?`It was last heard from <span class="js-heard">${heardText()}</span>.`:'It hasn’t been heard from since the server started.'}</div>
+        <div class="dim">The dashboard can only see the SD card while the <b>Dashboard Link</b> app is open on the Cardputer. ${S.dev.last_seen?`It was last heard from <span class="js-heard">${heardText()}</span>.`:'It hasn’t been heard from since the server started.'}</div>
         <ol>
           <li><span>On the Cardputer, get to the launcher. If an app is open, press <span class="kbd">fn</span> + <span class="kbd">\`</span> to leave it.</span></li>
           <li><span>Open the <b>Net</b> folder.</span></li>
-          <li><span>Open <b>Remote Files</b> and leave it on screen while you work here.</span></li>
+          <li><span>Open <b>Dashboard Link</b> and leave it on screen while you work here.</span></li>
         </ol>
         <div class="watch"><span class="spin"></span>Watching for it — this page notices on its own, no need to reload.</div>
       </div></div>`;
@@ -777,7 +810,7 @@ async function cd(path){
   S.loading=false; renderCard();
 }
 const reloadIf=dir=>{ if(S.dev.connected&&S.cwd===dir) cd(dir); };
-function requireCard(){ if(S.dev.connected) return true; toast('The card isn’t reachable. Open Remote Files on the device (launcher → Net) first.','err'); return false; }
+function requireCard(){ if(S.dev.connected) return true; toast('The card isn’t reachable. Open Dashboard Link on the device (launcher → Net) first.','err'); return false; }
 const entryIn=(dir,name)=>S.listing&&S.listing.path===dir?S.listing.entries.find(e=>e.name===name):null;
 
 /* ---------- transfers ---------- */
@@ -799,7 +832,7 @@ function speedOf(x,t){
   const inst=(x.done-x.lastB)/dt; x.rate=x.rate?x.rate*.6+inst*.4:inst; x.lastT=t; x.lastB=x.done;
 }
 function xferLine(x){
-  if(x.status==='waiting') return S.dev.connected?'Waiting — the device does one job at a time':'Paused — waiting for Remote Files to be opened on the device';
+  if(x.status==='waiting') return S.dev.connected?'Waiting — the device does one job at a time':'Paused — waiting for Dashboard Link to be opened on the device';
   if(x.status==='active'){
     if(x.dir==='up'){ return `Sending to the server — ${fmtSize(x.sent||0)} of ${fmtSize(x.total)}`; }
     if(!x.done) return 'Asking the card…';
@@ -885,7 +918,7 @@ function putFile(path,body,size,opts={}){
       if(xhr.status===403){ signedOut(); rej(new ApiError('You’re signed out.')); return; }
       if(xhr.status>=200&&xhr.status<300&&j&&j.ok!==false){ res(j); return; }
       if(j&&j.gone) markGone();
-      rej(new ApiError(j&&j.error?j.error:xhr.status===413?'That file is too big for the server to take (16 MB at most).':xhr.status===503?'The card isn’t reachable — Remote Files isn’t open on the device.':`The server answered “${xhr.status} ${xhr.statusText||'error'}”.`));
+      rej(new ApiError(j&&j.error?j.error:xhr.status===413?'That file is too big for the server to take (16 MB at most).':xhr.status===503?'The card isn’t reachable — Dashboard Link isn’t open on the device.':`The server answered “${xhr.status} ${xhr.statusText||'error'}”.`));
     };
     xhr.onerror=()=>rej(new ApiError(x.status==='writing'?'Lost touch with the server while it was writing to the card. The file may or may not have arrived — refresh the folder to check.':'Couldn’t reach the CardOS server. Check this computer’s connection and try again.'));
     xhr.onabort=()=>rej(new ApiError('Cancelled.'));
@@ -1049,7 +1082,7 @@ function renderEdState(){
 }
 function edSave(){
   const e=S.editor; if(!e||e.saving||!edDirty()) return;
-  if(!S.dev.connected){ e.err='The card isn’t reachable — Remote Files isn’t open on the device.'; renderEdState(); return; }
+  if(!S.dev.connected){ e.err='The card isn’t reachable — Dashboard Link isn’t open on the device.'; renderEdState(); return; }
   const text=$('#ed-ta').value, bytes=enc.encode(text), name=baseOf(e.path);
   e.err=''; e.saving=true;
   const p=putFile(e.path,new Blob([bytes]),bytes.length);
@@ -1224,8 +1257,54 @@ function tick(){
   S.xfers.filter(x=>x.status==='waiting'||x.status==='writing').forEach(updateXferRow);
 }
 
+/* ---------- terminal ----------
+ * A console line goes to the device through the same one-job queue as the
+ * card (the device does one thing at a time), and the answer is everything it
+ * printed, once the command is done. History is per browser. */
+const SUGGEST=['mem','do calendar sync','do todo sync','update','log 20','time','wifi','help'];
+const T={busy:false,hist:[],hi:0,started:0,timer:null};
+try{ T.hist=JSON.parse(localStorage.getItem('cardos-term-hist')||'[]').slice(-100); }catch(e){}
+T.hi=T.hist.length;
+function termOut(cls,text){
+  const out=$('#term-out'), el=document.createElement('div');
+  el.className=cls; el.textContent=text; out.appendChild(el);
+  out.scrollTop=out.scrollHeight; return el;
+}
+function renderTerm(){
+  const side=$('#term-side');
+  if(side) side.textContent=S.dev.connected?(T.busy?'running…':'linked to the device'):'Dashboard Link isn’t open on the device';
+  $('#term-run').disabled=T.busy||!S.dev.connected;
+  $('#term-line').disabled=!S.dev.connected;
+  $('#term-line').placeholder=S.dev.connected?'a console command, e.g. mem':'open Dashboard Link on the device (launcher → Net)';
+  const sug=$('#term-sug');
+  if(!sug.childElementCount) sug.innerHTML=SUGGEST.map(s=>`<button type="button" data-act="term-sug" data-line="${esc(s)}">${esc(s)}</button>`).join('');
+  if(!$('#term-out').childElementCount) termOut('tnote','The device’s console. Type a command, or pick one below.');
+}
+async function termRun(line){
+  line=line.trim().replace(/\s+/g,' ');
+  if(!line||T.busy) return;
+  if(!S.dev.connected){ termOut('err','The device isn’t linked: open Dashboard Link on it (launcher → Net).'); return; }
+  if(T.hist[T.hist.length-1]!==line){ T.hist.push(line); T.hist=T.hist.slice(-100); try{ localStorage.setItem('cardos-term-hist',JSON.stringify(T.hist)); }catch(e){} }
+  T.hi=T.hist.length;
+  termOut('cmd','/> '+line);
+  const run=termOut('run','running…');
+  T.busy=true; T.started=now(); renderTerm();
+  T.timer=setInterval(()=>{ run.textContent='running… '+fmtDur((now()-T.started)/1000); },1000);
+  try{
+    const j=await devJob(()=>api('POST','/dash/term',{line}));
+    run.remove();
+    termOut(j.refused?'refused':'', (j.output||'').replace(/\n$/,'')||'(nothing printed)');
+  }catch(e){ run.remove(); termOut('err',e.message||String(e)); }
+  finally{ clearInterval(T.timer); T.busy=false; renderTerm(); $('#term-line').focus(); }
+}
+$('#term-form').addEventListener('submit',e=>{ e.preventDefault(); const i=$('#term-line'); const v=i.value; i.value=''; termRun(v); });
+$('#term-line').addEventListener('keydown',e=>{
+  if(e.key==='ArrowUp'){ if(T.hi>0){ T.hi--; e.target.value=T.hist[T.hi]; } e.preventDefault(); }
+  else if(e.key==='ArrowDown'){ if(T.hi<T.hist.length){ T.hi++; e.target.value=T.hist[T.hi]||''; } e.preventDefault(); }
+});
+
 /* ---------- routing ---------- */
-const VIEWS={home:'Overview',files:'SD card',accounts:'Accounts & keys',server:'Server',updates:'Updates',settings:'Settings'};
+const VIEWS={home:'Overview',files:'SD card',term:'Terminal',accounts:'Accounts & keys',server:'Server',updates:'Updates',settings:'Settings'};
 function currentView(){ const v=(location.hash.match(/^#\/(\w+)/)||[])[1]; return VIEWS[v]?v:'home'; }
 function route(){
   const v=currentView();
@@ -1235,6 +1314,7 @@ function route(){
   document.title=(v==='home'?'':VIEWS[v]+' · ')+'CardOS Dashboard';
   closeMenu(); window.scrollTo(0,0);
   if(v==='files') renderCard();
+  if(v==='term'){ renderTerm(); setTimeout(()=>$('#term-line').focus(),0); }
 }
 window.addEventListener('hashchange',route);
 
@@ -1243,6 +1323,8 @@ document.addEventListener('click',e=>{
   const b=e.target.closest('[data-act]');
   if(!e.target.closest('#menu')&&!(b&&b.dataset.act==='menu')) closeMenu();
   if(!b) return;
+  if(b.dataset.act==='term-sug'){ termRun(b.dataset.line); return; }
+  if(b.dataset.act==='term-clear'){ $('#term-out').innerHTML=''; renderTerm(); return; }
   const a=b.dataset.act, p=b.dataset.path, isDir=!!b.dataset.dir, size=+b.dataset.size||0;
   if(b.closest('#menu')) closeMenu();
   switch(a){
