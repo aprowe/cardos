@@ -113,7 +113,8 @@ class TogglTest(unittest.TestCase):
         self.t.running = {"id": 7, "description": "Old", "project_id": None, "start": T0,
                           "duration": -T0_EPOCH, "workspace_id": 5}
         s, text = self.req("POST", "/toggl/start", "description=Writing\nproject=10")
-        self.assertEqual((s, text), (200, "running\t99\t%d\tWriting\tCardOS\t#0b83d9\n" % T0_EPOCH))
+        self.assertEqual((s, text.rsplit("\t", 1)[0]),
+                         (200, "running\t99\t%d\tWriting\tCardOS\t#0b83d9" % T0_EPOCH))
         methods = [(m, r) for m, r, _ in self.t.calls]
         self.assertIn(("PATCH", "/workspaces/5/time_entries/7/stop"), methods)
         self.assertLess(methods.index(("PATCH", "/workspaces/5/time_entries/7/stop")),
@@ -129,14 +130,23 @@ class TogglTest(unittest.TestCase):
 
     def test_a_project_with_no_description_then_described_later(self):
         s, text = self.req("POST", "/toggl/start", "description=\nproject=11")
-        self.assertEqual((s, text), (200, "running\t99\t%d\t\tHome\t\n" % T0_EPOCH))
+        self.assertEqual((s, text.rsplit("\t", 1)[0]), (200, "running\t99\t%d\t\tHome\t" % T0_EPOCH))
         s, text = self.req("POST", "/toggl/describe", "description=Gutters")
-        self.assertEqual((s, text), (200, "running\t99\t%d\tGutters\tHome\t\n" % T0_EPOCH))
+        self.assertEqual((s, text.rsplit("\t", 1)[0]),
+                         (200, "running\t99\t%d\tGutters\tHome\t" % T0_EPOCH))
         put = [b for m, r, b in self.t.calls if m == "PUT"][0]
         self.assertEqual(put, {"description": "Gutters"})
         self.t.running = None
         toggl.drop("current")
         self.assertEqual(self.req("POST", "/toggl/describe", "description=x")[1], "idle\n")
+
+    def test_the_running_line_says_how_long_by_the_servers_clock(self):
+        start = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 125))
+        self.t.running = {"id": 7, "description": "Now", "project_id": 11, "start": start,
+                          "duration": -1, "workspace_id": 5}
+        s, text = self.req("GET", "/toggl/status")
+        secs = int(text.splitlines()[0].split("\t")[6])
+        self.assertTrue(124 <= secs <= 130, secs)
 
     def test_stop(self):
         self.req("POST", "/toggl/start", "description=Email\nproject=")

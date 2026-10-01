@@ -70,6 +70,8 @@ static struct {
   int      bad;                   /* the status line is an error */
   char     status[48];
   uint32_t shown_sec;             /* the second the timer last painted */
+  uint32_t elapsed0;              /* seconds run when the server answered */
+  uint32_t got_ms;                /* our uptime then: the count goes on from it */
 
   int      typing;                /* 1 a new entry, 2 describing the running one */
   char     draft[DESC_MAX];
@@ -147,6 +149,20 @@ static void absorb_running(const char *line) {
   field(line, 4, G.proj, PROJ_MAX);
   field(line, 5, num, sizeof num);
   G.colour = parse_colour(num);
+  /* How long it has run, by the server's clock, and when we heard -- not the
+   * device's clock, which can be minutes behind after a reboot. A server
+   * from before this field: the device's clock, as before. */
+  field(line, 6, num, sizeof num);
+  G.got_ms = api->ticks_ms();
+  if (num[0]) G.elapsed0 = (uint32_t)to_long(num);
+  else {
+    uint32_t now = api->epoch();
+    G.elapsed0 = now > G.start ? now - G.start : 0;
+  }
+}
+
+static uint32_t elapsed(void) {
+  return G.elapsed0 + (api->ticks_ms() - G.got_ms) / 1000u;
 }
 
 static void absorb_status(void) {
@@ -290,21 +306,20 @@ static CRect timer_rect(void) {
 static void paint_timer(void) {
   CRect r = timer_rect();
   char t[16];
-  uint32_t now = api->epoch();
+  uint32_t secs = elapsed();
   int big = timer_screen() && G.f_big >= 0, f = big ? G.f_big : G.f_num;
   api->fill(r, CLR_BG);
   if (!G.running) {
     draw(G.f_ui, r.x + 8, r.y + (r.h - height(G.f_ui)) / 2, "not running", CLR_DIM, CLR_BG);
     return;
   }
-  if (now && now >= G.start) hms(now - G.start, t, sizeof t);
-  else api->fmt(t, sizeof t, "0:00:00");
+  hms(secs, t, sizeof t);
   if (timer_screen())
     draw(f, r.x + (r.w - width(f, t)) / 2, r.y + (r.h - height(f)) / 2, t,
          proj_colour(G.colour), CLR_BG);
   else
     draw(f, r.x + 8, r.y + (r.h - height(f)) / 2, t, proj_colour(G.colour), CLR_BG);
-  G.shown_sec = now;
+  G.shown_sec = secs;
 }
 
 static void paint_row(int i, int y) {
@@ -467,7 +482,7 @@ static int app_tick(void *st, uint32_t now_ms) {
   changed = poll();
   /* The timer is the only thing that moves: a second's change repaints
    * just its strip. */
-  if (!changed && G.running && api->epoch() != G.shown_sec) {
+  if (!changed && G.running && elapsed() != G.shown_sec) {
     api->damage(timer_rect());
     return 1;
   }
@@ -629,9 +644,9 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
   case ACT_STATUS:
     if ((r = fetch("GET", "/toggl/status", 0)) < 0) return failed(r, out, n);
     absorb_status();
-    now = api->epoch();
+    now = elapsed();
     if (!G.running) { api->fmt(out, n, "not running"); return 0; }
-    hm(now > G.start ? now - G.start : 0, t, sizeof t);
+    hm(now, t, sizeof t);
     api->fmt(out, n, "running: %s%s%s%s, %s", G.desc[0] ? G.desc : "(no description)",
              G.proj[0] ? " (" : "", G.proj, G.proj[0] ? ")" : "", t);
     return 0;

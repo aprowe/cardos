@@ -641,6 +641,7 @@ void test_toggl_today_asks_for_the_local_day_and_reads_local_times(void);
 void test_toggl_dates_are_rfc3339(void);
 void test_toggl_a_refusal_is_said_in_the_servers_words(void);
 void test_toggl_projects_carry_their_colours(void);
+void test_toggl_counts_from_the_servers_seconds_not_the_clock(void);
 void test_tzreply_reads_the_rule_and_the_zone(void);
 void test_tzreply_rules_with_offsets_and_brackets(void);
 void test_tzreply_the_zone_line_is_optional(void);
@@ -1384,6 +1385,7 @@ int main(void) {
   RUN(test_toggl_dates_are_rfc3339);
   RUN(test_toggl_a_refusal_is_said_in_the_servers_words);
   RUN(test_toggl_projects_carry_their_colours);
+  RUN(test_toggl_counts_from_the_servers_seconds_not_the_clock);
   printf("-- tzreply --\n");
   RUN(test_tzreply_reads_the_rule_and_the_zone);
   RUN(test_tzreply_rules_with_offsets_and_brackets);

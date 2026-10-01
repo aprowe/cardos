@@ -6,7 +6,7 @@ and the Toggl app (apps/toggl.c) reads plain lines over the HTTP it already
 speaks to this server.
 
     GET  /toggl/status    the running entry, then what to start from:
-                            running <tab> id <tab> start <tab> description <tab> project <tab> #colour
+                            running <tab> id <tab> start <tab> description <tab> project <tab> #colour <tab> seconds so far
                           or "idle", then up to RECENT lines
                             recent <tab> project id <tab> description <tab> project <tab> #colour
                           then every active project, by name:
@@ -208,10 +208,16 @@ def recent_entries():
 
 
 def running_line(e, names):
-    return "running\t%s\t%d\t%s\t%s\t%s\n" % (e["id"], epoch(e["start"]),
-                                             clean(e.get("description")),
-                                             clean(names.get(e.get("project_id"), "")),
-                                             color(e.get("project_id")))
+    # The seconds so far, by this server's clock, last: the device counts on
+    # from them with its own uptime. Counting from `start` with the device's
+    # clock showed 0:00:00 whenever that clock was behind -- after a reboot
+    # it restores the time it last saved and waits for the network.
+    start = epoch(e["start"])
+    return "running\t%s\t%d\t%s\t%s\t%s\t%d\n" % (e["id"], start,
+                                                 clean(e.get("description")),
+                                                 clean(names.get(e.get("project_id"), "")),
+                                                 color(e.get("project_id")),
+                                                 max(0, int(time.time()) - start))
 
 
 def status_text():

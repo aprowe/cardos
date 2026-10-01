@@ -41,12 +41,17 @@ static int t_http(const char *m, const char *url, const char *body, const char *
   return (int)strlen(s_reply);
 }
 
+static uint32_t s_ticks;
+static uint32_t t_ticks(void) { return s_ticks; }
+static uint32_t t_no_clock(void) { return 0; }
+
 static CardApi TF;
 
 static void topen(void) {
   memset(&TF, 0, sizeof TF);
   TF.fmt = t_fmt; TF.str_len = t_strlen; TF.proxy = t_proxy; TF.net_ready = t_ready;
-  TF.epoch = t_epoch; TF.now = t_now; TF.http = t_http;
+  TF.epoch = t_epoch; TF.now = t_now; TF.http = t_http; TF.ticks_ms = t_ticks;
+  s_ticks = 5000;
   api = &TF;
   memset(&G, 0, sizeof G);
 }
@@ -172,4 +177,22 @@ void test_toggl_projects_carry_their_colours(void) {
   CHECK_EQ(parse_colour("#000000"), CAPP_RGB(127, 127, 127));   /* lifted */
   CHECK_EQ(parse_colour("nope"), 0);
   CHECK_EQ(parse_colour("#12345"), 0);
+}
+
+/* The device's clock can be unset or minutes behind after a reboot, and the
+ * timer showed 0:00:00 (2026-10-01). It counts from what the server says has
+ * run, on the device's uptime, so the device's clock does not matter. */
+void test_toggl_counts_from_the_servers_seconds_not_the_clock(void) {
+  char out[128];
+  topen();
+  TF.epoch = t_no_clock;
+  snprintf(G.reply, sizeof G.reply, "%s",
+           "running\t99\t1790874000\tWriting\tCardOS\t#0b83d9\t1800\n");
+  absorb_status();
+  CHECK_EQ((long)elapsed(), 1800L);
+  s_ticks += 65000;                        /* a minute and five seconds on */
+  CHECK_EQ((long)elapsed(), 1865L);
+  s_reply = "running\t99\t1790874000\tWriting\tCardOS\t#0b83d9\t2700\n";
+  CHECK_EQ(app_command(0, ACT_STATUS, 0, NULL, out, sizeof out), 0);
+  CHECK(!strcmp(out, "running: Writing (CardOS), 0:45"));
 }
