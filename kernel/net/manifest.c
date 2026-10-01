@@ -117,7 +117,9 @@ int manifest_parse(const char *text, Manifest *out) {
         out->firmware_size = size;
         understood++;
       }
-    } else if (!strcmp(kind, "app") && out->napps < MANIFEST_MAX_APPS) {
+    } else if (!strcmp(kind, "app") && out->napps >= MANIFEST_MAX_APPS) {
+      out->dropped++;                 /* said, not lost: see update.c */
+    } else if (!strcmp(kind, "app")) {
       ManifestApp *ap = &out->app[out->napps];
       uint32_t hash, size;
       if ((q = word(q, ap->name, sizeof ap->name)) && name_ok(ap->name) &&

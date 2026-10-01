@@ -19,7 +19,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define MANIFEST_MAX_APPS 24
+/* 24 was too few by 2026-10-01: the server listed 28 and the rest were
+ * dropped unseen. Anything past this is counted in `dropped`. */
+#define MANIFEST_MAX_APPS 48
 #define MANIFEST_NAME_MAX 16
 
 typedef struct {
@@ -35,6 +37,7 @@ typedef struct {
   uint8_t  firmware_sha[32];
   uint32_t firmware_size;
   int      napps;
+  int      dropped;                   /* app lines past MANIFEST_MAX_APPS */
   ManifestApp app[MANIFEST_MAX_APPS];
 } Manifest;
 

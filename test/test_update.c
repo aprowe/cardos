@@ -28,6 +28,29 @@ void test_manifest_parses_firmware_and_apps(void) {
   CHECK_EQ(m.app[1].hash, 0xDEADBEEFu);      /* either case */
 }
 
+/* More apps than there were when the table was sized: 28 on 2026-10-01,
+ * and with room for 24 the last four -- today, todo, toggl, web -- were
+ * dropped without a word, so `update` called them current and never
+ * installed them. Every app is kept now, and anything past the table is
+ * counted so the device can say so. */
+void test_manifest_keeps_every_app_and_counts_what_does_not_fit(void) {
+  static char text[MANIFEST_MAX_APPS * 40 + 200];
+  Manifest m;
+  int i, o = 0;
+  for (i = 0; i < 30; i++)
+    o += snprintf(text + o, sizeof text - o, "app app%02d 0000%04x %d Tools\n", i, i, 1000 + i);
+  manifest_parse(text, &m);
+  CHECK_EQ(m.napps, 30);
+  CHECK_EQ(m.dropped, 0);
+  CHECK(!strcmp(m.app[29].name, "app29"));
+  o = 0;
+  for (i = 0; i < MANIFEST_MAX_APPS + 3; i++)
+    o += snprintf(text + o, sizeof text - o, "app a%03d 0000%04x %d\n", i, i, 10 + i);
+  manifest_parse(text, &m);
+  CHECK_EQ(m.napps, MANIFEST_MAX_APPS);
+  CHECK_EQ(m.dropped, 3);
+}
+
 /* The folder rides at the end of an app line, so firmware from before it
  * reads the same line and ignores the extra word. Without one, the app
  * belongs at the top level -- and an app new to the card used to land there

@@ -455,7 +455,7 @@ static void update_say(void *ctx, const char *line) {
  * update os     -- install the firmware (restarts)
  * update all    -- both, apps first so they survive if the restart does not */
 void cmd_update(const char *arg) {
-  UpdateCheck c;
+  static UpdateCheck c;                 /* ~3 KB with 48 apps: not on main's stack */
   char what[8] = "", flavor[8] = "";
   int i, apps = 0, os = 0;
 
@@ -481,6 +481,9 @@ void cmd_update(const char *arg) {
   if (strcmp(flavor, update_flavor()))
     con_printf("running %s, comparing with %s\n", update_flavor(), flavor);
   if (update_check_as(&c, flavor) != 0) { err("update", update_error()); return; }
+  /* Never silent again: apps past the table were not compared at all. */
+  if (c.m.dropped)
+    con_printf("%d more apps than this firmware can check: update os first\n", c.m.dropped);
 
   if (!c.nstale_apps && !c.firmware_stale) {
     con_write("everything is current\n");

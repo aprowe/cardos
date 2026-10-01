@@ -20,7 +20,7 @@ static const char *TAG = "update";
 #define DEFAULT_BASE  CAPP_PROXY_DEFAULT
 #define UPDATE_DIR    CAPP_SYS "/update"
 #define FIRMWARE_PATH UPDATE_DIR "/firmware.bin"
-#define MANIFEST_MAX  2048                   /* 24 apps at ~40 bytes a line */
+#define MANIFEST_MAX  4096                   /* 48 apps at ~40 bytes a line, and room */
 
 static char s_error[96];
 static char s_token[64];
@@ -133,8 +133,8 @@ int update_check(UpdateCheck *out) { return update_check_as(out, OWN_FLAVOR); }
 
 int update_check_as(UpdateCheck *out, const char *flavor) {
   static char text[MANIFEST_MAX];
+  static ManifestLocal local;          /* 48 apps' hashes: not on a task's stack */
   char url[160];
-  ManifestLocal local;
   const esp_app_desc_t *self;
   int n, i;
 
