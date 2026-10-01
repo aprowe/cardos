@@ -44,6 +44,7 @@ INK = {
     "p": (186, 148, 232),   # violet
     "t": (96, 204, 196),    # teal
     "P": (232, 120, 210),   # pink, for Toggl
+    "R": (102, 45, 145),    # Roku's purple
 }
 
 ICONS = {
@@ -242,6 +243,25 @@ ICONS = {
         "................",
     ],
     # A stopwatch, in a pink close to Toggl's own.
+    # A Roku remote: purple, a red power button, the d-pad, two rows of keys.
+    "Roku": [
+        "................",
+        ".....KKKKKK.....",
+        "....KRRRRRRK....",
+        "....KRRRRrRK....",
+        "....KRRRRRRK....",
+        "....KRRWWRRK....",
+        "....KRWWWWRK....",
+        "....KRRWWRRK....",
+        "....KRRRRRRK....",
+        "....KRpRRpRK....",
+        "....KRRRRRRK....",
+        "....KRpRRpRK....",
+        "....KRRRRRRK....",
+        "....KRRRRRRK....",
+        ".....KKKKKK.....",
+        "................",
+    ],
     "Toggl": [
         "......KKKK......",
         ".......KK.......",

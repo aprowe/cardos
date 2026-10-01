@@ -30,6 +30,7 @@ mines     Games
 noodle    Games
 photo     Make
 pinball   Games
+roku      Net
 screen    Net
 share     Net
 stocks    Net
