@@ -761,6 +761,14 @@ int launchui_key(uint8_t key) {
 /* Is the running app taking text? The same question the arrow-key remapping
  * asks, exposed because voice needs the same answer and two callers working it
  * out separately would eventually disagree. */
+int launchui_button(int event, const char *text) {
+  int r;
+  if (picker_active() || !s_app || !s_app->button) return 0;
+  r = s_app->button(s_app->state, event, text);
+  if (event != 0 && r) launchui_repaint();
+  return r;
+}
+
 int launchui_wants_text(void) {
   if (picker_active()) return picker_wants_text();
   if (!s_app || !s_app->wants_text) return 0;

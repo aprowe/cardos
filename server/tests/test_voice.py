@@ -65,5 +65,63 @@ class Prompt(unittest.TestCase):
         self.assertIn("mines", s.split("open NAME")[1].split("\n\n")[0])
 
 
+
+
+class Route(unittest.TestCase):
+    """/voice: the words, or a command, as the gesture asked."""
+
+    def setUp(self):
+        import threading
+        from http.server import ThreadingHTTPServer
+        from server import app
+        from server import chat as chatmod
+
+        class FakeVoice:
+            heard = "open todo"
+
+            def ready(self):
+                return True
+
+            def transcribe(self, wav):
+                return self.heard, None
+
+            def command(self, text, chat):
+                return "open " + text.split()[-1]
+
+        self.voice = FakeVoice()
+        app.Handler.voice = self.voice
+        app.Handler.chat = chatmod.ChatService(claude="stub")
+        app.Handler.store = None
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        self.base = "http://127.0.0.1:%d" % self.srv.server_address[1]
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+    def post(self, q=""):
+        import urllib.request
+        r = urllib.request.Request(self.base + "/voice" + q, data=b"RIFF" + b"\0" * 100,
+                                   method="POST")
+        return urllib.request.urlopen(r, timeout=10).read().decode()
+
+    def test_text_mode_is_only_the_words(self):
+        self.voice.heard = "Carlos open todo"
+        self.assertEqual(self.post("?mode=text"), "text Carlos open todo\n")
+
+    def test_cmd_mode_needs_no_name(self):
+        self.voice.heard = "open todo"
+        self.assertEqual(self.post("?mode=cmd"), "cmd open todo\n")
+        self.voice.heard = "Carlos, open calendar"
+        self.assertEqual(self.post("?mode=cmd"), "cmd open calendar\n")
+
+    def test_no_mode_is_as_before(self):
+        self.voice.heard = "buy milk"
+        self.assertEqual(self.post(), "text buy milk\n")
+        self.voice.heard = "Carlos open todo"
+        self.assertEqual(self.post(), "cmd open todo\n")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

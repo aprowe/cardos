@@ -278,6 +278,17 @@ static int16_t tr_height(void *state, int16_t w) {
   return s->ui.height ? s->ui.height(s->ui.state, w) : 0;
 }
 
+static int tr_button(void *state, int event, const char *text) {
+  Run *s = (Run *)state, *prev;
+  int r;
+  if (IMAGE_GONE(s) || !s->ui.button) return 0;
+  prev = s_active;
+  s_active = s;
+  r = s->ui.button(s->ui.state, event, text);
+  handler_done(s, prev);
+  return r;
+}
+
 static int tr_wants_text(void *state) {
   Run *s = (Run *)state;
   if (IMAGE_GONE(s)) return 0;
@@ -326,6 +337,7 @@ void capprun_install_ui(const CappUi *ui) {
   s->def.pref_w     = ui->pref_w;
   s->def.pref_h     = ui->pref_h;
   s->def.wants_text = ui->wants_text ? tr_wants_text : NULL;
+  s->def.button     = ui->button ? tr_button : NULL;
   /* The help panel, written from the action table rather than by hand.
    *
    * capp_info.help is a string an app maintains separately from its key

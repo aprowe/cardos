@@ -40,6 +40,8 @@ void desktop_tick(uint32_t ms);
 
 /* Is the focused app taking typed text right now? */
 int  desktop_wants_text(void);
+/* The button on top, to the app on screen (CappUi.button). */
+int desktop_button(int event, const char *text);
 
 /* Feed one decoded mouse report in. Handles the cursor, focus, dragging and
  * the close box. Safe to call whether or not a real mouse exists. */

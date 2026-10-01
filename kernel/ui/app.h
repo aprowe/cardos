@@ -91,6 +91,9 @@ typedef struct {
    * The shell consumes it when deciding what to clip; painting clears it,
    * because the accumulator belongs to the frame being drawn. */
   int (*take_damage)(void *state, Rect *out);
+
+  /* The button on top: CappUi.button, through capprun. NULL for built-ins. */
+  int (*button)(void *state, int event, const char *text);
 } AppDef;
 
 /* The apps the Start menu offers. */

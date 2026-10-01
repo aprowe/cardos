@@ -902,6 +902,13 @@ static void ops_switch_shell(const char *which) {
   else                                 { launchui_init(); s_mode = MODE_LAUNCHER; }
 }
 
+/* The button on top: the console never claims it; a shell asks its app. */
+static int sink_button(int event, const char *text) {
+  if (s_mode == MODE_LAUNCHER) return launchui_button(event, text);
+  if (s_mode == MODE_DESKTOP) return desktop_button(event, text);
+  return 0;
+}
+
 static int sink_wants_text(void) {
   /* The console is always taking text; a shell running an app defers to the
    * app, which is the same question `; . , /` already asks. */
@@ -1353,7 +1360,7 @@ void app_main(void) {
 
   {
     static const ShellOps OPS = { ops_open_app, ops_switch_shell, feed_key, ops_running_app };
-    static const InputSink SINK = { sink_wants_text, feed_key };
+    static const InputSink SINK = { sink_wants_text, feed_key, sink_button };
     shell_set_ops(&OPS);
     input_set_sink(&SINK);
   }

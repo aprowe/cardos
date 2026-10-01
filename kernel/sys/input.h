@@ -43,7 +43,12 @@ void input_key(uint8_t k);
 typedef struct {
   int  (*wants_text)(void);
   void (*key)(uint8_t k);
+  int  (*button)(int event, const char *text);   /* CappUi.button, on screen */
 } InputSink;
+
+/* The button on top, to whatever is on screen: CAPP_G0_ASK and the rest
+ * (capp.h). 0 when nothing claims it. */
+int input_button(int event, const char *text);
 
 void input_set_sink(const InputSink *sink);
 

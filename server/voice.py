@@ -230,6 +230,10 @@ WAKE_WORDS = ("carlos", "karlos", "carlus", "carlo")
 def post_voice(h, path, args):
     """a WAV in; the words, or one command line, out
 
+    ?mode=text: only the words -- G0 held once, for typing or an app.
+    ?mode=cmd:  always a command -- G0 tapped then held; "Carlos" not needed.
+    No mode: the words unless they start with "Carlos", for older firmware.
+
     Both halves answer on this one request rather than through the job queue
     the chat uses. Recognition of a ten-second clip takes about two seconds
     and a command translation about one, which is inside what the device will
@@ -246,6 +250,10 @@ def post_voice(h, path, args):
         h.text("error %s\n" % err)
         return
     sys.stderr.write("voice: heard %r\n" % text[:80])
+    mode = (args.get("mode") or [""])[0]
+    if mode == "text":
+        h.text("text %s\n" % text)
+        return
 
     # The wake word is checked here as well as on the device: the device
     # decides what to do, but the translation only happens if it is asked
@@ -257,6 +265,8 @@ def post_voice(h, path, args):
             wake = text.lstrip()[len(name):].lstrip(" ,.:!?")
             break
 
+    if wake is None and mode == "cmd":
+        wake = text.strip(" ,.:!?")      # the gesture said command; no name needed
     if wake is None:
         h.text("text %s\n" % text)
         return

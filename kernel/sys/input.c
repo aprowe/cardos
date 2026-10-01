@@ -14,7 +14,11 @@ static InputSink s_sink;
 
 void input_set_sink(const InputSink *sink) {
   if (sink) s_sink = *sink;
-  else { s_sink.wants_text = NULL; s_sink.key = NULL; }
+  else { s_sink.wants_text = NULL; s_sink.key = NULL; s_sink.button = NULL; }
+}
+
+int input_button(int event, const char *text) {
+  return s_sink.button ? s_sink.button(event, text) : 0;
 }
 
 int input_wants_text(void) {

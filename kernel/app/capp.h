@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 34
+#define CAPP_API_VERSION 35
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -199,6 +199,22 @@ typedef struct {
 #define CAPP_GREEN  CAPP_RGB(0, 140, 0)
 
 /* Mouse buttons, as they reach click(). */
+/* The button on top (G0), held once (API 35). The OS asks the app on screen
+ * first -- button(state, CAPP_G0_ASK, NULL) -- and the answer decides:
+ *   CAPP_G0_NONE   not ours: the words are typed if anything takes text,
+ *                  and a voice memo is recorded if nothing does
+ *   CAPP_G0_PRESS  ours, as a press: nothing is recorded, and the app gets
+ *                  CAPP_G0_PRESSED when it comes back up (Counter counts)
+ *   CAPP_G0_WORDS  ours, as words: recorded, transcribed, and handed over as
+ *                  CAPP_G0_HEARD with the text (Todo adds a task)
+ * Tap then hold is always a device command, whatever is on screen. */
+#define CAPP_G0_ASK      0
+#define CAPP_G0_PRESSED  1
+#define CAPP_G0_HEARD    2
+#define CAPP_G0_NONE     0
+#define CAPP_G0_PRESS    1
+#define CAPP_G0_WORDS    2
+
 #define CAPP_BTN_LEFT  0x01
 #define CAPP_BTN_RIGHT 0x02
 
@@ -339,6 +355,11 @@ typedef struct {
    * tick with api->command_done. NULL for an app with no commands. */
   int (*command)(void *state, int action, int argc, const char *const *argv,
                  char *out, size_t n);
+
+  /* The button on top (API 35): see CAPP_G0_ASK. For CAPP_G0_ASK return
+   * what the app wants the press to be; for PRESSED and HEARD return 1 to
+   * repaint. NULL: never claimed. */
+  int (*button)(void *state, int event, const char *text);
 } CappUi;
 
 /* ---- sound ----

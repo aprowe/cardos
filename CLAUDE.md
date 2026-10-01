@@ -117,6 +117,16 @@ table changed for this (two OTA slots; `factory` is 2.75 MB and `spiffs`
 first flash after it needs the whole table: `python -m platformio run -t
 upload` does that, but old NVS contents (WiFi credentials, PATH) are gone.
 
+**The G0 button, since 2026-10-01** (API 35). A hold is delegated: the app
+on screen is asked first (`CappUi.button`, `CAPP_G0_ASK`) and may claim it
+as a press -- nothing recorded, `CAPP_G0_PRESSED` on release (Counter
+counts) -- or as words -- recorded, transcribed with `/voice?mode=text`,
+handed over as `CAPP_G0_HEARD` (Todo adds a task). Unclaimed, the words are
+typed if anything takes text, and a voice memo goes to /home/memos if
+nothing does. Tap then hold is always a device command
+(`/voice?mode=cmd`): "Carlos" is no longer needed. `kernel/sys/voice.c`
+is the flow, `g0gesture.c` the timing. The history below is how it was.
+
 **Voice, and where text comes from.** Hold the button on the top edge (G0) and
 talk: the mic records to `/cache/voice.wav` (16 kHz mono, PDM on DAT 46 / CLK
 43 — what whisper wants, so nothing resamples), posts it to the proxy, and

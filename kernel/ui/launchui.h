@@ -41,6 +41,8 @@ int launchui_run(const char *name, const char *args);
 
 /* Is the app that is running taking typed text right now? */
 int launchui_wants_text(void);
+/* The button on top, to the app on screen (CappUi.button). */
+int launchui_button(int event, const char *text);
 
 /* Run the .capp at this exact path, loading it if it is not already. What
  * "./grep" and a PATH lookup both end at. Returns 0 if it started. */

@@ -6,7 +6,7 @@ int g0_press(G0Gesture *g, uint32_t now_ms) {
   /* Unsigned subtraction: right across the counter wrapping. */
   int memo = g->armed && (uint32_t)(now_ms - g->tap_up_ms) <= G0_GAP_MS;
   g->armed = 0;
-  return memo ? G0_MEMO : G0_VOICE;
+  return memo ? G0_COMMAND : G0_HOLD;
 }
 
 int g0_release(G0Gesture *g, uint32_t held_ms, uint32_t now_ms) {

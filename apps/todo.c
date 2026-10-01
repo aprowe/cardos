@@ -1467,6 +1467,19 @@ static int menu_key(unsigned char k, int *handled) {
   return 0;
 }
 
+/* The button on top: say a task. Claimed for the words on the list; while a
+ * title is being typed the words are typed into it instead, as anywhere. */
+static int app_button(void *st, int event, const char *text) {
+  (void)st;
+  if (event == CAPP_G0_ASK) return T.view == VIEW_LIST ? CAPP_G0_WORDS : CAPP_G0_NONE;
+  if (event == CAPP_G0_HEARD && text && text[0]) {
+    if (add_text(text) == 0) say("added -- s syncs");
+    else say("the list is full");
+    return 1;
+  }
+  return 0;
+}
+
 static int app_key(void *st, unsigned char k) {
   int handled, r;
   (void)st;
@@ -1803,6 +1816,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.action = app_action;
   UI.command = app_command;
   UI.wants_text = app_wants_text;
+  UI.button = app_button;
   api->ui(&UI);
   return 0;
 }

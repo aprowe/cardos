@@ -451,6 +451,19 @@ static void clamp_top(void) {
   if (C.top < 0) C.top = 0;
 }
 
+/* The button on top counts, as space does: claimed as a press, so nothing
+ * is recorded and nothing waits for the network. */
+static int app_button(void *st, int event, const char *text) {
+  (void)st; (void)text;
+  if (event == CAPP_G0_ASK) return C.ask == ASK_NONE ? CAPP_G0_PRESS : CAPP_G0_NONE;
+  if (event == CAPP_G0_PRESSED) {
+    count_add(1);
+    damage_number();
+    return 1;
+  }
+  return 0;
+}
+
 static int app_key(void *st, uint8_t k) {
   int a = toolbar_key(k);
   (void)st;
@@ -565,6 +578,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.nactions = NACT;
   UI.action = app_action;
   UI.command = app_command;
+  UI.button = app_button;
   api->ui(&UI);
   return 0;
 }

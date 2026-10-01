@@ -107,6 +107,9 @@ static const char *base_url(void) {
 
 /* ---- what to do with what was heard --------------------------------------- */
 
+/* Where a recording's words go: decided when the button went down. */
+enum { TO_TYPE = 0, TO_APP = 1, TO_COMMAND = 2 };
+
 /* Execute one line of the RPC vocabulary. The verbs themselves live in
  * kernel/sys/agent.c now, where the on-device Claude runs the same list
  * through the same function; this only parses the line and shows what
@@ -126,12 +129,14 @@ static void run_command(const char *line) {
  * The reply is one line: "text ...", "cmd ...", or "error ...". A prefix
  * rather than JSON because the device has no parser and this needs none -- and
  * because the three cases are genuinely different things, not fields. */
-static void send_and_act(void) {
+static void send_and_act(int to) {
   static char reply[600];
   char url[160];
   int n;
 
-  snprintf(url, sizeof url, "%s/voice", base_url());
+  /* The server is told what the gesture was: the words alone, or always a
+   * command -- the name "Carlos" is no longer what decides. */
+  snprintf(url, sizeof url, "%s/voice?mode=%s", base_url(), to == TO_COMMAND ? "cmd" : "text");
   say("recognising...");
 
   /* The proxy may be remote and behind the device's shared secret. */
@@ -158,7 +163,10 @@ static void send_and_act(void) {
       while (l && (body[l - 1] == '\n' || body[l - 1] == '\r')) body[--l] = 0;
     }
 
-    if (!strcmp(reply, "text")) {
+    if (!strcmp(reply, "text") && to == TO_APP) {
+      input_button(CAPP_G0_HEARD, body);
+      snprintf(s_status, sizeof s_status, "%.60s", body);
+    } else if (!strcmp(reply, "text")) {
       if (input_text(body) > 0) snprintf(s_status, sizeof s_status, "%.60s", body);
       else snprintf(s_status, sizeof s_status, "heard, but nothing is taking text");
     } else if (!strcmp(reply, "cmd")) {
@@ -169,7 +177,11 @@ static void send_and_act(void) {
   }
 }
 
-void voice_once(int max_ms, int hold) {
+static void voice_to(int max_ms, int hold, int to);
+
+void voice_once(int max_ms, int hold) { voice_to(max_ms, hold, TO_TYPE); }
+
+static void voice_to(int max_ms, int hold, int to) {
   int bytes;
 
   /* Recording first, the network after. It used to join WiFi before
@@ -218,7 +230,7 @@ void voice_once(int max_ms, int hold) {
   }
 
   ESP_LOGI(TAG, "%d bytes recorded", bytes);
-  send_and_act();
+  send_and_act(to);
 
   /* Long enough to read, then the screen goes back to whatever it was. Two
    * seconds is about how long it takes to check that a machine understood
@@ -278,6 +290,14 @@ static void memo_once(void) {
   bytes = mic_record_wav(path, MIC_HARD_MAX_MS, stop_cb, memo_level_cb);
   s_recording = 0;
 
+  /* A tap: the first half of tap-then-hold, not a memo. */
+  if (g0_release(&s_g0, now_ms() - s_press_ms, now_ms())) {
+    fs_remove(path);
+    say("tap");
+    overlay_close();
+    return;
+  }
+
   if (bytes < 0) {
     say("the microphone did not start");
     overlay_memo_done(s_status);
@@ -294,6 +314,14 @@ static void memo_once(void) {
   }
   vTaskDelay(pdMS_TO_TICKS(1500));
   overlay_close();
+}
+
+static void press_once(void) {
+  s_press_ms = now_ms();
+  while (button_raw()) vTaskDelay(pdMS_TO_TICKS(10));
+  g0_release(&s_g0, now_ms() - s_press_ms, now_ms());   /* a tap still arms a command */
+  input_button(CAPP_G0_PRESSED, NULL);
+  say("pressed");
 }
 
 int voice_tick(void) {
@@ -315,7 +343,19 @@ int voice_tick(void) {
    * two. That is deliberate: while someone is talking to the machine, there
    * is nothing else for it to be doing, and the alternative is a state
    * machine spread across three subsystems for no gain. */
-  if (g0_press(&s_g0, now_ms()) == G0_MEMO) memo_once();
-  else voice_once(MIC_MAX_MS, 1);
+  /* Tap then hold is a device command, whatever is on screen. A hold is the
+   * app's if it claims it, then typing if anything takes text, and a memo
+   * if nothing does. */
+  if (g0_press(&s_g0, now_ms()) == G0_COMMAND) {
+    voice_to(MIC_MAX_MS, 1, TO_COMMAND);
+    return 1;
+  }
+  switch (input_button(CAPP_G0_ASK, NULL)) {
+  case CAPP_G0_PRESS: press_once(); break;
+  case CAPP_G0_WORDS: voice_to(MIC_MAX_MS, 1, TO_APP); break;
+  default:
+    if (input_wants_text()) voice_to(MIC_MAX_MS, 1, TO_TYPE);
+    else memo_once();
+  }
   return 1;
 }

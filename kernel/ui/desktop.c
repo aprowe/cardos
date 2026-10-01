@@ -1257,6 +1257,16 @@ int desktop_key(uint8_t key) {
 
 /* Is the focused app taking text? Fullscreen app, focused window, or nothing
  * -- the same order the keyboard already resolves. */
+int desktop_button(int event, const char *text) {
+  const AppDef *a = s_full ? s_full
+                  : (wm_focus() != WIN_NONE ? app_of(wm_focus()) : NULL);
+  int r;
+  if (picker_active() || !a || !a->button) return 0;
+  r = a->button(a->state, event, text);
+  if (event != 0 && r) desktop_repaint();
+  return r;
+}
+
 int desktop_wants_text(void) {
   const AppDef *a = s_full ? s_full
                   : (wm_focus() != WIN_NONE ? app_of(wm_focus()) : NULL);
