@@ -221,6 +221,25 @@ ICONS = {
         "................",
         "................",
     ],
+    # A memory card with an arrow up and an arrow down: the card, both ways.
+    "Remote Files": [
+        "................",
+        "...KKKKKKKK.....",
+        "...KDDDDDDDK....",
+        "...KDyDyDyDDK...",
+        "...KDDDDDDDDK...",
+        "...KDDDDDDDDK...",
+        "...KDDDDDDDDK...",
+        "...KDDDDDDDDK...",
+        "...KDDDDDDDDK...",
+        "...KKKKKKKKKK...",
+        "................",
+        "..b...........g.",
+        ".bbb..........g.",
+        "..b..........ggg",
+        "..b...........g.",
+        "................",
+    ],
     # A page with a pencil across it.
     "Edit": [
         "................",

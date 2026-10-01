@@ -306,7 +306,18 @@ td.a button{padding:3px 9px;font-size:13px}
 #state{font-size:13px}
 #drop.over{outline:2px dashed var(--acc);outline-offset:4px}
 progress{width:100%;margin-top:8px}
+#editor{display:none}#editor.open{display:block}
+#editor .CodeMirror{height:60vh;border:1px solid var(--line);border-radius:6px;font-size:13px}
+.dirty{color:var(--bad)}
 </style>
+<link rel=stylesheet href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.css">
+<link rel=stylesheet href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/theme/material-darker.min.css">
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/markdown/markdown.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/clike/clike.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/python/python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/javascript/javascript.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/properties/properties.min.js"></script>
 <h1>Card <span><a class=btn href=/dash>Dashboard</a></span></h1>
 <p id=state class=dim>checking for the device...</p>
 <section id=drop>
@@ -317,6 +328,13 @@ progress{width:100%;margin-top:8px}
 <div id=msg class=dim></div>
 <progress id=prog hidden></progress>
 <table id=list></table>
+</section>
+<section id=editor>
+<div class=bar><div class=crumbs><b id=edname></b> <span id=edstate class=dim></span></div>
+<button class=primary onclick="save()">Save</button>
+<button onclick="closeEditor()">Close</button></div>
+<textarea id=edtext></textarea>
+<p class=dim>Ctrl-S saves. The file is written whole: to NAME.part, then put in place.</p>
 </section>
 <p class=dim>Open <b>Remote Files</b> on the device to reach its card. Drop files on the
 list to upload them into this folder. Transfers are slow: a few tens of KB a second.</p>
@@ -346,19 +364,23 @@ async function go(p) {
   try {
     const j = await call('/dash/files/ls?path=' + encodeURIComponent(p));
     say('');
-    const rows = j.entries.map((e, i) => '<tr><td class=n>' +
-      (e.dir ? '<span class=dir data-i=' + i + '>' + esc(e.name) + '/</span>'
+    const rows = j.entries.map((e, i) => (e.dir ? '<tr><td class=n data-i=' + i + '>' : '<tr><td class=n>') +
+      (e.dir ? '<span class=dir>' + esc(e.name) + '/</span>'
              : '<a href="/dash/files/get?path=' + encodeURIComponent(join(cwd, e.name)) + '">' + esc(e.name) + '</a>') +
       '</td><td class=s>' + (e.dir ? '' : size(e.size)) + '</td><td class=a>' +
+      (!e.dir && editable(e.name) ? '<button data-ed=' + i + '>Edit</button> ' : '') +
       '<button data-mv=' + i + '>Rename</button> <button data-rm=' + i + '>Delete</button></td></tr>');
-    if (cwd !== '/') rows.unshift('<tr><td class=n colspan=3><span class=dir data-up=1>..</span></td></tr>');
+    if (cwd !== '/') rows.unshift('<tr><td class=n colspan=3 data-up=1><span class=dir>..</span></td></tr>');
     $('list').innerHTML = rows.join('') || '<tr><td class=dim>empty</td></tr>';
     $('list').onclick = ev => {
-      const t = ev.target, d = t.dataset;
+      const t = ev.target.closest('[data-i],[data-mv],[data-rm],[data-ed],[data-up]');
+      if (!t) return;
+      const d = t.dataset;
       if (d.up) return go(cwd.replace(/\\/[^\\/]*$/, '') || '/');
-      const e = j.entries[d.i ?? d.mv ?? d.rm];
+      const e = j.entries[d.i ?? d.mv ?? d.rm ?? d.ed];
       if (!e) return;
-      if (d.i !== undefined) go(join(cwd, e.name));
+      if (d.ed !== undefined) openEditor(e);
+      else if (d.i !== undefined) go(join(cwd, e.name));
       else if (d.mv !== undefined) rename(e);
       else if (d.rm !== undefined) remove(e);
     };
@@ -398,6 +420,64 @@ async function upload(files) {
   } catch (e) { say(e.message, true); }
   $('prog').hidden = true; go(cwd);
 }
+// ---- the editor: CodeMirror 5, for the text files a card holds
+const EDIT_MAX = 512 * 1024;
+const MODES = {md: 'markdown', markdown: 'markdown', c: 'text/x-csrc', h: 'text/x-csrc',
+               py: 'python', js: 'javascript', json: {name: 'javascript', json: true},
+               ini: 'properties', cfg: 'properties', conf: 'properties',
+               txt: null, log: null, csv: null};
+const ext = n => n.includes('.') ? n.split('.').pop().toLowerCase() : 'txt';
+const editable = n => ext(n) in MODES;
+let cm = null, edPath = null, edClean = 0;
+function edDirty() { return cm && !cm.isClean(edClean); }
+function edShow() { $('edstate').textContent = edDirty() ? 'unsaved' : 'saved';
+                    $('edstate').className = edDirty() ? 'dirty' : 'dim'; }
+async function openEditor(e) {
+  if (e.size > EDIT_MAX) return say(e.name + ' is too big to edit here (' + size(e.size) + ')', true);
+  if (edDirty() && !confirm('Discard the changes to ' + edPath + '?')) return;
+  const path = join(cwd, e.name);
+  say('opening ' + e.name + '...');
+  try {
+    const r = await fetch('/dash/files/get?path=' + encodeURIComponent(path));
+    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'HTTP ' + r.status); }
+    const text = await r.text();
+    if (!cm) {
+      const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+      cm = CodeMirror.fromTextArea($('edtext'), {lineNumbers: true, lineWrapping: true,
+            theme: dark ? 'material-darker' : 'default', indentUnit: 2,
+            extraKeys: {'Ctrl-S': save, 'Cmd-S': save}});
+      cm.on('change', edShow);
+    }
+    edPath = path;
+    $('edname').textContent = path;
+    $('editor').className = 'open';
+    cm.setOption('mode', MODES[ext(e.name)]);
+    cm.setValue(text);
+    cm.clearHistory();
+    edClean = cm.changeGeneration();
+    edShow();
+    cm.refresh(); cm.focus();
+    say('');
+  } catch (err) { say(err.message, true); }
+}
+async function save() {
+  if (!cm || !edPath) return;
+  const gen = cm.changeGeneration();
+  $('edstate').textContent = 'saving...';
+  try {
+    await call('/dash/files/put?path=' + encodeURIComponent(edPath),
+               {method: 'POST', body: new Blob([cm.getValue()], {type: 'text/plain'})});
+    edClean = gen;
+    edShow();
+    if (edPath.startsWith(cwd === '/' ? '/' : cwd + '/')) go(cwd);
+  } catch (err) { $('edstate').textContent = err.message; $('edstate').className = 'bad'; }
+}
+function closeEditor() {
+  if (edDirty() && !confirm('Close without saving?')) return;
+  $('editor').className = ''; edPath = null;
+}
+window.addEventListener('beforeunload', ev => { if (edDirty()) { ev.preventDefault(); ev.returnValue = ''; } });
+
 const drop = $('drop');
 drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
 drop.ondragleave = () => drop.classList.remove('over');

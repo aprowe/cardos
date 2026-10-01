@@ -27,6 +27,7 @@ mines     Games
 noodle    Games
 photo     Tools
 pinball   Games
+rfiles    Net
 screen    Net
 share     Net
 stocks    Net

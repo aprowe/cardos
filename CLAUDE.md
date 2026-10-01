@@ -182,6 +182,20 @@ marks nothing gets its whole rectangle exactly as before**, so this cost the
 existing apps nothing; `apps/files.c` shows the pattern, and Mines, Claude and
 Pinball can drop their hand-rolled versions whenever someone is in there.
 
+**Remote Files: the card from the dashboard** (2026-10-01). While the
+Remote Files app (`apps/rfiles.c`, Net) is open, the card can be browsed at
+`/dash/files` behind the dashboard sign-in: download, upload, rename,
+delete, new folders, and a CodeMirror editor (from jsDelivr) for text files.
+The droplet cannot reach the device, so the device polls `/files/poll`,
+one request carrying the last answer in and the next job out
+(`server/files.py` has the protocol). Data is base64 in 3 KB chunks
+because the app HTTP layer is text; an upload goes to NAME.part and is
+committed at the end. Closed, nothing on the card is reachable.
+
+**The Bluetooth radio comes down after a print** unless Bluetooth is set
+to start at boot (`bt_radio_down`, run on cardos-bg after the job). Before,
+one print left 67 KB held for the uptime, and Todo could not load beside it.
+
 **Voice memos, and a speaker** (2026-09-20). `kernel/drv/speaker.c` is the
 first speaker driver: I2S standard mode to the NS4168 on BCLK 41 / DATA 42 /
 LRCLK 43, streaming a PCM WAV (16-bit, mono or stereo, 8-48 kHz, chunk
