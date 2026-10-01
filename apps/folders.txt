@@ -5,34 +5,36 @@
 # Every app in apps/ must have a line: tools/build_apps.py refuses one that
 # does not, because an app nobody placed used to land at the top level with
 # no folder. The launcher shows one level of folders; these are the ones
-# there are. Read by tools/build_apps.py (where the firmware seeds it) and by
+# there are: Plan, Make, Net, Games and System (2026-10-01; Tools
+# was split up). The launcher's order is /config/favorites.txt on the card.
+# Read by tools/build_apps.py (where the firmware seeds it) and by
 # server/updates.py (the /update manifest, so a first install lands here too).
 
-build     Net
-calc      Tools
-calendar  Tools
+build     Make
+calc      Make
+calendar  Plan
 cat       -
 claude    Net
-clock     Tools
-counter   Tools
-edit      Tools
-explorer  Tools
-files     Tools
-grep      -
-habits    Tools
-ide       Tools
-memo      Tools
+clock     Plan
+counter   Plan
+dashlink  Net
+edit      Make
+explorer  System
+files     System
 forklift  Games
+grep      -
+habits    Plan
+ide       Make
+memo      Make
 mines     Games
 noodle    Games
-photo     Tools
+photo     Make
 pinball   Games
-dashlink  Net
 screen    Net
 share     Net
 stocks    Net
-timer     Tools
-toggl     Net
-today     Tools
-todo      Tools
+timer     Plan
+today     Plan
+todo      Plan
+toggl     Plan
 web       Net

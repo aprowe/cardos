@@ -204,6 +204,17 @@ output fills a buffer and nothing is drawn over the app on screen; lines
 that would take the screen (launch, desk, run, ...) are refused, and so is
 an app on PATH that wants it. Closed, nothing is reachable.
 
+**The launcher's order is chosen, not the card's** (2026-10-01).
+`/config/favorites.txt` (written with a default at first boot, hand-
+editable) lists apps or folders, in order: those come first, and a
+favourite app inside a folder also shows at the top level. Everything else
+follows, folders then apps, A-Z (`kernel/ui/iconorder.c`, host-tested;
+applied in `icons_in_count`/`icons_in_at`, which is all the launcher
+reads). The folders are Plan, Make, Net, Games and System; a firmware whose
+blobs name different folders moves its apps there at boot
+(`settle_anywhere`), and the built-in Settings, Memory and About live in
+System.
+
 **`update` checks every app** (2026-10-01). The manifest table held 24
 apps; the server listed 28, and the last four alphabetically (today,
 todo, toggl, web) were dropped unseen, so `update` called them current.

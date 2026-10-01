@@ -45,7 +45,8 @@ static int s_n;
  * searched after PATH, so an app resolves by name even on a card whose saved
  * PATH predates the folders. */
 static const char *DEFAULT_PATH =
-    CAPP_APPS ":" CAPP_APPS "/Tools:" CAPP_APPS "/Net:" CAPP_APPS "/Games:/bin";
+    CAPP_APPS ":" CAPP_APPS "/Plan:" CAPP_APPS "/Make:" CAPP_APPS "/Net:" CAPP_APPS "/Games:"
+    CAPP_APPS "/System:/bin";
 
 static int find(const char *name) {
   int i;

@@ -20,6 +20,7 @@ idf_component_register(
     "../kernel/ui/apps.c"
     "../kernel/ui/settings.c"
     "../kernel/ui/icons.c"
+    "../kernel/ui/iconorder.c"
     "../kernel/ui/pins.c"
     "../kernel/ui/launchui.c"
     "../kernel/ui/shell.c"

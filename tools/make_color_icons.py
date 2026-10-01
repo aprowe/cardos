@@ -577,7 +577,8 @@ ICONS = {
         "................",
         "................",
     ],
-    # The three folders the apps are grouped into. One folder body -- amber,
+    # The folders the apps are grouped into (Plan, Make, Net, Games, System
+    # since 2026-10-01). One folder body -- amber,
     # tab on the left, a darker lip along the bottom -- with a different mark
     # on the face of each, so they read as a set at 16 pixels and still tell
     # each other apart at a glance. Keyed by the folder's name on the card,
@@ -623,8 +624,8 @@ ICONS = {
         "................",
     ],
 
-    # Tools: a spanner, laid across the face.
-    "folder-Tools": [
+    # Make: a spanner, laid across the face -- Tools' mark, kept.
+    "folder-Make": [
         "................",
         "..KKKKK.........",
         ".KyyyyyKKKKKKKK.",
@@ -637,6 +638,46 @@ ICONS = {
         ".KyyyKGGKyyyyyK.",
         ".KyyKGGKyyyyyyK.",
         ".KyyKKKyyyyyyyK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KooooooooooooK.",
+        ".KKKKKKKKKKKKKK.",
+        "................",
+    ],
+
+    # Plan: a box with a tick in it.
+    "folder-Plan": [
+        "................",
+        "..KKKKK.........",
+        ".KyyyyyKKKKKKKK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KyyyKKKKKKKyyK.",
+        ".KyyyKWWWWWgKyK.",
+        ".KyyyKWWWWggKyK.",
+        ".KyyyKgWWggWKyK.",
+        ".KyyyKggggWWKyK.",
+        ".KyyyKWggWWWKyK.",
+        ".KyyyKKKKKKKyyK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KooooooooooooK.",
+        ".KKKKKKKKKKKKKK.",
+        "................",
+    ],
+
+    # System: a gear.
+    "folder-System": [
+        "................",
+        "..KKKKK.........",
+        ".KyyyyyKKKKKKKK.",
+        ".KyyyyyyyyyyyyK.",
+        ".KyyyyyKKyyyyyK.",
+        ".KyyyKKDDKKyyyK.",
+        ".KyyyKDDDDKyyyK.",
+        ".KyyKDDKKDDKyyK.",
+        ".KyyKDDKKDDKyyK.",
+        ".KyyyKDDDDKyyyK.",
+        ".KyyyKKDDKKyyyK.",
+        ".KyyyyyKKyyyyyK.",
         ".KyyyyyyyyyyyyK.",
         ".KooooooooooooK.",
         ".KKKKKKKKKKKKKK.",

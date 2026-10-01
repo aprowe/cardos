@@ -10,6 +10,7 @@
 #include "kernel/ui/icons_color.h"
 #include "kernel/ui/font_blobs.h"
 #include "kernel/ui/fontres.h"
+#include "kernel/ui/iconorder.h"
 
 #include <stdlib.h>
 
@@ -24,6 +25,16 @@
 static Icon s_icon[MAX_ICONS];
 static int  s_nicon;      /* everything found */
 static int  s_nvisible;   /* everything with an icon, sorted to the front */
+
+/* The order a folder is shown in (iconorder.h): worked out once per folder
+ * per reload, since the launcher asks for it on every paint. The top level
+ * also holds the favourites that live in folders. */
+#define FAVS_FILE "/config/favorites.txt"
+static IconFavs s_favs;
+static int  s_ord[MAX_ICONS * 2];
+static int  s_nord;
+static int  s_ord_folder = -2;     /* the folder s_ord is for; -2 none */
+static void load_favs(void);
 
 /* The .capp binaries are carried in the firmware and written out to the card.
  * There is no card reader in the loop, so an app that can only arrive by
@@ -210,6 +221,40 @@ static void settle_folder(const char *rel) {
   else fs_remove(flat);
 }
 
+/* The same, from any folder: for a firmware whose folders differ from the
+ * card's (2026-10-01 regrouped Tools into Plan, Make and System). Only when
+ * the firmware is new -- a move made by hand stays until the next one. */
+static void settle_anywhere(const char *rel) {
+  const char *slash = strrchr(rel, '/'), *base = slash ? slash + 1 : rel;
+  char full[80], other[96];
+  FsDir d;
+  FsEntry e;
+
+  settle_folder(rel);
+  snprintf(full, sizeof full, "%s/%s", ICONS_DIR, rel);
+  if (fs_opendir(ICONS_DIR, &d) != 0) return;
+  while (fs_readdir(&d, &e) == 1) {
+    if (!e.is_dir || e.name[0] == '.' || !strcmp(e.name, "icons")) continue;
+    snprintf(other, sizeof other, "%s/%s/%s", ICONS_DIR, e.name, base);
+    if (!strcmp(other, full) || have_size(other) < 0) continue;
+    if (have_size(full) >= 0) fs_remove(other);            /* already there */
+    else if (fs_rename(other, full) == 0) seen_add(full, (uint32_t)have_size(full), 0);
+  }
+  fs_closedir(&d);
+}
+
+/* A folder the regrouping emptied (Tools) goes; one with anything left in
+ * it -- an app Build made, say -- stays. */
+static void drop_if_empty(const char *dir) {
+  FsDir d;
+  FsEntry e;
+  int any = 0;
+  if (fs_opendir(dir, &d) != 0) return;
+  while (fs_readdir(&d, &e) == 1) if (e.name[0] != '.') { any = 1; break; }
+  fs_closedir(&d);
+  if (!any) fs_remove(dir);
+}
+
 static void seed_capps(void) {
   uint32_t want = blob_stamp(), have = 0;
   size_t i;
@@ -227,7 +272,8 @@ static void seed_capps(void) {
     /* Before the stamp is consulted: a card seeded by an older firmware has a
      * matching stamp and the file in the wrong place, and the early `continue`
      * below would leave it there. */
-    settle_folder(CAPP_BLOBS[i].name);
+    if (have != want) settle_anywhere(CAPP_BLOBS[i].name);
+    else settle_folder(CAPP_BLOBS[i].name);
     snprintf(path, sizeof path, "%s/%s", ICONS_DIR, CAPP_BLOBS[i].name);
 
     /* The stamp says which firmware wrote these, and it is only written once
@@ -250,6 +296,8 @@ static void seed_capps(void) {
     if (ok && file_size(path) != (int)CAPP_BLOBS[i].size) ok = 0;
     if (!ok) { fs_remove(path); all_ok = 0; }
   }
+
+  if (have != want) drop_if_empty(ICONS_DIR "/Tools");
 
   /* The stamp means "every blob on the card is this firmware's". Writing it
    * after a failure is what made the truncation permanent. */
@@ -346,15 +394,24 @@ static void seed_dir(void) {
   /* Files.app is gone: the file manager is a .capp now, seeded like the
    * others. Settings is still built in, so it still needs a stub. */
   static const char *seed[] = { "Settings.app" };
+  static const char *const builtin[] = { "Settings.app", "Memory.app", "About.app" };
   size_t i;
-  char path[80];
+  char path[80], flat[80];
 
   seen_begin();
   have_dir(ICONS_DIR);
+  have_dir(ICONS_DIR "/System");
+
+  for (i = 0; i < sizeof builtin / sizeof builtin[0]; i++) {
+    snprintf(flat, sizeof flat, "%s/%s", ICONS_DIR, builtin[i]);
+    snprintf(path, sizeof path, "%s/System/%s", ICONS_DIR, builtin[i]);
+    if (have_size(flat) < 0) continue;
+    if (have_size(path) >= 0 || fs_rename(flat, path) != 0) fs_remove(flat);
+  }
 
   for (i = 0; i < sizeof seed / sizeof seed[0]; i++) {
     int fd;
-    snprintf(path, sizeof path, "%s/%s", ICONS_DIR, seed[i]);
+    snprintf(path, sizeof path, "%s/System/%s", ICONS_DIR, seed[i]);
     if (have_size(path) >= 0) continue;
     fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
     if (fd >= 0) { fs_write(fd, "cardos app", 10); fs_close(fd); }
@@ -539,6 +596,8 @@ void icons_reload(void) {
   capprun_catalog_end();
   scan_firmware_folder();
   partition_cli();
+  load_favs();
+  s_ord_folder = -2;                     /* every folder's order again */
 }
 
 int icons_count(void) { return s_nvisible; }
@@ -549,19 +608,55 @@ const Icon *icon_at(int i) {
   return &s_icon[i];
 }
 
+/* The favourites, from the card; the default written out the first time,
+ * so there is a file to edit. */
+static void load_favs(void) {
+  char buf[512];
+  int fd = fs_open(FAVS_FILE, FS_O_READ), n = 0;
+  if (fd < 0) {
+    fd = fs_open(FAVS_FILE, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    if (fd >= 0) { fs_write(fd, ICONORDER_DEFAULT, strlen(ICONORDER_DEFAULT)); fs_close(fd); }
+    iconorder_parse(ICONORDER_DEFAULT, &s_favs);
+    return;
+  }
+  n = fs_read(fd, buf, sizeof buf - 1);
+  fs_close(fd);
+  buf[n > 0 ? n : 0] = 0;
+  iconorder_parse(buf, &s_favs);
+}
+
+static void build_order(int folder) {
+  static const char *names[MAX_ICONS];
+  static int is_folder[MAX_ICONS];
+  int i, k;
+  s_nord = 0;
+  for (i = 0; i < s_nvisible; i++) {
+    names[i] = s_icon[i].name;
+    is_folder[i] = s_icon[i].kind == ICON_FOLDER;
+    if (s_icon[i].parent == folder) s_ord[s_nord++] = i;
+  }
+  /* At the top: a favourite app that lives in a folder, as well. */
+  if (folder == -1)
+    for (i = 0; i < s_nvisible && s_nord < MAX_ICONS * 2; i++)
+      if (s_icon[i].parent >= 0 && s_icon[i].kind != ICON_FOLDER &&
+          iconorder_rank(&s_favs, s_icon[i].name) >= 0) {
+        for (k = 0; k < s_nord && s_icon[s_ord[k]].kind != ICON_FOLDER &&
+                    strcmp(s_icon[s_ord[k]].name, s_icon[i].name); k++) {}
+        /* Not twice if a copy also sits at the top level. */
+        if (k == s_nord || s_icon[s_ord[k]].kind == ICON_FOLDER) s_ord[s_nord++] = i;
+      }
+  iconorder_sort(s_ord, s_nord, names, is_folder, &s_favs);
+  s_ord_folder = folder;
+}
+
 int icons_in_count(int folder) {
-  int i, n = 0;
-  for (i = 0; i < s_nvisible; i++) n += s_icon[i].parent == folder;
-  return n;
+  if (s_ord_folder != folder) build_order(folder);
+  return s_nord;
 }
 
 const Icon *icons_in_at(int folder, int i) {
-  int k;
-  for (k = 0; k < s_nvisible; k++) {
-    if (s_icon[k].parent != folder) continue;
-    if (i-- == 0) return &s_icon[k];
-  }
-  return NULL;
+  if (s_ord_folder != folder) build_order(folder);
+  return (i >= 0 && i < s_nord) ? &s_icon[s_ord[i]] : NULL;
 }
 
 int icon_index(const Icon *ic) {

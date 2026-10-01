@@ -47,7 +47,7 @@ def main():
     fails += not check("and the folder it belongs in, last",
                        m, "app pinball e40c292c 1 Games\n")
     fails += not check("the repository's own table is apps/folders.txt",
-                       updates.load_folders().get("timer"), "Tools")
+                       updates.load_folders().get("timer"), "Plan")
     fails += not check("where '-' means the top level",
                        "grep" in updates.load_folders(), False)
     fails += not check("fnv1a of the empty string is the reference value",
