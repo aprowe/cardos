@@ -790,7 +790,7 @@ def main():
         "",
     ]
     for name, data in built:
-        sym = name.replace("-", "_")
+        sym = "".join(c if c.isalnum() else "_" for c in name)   # "Remote Files"
         lines.append("static const uint8_t cic_%s[] = {" % sym)
         for i in range(0, len(data), 16):
             lines.append("  " + " ".join("0x%02X," % b for b in data[i:i + 16]))
@@ -807,7 +807,7 @@ def main():
         "static const CicBlob CIC_BLOBS[] = {",
     ]
     for name, _ in built:
-        sym = name.replace("-", "_")
+        sym = "".join(c if c.isalnum() else "_" for c in name)   # "Remote Files"
         lines.append('  { "%s.cic", cic_%s, sizeof cic_%s },' % (name, sym, sym))
     lines += [
         "};",
