@@ -32,6 +32,7 @@ screen    Net
 share     Net
 stocks    Net
 timer     Tools
+toggl     Net
 today     Tools
 todo      Tools
 web       Net

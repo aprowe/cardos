@@ -353,6 +353,29 @@ def google_card():
                if stale else ""))
 
 
+def toggl_card():
+    """The Toggl token: who it belongs to, or a box to paste one into. Not
+    checked against Toggl on every page load -- its hourly quota is small,
+    and the device needs it more."""
+    from . import toggl
+    c = toggl.load()
+    head = "<div class=card-head><h2>Toggl</h2></div>"
+    if not c:
+        return ("<section>%s<p class=big><span class=dot></span>Not connected</p>"
+                "<p class=dim>Paste your API token from the bottom of "
+                "<a href='https://track.toggl.com/profile' target=_blank rel=noopener>"
+                "your Toggl profile</a>. The Toggl app on the device then starts and "
+                "stops timers through this server.</p>"
+                "<form method=post action=/dash/toggl/token style='display:block'>"
+                "<input name=token autocomplete=off placeholder='API token'>"
+                "<button class=primary>Connect</button></form></section>" % head)
+    return ("<section>%s<p class=big><span class='dot ok'></span>Connected</p>"
+            "<dl><dt>Account</dt><dd>%s</dd><dt>Connected</dt><dd>%s</dd></dl>"
+            "<div class=actions><form method=post action=/dash/toggl/forget>"
+            "<button>Disconnect</button></form></div></section>"
+            % (head, html.escape(c.get("name") or "?"), _when(c.get("saved_at"))))
+
+
 def device_card():
     """Whether Remote Files is open on the device, and the way to the card."""
     from . import files
@@ -468,7 +491,7 @@ def get_dash(h, path, args):
         return
     msg = (args.get("msg") or [""])[0]
     note = "<p class=msg>%s</p>" % html.escape(msg) if msg else ""
-    h.html(_page("CardOS", note + "<div class=grid>" + device_card() + google_card() +
+    h.html(_page("CardOS", note + "<div class=grid>" + device_card() + google_card() + toggl_card() +
                  status_card(h) + "</div>", here="/dash"))
 
 
@@ -576,6 +599,40 @@ def post_google_forget(h, path, args):
     h.redirect("/dash?msg=" + urllib.parse.quote(msg))
 
 
+def post_toggl_token(h, path, args):
+    """connect Toggl: check a token and keep it"""
+    from . import toggl
+    if not _need_token(h):
+        return
+    if not logged_in(h):
+        h.redirect("/dash")
+        return
+    token = (_form(h).get("token") or [""])[0].strip()
+    if not token:
+        h.redirect("/dash?msg=" + urllib.parse.quote("Paste a token first."))
+        return
+    try:
+        name, wid = toggl.check_token(token)
+    except toggl.TogglError as e:
+        h.redirect("/dash?msg=" + urllib.parse.quote(e.why))
+        return
+    toggl.save({"token": token, "name": name, "workspace": wid, "saved_at": int(time.time())})
+    sys.stderr.write("dash: toggl connected\n")
+    h.redirect("/dash?msg=" + urllib.parse.quote("Toggl connected as %s." % name))
+
+
+def post_toggl_forget(h, path, args):
+    """disconnect Toggl"""
+    from . import toggl
+    if not _need_token(h):
+        return
+    if not logged_in(h):
+        h.redirect("/dash")
+        return
+    toggl.forget()
+    h.redirect("/dash?msg=" + urllib.parse.quote("Toggl disconnected."))
+
+
 def get_creds(h, path, args):
     """Google client id, secret, refresh token, a line each"""
     # Every other route is open when there is no token; this one never is.
@@ -600,5 +657,7 @@ ROUTES = [
     ("GET", "/dash/google/start", get_google_start, "open"),
     ("GET", CALLBACK, get_google_callback, "open"),
     ("POST", "/dash/google/forget", post_google_forget, "open"),
+    ("POST", "/dash/toggl/token", post_toggl_token, "open"),
+    ("POST", "/dash/toggl/forget", post_toggl_forget, "open"),
     ("GET", "/google/creds", get_creds),
 ]

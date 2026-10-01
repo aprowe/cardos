@@ -192,6 +192,17 @@ one request carrying the last answer in and the next job out
 because the app HTTP layer is text; an upload goes to NAME.part and is
 committed at the end. Closed, nothing on the card is reachable.
 
+**Toggl** (2026-10-01). `apps/toggl.c` (Net) shows the running timer in
+`num30`, starts one from a list of recent entries or a typed description,
+and stops it; commands `status`, `start TEXT`, `stop`, `today` (a Today
+section: `Toggl | toggl today`). `server/toggl.py` holds the API token --
+pasted into the dashboard's Toggl card, kept in toggl.json -- and answers
+in lines. Toggl has an hourly request quota, so the server caches projects
+and recent entries and the app counts the timer itself, asking only on
+open and after an action. Both of an app's HTTP calls now carry the
+device's token to its own server (`own_bearer` in cardapi.c); before, only
+`http_start` did, and a command using the blocking `http` was refused.
+
 **The Bluetooth radio comes down after a print** unless Bluetooth is set
 to start at boot (`bt_radio_down`, run on cardos-bg after the job). Before,
 one print left 67 KB held for the uptime, and Todo could not load beside it.

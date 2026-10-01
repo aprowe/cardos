@@ -43,6 +43,7 @@ INK = {
     "m": (168, 52, 52),     # deeper red
     "p": (186, 148, 232),   # violet
     "t": (96, 204, 196),    # teal
+    "P": (232, 120, 210),   # pink, for Toggl
 }
 
 ICONS = {
@@ -238,6 +239,25 @@ ICONS = {
         ".bbb..........g.",
         "..b..........ggg",
         "..b...........g.",
+        "................",
+    ],
+    # A stopwatch, in a pink close to Toggl's own.
+    "Toggl": [
+        "......KKKK......",
+        ".......KK.......",
+        ".....KKKKKK.....",
+        "...KKPPPPPPKK...",
+        "..KPPWWWWWWPPK..",
+        "..KPWWWWKWWWPK..",
+        ".KPWWWWWKWWWWPK.",
+        ".KPWWWWWKWWWWPK.",
+        ".KPWWWWWKKKWWPK.",
+        ".KPWWWWWWWWWWPK.",
+        ".KPWWWWWWWWWWPK.",
+        "..KPWWWWWWWWPK..",
+        "..KPPWWWWWWPPK..",
+        "...KKPPPPPPKK...",
+        ".....KKKKKK.....",
         "................",
     ],
     # A page with a pencil across it.
