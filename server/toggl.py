@@ -6,11 +6,11 @@ and the Toggl app (apps/toggl.c) reads plain lines over the HTTP it already
 speaks to this server.
 
     GET  /toggl/status    the running entry, then what to start from:
-                            running <tab> id <tab> start <tab> description <tab> project
+                            running <tab> id <tab> start <tab> description <tab> project <tab> #colour
                           or "idle", then up to RECENT lines
-                            recent <tab> project id <tab> description <tab> project
+                            recent <tab> project id <tab> description <tab> project <tab> #colour
                           then every active project, by name:
-                            project <tab> id <tab> name
+                            project <tab> id <tab> name <tab> #colour
                           start is UTC epoch seconds; the device counts from it
     POST /toggl/start     body: description=..\\nproject=ID   -> a "running" line
                           (whatever was running is stopped first)
@@ -163,12 +163,23 @@ def workspace():
     return c["workspace"]
 
 
-def projects():
-    """id -> name, the workspace's active projects."""
+def _projects():
     def get():
         js = call("GET", "/workspaces/%s/projects?active=true" % workspace()) or []
-        return {p["id"]: p.get("name", "") for p in js if p.get("id")}
+        return {p["id"]: (p.get("name", ""), p.get("color") or "") for p in js if p.get("id")}
     return cached("projects", PROJECTS_FOR, get)
+
+
+def projects():
+    """id -> name, the workspace's active projects."""
+    return {k: v[0] for k, v in _projects().items()}
+
+
+def color(pid):
+    """A project's colour as Toggl has it ("#0b83d9"), or "" -- the device
+    draws each project's name in its own colour."""
+    c = _projects().get(pid, ("", ""))[1]
+    return c if len(c) == 7 and c.startswith("#") else ""
 
 
 def epoch(s):
@@ -197,8 +208,10 @@ def recent_entries():
 
 
 def running_line(e, names):
-    return "running\t%s\t%d\t%s\t%s\n" % (e["id"], epoch(e["start"]), clean(e.get("description")),
-                                         clean(names.get(e.get("project_id"), "")))
+    return "running\t%s\t%d\t%s\t%s\t%s\n" % (e["id"], epoch(e["start"]),
+                                             clean(e.get("description")),
+                                             clean(names.get(e.get("project_id"), "")),
+                                             color(e.get("project_id")))
 
 
 def status_text():
@@ -211,13 +224,14 @@ def status_text():
         if key in seen or not (key[0] or key[1]):
             continue
         seen.add(key)
-        out += "recent\t%s\t%s\t%s\n" % (key[1] or "", key[0], clean(names.get(key[1], "")))
+        out += "recent\t%s\t%s\t%s\t%s\n" % (key[1] or "", key[0], clean(names.get(key[1], "")),
+                                            color(key[1]))
         if len(seen) >= RECENT:
             break
     # Every active project, to start one with no description and add it
     # later -- which is how a timer is usually started in a hurry.
     for pid, name in sorted(names.items(), key=lambda kv: kv[1].lower())[:PROJECTS_MAX]:
-        out += "project\t%s\t%s\n" % (pid, clean(name))
+        out += "project\t%s\t%s\t%s\n" % (pid, clean(name), color(pid))
     return out
 
 

@@ -12,6 +12,11 @@
  * starts with no description, which d adds while it runs. s stops, n types a
  * new one, r asks again.
  *
+ * A running timer has the screen to itself: its project, in the project's
+ * own colour from Toggl, the time in clock56, the description, and the keys
+ * in the bar. l goes to the list and back; starting anything comes back to
+ * the timer.
+ *
  * Commands: `status`, `start TEXT` (a recent entry's project if the text
  * names one), `project NAME` (no description), `describe TEXT` (the running
  * one), `stop`, and `today` -- what was tracked today and the total,
@@ -46,6 +51,7 @@ typedef struct {
   char proj_id[12];
   char desc[DESC_MAX];
   char proj[PROJ_MAX];
+  uint16_t colour;                /* the project's, or 0 for none */
 } Recent;
 
 static struct {
@@ -53,6 +59,8 @@ static struct {
   uint32_t start;                 /* UTC epoch seconds */
   char     desc[DESC_MAX];
   char     proj[PROJ_MAX];
+  uint16_t colour;                /* the running project's, or 0 */
+  int      list;                  /* the list, not the timer, while one runs */
 
   Recent   rec[MAX_ROWS];
   int      nrec;
@@ -67,7 +75,7 @@ static struct {
   char     draft[DESC_MAX];
   int      dlen;
 
-  int      f_num, f_ui, f_uib;
+  int      f_big, f_num, f_ui, f_uib;
   CRect    content;
   char     body[DESC_MAX + 32];
   char     reply[REPLY_MAX];
@@ -112,6 +120,24 @@ static void hm(uint32_t secs, char *out, int n) {
 
 /* ---- what the server says ------------------------------------------------------ */
 
+static int hexval(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+/* "#rrggbb" as a colour for this screen, or 0. A dark one is lifted halfway
+ * to white: Toggl's palette is made for a white page. */
+static uint16_t parse_colour(const char *s) {
+  int v[6], i, r, g, b;
+  if (s[0] != '#') return 0;
+  for (i = 0; i < 6; i++) if ((v[i] = hexval(s[i + 1])) < 0) return 0;
+  r = v[0] * 16 + v[1]; g = v[2] * 16 + v[3]; b = v[4] * 16 + v[5];
+  if (r * 3 + g * 6 + b < 1100) { r = (r + 255) / 2; g = (g + 255) / 2; b = (b + 255) / 2; }
+  return CAPP_RGB(r, g, b) ? CAPP_RGB(r, g, b) : 1;
+}
+
 static void absorb_running(const char *line) {
   char num[16];
   G.running = 1;
@@ -119,6 +145,8 @@ static void absorb_running(const char *line) {
   G.start = (uint32_t)to_long(num);
   field(line, 3, G.desc, DESC_MAX);
   field(line, 4, G.proj, PROJ_MAX);
+  field(line, 5, num, sizeof num);
+  G.colour = parse_colour(num);
 }
 
 static void absorb_status(void) {
@@ -136,13 +164,17 @@ static void absorb_status(void) {
         Recent *r = &G.rec[G.nrec++];
         r->kind = pass == 0 ? 'p' : 'r';
         field(p, 1, r->proj_id, sizeof r->proj_id);
+        char hex[12];
         if (pass == 0) {
           r->desc[0] = 0;
           field(p, 2, r->proj, PROJ_MAX);
+          field(p, 3, hex, sizeof hex);
         } else {
           field(p, 2, r->desc, DESC_MAX);
           field(p, 3, r->proj, PROJ_MAX);
+          field(p, 4, hex, sizeof hex);
         }
+        r->colour = parse_colour(hex);
       }
       while (*p && *p != '\n') p++;
       if (*p) p++;
@@ -215,8 +247,10 @@ static int poll(void) {
   } else {
     /* A start answers with its running line, a stop with what stopped;
      * either way the list may have changed, so ask again. */
-    if ((G.stage == ST_START || G.stage == ST_DESCRIBE) && starts(G.reply, "running\t"))
+    if ((G.stage == ST_START || G.stage == ST_DESCRIBE) && starts(G.reply, "running\t")) {
       absorb_running(G.reply);
+      G.list = 0;
+    }
     if (G.stage == ST_STOP) G.running = 0;
     G.stage = ST_IDLE;
     refresh();
@@ -237,22 +271,39 @@ static int width(int f, const char *s) {
 
 static int height(int f) { return f >= 0 ? api->font_height(f) : 8; }
 
+static int timer_screen(void) { return G.running && !G.list && G.typing != 1; }
+
+static uint16_t proj_colour(uint16_t c) { return c ? c : CLR_TEXT; }
+
+/* Where the time is drawn: the middle of the screen on the timer screen, a
+ * strip under the title on the list. Its own rect, so a second's tick
+ * repaints only it. */
 static CRect timer_rect(void) {
-  return rect(G.content.x, G.content.y + TOP_H, G.content.w, TIMER_H);
+  CRect c = G.content;
+  if (timer_screen()) {
+    int h = height(G.f_big >= 0 ? G.f_big : G.f_num) + 4;
+    return rect(c.x, c.y + TOP_H + ROW_H + 2, c.w, h);
+  }
+  return rect(c.x, c.y + TOP_H, c.w, TIMER_H);
 }
 
 static void paint_timer(void) {
   CRect r = timer_rect();
   char t[16];
   uint32_t now = api->epoch();
+  int big = timer_screen() && G.f_big >= 0, f = big ? G.f_big : G.f_num;
   api->fill(r, CLR_BG);
   if (!G.running) {
     draw(G.f_ui, r.x + 8, r.y + (r.h - height(G.f_ui)) / 2, "not running", CLR_DIM, CLR_BG);
     return;
   }
   if (now && now >= G.start) hms(now - G.start, t, sizeof t);
-  else api->fmt(t, sizeof t, "-:--:--");
-  draw(G.f_num, r.x + 8, r.y + (r.h - height(G.f_num)) / 2, t, CLR_RUN, CLR_BG);
+  else api->fmt(t, sizeof t, "0:00:00");
+  if (timer_screen())
+    draw(f, r.x + (r.w - width(f, t)) / 2, r.y + (r.h - height(f)) / 2, t,
+         proj_colour(G.colour), CLR_BG);
+  else
+    draw(f, r.x + 8, r.y + (r.h - height(f)) / 2, t, proj_colour(G.colour), CLR_BG);
   G.shown_sec = now;
 }
 
@@ -270,65 +321,83 @@ static void paint_row(int i, int y) {
   }
   if (G.rec[i - 1].kind == 'p') {
     Recent *r = &G.rec[i - 1];
-    api->fill(rect(c.x + 8, y + ROW_H / 2 - 3, 6, 6), CLR_RUN);
-    draw(G.f_ui, c.x + 20, y + (ROW_H - height(G.f_ui)) / 2, r->proj, CLR_TEXT, bg);
+    api->fill(rect(c.x + 8, y + ROW_H / 2 - 3, 6, 6), proj_colour(r->colour));
+    draw(G.f_uib, c.x + 20, y + (ROW_H - height(G.f_uib)) / 2, r->proj,
+         proj_colour(r->colour), bg);
     return;
   }
   {
     Recent *r = &G.rec[i - 1];
     int x = c.x + 8;
-    draw(G.f_ui, x, y + (ROW_H - height(G.f_ui)) / 2, r->desc[0] ? r->desc : "(no description)",
-         CLR_TEXT, bg);
+    const char *d = r->desc[0] ? r->desc : "(no description)";
+    draw(G.f_ui, x, y + (ROW_H - height(G.f_ui)) / 2, d, r->desc[0] ? CLR_TEXT : CLR_DIM, bg);
     if (r->proj[0]) {
-      x += width(G.f_ui, r->desc[0] ? r->desc : "(no description)") + 8;
+      x += width(G.f_ui, d) + 8;
       if (x < c.x + c.w - 30)
-        draw(G.f_ui, x, y + (ROW_H - height(G.f_ui)) / 2, r->proj, CLR_DIM, bg);
+        draw(G.f_ui, x, y + (ROW_H - height(G.f_ui)) / 2, r->proj, proj_colour(r->colour), bg);
     }
   }
 }
 
-static void app_paint(void *st, CRect c) {
-  int y, i, rows, top = 0, w;
-  (void)st;
-  G.content = c;
+static void paint_top(void) {
+  CRect c = G.content;
+  int w;
   api->fill(rect(c.x, c.y, c.w, TOP_H), CLR_BG);
-  draw(G.f_uib, c.x + 8, c.y + (TOP_H - height(G.f_uib)) / 2, "Toggl", CLR_TEXT, CLR_BG);
+  draw(G.f_uib, c.x + 8, c.y + (TOP_H - height(G.f_uib)) / 2, "Toggl", CLR_DIM, CLR_BG);
   if (G.status[0]) {
     w = width(G.f_ui, G.status);
     draw(G.f_ui, c.x + c.w - 8 - w, c.y + (TOP_H - height(G.f_ui)) / 2, G.status,
          G.bad ? CLR_BAD : CLR_DIM, CLR_BG);
   }
+}
+
+static void paint_foot(const char *keys) {
+  CRect c = G.content;
+  api->fill(rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H), CLR_FOOT);
+  api->text((int16_t)(c.x + 4), (int16_t)(c.y + c.h - FOOT_H + 2), keys, CLR_DIM, CLR_FOOT);
+}
+
+/* The timer, alone: project, time, description. */
+static void paint_running(void) {
+  CRect c = G.content, tr;
+  const char *proj = G.proj[0] ? G.proj : "no project";
+  char line[72];
+  int y = c.y + TOP_H;
+  api->fill(rect(c.x, y, c.w, c.h - TOP_H - FOOT_H), CLR_BG);
+  draw(G.f_uib, c.x + (c.w - width(G.f_uib, proj)) / 2, y + (ROW_H - height(G.f_uib)) / 2,
+       proj, G.proj[0] ? proj_colour(G.colour) : CLR_DIM, CLR_BG);
+  paint_timer();
+  tr = timer_rect();
+  y = tr.y + tr.h + 2;
+  if (G.typing == 2) api->fmt(line, sizeof line, "%s_", G.draft);
+  else api->fmt(line, sizeof line, "%s", G.desc[0] ? G.desc : "no description");
+  draw(G.f_ui, c.x + (c.w - width(G.f_ui, line)) / 2, y, line,
+       G.typing == 2 || G.desc[0] ? CLR_TEXT : CLR_DIM, CLR_BG);
+  paint_foot(G.typing == 2 ? "enter save  esc cancel" : "d describe  s stop  l list  n new");
+}
+
+static void paint_list(void) {
+  CRect c = G.content;
+  int y, i, rows, top = 0;
   paint_timer();
   y = c.y + TOP_H + TIMER_H;
-  api->fill(rect(c.x, y, c.w, ROW_H), CLR_BG);
-  if (G.typing == 2) {
-    char line[72];
-    api->fmt(line, sizeof line, "describe: %s_", G.draft);
-    draw(G.f_ui, c.x + 8, y + (ROW_H - height(G.f_ui)) / 2, line, CLR_TEXT, CLR_BG);
-  } else if (G.running) {
-    char line[72];
-    int x = c.x + 8;
-    if (G.proj[0]) {
-      draw(G.f_uib, x, y + (ROW_H - height(G.f_uib)) / 2, G.proj, CLR_TEXT, CLR_BG);
-      x += width(G.f_uib, G.proj) + 8;
-    }
-    api->fmt(line, sizeof line, "%s", G.desc[0] ? G.desc : "d adds a description");
-    draw(G.f_ui, x, y + (ROW_H - height(G.f_ui)) / 2, line,
-         G.desc[0] ? CLR_TEXT : CLR_DIM, CLR_BG);
-  }
-  y += ROW_H + 2;
-  api->fill(rect(c.x, y - 2, c.w, 2), CLR_BG);
+  api->fill(rect(c.x, y, c.w, 2), CLR_BG);
+  y += 2;
   rows = (c.y + c.h - FOOT_H - y) / ROW_H;
   if (G.sel >= rows) top = G.sel - rows + 1;
   for (i = top; i <= G.nrec && i - top < rows; i++, y += ROW_H) paint_row(i, y);
   if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
-  api->fill(rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H), CLR_FOOT);
-  api->text((int16_t)(c.x + 4), (int16_t)(c.y + c.h - FOOT_H + 2),
-            G.typing == 1 ? "enter start  esc cancel" :
-            G.typing == 2 ? "enter save  esc cancel" :
-            G.running ? "enter start  d describe  s stop  n new" :
-                        "enter start  n new  r refresh",
-            CLR_DIM, CLR_FOOT);
+  paint_foot(G.typing == 1 ? "enter start  esc cancel" :
+             G.running ? "enter start  l timer  s stop  n new" :
+                         "enter start  n new  r refresh");
+}
+
+static void app_paint(void *st, CRect c) {
+  (void)st;
+  G.content = c;
+  paint_top();
+  if (timer_screen()) paint_running();
+  else paint_list();
 }
 
 /* ---- keys ---------------------------------------------------------------------------- */
@@ -361,7 +430,16 @@ static void begin_typing(void) {
 static int app_key(void *st, uint8_t k) {
   (void)st;
   if (G.typing) return key_typing(k);
+  if (timer_screen()) {
+    switch (k) {
+    case 'l': case 'L': case CAPP_KEY_DOWN: G.list = 1; return 1;
+    case 'd': case 'D': case 's': case 'S': case ' ': case 'n': case 'N': case 'r': case 'R':
+      break;                                 /* as on the list, below */
+    default: return 0;
+    }
+  }
   switch (k) {
+  case 'l': case 'L': if (G.running) { G.list = 0; return 1; } return 0;
   case CAPP_KEY_UP:   if (G.sel > 0) G.sel--; return 1;
   case CAPP_KEY_DOWN: if (G.sel < G.nrec) G.sel++; return 1;
   case CAPP_KEY_ENTER:
@@ -617,6 +695,7 @@ const CappInfo capp_info = {
   "s\tstop the running timer\n"
   "n\ta new entry: type its description\n"
   "d\tdescribe the running entry\n"
+  "l\tthe list, and back to the timer\n"
   "r\task Toggl again\n"
   "up/down\tchoose\n"
   "\n"
@@ -631,8 +710,9 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   (void)argc; (void)argv;
   api = a;
   api->mem_set(&G, 0, sizeof G);
-  G.f_num = G.f_ui = G.f_uib = -1;
+  G.f_big = G.f_num = G.f_ui = G.f_uib = -1;
   if (!api->headless()) {
+    G.f_big = api->font_load("clock56");
     G.f_num = api->font_load("num30");
     G.f_ui = api->font_load("ui13");
     G.f_uib = api->font_load("ui13b");

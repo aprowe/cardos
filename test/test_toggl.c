@@ -155,3 +155,21 @@ void test_toggl_a_refusal_is_said_in_the_servers_words(void) {
   failed(-401, out, sizeof out);
   CHECK(!strncmp(out, "Toggl refused the token", 23));
 }
+
+/* Each project in its own colour, as Toggl has it -- lifted when it is too
+ * dark for this screen; no colour is 0, and the text colour is used. */
+void test_toggl_projects_carry_their_colours(void) {
+  topen();
+  snprintf(G.reply, sizeof G.reply, "%s",
+           "running\t99\t1790874000\tWriting\tCardOS\t#0b83d9\n"
+           "project\t10\tCardOS\t#0b83d9\n"
+           "project\t11\tHome\t\n");
+  absorb_status();
+  CHECK(G.colour != 0);
+  CHECK_EQ(G.rec[0].colour, G.colour);
+  CHECK_EQ(G.rec[1].colour, 0);
+  CHECK_EQ(parse_colour("#ffffff"), CAPP_RGB(255, 255, 255));
+  CHECK_EQ(parse_colour("#000000"), CAPP_RGB(127, 127, 127));   /* lifted */
+  CHECK_EQ(parse_colour("nope"), 0);
+  CHECK_EQ(parse_colour("#12345"), 0);
+}

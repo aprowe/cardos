@@ -51,7 +51,8 @@ class FakeToggl:
         if rel == "/me":
             return 200, {"fullname": "Alex", "default_workspace_id": 5}
         if rel.startswith("/workspaces/5/projects"):
-            return 200, [{"id": 10, "name": "CardOS"}, {"id": 11, "name": "Home"}]
+            return 200, [{"id": 10, "name": "CardOS", "color": "#0b83d9"},
+                         {"id": 11, "name": "Home"}]
         if rel == "/me/time_entries/current":
             return 200, self.running
         if rel.startswith("/me/time_entries?"):
@@ -103,16 +104,16 @@ class TogglTest(unittest.TestCase):
         s, text = self.req("GET", "/toggl/status")
         self.assertEqual(s, 200)
         self.assertEqual(text, "idle\n"
-                               "recent\t\tEmail\t\n"
-                               "recent\t10\tWriting\tCardOS\n"
-                               "project\t10\tCardOS\n"
-                               "project\t11\tHome\n")
+                               "recent\t\tEmail\t\t\n"
+                               "recent\t10\tWriting\tCardOS\t#0b83d9\n"
+                               "project\t10\tCardOS\t#0b83d9\n"
+                               "project\t11\tHome\t\n")
 
     def test_start_stops_what_was_running_and_says_when_it_began(self):
         self.t.running = {"id": 7, "description": "Old", "project_id": None, "start": T0,
                           "duration": -T0_EPOCH, "workspace_id": 5}
         s, text = self.req("POST", "/toggl/start", "description=Writing\nproject=10")
-        self.assertEqual((s, text), (200, "running\t99\t%d\tWriting\tCardOS\n" % T0_EPOCH))
+        self.assertEqual((s, text), (200, "running\t99\t%d\tWriting\tCardOS\t#0b83d9\n" % T0_EPOCH))
         methods = [(m, r) for m, r, _ in self.t.calls]
         self.assertIn(("PATCH", "/workspaces/5/time_entries/7/stop"), methods)
         self.assertLess(methods.index(("PATCH", "/workspaces/5/time_entries/7/stop")),
@@ -124,13 +125,13 @@ class TogglTest(unittest.TestCase):
 
     def test_status_lists_the_projects_to_start_from(self):
         s, text = self.req("GET", "/toggl/status")
-        self.assertTrue(text.endswith("project\t10\tCardOS\nproject\t11\tHome\n"), text)
+        self.assertTrue(text.endswith("project\t10\tCardOS\t#0b83d9\nproject\t11\tHome\t\n"), text)
 
     def test_a_project_with_no_description_then_described_later(self):
         s, text = self.req("POST", "/toggl/start", "description=\nproject=11")
-        self.assertEqual((s, text), (200, "running\t99\t%d\t\tHome\n" % T0_EPOCH))
+        self.assertEqual((s, text), (200, "running\t99\t%d\t\tHome\t\n" % T0_EPOCH))
         s, text = self.req("POST", "/toggl/describe", "description=Gutters")
-        self.assertEqual((s, text), (200, "running\t99\t%d\tGutters\tHome\n" % T0_EPOCH))
+        self.assertEqual((s, text), (200, "running\t99\t%d\tGutters\tHome\t\n" % T0_EPOCH))
         put = [b for m, r, b in self.t.calls if m == "PUT"][0]
         self.assertEqual(put, {"description": "Gutters"})
         self.t.running = None
