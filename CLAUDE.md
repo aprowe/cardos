@@ -384,7 +384,7 @@ subview once too often and the app is gone. `fn` + the ` key (`KEY_QUIT`,
 Bluetooth), which is the same code from the other corner of the keyboard, is
 the one way out: of an app in the launcher,
 of a fullscreen app or a focused window on the desktop, and of the launcher to
-the console. `CAPP_KEY_ESC` in `capp.h` is the constant an app matches.
+the console. From the console the same key goes back to the launcher (2026-10-01). `CAPP_KEY_ESC` in `capp.h` is the constant an app matches.
 
 **The help panel is fn-h, and for a while it was nothing at all.** Help moved
 off ctrl-h because ctrl-h is 0x08, the byte Backspace sends. The header and

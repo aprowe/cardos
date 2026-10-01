@@ -1509,6 +1509,16 @@ void app_main(void) {
       continue;
     }
 
+    /* The way out of the console is the way out of everything else: fn-` or
+     * opt-backspace goes to the launcher, as the same key there comes back
+     * here. Before this it reached the line editor and did nothing. */
+    if (k == KEY_QUIT) {
+      con_cursor(0);
+      launchui_init();
+      s_mode = MODE_LAUNCHER;
+      continue;
+    }
+
     if (k) {
       console_key(k);
       if (s_mode == MODE_CONSOLE) {
