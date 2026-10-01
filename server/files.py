@@ -198,7 +198,7 @@ def _browser(fn):
 @_browser
 def get_page(h, args):
     """the card, in a browser (dashboard sign-in)"""
-    h.html(dash._page("CardOS files", PAGE))
+    h.html(dash._page("CardOS files", PAGE, here="/dash/files"))
 
 
 @_browser
@@ -293,7 +293,6 @@ ROUTES = [
 
 PAGE = """
 <style>
-main{max-width:860px}
 .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 .crumbs{flex:1;min-width:0;overflow-wrap:anywhere}
 .crumbs a{color:var(--acc);text-decoration:none;cursor:pointer}
@@ -318,7 +317,6 @@ progress{width:100%;margin-top:8px}
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/python/python.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/javascript/javascript.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/properties/properties.min.js"></script>
-<h1>Card <span><a class=btn href=/dash>Dashboard</a></span></h1>
 <p id=state class=dim>checking for the device...</p>
 <section id=drop>
 <div class=bar><div class=crumbs id=crumbs></div>
@@ -384,7 +382,11 @@ async function go(p) {
       else if (d.mv !== undefined) rename(e);
       else if (d.rm !== undefined) remove(e);
     };
-  } catch (e) { say(e.message, true); $('list').innerHTML = ''; }
+  } catch (e) {
+    // A remembered folder that has since gone: back to the top, saying so.
+    if (p !== '/' && /no such folder/.test(e.message)) { await go('/'); say(p + ' is not there any more'); return; }
+    say(e.message, true); $('list').innerHTML = '';
+  }
 }
 async function act(url, okmsg) {
   try { await call(url, {method: 'POST'}); say(okmsg); go(cwd); } catch (e) { say(e.message, true); }

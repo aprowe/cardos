@@ -1,9 +1,11 @@
-"""The dashboard: a private page on the droplet, and Google sign-in on it.
+"""The dashboard: a private page on the droplet -- the device, the Google
+login, the server -- and the way to the card's files (server/files.py).
 
-The device has no browser, so Google's consent screen has to happen somewhere
-else. It used to be tools/google_auth.py on a PC, which then typed the result
-down a serial cable. Now it happens here, at https://cardos.arowe.net/dash,
-and the device fetches the result over the network with `google pull`.
+The device has no browser, so Google's consent screen happens here, at
+https://cardos.arowe.net/dash. The login stays on the server: Calendar and
+Todo get their Google data through server/google.py with it. /google/creds
+still hands it to a device that asks (`google pull`), which nothing needs
+since 2026-09-29.
 
 Two doors, and neither opens the other:
 
@@ -240,14 +242,47 @@ input{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:6
 background:var(--bg);color:var(--ink);width:100%;margin:8px 0 12px}
 .ok{color:var(--ok)}.bad{color:var(--bad)}.dim{color:var(--dim)}
 form{display:inline}.msg{margin:0 0 16px;padding:10px 14px;border-radius:6px;border:1px solid var(--line)}
+header{background:var(--card);border-bottom:1px solid var(--line)}
+header .in{max-width:960px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+header .brand{font-weight:700;font-size:17px;margin-right:6px}
+header nav{display:flex;gap:4px;flex:1}
+header nav a{color:var(--dim);text-decoration:none;padding:6px 12px;border-radius:6px}
+header nav a.on{color:var(--ink);background:var(--bg);font-weight:600}
+header nav a:hover{color:var(--ink)}
+main.wide{max-width:960px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;align-items:start}
+.grid section{margin:0}
+.card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.card-head h2{margin:0}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px;background:var(--dim)}
+.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+.big{font-size:17px;font-weight:600;margin:0 0 4px}
+details summary{cursor:pointer;margin-top:4px}
+table.apps{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
+table.apps td{padding:4px 6px;border-top:1px solid var(--line)}
 """
 
 
-def _page(title, body):
+PAGES = [("/dash", "Dashboard"), ("/dash/files", "Files")]
+
+
+def _page(title, body, here=None):
+    """A page; `here` (a path in PAGES) gives it the bar with the pages and
+    log out, which only a signed-in page should have."""
+    bar = ""
+    if here:
+        links = "".join("<a href=%s%s>%s</a>" % (u, " class=on" if u == here else "",
+                                                  html.escape(n)) for u, n in PAGES)
+        bar = ("<header><div class=in><span class=brand>CardOS</span><nav>%s</nav>"
+               "<form method=post action=/dash/logout><button>Log out</button></form>"
+               "</div></header>" % links)
     return ("<!doctype html><html lang=en><head><meta charset=utf-8>"
             "<meta name=viewport content='width=device-width,initial-scale=1'>"
-            "<meta name=robots content=noindex><title>%s</title><style>%s</style></head>"
-            "<body><main>%s</main></body></html>" % (html.escape(title), STYLE, body))
+            "<meta name=robots content=noindex><link rel=icon href='data:,'>"
+            "<title>%s</title><style>%s</style></head>"
+            "<body>%s<main%s>%s</main></body></html>"
+            % (html.escape(title), STYLE, bar, " class=wide" if here else "", body))
 
 
 def _when(t):
@@ -265,31 +300,112 @@ def login_page(msg=""):
                  "<button class=primary>Sign in</button></form></section>" % note)
 
 
+def _google_check():
+    """(ok, words): whether the server's login works right now. Uses the
+    cached access token when there is one, so a page load is not a Google
+    round trip every time."""
+    from . import google                  # it imports this module
+    try:
+        google.access_token()
+        return True, "working"
+    except google.GoogleError as e:
+        return False, e.why
+    except Exception as e:                # the network, mostly
+        return False, "could not check: %s" % e
+
+
 def google_card():
     cid, csec = client()
     c = load_creds()
+    head = "<div class=card-head><h2>Google</h2></div>"
     if not cid or not csec:
-        return ("<section><h2>Google</h2><p class=bad>No Web client configured.</p>"
+        return ("<section>%s<p class=bad>No Web client configured.</p>"
                 "<p class=dim>Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in the "
                 "server's environment. The client's redirect URI must be "
-                "<code>%s</code>.</p></section>" % html.escape(base_url() + CALLBACK))
+                "<code>%s</code>.</p></section>" % (head, html.escape(base_url() + CALLBACK)))
     if not c:
-        return ("<section><h2>Google</h2><p>Not signed in. Todo and Calendar on the "
-                "device need this.</p><a class='btn primary' href=/dash/google/start>"
-                "Sign in with Google</a></section>")
+        return ("<section>%s<p class=big><span class='dot bad'></span>Not signed in</p>"
+                "<p class=dim>Calendar and Todo on the device get their Google data "
+                "through this server, with this login.</p>"
+                "<div class=actions><a class='btn primary' href=/dash/google/start>"
+                "Sign in with Google</a></div></section>" % head)
+    ok, why = _google_check()
+    scope = c.get("scope", "")
+    has = lambda s: ("<span class=ok>yes</span>" if s in scope
+                     else "<span class=bad>no &mdash; sign in again and allow it</span>")
     stale = c.get("client_id") != cid
-    return ("<section><h2>Google</h2><dl>"
+    return ("<section>%s<p class=big><span class='dot %s'></span>%s</p>"
+            "<p class=dim>%s</p><dl>"
             "<dt>Account</dt><dd>%s</dd>"
-            "<dt>Signed in</dt><dd>%s</dd>"
-            "<dt>Device pulled</dt><dd>%s</dd>"
-            "<dt>Client</dt><dd class=dim>%s%s</dd></dl>"
-            "<p class=dim>On the device: <code>google pull</code></p>"
-            "<a class=btn href=/dash/google/start>Sign in again</a> "
+            "<dt>Calendar</dt><dd>%s</dd>"
+            "<dt>Tasks</dt><dd>%s</dd>"
+            "<dt>Signed in</dt><dd>%s</dd>%s</dl>"
+            "<div class=actions><a class=btn href=/dash/google/start>Sign in again</a>"
             "<form method=post action=/dash/google/forget>"
-            "<button>Sign out and revoke</button></form></section>"
-            % (html.escape(c.get("email") or "unknown"), _when(c.get("issued_at")),
-               _when(c.get("pulled_at")), html.escape(c.get("client_id", "")[:24] + "..."),
-               " <span class=bad>(not the configured client)</span>" if stale else ""))
+            "<button>Sign out</button></form></div></section>"
+            % (head, "ok" if ok else "bad",
+               "Working" if ok else "Not working",
+               "Calendar and Todo on the device get their Google data through this "
+               "server, with this login." if ok else html.escape(why),
+               html.escape(c.get("email") or "unknown"),
+               has("calendar"), has("tasks"), _when(c.get("issued_at")),
+               "<dt>Client</dt><dd class=bad>not the configured client: sign in again</dd>"
+               if stale else ""))
+
+
+def device_card():
+    """Whether Remote Files is open on the device, and the way to the card."""
+    from . import files
+    b = files.broker
+    on = b.connected()
+    seen = ("never this run" if not b.last_seen else
+            "just now" if on else _ago(b.last_seen))
+    return ("<section><div class=card-head><h2>Device</h2></div>"
+            "<p class=big><span class='dot %s'></span>%s</p><p class=dim>%s</p>"
+            "<dl><dt>Last heard</dt><dd>%s</dd></dl>"
+            "<div class=actions><a class='btn primary' href=/dash/files>Open files</a></div>"
+            "</section>"
+            % ("ok" if on else "", "Card reachable" if on else "Card not reachable",
+               "Browse, upload, download and edit what is on the SD card." if on else
+               "Open <b>Remote Files</b> (Net folder) on the device to browse its card "
+               "from here.", seen))
+
+
+def _ago(t):
+    s = int(time.time() - t)
+    if s < 90:
+        return "%d s ago" % s
+    if s < 5400:
+        return "%d min ago" % (s // 60)
+    if s < 129600:
+        return "%d h ago" % (s // 3600)
+    return _when(t)
+
+
+def published_card(man):
+    """The /update manifest as a summary and a table, rather than the raw
+    lines the device reads."""
+    fw, apps, other = [], [], []
+    for line in man.splitlines():
+        f = line.split()
+        if len(f) >= 3 and f[0] == "firmware":
+            fw.append((f[1], f[2][:12]))
+        elif len(f) >= 4 and f[0] == "app":
+            apps.append((f[1], f[4] if len(f) > 4 else "", int(f[3]) if f[3].isdigit() else 0))
+        elif line.strip():
+            other.append(line)
+    rows = "".join("<tr><td>%s</td><td class=dim>%s</td><td class=dim>%.1f KB</td></tr>"
+                   % (html.escape(n), html.escape(folder or "top"), size / 1024.0)
+                   for n, folder, size in apps)
+    firm = "".join("<dt>Firmware %s</dt><dd><code>%s</code></dd>"
+                   % (html.escape(k), html.escape(s)) for k, s in fw)
+    return ("<section><div class=card-head><h2>Published for update</h2></div>"
+            "<p class=dim>What <code>update</code> on the device compares itself with.</p>"
+            "<dl>%s<dt>Apps</dt><dd>%d</dd></dl>%s"
+            "<details><summary class=dim>Every app</summary>"
+            "<table class=apps>%s</table></details></section>"
+            % (firm, len(apps),
+               "".join("<p class=bad>%s</p>" % html.escape(o) for o in other), rows))
 
 
 def status_card(h):
@@ -310,19 +426,19 @@ def status_card(h):
 
     def yn(ok, good, bad):
         return "<span class=%s>%s</span>" % ("ok" if ok else "bad", good if ok else bad)
-    return ("<section><h2>Server</h2><dl>"
+    return ("<section><div class=card-head><h2>Server</h2></div><dl>"
             "<dt>Claude</dt><dd>%s</dd>"
             "<dt>Session</dt><dd class=dim>%s</dd>"
             "<dt>Builds</dt><dd>%s</dd>"
             "<dt>Voice</dt><dd>%s</dd>"
-            "<dt>Render</dt><dd>%s</dd></dl>"
-            "<h2>Published for update</h2><pre>%s</pre></section>"
+            "<dt>Render</dt><dd>%s</dd></dl></section>"
+            "%s"
             % (yn(c and c.claude, html.escape(str(c.claude if c else "")), "not found"),
                html.escape(c.session_id if c and c.session_id else "none yet"),
                yn(getattr(c, "store", None), "yes, into " + html.escape(str(h.store)), "no"),
                yn(voice, "whisper ready", "not found"),
                yn(render, "available", "unavailable"),
-               html.escape(man)))
+               published_card(man)))
 
 
 # ---- routes -----------------------------------------------------------------
@@ -352,9 +468,8 @@ def get_dash(h, path, args):
         return
     msg = (args.get("msg") or [""])[0]
     note = "<p class=msg>%s</p>" % html.escape(msg) if msg else ""
-    h.html(_page("CardOS", "<h1>CardOS <form method=post action=/dash/logout>"
-                 "<button>Log out</button></form></h1>" + note +
-                 google_card() + status_card(h)))
+    h.html(_page("CardOS", note + "<div class=grid>" + device_card() + google_card() +
+                 status_card(h) + "</div>", here="/dash"))
 
 
 def post_login(h, path, args):
@@ -426,19 +541,19 @@ def get_google_callback(h, path, args):
         back("Google sent no refresh token: %s" % (tok.get("error_description")
                                                    or tok.get("error") or "no reason given"))
         return
-    old = load_creds()
     save_creds({"client_id": cid, "client_secret": csec, "refresh_token": refresh,
                 "email": email_from_id_token(tok.get("id_token", "")),
                 "scope": tok.get("scope", ""), "issued_at": int(time.time()),
                 "pulled_at": None})
-    # The token it replaces is still live at Google until revoked.
-    if old and old.get("refresh_token") and old["refresh_token"] != refresh:
-        try:
-            revoke(old["refresh_token"])
-        except Exception as e:
-            sys.stderr.write("dash: revoking the old token: %s\n" % e)
+    # The login it replaces is NOT revoked. Google's revoke ends the app's
+    # whole grant -- every token for this client and account -- so revoking
+    # the old one here killed the one just issued, and each fresh sign-in
+    # died minutes later with "Token has been expired or revoked"
+    # (2026-10-01). A replaced token simply goes unused.
+    from . import google
+    google._access.update(token=None, until=0)   # the old login's access token
     sys.stderr.write("dash: google signed in\n")
-    back("Signed in. On the device: google pull")
+    back("Signed in to Google. Calendar and Todo use this login.")
 
 
 def post_google_forget(h, path, args):
@@ -454,7 +569,7 @@ def post_google_forget(h, path, args):
     if c and c.get("refresh_token"):
         try:
             revoke(c["refresh_token"])
-            msg = "Signed out and revoked. The device's copy no longer works."
+            msg = "Signed out of Google and revoked. Calendar and Todo stop syncing."
         except Exception as e:
             msg = "Signed out here, but revoking failed (%s); revoke it at " \
                   "myaccount.google.com/permissions." % e

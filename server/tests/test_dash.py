@@ -209,11 +209,14 @@ class Google(Server):
         self.assertIn("no%20refresh%20token", hdrs["Location"])
         self.assertIsNone(dash.load_creds())
 
-    def test_signing_in_again_revokes_the_old_token(self):
+    def test_signing_in_again_does_not_revoke_anything(self):
+        # Google's revoke ends the app's whole grant, not one token: revoking
+        # the old token here killed the new one with it, minutes after every
+        # fresh sign-in -- "Token has been expired or revoked" (2026-10-01).
         cookie = self.login()
         self.signed_in(cookie, "one")
         self.signed_in(cookie, "two")
-        self.assertEqual(self.revoked, ["r-one"])
+        self.assertEqual(self.revoked, [])
         self.assertEqual(dash.load_creds()["refresh_token"], "r-two")
 
     def test_forget_revokes_and_deletes(self):
