@@ -28,6 +28,7 @@ ide       Make
 memo      Make
 mines     Games
 noodle    Games
+notes     Plan
 photo     Make
 pinball   Games
 roku      Net

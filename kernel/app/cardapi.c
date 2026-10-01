@@ -426,6 +426,12 @@ static int api_run_command(const char *app, const char *line, char *out, size_t 
   return capprun_command_line(app, line, out, n);
 }
 
+static int api_http_upload(const char *url, const char *path, const char *ctype,
+                           char *out, size_t n, int timeout_ms) {
+  return http_post_file_progress(url, path, ctype, own_bearer(url, NULL), out, n,
+                                 timeout_ms, NULL);
+}
+
 static int api_shell(const char *line, char *out, size_t n) {
   return capprun_shell(line, out, n);
 }
@@ -462,6 +468,7 @@ static const CardApi API = {
   api_keep_awake, api_wake,
   api_run_command,
   api_shell,
+  api_http_upload,
 };
 
 const CardApi *cardos_api(void) { return &API; }

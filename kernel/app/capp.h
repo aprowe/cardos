@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 35
+#define CAPP_API_VERSION 36
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -767,6 +767,15 @@ typedef struct {
    * Blocks until the command is done (an `update` takes minutes). For the
    * Dashboard Link app's terminal; anything else should prefer a command. */
   int (*shell)(const char *line, char *out, size_t n);
+
+  /* ---- a file as a request body (API 36) ----
+   *
+   * POST the file at `path` -- binary is fine, which a body string is not --
+   * and put the reply in `out`. Signed for this device's own server like the
+   * other calls. Blocks; the bytes of the reply, or <0 (an HTTP status
+   * negated). Notes uses it to turn a voice memo into a note. */
+  int (*http_upload)(const char *url, const char *path, const char *content_type,
+                     char *out, size_t out_size, int timeout_ms);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

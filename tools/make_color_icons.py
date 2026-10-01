@@ -280,6 +280,25 @@ ICONS = {
         ".....KKKKKK.....",
         "................",
     ],
+    # A yellow note page, lines on it, the corner turned.
+    "Notes": [
+        "................",
+        "..KKKKKKKKKK....",
+        "..KyyyyyyyyKK...",
+        "..KyyyyyyyyKoK..",
+        "..KyDDDDDDyKKKK.",
+        "..KyyyyyyyyyyyK.",
+        "..KyDDDDDDDDDyK.",
+        "..KyyyyyyyyyyyK.",
+        "..KyDDDDDDDDDyK.",
+        "..KyyyyyyyyyyyK.",
+        "..KyDDDDDDyyyyK.",
+        "..KyyyyyyyyyyyK.",
+        "..KyyyyyyyyyyyK.",
+        "..KKKKKKKKKKKKK.",
+        "................",
+        "................",
+    ],
     # A page with a pencil across it.
     "Edit": [
         "................",

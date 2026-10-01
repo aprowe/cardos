@@ -272,7 +272,7 @@ static void paint_strip(CRect c) {
     else api->fmt(vol, sizeof vol, "%s", "muted");
     api->text((short)(s.x + 4), (short)(s.y + 3), M.status, CLR_BAR_FG, CLR_BAR);
     api->text((short)(s.x + c.w - 4 - 6 * (short)api->str_len(vol)), (short)(s.y + 3), vol, CLR_BAR_FG, CLR_BAR);
-    api->text((short)(s.x + 4), (short)(s.y + 13), "r rec  enter play  d del  < > vol", CLR_DIM, CLR_BAR);
+    api->text((short)(s.x + 4), (short)(s.y + 13), "r rec  enter play  n note  d del", CLR_DIM, CLR_BAR);
   }
 }
 
@@ -434,6 +434,18 @@ static int app_key(void *st, unsigned char k) {
   case CAPP_KEY_ENTER: return do_action(ACT_PLAY);
   case 'd': case 'D':
   case 0x7F:           return do_action(ACT_DELETE);
+  case 'n': case 'N':
+    /* To a note: the Notes app sends it to the server, which transcribes it
+     * and keeps it as a note (apps/notes.c, `notes memo PATH`). */
+    if (M.n) {
+      char path[80], line[100], out[64];
+      path_of(&M.memo[M.sel], path, sizeof path);
+      say("transcribing...");
+      api->fmt(line, sizeof line, "memo %s", path);
+      if (api->run_command("notes", line, out, sizeof out) == 0) say(out);
+      else { api->fmt(M.status, sizeof M.status, "%s", out[0] ? out : "not noted"); }
+    }
+    return 1;
   case '+': case '=':
   case CAPP_KEY_RIGHT: return do_action(ACT_LOUDER);
   case '-':

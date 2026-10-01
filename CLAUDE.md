@@ -117,6 +117,18 @@ table changed for this (two OTA slots; `factory` is 2.75 MB and `spiffs`
 first flash after it needs the whole table: `python -m platformio run -t
 upload` does that, but old NVS contents (WiFi credentials, PATH) are gone.
 
+**Notes** (2026-10-01). Kept on the server (`server/notes.py`, JSON in
+CARDOS_STATE/notes, each with an FNV-1a hash of its text), edited in the
+dashboard's Notes view or on the device. `apps/notes.c` (Plan) keeps each
+as /home/notes/NAME.md, opened in Edit, and syncs by hash against
+/home/notes/.sync: changed on one side goes to the other, changed on both
+keeps both (NAME (conflict)), deleted on one side is deleted on the other
+unless it changed there. Host-tested over an in-memory card and server
+(`test/test_notes.c`). G0 held on its list says a new note; `m` there, or
+`n` in Memo, sends a voice memo to /notes/audio, which Whisper turns into a
+note. That needed `api->http_upload` (API 36): an app's body is a string,
+and a WAV is not.
+
 **The G0 button, since 2026-10-01** (API 35). A hold is delegated: the app
 on screen is asked first (`CappUi.button`, `CAPP_G0_ASK`) and may claim it
 as a press -- nothing recorded, `CAPP_G0_PRESSED` on release (Counter
@@ -465,7 +477,7 @@ paint used to clear the active slot for the rest of the tick — so `damage()`
 marks were dropped and the request had no owner. Apps now say "busy" when a
 start is refused instead of returning silently.
 
-**API version 34** (`CAPP_API_VERSION` in `capp.h` is the truth; this
+**API version 36** (`CAPP_API_VERSION` in `capp.h` is the truth; this
 paragraph is history). It moved six times in one day — 11 to 17 — and has
 kept moving since; each move means every `.capp` must be rebuilt, because the
 loader refuses a binary built against a different table. `python
@@ -478,7 +490,7 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal.
+`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36).
 
 **Fonts are files an app asks for** (2026-09-23). The 6x8 console font is
 still compiled in and still the default; anything nicer is a `.cfnt` in
