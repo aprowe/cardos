@@ -38,6 +38,18 @@ button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 a{color:inherit}
 .mono{font-family:var(--mono);font-size:.92em}
+.notes{display:grid;grid-template-columns:minmax(180px,260px) 1fr;gap:12px;align-items:stretch}
+@media (max-width:700px){.notes{grid-template-columns:1fr}}
+.notes-list{padding:6px;max-height:min(62vh,560px);overflow-y:auto}
+.notes-list button{display:block;width:100%;text-align:left;border:0;background:none;color:var(--ink);padding:8px 10px;border-radius:6px;cursor:pointer;font:inherit}
+.notes-list button:hover{background:var(--panel2)}
+.notes-list button.on{background:var(--accent-soft);color:var(--ink)}
+.notes-list .t{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.notes-list .w{display:block;font-size:12px;color:var(--ink3)}
+.notes-ed{display:flex;flex-direction:column;padding:0;overflow:hidden}
+.notes-ed textarea{flex:1;min-height:min(56vh,500px);border:0;resize:vertical;background:transparent;color:var(--ink);font:14px/1.55 var(--mono);padding:14px;outline:none}
+.notes-bar{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--line)}
+.notes-bar .grow{flex:1}
 .term{padding:0;overflow:hidden}
 .term-out{background:var(--screen);color:var(--screen-ink);font:13px/1.45 var(--mono);padding:12px 14px;height:min(58vh,520px);overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere}
 .term-out .cmd{color:var(--screen-hi)}
@@ -95,7 +107,7 @@ main{max-width:1000px;width:100%;padding:30px 36px 120px;min-height:calc(100vh -
   .mtop .end{margin-left:auto;display:flex;align-items:center;gap:8px}
   main{padding:20px 16px 110px}
   .page-head h1{font-size:22px}
-  .bnav{display:grid;grid-template-columns:repeat(7,1fr);position:fixed;z-index:40;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:4px 2px calc(4px + env(safe-area-inset-bottom))}
+  .bnav{display:grid;grid-template-columns:repeat(8,1fr);position:fixed;z-index:40;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:4px 2px calc(4px + env(safe-area-inset-bottom))}
   .bnav a{display:flex;flex-direction:column;align-items:center;gap:2px;text-decoration:none;color:var(--ink3);font-size:10px;min-width:0;white-space:nowrap;padding:5px 0;border-radius:8px;position:relative}
   .bnav a.on{color:var(--accent);font-weight:600}
   .bnav a .dot,.bnav a .badge{position:absolute;top:3px;left:calc(50% + 8px)}
@@ -385,6 +397,7 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
       <a href="#/home" data-view="home"><svg class="i" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/></svg>Overview</a>
       <a href="#/files" data-view="files"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M10 3v4M13 3v4"/></svg>SD card<span class="end"><span class="badge js-xbadge hidden"></span><span class="dot js-nd-files"></span></span></a>
       <a href="#/term" data-view="term"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Terminal<span class="end"><span class="dot js-nd-files"></span></span></a>
+      <a href="#/notes" data-view="notes"><svg class="i" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>Notes</a>
     <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts &amp; keys<span class="end"><span class="dot js-nd-accounts"></span></span></a>
       <a href="#/server" data-view="server"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>Server<span class="end"><span class="dot js-nd-server"></span></span></a>
       <a href="#/updates" data-view="updates"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
@@ -438,6 +451,24 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
         <p class="faint term-note">Commands run on the device's console, one at a time, and answer when they finish &mdash; an <span class="mono">update</span> can take minutes. Lines that would take over its screen (<span class="mono">launch</span>, <span class="mono">desk</span>, <span class="mono">run</span>) are refused.</p>
       </section>
 
+      <section class="view block" id="v-notes">
+        <div class="sec-head">
+          <div><span class="lab">on the server</span><h2>Notes</h2></div>
+          <div class="side-info"><span id="note-state" class="faint"></span><button class="btn sm" data-act="note-new">New note</button></div>
+        </div>
+        <div class="notes">
+          <div class="panel notes-list" id="notes-list"></div>
+          <div class="panel notes-ed">
+            <textarea id="note-text" spellcheck="true" placeholder="Pick a note, or start a new one. The first line is its title."></textarea>
+            <div class="notes-bar"><span class="faint" id="note-meta"></span>
+              <span class="grow"></span>
+              <button class="btn sm" data-act="note-delete">Delete</button>
+              <button class="btn sm primary" data-act="note-save">Save</button></div>
+          </div>
+        </div>
+        <p class="faint term-note">Kept on the server. The Notes app on the device keeps a copy of each as a file and syncs it; Ctrl-S saves here.</p>
+      </section>
+
       <section class="view block" id="v-accounts">
         <div class="sec-head">
           <div><span class="lab">connections</span><h2>Accounts &amp; keys</h2></div>
@@ -487,6 +518,7 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
     <a href="#/home" data-view="home"><svg class="i" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/></svg>Overview</a>
     <a href="#/files" data-view="files"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M10 3v4M13 3v4"/></svg>Card<span class="badge js-xbadge hidden"></span><span class="dot js-nd-files"></span></a>
     <a href="#/term" data-view="term"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Term</a>
+    <a href="#/notes" data-view="notes"><svg class="i" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>Notes</a>
     <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts<span class="dot js-nd-accounts"></span></a>
     <a href="#/server" data-view="server"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/></svg>Server<span class="dot js-nd-server"></span></a>
     <a href="#/updates" data-view="updates"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
@@ -1303,8 +1335,64 @@ $('#term-line').addEventListener('keydown',e=>{
   else if(e.key==='ArrowDown'){ if(T.hi<T.hist.length){ T.hi++; e.target.value=T.hist[T.hi]||''; } e.preventDefault(); }
 });
 
+/* ---------- notes ----------
+ * Kept on the server (server/notes.py); the device syncs its own copies. */
+const N={list:[],id:null,clean:'',busy:false};
+const noteDirty=()=>$('#note-text').value!==N.clean;
+function noteMeta(t){ $('#note-meta').textContent=t||''; }
+function renderNotes(){
+  const el=$('#notes-list');
+  el.innerHTML=N.list.length?N.list.map(n=>`<button data-act="note-open" data-id="${esc(n.id)}" class="${n.id===N.id?'on':''}"><span class="t">${esc(n.title)}</span><span class="w">${esc(new Date(n.updated*1000).toLocaleString(undefined,{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}</span></button>`).join(''):'<p class="faint" style="padding:8px">No notes yet.</p>';
+  $('#note-state').textContent=N.busy?'saving…':(N.id&&noteDirty()?'unsaved changes':'');
+}
+async function noteFetch(method,url,body){
+  const r=await fetch(url,{method,credentials:'same-origin',body});
+  if(r.status===403){ signedOut(); throw new ApiError('You’re signed out.'); }
+  const text=await r.text();
+  if(!r.ok) throw new ApiError(text.replace(/^error /,'').trim()||('HTTP '+r.status));
+  return text;
+}
+async function notesLoad(){
+  try{ N.list=JSON.parse(await noteFetch('GET','/dash/notes')); renderNotes(); }
+  catch(e){ toast(e.message,'err'); }
+}
+function noteGuard(){ return !noteDirty()||confirm('Discard the unsaved changes to this note?'); }
+async function noteOpen(id){
+  if(id===N.id||!noteGuard()) return;
+  try{
+    const text=await noteFetch('GET','/notes/note?id='+encodeURIComponent(id));
+    N.id=id; N.clean=text; $('#note-text').value=text;
+    const n=N.list.find(n=>n.id===id); noteMeta(n?'saved '+new Date(n.updated*1000).toLocaleString():'');
+    renderNotes();
+  }catch(e){ toast(e.message,'err'); }
+}
+function noteNew(){
+  if(!noteGuard()) return;
+  N.id=null; N.clean=''; $('#note-text').value=''; noteMeta('a new note'); renderNotes(); $('#note-text').focus();
+}
+async function noteSave(){
+  const text=$('#note-text').value;
+  if(!text.trim()){ toast('Write something first — the first line is the title.','err'); return; }
+  N.busy=true; renderNotes();
+  try{
+    const line=await noteFetch('POST','/notes/note'+(N.id?'?id='+encodeURIComponent(N.id):''),text);
+    N.id=line.split('\t')[0]; N.clean=text; noteMeta('saved just now');
+    await notesLoad();
+  }catch(e){ toast(e.message,'err'); }
+  finally{ N.busy=false; renderNotes(); }
+}
+async function noteDelete(){
+  if(!N.id){ noteNew(); return; }
+  if(!confirm('Delete this note? The device deletes its copy at its next sync.')) return;
+  try{ await noteFetch('DELETE','/notes/note?id='+encodeURIComponent(N.id)); N.id=null; N.clean=''; $('#note-text').value=''; noteMeta(''); await notesLoad(); toast('Deleted.','info'); }
+  catch(e){ toast(e.message,'err'); }
+}
+$('#note-text').addEventListener('input',()=>{ $('#note-state').textContent=noteDirty()?'unsaved changes':''; });
+$('#note-text').addEventListener('keydown',e=>{ if((e.ctrlKey||e.metaKey)&&e.key==='s'){ e.preventDefault(); noteSave(); } });
+window.addEventListener('beforeunload',e=>{ if(N.id!==undefined&&noteDirty()){ e.preventDefault(); e.returnValue=''; } });
+
 /* ---------- routing ---------- */
-const VIEWS={home:'Overview',files:'SD card',term:'Terminal',accounts:'Accounts & keys',server:'Server',updates:'Updates',settings:'Settings'};
+const VIEWS={home:'Overview',files:'SD card',term:'Terminal',notes:'Notes',accounts:'Accounts & keys',server:'Server',updates:'Updates',settings:'Settings'};
 function currentView(){ const v=(location.hash.match(/^#\/(\w+)/)||[])[1]; return VIEWS[v]?v:'home'; }
 function route(){
   const v=currentView();
@@ -1315,6 +1403,7 @@ function route(){
   closeMenu(); window.scrollTo(0,0);
   if(v==='files') renderCard();
   if(v==='term'){ renderTerm(); setTimeout(()=>$('#term-line').focus(),0); }
+  if(v==='notes') notesLoad();
 }
 window.addEventListener('hashchange',route);
 
@@ -1324,6 +1413,10 @@ document.addEventListener('click',e=>{
   if(!e.target.closest('#menu')&&!(b&&b.dataset.act==='menu')) closeMenu();
   if(!b) return;
   if(b.dataset.act==='term-sug'){ termRun(b.dataset.line); return; }
+  if(b.dataset.act==='note-open'){ noteOpen(b.dataset.id); return; }
+  if(b.dataset.act==='note-new'){ noteNew(); return; }
+  if(b.dataset.act==='note-save'){ noteSave(); return; }
+  if(b.dataset.act==='note-delete'){ noteDelete(); return; }
   if(b.dataset.act==='term-clear'){ $('#term-out').innerHTML=''; renderTerm(); return; }
   const a=b.dataset.act, p=b.dataset.path, isDir=!!b.dataset.dir, size=+b.dataset.size||0;
   if(b.closest('#menu')) closeMenu();
