@@ -15,8 +15,10 @@
  * without this file changing. Answers written as `[ ] task` print as boxes to
  * tick with a pen; Todo's `show` and Habits' `today` answer that way for this.
  *
- * r gathers again, fn-p prints (in the print fonts: fonts/fonts.txt), l
- * picks which todo list, e opens the sections in Edit. `do today print` is
+ * r gathers again, fn-p prints (in the print fonts: fonts/fonts.txt), e
+ * opens the sections in Edit -- with a comment line naming the todo lists,
+ * so choosing one is typing its name into the To do line. The page gathers
+ * again by itself when the file changes. `do today print` is
  * the whole thing without the screen -- "Carlos, print my day".
  *
  * t turns the page to tomorrow and back: a section whose command is `today`
@@ -44,7 +46,6 @@ static const CardApi *api;
 #define ROW_H       16
 #define HEAD_H      20
 #define FOOT_H      11
-#define MAX_LISTS   12
 
 #define CLR_BG      CAPP_RGB(14, 16, 22)
 #define CLR_TEXT    CAPP_RGB(232, 236, 244)
@@ -52,7 +53,6 @@ static const CardApi *api;
 #define CLR_ACCENT  CAPP_RGB(255, 176, 76)
 #define CLR_BOX     CAPP_RGB(150, 160, 180)
 #define CLR_DONE    CAPP_RGB(76, 196, 128)
-#define CLR_SEL     CAPP_RGB(30, 40, 58)
 #define CLR_FOOT    CAPP_RGB(30, 34, 44)
 #define CLR_WARN    CAPP_RGB(236, 104, 84)
 
@@ -62,7 +62,6 @@ typedef struct {
   char line[CMD_MAX];         /* the command and its arguments */
 } Section;
 
-enum { VIEW_PAGE = 0, VIEW_LISTS };
 
 static struct {
   Section sect[MAX_SECT];
@@ -76,10 +75,9 @@ static struct {
   char    status[48];
   int     printing;
 
-  int     view;
   int     top, rows, nlines;
-  char    lists[MAX_LISTS][32];
-  int     nlists, lsel;
+  int32_t cfg_size;           /* the sections file as last read, to see edits */
+  uint32_t cfg_check;         /* when it was last looked at */
 
   int     f_ui, f_uib;
   CRect   content;
@@ -164,12 +162,91 @@ static int current_list(char *out, int n) {
   return -1;
 }
 
+/* "# todo lists: Home, Chores (open in Todo)" from Todo's answer, where the
+ * open one is starred. A line in the script rather than a picker of its
+ * own: the To do line is chosen by typing a name, beside the names. */
+static int lists_line(char *out, int n) {
+  char *answer = s_answer;
+  const char *p = answer;
+  int o, first = 1;
+  if (api->run_command("todo", "lists", answer, ANSWER_MAX) != 0) return -1;
+  o = api->fmt(out, (size_t)n, "# todo lists:");
+  while (*p && o < n - 1) {
+    const char *e = p;
+    int star = p[0] == '*' && p[1] == ' ';
+    char name[40];
+    while (*e && *e != '\n') e++;
+    trim_copy(name, sizeof name, p + (star ? 2 : 0), (int)(e - p) - (star ? 2 : 0));
+    if (name[0])
+      o += api->fmt(out + o, (size_t)(n - o), "%s %s%s", first ? "" : ",", name,
+                    star ? " (open in Todo)" : "");
+    if (name[0]) first = 0;
+    p = *e ? e + 1 : e;
+  }
+  if (o < n - 1) o += api->fmt(out + o, (size_t)(n - o), "\n");
+  return o < n - 1 ? 0 : -1;
+}
+
+/* The file with `line` in place of any lists line it had, put after the
+ * comments it starts with. Everything else stays where it was. Length, or
+ * -1 if it does not fit. */
+static int with_lists_line(const char *file, const char *line, char *out, int n) {
+  const char *p = file;
+  int o = 0, put_in = 0, k;
+  while (1) {
+    const char *e = p;
+    int is_lists, is_comment;
+    while (*e && *e != '\n') e++;
+    is_lists = starts(p, "# todo lists:");
+    is_comment = p[0] == '#';
+    if (!put_in && (!is_comment || !*p) && !is_lists) {
+      for (k = 0; line[k]; k++) { if (o >= n - 1) return -1; out[o++] = line[k]; }
+      put_in = 1;
+    }
+    if (!*p) break;
+    if (!is_lists) {
+      for (k = 0; p + k < e; k++) { if (o >= n - 2) return -1; out[o++] = p[k]; }
+      out[o++] = '\n';
+    }
+    p = *e ? e + 1 : e;
+  }
+  out[o] = 0;
+  return o;
+}
+
+/* Before Edit opens: the file, with the lists as they are now. The page
+ * buffer is borrowed -- the page is gathered again once the file changes. */
+static void refresh_lists_in_file(void) {
+  char line[200];
+  int fd, n, len = 0;
+  SafeFile f;
+  if (lists_line(line, sizeof line) != 0) return;
+  fd = safe_open_read(api, CONFIG);
+  if (fd < 0) return;
+  while (len < PAGE_MAX / 2 - 1 && (n = api->read(fd, D.page + len, (size_t)(PAGE_MAX / 2 - 1 - len))) > 0)
+    len += n;
+  api->close(fd);
+  D.page[len] = 0;
+  if (with_lists_line(D.page, line, D.page + PAGE_MAX / 2, PAGE_MAX / 2) < 0) return;
+  if (safe_begin(&f, api, CONFIG) != 0) return;
+  safe_line(&f, D.page + PAGE_MAX / 2);
+  safe_commit(&f);
+  D.len = 0;
+  D.page[0] = 0;
+}
+
+static int32_t config_size(void) {
+  CappStat st;
+  return api->stat && api->stat(CONFIG, &st) == 0 ? (int32_t)st.size : -1;
+}
+
 /* The page as it is on the card, or -- the first time -- the four sections
  * this was asked for, written out so they can be changed. */
 static void load_sections(void) {
   char buf[256], line[HEAD_MAX + CMD_MAX + 24], list[40];
   int fd, n, i, len = 0;
   D.nsect = 0;
+  D.cfg_size = config_size();
   fd = safe_open_read(api, CONFIG);
   if (fd >= 0) {
     while ((n = api->read(fd, buf, sizeof buf)) > 0)
@@ -194,6 +271,7 @@ static void load_sections(void) {
   add_section("Habits", "habits", "today");
   add_section("Stocks", "stocks", "portfolio");
   save_sections();
+  D.cfg_size = config_size();
 }
 
 /* ---- the page ------------------------------------------------------------- */
@@ -355,26 +433,8 @@ static void paint_page(void) {
     p = *e ? e + 1 : e;
   }
   if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
-  paint_foot(D.ahead ? "fn-p print  t today  l list  e edit"
-                      : "fn-p print  t tomorrow  l list  e edit", CLR_DIM);
-}
-
-static void paint_lists(void) {
-  CRect c = D.content;
-  int i, y = c.y + HEAD_H;
-  api->fill(rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
-  api->text_font(D.f_uib, (int16_t)(c.x + 8), (int16_t)font_y(D.f_uib, c.y, HEAD_H),
-                 "Which todo list?", CLR_TEXT, CLR_BG);
-  if (!D.nlists)
-    api->text_font(D.f_ui, (int16_t)(c.x + 8), (int16_t)y, "no lists: open Todo once",
-                   CLR_DIM, CLR_BG);
-  for (i = 0; i < D.nlists && y + ROW_H <= c.y + c.h - FOOT_H; i++, y += ROW_H) {
-    uint16_t bg = i == D.lsel ? CLR_SEL : CLR_BG;
-    api->fill(rect(c.x, y, c.w, ROW_H), bg);
-    api->text_font(D.f_ui, (int16_t)(c.x + 8), (int16_t)font_y(D.f_ui, y, ROW_H), D.lists[i],
-                   CLR_TEXT, bg);
-  }
-  paint_foot("enter uses it  esc back", CLR_DIM);
+  paint_foot(D.ahead ? "fn-p print  t today  e edit sections"
+                      : "fn-p print  t tomorrow  e edit sections", CLR_DIM);
 }
 
 static void app_paint(void *st, CRect full) {
@@ -383,7 +443,7 @@ static void app_paint(void *st, CRect full) {
   if (toolbar_only_bar()) { toolbar_paint_bar(full); return; }
   toolbar_paint_bar(full);
   D.content = toolbar_rest(full);
-  if (D.view == VIEW_LISTS) paint_lists(); else paint_page();
+  paint_page();
   toolbar_paint_menu(full);
 }
 
@@ -420,45 +480,7 @@ static void regather(void) {
   api->fmt(D.status, sizeof D.status, "gathering");
 }
 
-/* The todo lists, from Todo, to pick one. */
-static void open_lists(void) {
-  char *answer = s_answer;
-  const char *p = answer;
-  D.nlists = 0;
-  D.lsel = 0;
-  if (api->run_command("todo", "lists", answer, ANSWER_MAX) == 0)
-    while (*p && D.nlists < MAX_LISTS) {
-      const char *e = p;
-      int star = p[0] == '*' && p[1] == ' ';
-      while (*e && *e != '\n') e++;
-      trim_copy(D.lists[D.nlists], sizeof D.lists[0], p + (star ? 2 : 0),
-                (int)(e - p) - (star ? 2 : 0));
-      if (star) D.lsel = D.nlists;
-      if (D.lists[D.nlists][0]) D.nlists++;
-      p = *e ? e + 1 : e;
-    }
-  D.view = VIEW_LISTS;
-}
-
-/* Point the todo section at the chosen list -- or add one if the page has
- * none -- and save, so it is the list next time too. */
-static void use_list(int i) {
-  char cmd[CMD_MAX];
-  int k, found = 0;
-  if (i < 0 || i >= D.nlists) return;
-  api->fmt(cmd, sizeof cmd, "show %s", D.lists[i]);
-  for (k = 0; k < D.nsect; k++)
-    if (starts(D.sect[k].app, "todo") && !D.sect[k].app[4]) {
-      api->fmt(D.sect[k].line, sizeof D.sect[k].line, "%s", cmd);
-      found = 1;
-    }
-  if (!found) add_section("To do", "todo", cmd);
-  save_sections();
-  D.view = VIEW_PAGE;
-  regather();
-}
-
-enum { ACT_PRINT = 1, ACT_AGAIN, ACT_LISTS, ACT_EDIT, ACT_SHOW, ACT_DAY, ACT_TOMORROW,
+enum { ACT_PRINT = 1, ACT_AGAIN, ACT_EDIT, ACT_SHOW, ACT_DAY, ACT_TOMORROW,
        ACT_SHOW_TOMORROW };
 
 static const CappAction ACTIONS[] = {
@@ -467,7 +489,6 @@ static const CappAction ACTIONS[] = {
     "/config/today.txt", 0, 0, CAPP_CMD_YES },
   { "day",      "Today/tomorrow", "Today", 0, ACT_DAY },
   { "again",    "Gather again",   "Today", 0, ACT_AGAIN },
-  { "lists",    "Todo list...",   "Today", 0, ACT_LISTS },
   { "sections", "Edit sections",  "Today", 0, ACT_EDIT },
   { "show",     "Show",           0,       0, ACT_SHOW,
     "today's page as text, without printing it", 0, 0, CAPP_CMD_YES },
@@ -487,8 +508,11 @@ static int do_action(int a) {
     return 1;
   case ACT_AGAIN: regather(); return 1;
   case ACT_DAY:   D.ahead = !D.ahead; regather(); return 1;
-  case ACT_LISTS: open_lists(); return 1;
-  case ACT_EDIT:  api->run("edit", CONFIG); return 1;
+  case ACT_EDIT:
+    refresh_lists_in_file();
+    D.cfg_size = config_size();
+    api->run("edit", CONFIG);
+    return 1;
   default:        return 0;
   }
 }
@@ -519,21 +543,11 @@ static int app_key(void *st, uint8_t k) {
   (void)st;
   if (a == TB_CONSUMED) return 1;
   if (a != TB_NONE) return do_action(a);
-  if (D.view == VIEW_LISTS) {
-    switch (k) {
-    case CAPP_KEY_UP:   if (D.lsel > 0) D.lsel--; return 1;
-    case CAPP_KEY_DOWN: if (D.lsel + 1 < D.nlists) D.lsel++; return 1;
-    case CAPP_KEY_ENTER: use_list(D.lsel); return 1;
-    case CAPP_KEY_ESC: case CAPP_KEY_BACK: D.view = VIEW_PAGE; return 1;
-    default: return 1;
-    }
-  }
   switch (k) {
   case CAPP_KEY_UP:   if (D.top > 0) D.top--; return 1;
   case CAPP_KEY_DOWN: if (D.top + D.rows < D.nlines) D.top++; return 1;
   case 'r': case 'R': return do_action(ACT_AGAIN);
   case 't': case 'T': return do_action(ACT_DAY);
-  case 'l': case 'L': return do_action(ACT_LISTS);
   case 'e': case 'E': return do_action(ACT_EDIT);
   case 'p': case 'P': return do_action(ACT_PRINT);
   default: return 0;
@@ -565,7 +579,7 @@ static int app_click(void *st, int16_t x, int16_t y, int button) {
 /* One section a tick: say which, repaint, then ask for it -- so the screen
  * shows what it is waiting on while a network command takes its seconds. */
 static int app_tick(void *st, uint32_t now) {
-  (void)st; (void)now;
+  (void)st;
   if (D.next >= 0) {
     if (D.next >= D.nsect) {
       end_page();
@@ -581,6 +595,16 @@ static int app_tick(void *st, uint32_t now) {
     gather_one(D.next++);
     D.announced = 0;
     return 1;
+  }
+  if ((int32_t)(now - D.cfg_check) > 1000) {
+    int32_t sz;
+    D.cfg_check = now;
+    sz = config_size();
+    if (sz != D.cfg_size) {
+      load_sections();
+      regather();
+      return 1;
+    }
   }
   if (D.printing) {
     const char *ps = api->print_status();
@@ -604,8 +628,8 @@ const CappInfo capp_info = {
     0x5E, 0x02, 0x40, 0x02, 0x5F, 0xE2, 0x40, 0x02,
     0x5C, 0x02, 0x40, 0x02, 0x7F, 0xFE, 0x00, 0x00 },
   "fn-p\tprint the page\nt\ttomorrow's page, and back\nr\tgather again\n"
-  "l\twhich todo list\n"
-  "e\tedit the sections (/config/today.txt)\nup/down\tscroll\n",
+
+  "e\tedit the sections; the todo lists are named in it\nup/down\tscroll\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
 };

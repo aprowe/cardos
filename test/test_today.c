@@ -109,6 +109,38 @@ void test_today_tomorrow_crosses_the_month_and_the_year(void) {
   }
 }
 
+/* The todo lists are in the script, to be chosen by typing one: Todo's
+ * answer becomes one comment line, the open list marked. */
+void test_today_the_lists_line_names_every_list(void) {
+  char line[160];
+  dopen();
+  CHECK_EQ(lists_line(line, sizeof line), 0);
+  CHECK(!strcmp(line, "# todo lists: Home, Chores (open in Todo)\n"));
+}
+
+/* The line goes in under the header, replacing the one before it, and
+ * nothing the person wrote moves. */
+void test_today_the_lists_line_replaces_the_old_one_and_keeps_the_rest(void) {
+  const char *file =
+    "# The Today app's page\n"
+    "# todo lists: Old\n"
+    "Calendar | calendar today\n"
+    "# my own note\n"
+    "To do | todo show Chores\n";
+  char out[512];
+  dopen();
+  CHECK(with_lists_line(file, "# todo lists: Home, Chores\n", out, sizeof out) > 0);
+  CHECK(!strcmp(out,
+    "# The Today app's page\n"
+    "# todo lists: Home, Chores\n"
+    "Calendar | calendar today\n"
+    "# my own note\n"
+    "To do | todo show Chores\n"));
+  /* A file with no header and no line gets it first. */
+  CHECK(with_lists_line("Calendar | calendar today", "# todo lists: A\n", out, sizeof out) > 0);
+  CHECK(!strcmp(out, "# todo lists: A\nCalendar | calendar today\n"));
+}
+
 /* The first time, with no file: the four sections asked for, and the todo
  * one on the list Todo has open. */
 void test_today_first_page_uses_todos_current_list(void) {
