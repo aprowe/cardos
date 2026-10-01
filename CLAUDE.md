@@ -182,15 +182,32 @@ marks nothing gets its whole rectangle exactly as before**, so this cost the
 existing apps nothing; `apps/files.c` shows the pattern, and Mines, Claude and
 Pinball can drop their hand-rolled versions whenever someone is in there.
 
-**Remote Files: the card from the dashboard** (2026-10-01). While the
-Remote Files app (`apps/rfiles.c`, Net) is open, the card can be browsed at
-`/dash/files` behind the dashboard sign-in: download, upload, rename,
-delete, new folders, and a CodeMirror editor (from jsDelivr) for text files.
-The droplet cannot reach the device, so the device polls `/files/poll`,
-one request carrying the last answer in and the next job out
-(`server/files.py` has the protocol). Data is base64 in 3 KB chunks
-because the app HTTP layer is text; an upload goes to NAME.part and is
-committed at the end. Closed, nothing on the card is reachable.
+**The dashboard is a page and an API** (2026-10-01).
+`server/dashboard.html` is one file of HTML and script, served whole at
+`/dash` to a signed-in browser (the design the owner chose from three
+prototypes): Overview, SD card, Accounts & keys, Server, Updates, Settings.
+It reads `/dash/api/state` (`server/dashapi.py`) on load and after an
+action -- never on a timer, because the state asks Toggl, which has an
+hourly quota -- and polls the cheap `/dash/files/status` for the device's
+link. Everything is behind the dashboard cookie; a 403 sends it to sign in.
+
+**Dashboard Link: the device from the dashboard** (2026-10-01; was Remote
+Files). While `apps/dashlink.c` (Net) is open, the dashboard can browse
+and change the card and run console lines on the device. The droplet
+cannot reach the device, so the device polls `/files/poll`, one request
+carrying the last answer in and the next job out (`server/files.py` has
+the protocol). File data is base64 in 3 KB chunks because the app HTTP
+layer is text; an upload goes to NAME.part and is committed at the end. A
+console line (`POST /dash/term`) is the `sh` job: `api->shell` (API 34)
+runs it through the console's own pipeline with `con_capture` on, so its
+output fills a buffer and nothing is drawn over the app on screen; lines
+that would take the screen (launch, desk, run, ...) are refused, and so is
+an app on PATH that wants it. Closed, nothing is reachable.
+
+**`update` checks every app** (2026-10-01). The manifest table held 24
+apps; the server listed 28, and the last four alphabetically (today,
+todo, toggl, web) were dropped unseen, so `update` called them current.
+It holds 48 now (`MANIFEST_MAX_APPS`), and an overflow is reported.
 
 **Toggl** (2026-10-01). `apps/toggl.c` (Net) shows the running timer in
 `num30`, starts one from a list of recent entries or a typed description,
@@ -427,7 +444,7 @@ paint used to clear the active slot for the rest of the tick — so `damage()`
 marks were dropped and the request had no owner. Apps now say "busy" when a
 start is refused instead of returning silently.
 
-**API version 33** (`CAPP_API_VERSION` in `capp.h` is the truth; this
+**API version 34** (`CAPP_API_VERSION` in `capp.h` is the truth; this
 paragraph is history). It moved six times in one day — 11 to 17 — and has
 kept moving since; each move means every `.capp` must be rebuilt, because the
 loader refuses a binary built against a different table. `python
@@ -440,7 +457,7 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command.
+`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal.
 
 **Fonts are files an app asks for** (2026-09-23). The 6x8 console font is
 still compiled in and still the default; anything nicer is a `.cfnt` in
