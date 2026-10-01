@@ -1187,7 +1187,7 @@ static void paint_add(CRect c) {
  * menu bar, the help panel and the names a script or a model would use all
  * come out of this table. See CappUi.actions. */
 enum { ACT_ADD = 1, ACT_DELETE, ACT_SYNC, ACT_AGENDA, ACT_MONTH, ACT_DAY,
-       ACT_SAVE, ACT_CANCEL, ACT_TODAY, ACT_UPCOMING, ACT_EDIT };
+       ACT_SAVE, ACT_CANCEL, ACT_TODAY, ACT_UPCOMING, ACT_EDIT, ACT_TOMORROW };
 
 /* Commands (CAPP_CMD_YES). add's title comes last so a sentence needs no
  * quotes: `add tomorrow 3pm dentist appointment`. */
@@ -1202,6 +1202,8 @@ static const CappAction MAIN_ACTIONS[] = {
     "add an hour-long event", P_ADD, 3, CAPP_CMD_YES },
   { "today",  "Today",    0,       0,    ACT_TODAY,
     "today's events", 0, 0, CAPP_CMD_YES },
+  { "tomorrow", "Tomorrow", 0,     0,    ACT_TOMORROW,
+    "tomorrow's events", 0, 0, CAPP_CMD_YES },
   { "upcoming", "Upcoming", 0,     0,    ACT_UPCOMING,
     "the events of the next seven days", 0, 0, CAPP_CMD_YES },
   { "edit",   "Edit",     "Event", 0x05, ACT_EDIT },    /* ctrl-e */
@@ -1616,6 +1618,10 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
 
   case ACT_TODAY:
     if (!list_days(today, today + 1, 0, out, n)) api->fmt(out, n, "nothing today");
+    return 0;
+
+  case ACT_TOMORROW:
+    if (!list_days(today + 1, today + 2, 0, out, n)) api->fmt(out, n, "nothing tomorrow");
     return 0;
 
   case ACT_UPCOMING:

@@ -321,5 +321,8 @@ void test_habits_today_is_boxes_to_tick(void) {
   open_app();
   CHECK_EQ(app_command(0, ACT_TODAY, 0, NULL, out, sizeof out), 0);
   CHECK(!strcmp(out, "[x] Read  (3 days)\n[ ] Stretch"));
+  /* Tomorrow nothing is done yet; the streaks are as they stand. */
+  CHECK_EQ(app_command(0, ACT_TOMORROW, 0, NULL, out, sizeof out), 0);
+  CHECK(!strcmp(out, "[ ] Read  (3 days)\n[ ] Stretch"));
   wipe();
 }

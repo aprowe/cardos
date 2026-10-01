@@ -751,7 +751,7 @@ static void app_paint(void *st, CRect full) {
 /* ---- actions ----------------------------------------------------------------------------------- */
 
 enum { ACT_ADD = 1, ACT_DONE, ACT_LIST, ACT_RENAME, ACT_DELETE, ACT_INFO, ACT_ALL,
-       ACT_TODAY, ACT_UP, ACT_DOWN };
+       ACT_TODAY, ACT_UP, ACT_DOWN, ACT_TOMORROW };
 
 static const CappParam P_HABIT[] = { { "habit", CAPP_ARG_TEXT, "the habit, or enough of its name" } };
 static const CappParam P_NEW[]   = { { "name",  CAPP_ARG_TEXT, "what the habit is called" } };
@@ -771,6 +771,8 @@ static const CappAction ACTIONS[] = {
   { "all",    "All habits",   "View",  0, ACT_ALL },
   { "today",  "Today",        "View",  0, ACT_TODAY,
     "every habit, a box ticked if it is done today, and its streak", 0, 0, CAPP_CMD_YES },
+  { "tomorrow", "Tomorrow",   0,       0, ACT_TOMORROW,
+    "every habit with an empty box, for tomorrow's page", 0, 0, CAPP_CMD_YES },
 };
 #define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
 
@@ -853,13 +855,15 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
     api->fmt(out, n, "%s: done today, %d day streak", H.habit[i].name, streak(i));
     return 0;
   case ACT_TODAY:
+  case ACT_TOMORROW:
     /* The print markup: the Today app puts these straight on paper, where a
-     * box is something to tick with a pen. */
+     * box is something to tick with a pen. Tomorrow's are all empty. */
     if (!H.n) { api->fmt(out, n, "no habits yet"); return 0; }
     for (i = 0; i < H.n && o + 8 < n; i++) {
       int s = streak(i);
       o += (size_t)api->fmt(out + o, n - o, "%s[%c] %s", i ? "\n" : "",
-                            is_done(i, H.today) ? 'x' : ' ', H.habit[i].name);
+                            action == ACT_TODAY && is_done(i, H.today) ? 'x' : ' ',
+                            H.habit[i].name);
       if (s > 1 && o + 16 < n) o += (size_t)api->fmt(out + o, n - o, "  (%d days)", s);
     }
     return 0;

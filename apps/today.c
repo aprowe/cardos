@@ -19,6 +19,10 @@
  * picks which todo list, e opens the sections in Edit. `do today print` is
  * the whole thing without the screen -- "Carlos, print my day".
  *
+ * t turns the page to tomorrow and back: a section whose command is `today`
+ * (Calendar's, Habits') is asked `tomorrow` instead, and the rest as they
+ * are. `do today tomorrow` prints it, for the night before.
+ *
  * Gathering is one command a tick: a network one (stocks) takes a second or
  * two, and one at a time the screen says which it is waiting on rather than
  * freezing on the lot. What was gathered is what prints: nothing is fetched
@@ -67,6 +71,7 @@ static struct {
   char    page[PAGE_MAX];     /* the print markup, and what the screen shows */
   int     len;
   int     next;               /* the section gathering next, or -1 when done */
+  int     ahead;              /* 1: tomorrow's page */
   int     announced;          /* the status says which, before it blocks */
   char    status[48];
   int     printing;
@@ -208,14 +213,26 @@ static void put(const char *s) {
   D.page[D.len] = 0;
 }
 
+static void next_day(int *y, int *m, int *d) {
+  static const unsigned char LEN[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+  int len = LEN[(*m + 11) % 12];
+  if (*m == 2 && *y % 4 == 0 && (*y % 100 != 0 || *y % 400 == 0)) len = 29;
+  if (++*d > len) { *d = 1; if (++*m > 12) { *m = 1; ++*y; } }
+}
+
 static void begin_page(void) {
   CappTime t;
   char s[64];
   D.len = 0;
   D.page[0] = 0;
   api->now(&t);
-  if (t.synced) api->fmt(s, sizeof s, "# %s %u %s\n", WDAY[t.wday % 7], t.day, MON[(t.month + 11) % 12]);
-  else api->fmt(s, sizeof s, "# Today\n");
+  if (t.synced) {
+    int y = t.year, m = t.month, d = t.day, wd = t.wday % 7;
+    if (D.ahead) { next_day(&y, &m, &d); wd = (wd + 1) % 7; }
+    api->fmt(s, sizeof s, "# %s %d %s\n", WDAY[wd], d, MON[(m + 11) % 12]);
+  } else {
+    api->fmt(s, sizeof s, D.ahead ? "# Tomorrow\n" : "# Today\n");
+  }
   put(s);
   D.next = 0;
   D.announced = 0;
@@ -227,8 +244,16 @@ static void gather_one(int i) {
   char *answer = s_answer;
   char head[HEAD_MAX + 8];
   int rc;
+  const char *line = D.sect[i].line;
+  char moved[CMD_MAX + 8];
   answer[0] = 0;
-  rc = api->run_command(D.sect[i].app, D.sect[i].line, answer, ANSWER_MAX);
+  /* Tomorrow's page: "today" -- the whole command or its first word -- is
+   * asked as "tomorrow". */
+  if (D.ahead && starts(line, "today") && (line[5] == 0 || line[5] == ' ')) {
+    api->fmt(moved, sizeof moved, "tomorrow%s", line + 5);
+    line = moved;
+  }
+  rc = api->run_command(D.sect[i].app, line, answer, ANSWER_MAX);
   api->fmt(head, sizeof head, "\n## %s\n", D.sect[i].head);
   put(head);
   if (rc != 0) { put("("); put(answer[0] ? answer : "no answer"); put(")\n"); return; }
@@ -330,7 +355,8 @@ static void paint_page(void) {
     p = *e ? e + 1 : e;
   }
   if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
-  paint_foot("fn-p print  r again  l list  e sections", CLR_DIM);
+  paint_foot(D.ahead ? "fn-p print  t today  l list  e edit"
+                      : "fn-p print  t tomorrow  l list  e edit", CLR_DIM);
 }
 
 static void paint_lists(void) {
@@ -432,17 +458,24 @@ static void use_list(int i) {
   regather();
 }
 
-enum { ACT_PRINT = 1, ACT_AGAIN, ACT_LISTS, ACT_EDIT, ACT_SHOW };
+enum { ACT_PRINT = 1, ACT_AGAIN, ACT_LISTS, ACT_EDIT, ACT_SHOW, ACT_DAY, ACT_TOMORROW,
+       ACT_SHOW_TOMORROW };
 
 static const CappAction ACTIONS[] = {
   { "print",    "Print",          "Today", CAPP_KEY_PRINT, ACT_PRINT,     /* fn-p */
     "print today's page -- calendar, todo list, habits, stocks: the sections in "
     "/config/today.txt", 0, 0, CAPP_CMD_YES },
+  { "day",      "Today/tomorrow", "Today", 0, ACT_DAY },
   { "again",    "Gather again",   "Today", 0, ACT_AGAIN },
   { "lists",    "Todo list...",   "Today", 0, ACT_LISTS },
   { "sections", "Edit sections",  "Today", 0, ACT_EDIT },
   { "show",     "Show",           0,       0, ACT_SHOW,
     "today's page as text, without printing it", 0, 0, CAPP_CMD_YES },
+  { "tomorrow", "Print tomorrow", 0,     0, ACT_TOMORROW,
+    "print tomorrow's page: tomorrow's events, the todo list, habits to tick", 0, 0,
+    CAPP_CMD_YES },
+  { "show.tomorrow", "Show tomorrow", 0, 0, ACT_SHOW_TOMORROW,
+    "tomorrow's page as text, without printing it", 0, 0, CAPP_CMD_YES },
 };
 #define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
 
@@ -453,6 +486,7 @@ static int do_action(int a) {
     print_page();
     return 1;
   case ACT_AGAIN: regather(); return 1;
+  case ACT_DAY:   D.ahead = !D.ahead; regather(); return 1;
   case ACT_LISTS: open_lists(); return 1;
   case ACT_EDIT:  api->run("edit", CONFIG); return 1;
   default:        return 0;
@@ -464,11 +498,16 @@ static int app_action(void *st, int a) { (void)st; return do_action(a); }
 static int app_command(void *st, int action, int argc, const char *const *argv,
                        char *out, size_t n) {
   (void)st; (void)argc; (void)argv;
+  D.ahead = action == ACT_TOMORROW || action == ACT_SHOW_TOMORROW;
   gather_all();
-  if (action == ACT_SHOW) { api->fmt(out, n, "%s", D.page); return 0; }
-  if (action == ACT_PRINT) {
+  if (action == ACT_SHOW || action == ACT_SHOW_TOMORROW) {
+    api->fmt(out, n, "%s", D.page);
+    return 0;
+  }
+  if (action == ACT_PRINT || action == ACT_TOMORROW) {
     if (print_page() != 0) { api->fmt(out, n, "%s", D.status); return -1; }
-    api->fmt(out, n, "printing today's page, %d sections", D.nsect);
+    api->fmt(out, n, "printing %s page, %d sections", D.ahead ? "tomorrow's" : "today's",
+             D.nsect);
     return 0;
   }
   api->fmt(out, n, "today has no command %d", action);
@@ -493,6 +532,7 @@ static int app_key(void *st, uint8_t k) {
   case CAPP_KEY_UP:   if (D.top > 0) D.top--; return 1;
   case CAPP_KEY_DOWN: if (D.top + D.rows < D.nlines) D.top++; return 1;
   case 'r': case 'R': return do_action(ACT_AGAIN);
+  case 't': case 'T': return do_action(ACT_DAY);
   case 'l': case 'L': return do_action(ACT_LISTS);
   case 'e': case 'E': return do_action(ACT_EDIT);
   case 'p': case 'P': return do_action(ACT_PRINT);
@@ -530,7 +570,7 @@ static int app_tick(void *st, uint32_t now) {
     if (D.next >= D.nsect) {
       end_page();
       load_fonts();
-      api->fmt(D.status, sizeof D.status, "fn-p prints");
+      D.status[0] = 0;
       return 1;
     }
     if (!D.announced) {
@@ -563,7 +603,8 @@ const CappInfo capp_info = {
     0x37, 0xEC, 0x07, 0xE0, 0x7F, 0xFE, 0x40, 0x02,
     0x5E, 0x02, 0x40, 0x02, 0x5F, 0xE2, 0x40, 0x02,
     0x5C, 0x02, 0x40, 0x02, 0x7F, 0xFE, 0x00, 0x00 },
-  "fn-p\tprint the page\nr\tgather again\nl\twhich todo list\n"
+  "fn-p\tprint the page\nt\ttomorrow's page, and back\nr\tgather again\n"
+  "l\twhich todo list\n"
   "e\tedit the sections (/config/today.txt)\nup/down\tscroll\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
