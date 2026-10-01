@@ -582,10 +582,11 @@ int bt_radio_down(void) {
   size_t before;
   int i;
   if (!s_inited) return 0;
+  /* Any mouse or keyboard claimed this run keeps the radio, connected or
+   * not: one that dropped for a moment is reconnected by the launcher only
+   * while the radio is up, and taking it down after a print stranded it. */
   for (i = 0; i < MAX_LINKS; i++)
-    if (s_link[i].used && (s_link[i].state == BTH_CONNECTED ||
-                           s_link[i].state == BTH_CONNECTING))
-      return -1;
+    if (s_link[i].used) return -1;
   before = esp_get_free_heap_size();
   /* nimble_port_run returns, and the host task deletes itself on the way
    * out (nimble_host_task). Then the reverse of esp_hid_gap_init. */

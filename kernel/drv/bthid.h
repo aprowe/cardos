@@ -64,8 +64,8 @@ void bthid_stop_all(void);
  * not take it. */
 int bt_radio_up(void);
 
-/* Take it down again and give back its ~67 KB, if no mouse or keyboard link
- * is connected or connecting. 0 when the radio is down (or already was), -1
+/* Take it down again and give back its ~67 KB, if no mouse or keyboard has
+ * been linked this run. 0 when the radio is down (or already was), -1
  * when a link is using it. Nothing else turned it off: one print left the
  * radio up, and a mouse scan every fifteen seconds, for the whole uptime --
  * Todo then could not load beside it (2026-10-01). Run it where the scans
