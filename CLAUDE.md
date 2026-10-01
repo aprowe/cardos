@@ -599,9 +599,11 @@ waiting for the laptop's address to change.
 Half the image is radio and TLS (net80211 158 KB,
 mbedTLS + PSA crypto 228 KB, Bluetooth 177 KB, lwIP 103 KB), which is not
 shrinkable by writing tighter kernel code — CardOS's own code is about 178 KB.
-The lever that is available: **204 KB of embedded `.capp` blobs**, which are
-copies of files that also live on the card and can be fetched with `update
-apps`. Keeping two or three seeded and dropping the rest returns ~150 KB. Run
+**Only three apps are embedded** (2026-10-01): Dashboard Link, Files and
+Edit (`EMBED` in `tools/build_apps.py`) -- enough for a blank card to be
+linked and repaired. All of them used to be, 948 KB by then, and the image
+outgrew the 2304 KB OTA slots: `update os` downloaded it and refused it as
+"not a bootable image". The rest arrive with `update apps`. Run
 `python tools/mapsize.py` before deciding anything about size.
 
 **Measured memory, with both radios up: 120 KB of heap free**, low water 95 KB.
