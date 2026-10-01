@@ -94,6 +94,11 @@ class FakeDevice:
             if self.files.pop(path, None) is None:
                 return "error no such file"
             return "ok"
+        if op == "sh":
+            line = data.strip()
+            if line.startswith("launch"):
+                return "ok refused\nlaunch takes over the device's screen\n"
+            return "ok\n$ ran %s\nheap free 120000\n" % line
         if op == "mv":
             self.files[arg] = self.files.pop(path)
             return "ok"
@@ -189,7 +194,8 @@ class FilesTest(unittest.TestCase):
         self.assertEqual(s, 503)
         self.assertIn("Remote Files", j["error"])
         self.assertLess(time.time() - t, 2)
-        self.assertEqual(self.j("GET", "/dash/files/status")[1], {"connected": False})
+        self.assertEqual(self.j("GET", "/dash/files/status")[1],
+                         {"connected": False, "last_seen": None})
 
     def test_dotdot_is_refused_before_the_device_hears_of_it(self):
         d = self.device()
@@ -202,6 +208,16 @@ class FilesTest(unittest.TestCase):
         self.assertEqual(self.req("POST", "/dash/files/rm?path=/x")[0], 403)
         s, body = self.req("GET", "/dash/files")      # sent to /dash to sign in
         self.assertNotIn(b"/dash/files/ls", body)
+
+    def test_a_console_line_and_what_it_printed(self):
+        self.device()
+        s, j = self.j("POST", "/dash/term", json.dumps({"line": "  do  calendar sync "}).encode())
+        self.assertEqual((s, j["refused"]), (200, False))
+        self.assertEqual(j["output"], "$ ran do calendar sync\nheap free 120000\n")
+        s, j = self.j("POST", "/dash/term", json.dumps({"line": "launch"}).encode())
+        self.assertEqual((s, j["refused"]), (200, True))
+        s, j = self.j("POST", "/dash/term", json.dumps({"line": "   "}).encode())
+        self.assertEqual(s, 400)
 
     def test_the_poll_needs_the_token(self):
         r = urllib.request.Request(self.base + "/files/poll", data=b"", method="POST")

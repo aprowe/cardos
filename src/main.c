@@ -690,6 +690,36 @@ static void run_stage(Stage *st) {
   if (cmd[0]) run_builtin(cmd, arg);
 }
 
+static void run_pipeline(const char *line);
+
+/* A console line from the dashboard (api->shell, the Dashboard Link app):
+ * run as typed, its output captured rather than drawn -- the screen is the
+ * app's. Some lines are refused, because they take the screen: switching
+ * shells, and opening an app on top of the one doing the linking, which
+ * would stop the link mid-command. */
+static int shell_remote(const char *line, char *out, size_t n) {
+  static const char *const TAKES_SCREEN[] = {
+    "launch", "desk", "gui", "flip", "run", "boot", "boot!", "clear", NULL };
+  static int busy;
+  char word[24];
+  int i = 0, k;
+  while (line[i] == ' ') i++;
+  for (k = 0; line[i] && line[i] != ' ' && k < (int)sizeof word - 1; i++) word[k++] = line[i];
+  word[k] = 0;
+  for (k = 0; TAKES_SCREEN[k]; k++)
+    if (!strcmp(word, TAKES_SCREEN[k])) {
+      snprintf(out, n, "%s takes over the device's screen; not from the dashboard\n", word);
+      return -1;
+    }
+  if (busy) { snprintf(out, n, "a command is already running\n"); return -1; }
+  busy = 1;
+  con_capture(out, n);
+  run_pipeline(line);
+  con_capture_end();
+  busy = 0;
+  return 0;
+}
+
 /* The whole line: split on |, wire each stage's output to the next one's
  * input, and give stdio back to the console afterwards. */
 static void run_pipeline(const char *line) {
@@ -1303,6 +1333,7 @@ void app_main(void) {
   /* A command that opens its app (CAPP_CMD_OPEN) opens it the way `run`
    * does: through the launcher. */
   capprun_set_opener(launchui_run);
+  capprun_set_shell(shell_remote);
   alarm_set_repaint(repaint_all);    /* what a ringing alarm's panel covered */
 
   /* The icon scan, whichever shell comes up. It is also what writes a new

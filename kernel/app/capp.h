@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 33
+#define CAPP_API_VERSION 34
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -736,6 +736,16 @@ typedef struct {
    * (an app whose code is running is busy). This is how the Today app
    * gathers the day: every section is some app's command. */
   int (*run_command)(const char *app, const char *line, char *out, size_t n);
+
+  /* ---- a console line (API 34) ----
+   *
+   * Runs `line` as the console would -- built-ins, pipes, `do`, CLI apps on
+   * PATH -- and puts what it printed in `out` instead of on the screen,
+   * which stays the calling app's. 0, or <0 when it was refused: a line
+   * that would switch shells or open an app on screen, or no shell at all.
+   * Blocks until the command is done (an `update` takes minutes). For the
+   * Dashboard Link app's terminal; anything else should prefer a command. */
+  int (*shell)(const char *line, char *out, size_t n);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

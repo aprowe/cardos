@@ -223,7 +223,7 @@ ICONS = {
         "................",
     ],
     # A memory card with an arrow up and an arrow down: the card, both ways.
-    "Remote Files": [
+    "Dashboard Link": [
         "................",
         "...KKKKKKKK.....",
         "...KDDDDDDDK....",

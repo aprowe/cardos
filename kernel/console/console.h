@@ -5,6 +5,7 @@
 #ifndef CARDOS_CONSOLE_H
 #define CARDOS_CONSOLE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define CON_COLS 40
@@ -31,6 +32,15 @@ void con_set_color(uint16_t fg);
  * is 40x16 and cannot be photographed into a bug report, so having the same
  * text on the wire is the difference between debugging and guessing. Costs
  * nothing when nothing is listening. */
+/* Capture: while on, everything written goes into buf (NUL-terminated,
+ * cut at n) and nowhere else -- not the grid, not the panel, not serial.
+ * For a console line run from the dashboard (shell_remote in main.c): the
+ * device's screen belongs to whatever app is open, and drawing console text
+ * over it would be a bug that looked like a crash. */
+void   con_capture(char *buf, size_t n);
+size_t con_capture_end(void);
+int    con_capturing(void);
+
 void con_set_serial(int on);
 int  con_serial_key(void);   /* next character from stdin, or 0 */
 int  con_serial_pending(void); /* is there one, without taking it */

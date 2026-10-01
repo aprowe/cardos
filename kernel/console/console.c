@@ -84,6 +84,7 @@ int con_init(void) {
 
 void con_clear(void) {
   int r, c;
+  if (con_capturing()) return;           /* the screen is an app's */
   memset(s_grid, ' ', sizeof s_grid);
   for (r = 0; r < CON_ROWS; r++)
     for (c = 0; c < CON_COLS; c++) s_fgs[r][c] = s_fg;
@@ -97,6 +98,7 @@ void con_clear(void) {
  * console that means this. */
 void con_repaint(void) {
   int r, c;
+  if (con_capturing()) return;
   display_fill(s_bg);
   for (r = 0; r < CON_ROWS; r++)
     for (c = 0; c < CON_COLS; c++)
@@ -137,7 +139,29 @@ int con_serial_pending(void) {
   return s_serial_held != 0;
 }
 
+static char  *s_cap;
+static size_t s_cap_n, s_cap_len;
+
+void con_capture(char *buf, size_t n) {
+  s_cap = buf;
+  s_cap_n = n;
+  s_cap_len = 0;
+  if (buf && n) buf[0] = 0;
+}
+
+size_t con_capture_end(void) {
+  size_t n = s_cap_len;
+  s_cap = NULL;
+  return n;
+}
+
+int con_capturing(void) { return s_cap != NULL; }
+
 void con_putc(char c) {
+  if (s_cap) {
+    if (s_cap_len + 1 < s_cap_n) { s_cap[s_cap_len++] = c; s_cap[s_cap_len] = 0; }
+    return;
+  }
   if (s_serial) fputc(c, stdout);
   if (s_cursor_on) { draw_cell(s_cx, s_cy, s_grid[s_cy][s_cx], 0); s_cursor_on = 0; }
 
@@ -186,6 +210,7 @@ void con_printf(const char *fmt, ...) {
 }
 
 void con_cursor(int visible) {
+  if (s_cap) return;
   if (visible == s_cursor_on) return;
   s_cursor_on = visible;
   /* The cell under the cursor is drawn in the colour being typed in. */

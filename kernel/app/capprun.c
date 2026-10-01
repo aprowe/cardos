@@ -856,6 +856,13 @@ int capprun_headless(void) { return s_headless; }
 static int (*s_opener)(const char *app, const char *args);
 void capprun_set_opener(int (*open)(const char *, const char *)) { s_opener = open; }
 
+static int (*s_shell)(const char *line, char *out, size_t n);
+void capprun_set_shell(int (*sh)(const char *, char *, size_t)) { s_shell = sh; }
+int capprun_shell(const char *line, char *out, size_t n) {
+  if (!s_shell || !line || !out || !n) return -1;
+  return s_shell(line, out, n);
+}
+
 /* A CAPP_CMD_OPEN command: its arguments, quoted where they have spaces, as
  * the app's command line, and the app opened with it by the shell. */
 static int open_with(const char *app, int argc, const char *const *argv,

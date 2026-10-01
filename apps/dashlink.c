@@ -1,4 +1,9 @@
-/* Remote Files -- the card, from the dashboard's /dash/files page.
+/* Dashboard Link -- the device, from the dashboard: its card and its console.
+ *
+ * Was Remote Files. While this is open the dashboard (server/dashboard.html)
+ * can browse and change the card, and run console lines here and read what
+ * they print -- `do calendar sync`, `update apps`, `mem`, anything typed at
+ * the console, captured instead of drawn (api->shell, API 34).
  *
  * The server cannot reach this device; it is behind somebody's router. So
  * while this is open, it asks the server for work, over and over: one POST
@@ -20,9 +25,10 @@
 static const CardApi *api;
 
 #define CHUNK     3072                  /* bytes a job carries */
+#define SH_MAX    4096                  /* what a console line may print back */
 #define B64_MAX   (CHUNK / 3 * 4 + 8)
 #define JOB_MAX   (B64_MAX + 400)       /* the job line, then base64 */
-#define ANS_MAX   (B64_MAX + 64)
+#define ANS_MAX   (B64_MAX + 64)        /* also holds SH_MAX of console output */
 #define PATH_MAX_ 160
 #define MAX_ENT   48
 #define LINES     6
@@ -50,6 +56,7 @@ static struct {
   union {
     unsigned char raw[CHUNK];
     CappEntry     ent[MAX_ENT];
+    char          sh[SH_MAX];
   } u;
 } R;
 
@@ -234,6 +241,21 @@ static int handle_job(void) {
   else if (same(f[1], "read")) do_read(f[2], f[3]);
   else if (same(f[1], "write")) do_write(f[2], f[3], data);
   else if (same(f[1], "commit")) do_commit(f[2]);
+  else if (same(f[1], "sh")) {
+    /* A console line: its text is the job's data, one line. What it printed
+     * comes back whole -- an `update` that runs for minutes answers when it
+     * is done, which the server waits for. */
+    int k;
+    for (k = 0; data[k] && data[k] != '\n'; k++) {}
+    data[k] = 0;
+    note("$", data, -1);
+    R.u.sh[0] = 0;
+    if (!api->shell) fail("this firmware has no console for apps: update os");
+    else {
+      int rc = api->shell(data, R.u.sh, SH_MAX);
+      api->fmt(R.answer, ANS_MAX, "%s\n%s", rc == 0 ? "ok" : "ok refused", R.u.sh);
+    }
+  }
   else if (same(f[1], "mkdir")) {
     if (api->mkdir(f[2]) != 0) fail("cannot make it");
     else { api->fmt(R.answer, ANS_MAX, "ok"); note("mkdir", f[2], -1); }
@@ -294,10 +316,10 @@ static void app_paint(void *st, CRect c) {
   char line[48];
   (void)st;
   api->fill(c, CLR_BG);
-  api->text((short)(c.x + 8), (short)(c.y + 6), "Remote Files", CLR_FG, CLR_BG);
-  api->text((short)(c.x + 8), (short)(c.y + 20), "open /dash/files on the server", CLR_DIM, CLR_BG);
+  api->text((short)(c.x + 8), (short)(c.y + 6), "Dashboard Link", CLR_FG, CLR_BG);
+  api->text((short)(c.x + 8), (short)(c.y + 20), "files and console at /dash", CLR_DIM, CLR_BG);
   if (R.connected)
-    api->text((short)(c.x + 8), (short)(c.y + 34), "connected: the card is reachable", CLR_OK, CLR_BG);
+    api->text((short)(c.x + 8), (short)(c.y + 34), "linked: the dashboard can reach it", CLR_OK, CLR_BG);
   else {
     api->fmt(line, sizeof line, "cannot reach the server (%d)", R.err);
     api->text((short)(c.x + 8), (short)(c.y + 34), R.err ? line : "connecting...",
@@ -314,17 +336,17 @@ static void app_paint(void *st, CRect c) {
 const CappInfo capp_info = {
   CAPP_API_VERSION,
   CAPP_FULLSCREEN | CAPP_NEEDS_PROXY,
-  "Remote Files",
+  "Dashboard Link",
   /* 16x16: a card with an arrow going each way. */
   { 0x00, 0x00, 0x3F, 0xC0, 0x20, 0x60, 0x20, 0x50,
     0x20, 0x78, 0x24, 0x08, 0x2E, 0x08, 0x24, 0x08,
     0x24, 0x48, 0x20, 0x48, 0x20, 0xE8, 0x20, 0x48,
     0x3F, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-  "fn-`\tstop and leave\n"
+  "fn-`\tunlink and leave\n"
   "\n"
-  "while this is open, the card can be browsed\n"
-  "at /dash/files on the server: download,\n"
-  "upload, rename, delete, new folders.\n",
+  "while this is open, the dashboard (/dash on\n"
+  "the server) can browse and change the card\n"
+  "and run console commands here.\n",
   0,
   0,
 };

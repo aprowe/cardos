@@ -426,6 +426,10 @@ static int api_run_command(const char *app, const char *line, char *out, size_t 
   return capprun_command_line(app, line, out, n);
 }
 
+static int api_shell(const char *line, char *out, size_t n) {
+  return capprun_shell(line, out, n);
+}
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -457,6 +461,7 @@ static const CardApi API = {
   api_print_fonts,
   api_keep_awake, api_wake,
   api_run_command,
+  api_shell,
 };
 
 const CardApi *cardos_api(void) { return &API; }

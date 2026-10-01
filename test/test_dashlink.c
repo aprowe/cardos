@@ -1,4 +1,4 @@
-/* Remote Files on the host: the jobs the server sends, answered against
+/* Dashboard Link on the host: the jobs the server sends, answered against
  * files on the PC.
  *
  * What must hold: base64 both ways for every length, an upload in chunks
@@ -13,9 +13,9 @@
 
 #include "tinytest.h"
 
-#define capp_info rfiles_capp_info
-#define capp_main rfiles_capp_main
-#include "apps/rfiles.c"
+#define capp_info dashlink_capp_info
+#define capp_main dashlink_capp_main
+#include "apps/dashlink.c"
 #undef capp_info
 #undef capp_main
 
@@ -28,7 +28,7 @@ static void *r_memmove(void *d, const void *s, size_t n) { return memmove(d, s, 
 
 static void rn(const char *path, char *out, size_t n) {
   size_t j = 0, i;
-  const char *pre = "rfiles_test";
+  const char *pre = "dashlink_test";
   for (i = 0; pre[i] && j + 1 < n; i++) out[j++] = pre[i];
   for (i = 0; path[i] && j + 1 < n; i++) out[j++] = path[i] == '/' ? '_' : path[i];
   out[j] = 0;
@@ -96,7 +96,7 @@ static int job(const char *text) {
   return handle_job();
 }
 
-void test_rfiles_base64_round_trips_every_length(void) {
+void test_dashlink_base64_round_trips_every_length(void) {
   unsigned char in[10], back[10];
   char enc[32];
   int n, i;
@@ -110,7 +110,7 @@ void test_rfiles_base64_round_trips_every_length(void) {
   CHECK_EQ(b64_decode("not*base64", back, sizeof back), -1);
 }
 
-void test_rfiles_an_upload_in_chunks_lands_only_at_commit(void) {
+void test_dashlink_an_upload_in_chunks_lands_only_at_commit(void) {
   char line[64];
   CappStat st;
   ropen();
@@ -139,7 +139,7 @@ void test_rfiles_an_upload_in_chunks_lands_only_at_commit(void) {
   r_remove("/up.txt");
 }
 
-void test_rfiles_a_chunk_out_of_order_is_refused(void) {
+void test_dashlink_a_chunk_out_of_order_is_refused(void) {
   ropen();
   r_remove("/gap.part");
   job("1\twrite\t/gap\t0\naGVsbG8g");
@@ -148,7 +148,7 @@ void test_rfiles_a_chunk_out_of_order_is_refused(void) {
   r_remove("/gap.part");
 }
 
-void test_rfiles_dotdot_is_refused_before_the_card_is_touched(void) {
+void test_dashlink_dotdot_is_refused_before_the_card_is_touched(void) {
   ropen();
   RF.open = NULL;                                  /* a touch would crash */
   CHECK_EQ(job("3\tread\t/apps/../config/google.txt\t0,10\n"), 3);
@@ -158,7 +158,7 @@ void test_rfiles_dotdot_is_refused_before_the_card_is_touched(void) {
   CHECK(path_ok("/notes..txt"));                   /* dots in a name are fine */
 }
 
-void test_rfiles_a_folder_lists_its_entries(void) {
+void test_dashlink_a_folder_lists_its_entries(void) {
   ropen();
   job("5\tlist\t/apps\t\n");
   CHECK(!strcmp(R.answer, "ok\nd\t0\tTools\nf\t544\tcat.capp\n"));
@@ -166,7 +166,29 @@ void test_rfiles_a_folder_lists_its_entries(void) {
   CHECK(!strcmp(R.answer, "error no such folder"));
 }
 
-void test_rfiles_idle_is_no_job(void) {
+/* A console line: run through api->shell, its output the answer. */
+static char s_ran[128];
+static int r_shell(const char *line, char *out, size_t n) {
+  snprintf(s_ran, sizeof s_ran, "%s", line);
+  if (!strncmp(line, "launch", 6)) { snprintf(out, n, "launch takes over\n"); return -1; }
+  snprintf(out, n, "heap free 120000\n");
+  return 0;
+}
+
+void test_dashlink_runs_a_console_line(void) {
+  ropen();
+  RF.shell = r_shell;
+  CHECK_EQ(job("9\tsh\t/\t\nmem\n"), 9);
+  CHECK(!strcmp(s_ran, "mem"));
+  CHECK(!strcmp(R.answer, "ok\nheap free 120000\n"));
+  job("10\tsh\t/\t\nlaunch\n");
+  CHECK(!strcmp(R.answer, "ok refused\nlaunch takes over\n"));
+  RF.shell = NULL;                       /* firmware older than API 34 */
+  job("11\tsh\t/\t\nmem\n");
+  CHECK(!strncmp(R.answer, "error this firmware", 19));
+}
+
+void test_dashlink_idle_is_no_job(void) {
   ropen();
   CHECK_EQ(job("idle\n"), 0);
   CHECK_EQ(R.answer[0], 0);

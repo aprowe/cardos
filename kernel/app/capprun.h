@@ -64,6 +64,11 @@ int capprun_command_line(const char *app, const char *line, char *out, size_t n)
  * boot (launchui_run). A hook rather than a call because the launcher is
  * built on this file, not under it. */
 void capprun_set_opener(int (*open)(const char *app, const char *args));
+
+/* The console, for api->shell: main.c hands it over at boot, as with the
+ * opener, so the kernel needs nothing from src/. */
+void capprun_set_shell(int (*sh)(const char *line, char *out, size_t n));
+int  capprun_shell(const char *line, char *out, size_t n);
 void capprun_command_done(int rc, const char *out);   /* api->command_done */
 /* Around the icon scan. `stamp` names the apps this firmware carries; with
  * the API version it keys the app index, so the first scan after a new

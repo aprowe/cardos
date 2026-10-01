@@ -16,6 +16,7 @@
  */
 
 #include "kernel/ui/launchui.h"
+#include "kernel/console/console.h"
 #include "kernel/ui/icons.h"
 #include "kernel/ui/draw.h"
 #include "kernel/ui/desktop.h"
@@ -555,6 +556,17 @@ static int same_name(const char *a, const char *b) {
   return *a == 0 && *b == 0;
 }
 
+/* A console line run from the dashboard (con_capturing) that turned out to
+ * be an app wanting the screen: let it go again, say so in the captured
+ * output, and do not host it -- the app on screen is the one keeping the
+ * dashboard's link alive. */
+static int from_dashboard(int slot) {
+  if (!con_capturing()) return 0;
+  capprun_release(capprun_def(slot));
+  con_write("that app opens on the device's screen; not from the dashboard\n");
+  return 1;
+}
+
 int launchui_run(const char *name, const char *args) {
   int i;
 
@@ -570,6 +582,7 @@ int launchui_run(const char *name, const char *args) {
     if (ic->kind == ICON_CAPP) {
       capprun_start(ic->slot, ic->name, args);
       if (!capprun_is_app(ic->slot)) return 0;
+      if (from_dashboard(ic->slot)) return 0;
       select_flat(i);
       enter();
       host(capprun_def(ic->slot));
@@ -599,6 +612,7 @@ int launchui_run_path(const char *path, const char *args) {
     if (ic && ic->kind == ICON_CAPP && strcmp(ic->path, path) == 0) {
       capprun_start(ic->slot, ic->name, args);
       if (!capprun_is_app(ic->slot)) return 0;   /* a command, already done */
+      if (from_dashboard(ic->slot)) return 0;
       select_flat(i);
       enter();
       host(capprun_def(ic->slot));
@@ -610,6 +624,7 @@ int launchui_run_path(const char *path, const char *args) {
   if (slot < 0) return -1;
   capprun_start(slot, path, args);
   if (!capprun_is_app(slot)) return 0;    /* a command, and it is done */
+  if (from_dashboard(slot)) return 0;
   a = capprun_def(slot);
   if (!a) return -1;
 
