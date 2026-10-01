@@ -1367,6 +1367,7 @@ void app_main(void) {
       input_set_repeat(k ? repeat : 0);
     }
 
+    int from_serial = 0;
     if (!k) {
       int sc = con_serial_key();
       /* Not a key: 0xFF is outside the alphabet, and it means "screenshot".
@@ -1376,6 +1377,7 @@ void app_main(void) {
       else if (sc == 0x7F || sc == 0x08) k = KEY_BACKSPACE;
       else if (sc == 0x1B) k = KEY_ESC;
       else if (sc > 0) k = (uint8_t)sc;
+      from_serial = k != 0;
     }
 
     /* Anything the user did resets the idle clock -- which is what decides
@@ -1385,7 +1387,13 @@ void app_main(void) {
       bg_note_activity();
       /* Wake first. A key pressed at a dark screen means "come back", and
        * acting on it as well would open an app nobody asked for. */
-      if (power_dimmed()) { power_wake(); k = 0; }
+      if (power_dimmed()) {
+        power_wake();
+        /* Not from the serial port: that is a program typing a command, not
+         * someone at a dark screen, and swallowing the first byte cut the
+         * first letter off every command sent after a pause (2026-09-30). */
+        if (!from_serial) k = 0;
+      }
     }
     power_tick();
     alarm_tick();           /* reads /config/alarms.txt when the minute changes */
