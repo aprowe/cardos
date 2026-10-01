@@ -488,6 +488,33 @@ void test_todo_nothing_syncs_again_until_it_is_asked_to(void) {
   host_clean();
 }
 
+/* The loop that was on the device (2026-10-01): the lists failed, the
+ * open-time sweep counted as not tried, and it started again the next tick
+ * -- twice a second, forever, a log line each time. A 403 or 401 is the
+ * login, which no retry fixes: one request, then nothing until `s`. */
+void test_todo_a_refused_login_is_not_retried_in_a_loop(void) {
+  int i;
+  use_script_api();
+  script_add("", -403);
+  for (i = 0; i < 12000; i++) { s_now += 5; app_tick(0, s_now); }   /* a minute */
+  CHECK_EQ(S.asked, 1);
+  CHECK(strstr(T.status, "/dash") != NULL);
+  host_clean();
+}
+
+/* No server at all is worth another try -- after RETRY_MS, not next tick. */
+void test_todo_an_unreachable_server_is_retried_later_not_at_once(void) {
+  int i;
+  use_script_api();
+  script_add("", -1);
+  script_add(THREE_LISTS, 200);
+  for (i = 0; i < 1000; i++) { s_now += 5; app_tick(0, s_now); }    /* 5 s */
+  CHECK_EQ(S.asked, 1);
+  for (i = 0; i < 3000; i++) { s_now += 5; app_tick(0, s_now); }    /* 20 s */
+  CHECK(S.asked >= 2);
+  host_clean();
+}
+
 /* A list you are not looking at is still fetched, and lands in its own file
  * rather than on screen. */
 void test_todo_a_list_off_screen_is_fetched_into_its_own_cache(void) {

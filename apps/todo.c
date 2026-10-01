@@ -832,6 +832,13 @@ static void sync_tick(void) {
           : n < 0 ? "cannot reach the server" : "no task lists on this account");
       logf("lists failed (%d)", n);
       T.stage = SYNC_IDLE;
+      /* Without these the open-time sweep counted as never tried and began
+       * again the next tick: twice a second, a log line on the card each
+       * time (2026-10-01). A refused login is not fixed by asking again --
+       * that is this open's sweep, and `s` asks for another; anything else
+       * is tried again after RETRY_MS. */
+      if (n == -401 || n == -403) T.synced_once = 1;
+      T.next_auto = api->ticks_ms() + RETRY_MS;
       return;
     }
     logf("%d list%s", T.nlists, T.nlists == 1 ? "" : "s");
