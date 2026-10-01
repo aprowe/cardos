@@ -54,7 +54,9 @@ static void topen(void) {
 static const char STATUS[] =
   "running\t99\t1790874000\tWriting\tCardOS\n"
   "recent\t10\tWriting\tCardOS\n"
-  "recent\t\tEmail\t\n";
+  "recent\t\tEmail\t\n"
+  "project\t10\tCardOS\n"
+  "project\t11\tHome\n";
 
 void test_toggl_reads_the_status_lines(void) {
   topen();
@@ -63,9 +65,12 @@ void test_toggl_reads_the_status_lines(void) {
   CHECK_EQ(G.running, 1);
   CHECK_EQ((long)G.start, 1790874000L);
   CHECK(!strcmp(G.desc, "Writing") && !strcmp(G.proj, "CardOS"));
-  CHECK_EQ(G.nrec, 2);
-  CHECK(!strcmp(G.rec[0].proj_id, "10"));
-  CHECK(!strcmp(G.rec[1].desc, "Email") && !G.rec[1].proj_id[0] && !G.rec[1].proj[0]);
+  /* Projects first, then what was done lately. */
+  CHECK_EQ(G.nrec, 4);
+  CHECK(G.rec[0].kind == 'p' && !strcmp(G.rec[0].proj, "CardOS") && !G.rec[0].desc[0]);
+  CHECK(G.rec[1].kind == 'p' && !strcmp(G.rec[1].proj_id, "11"));
+  CHECK(G.rec[2].kind == 'r' && !strcmp(G.rec[2].proj_id, "10"));
+  CHECK(!strcmp(G.rec[3].desc, "Email") && !G.rec[3].proj_id[0] && !G.rec[3].proj[0]);
   snprintf(G.reply, sizeof G.reply, "idle\n");
   absorb_status();
   CHECK_EQ(G.running, 0);
@@ -88,6 +93,34 @@ void test_toggl_start_brings_a_recent_entrys_project(void) {
   app_command(0, ACT_START, 1, argv, out, sizeof out);
   CHECK(strstr(s_url, "/toggl/start") != NULL);
   CHECK(!strcmp(s_body, "description=writ\nproject=10"));
+}
+
+/* A project with no description, found by the start of its name. */
+void test_toggl_project_starts_with_no_description(void) {
+  const char *argv[1] = { "ho" };
+  char out[128];
+  topen();
+  s_reply = STATUS;
+  app_command(0, ACT_PROJECT, 1, argv, out, sizeof out);
+  CHECK(strstr(s_url, "/toggl/start") != NULL);
+  CHECK(!strcmp(s_body, "description=\nproject=11"));
+  argv[0] = "nothing like it";
+  s_reply = STATUS;
+  CHECK_EQ(app_command(0, ACT_PROJECT, 1, argv, out, sizeof out), -1);
+  CHECK(!strcmp(out, "no project called nothing like it"));
+}
+
+void test_toggl_describe_names_the_running_entry(void) {
+  const char *argv[1] = { "Gutters" };
+  char out[128];
+  topen();
+  s_reply = "running\t99\t1790874000\tGutters\tHome\n";
+  CHECK_EQ(app_command(0, ACT_DESCRIBE, 1, argv, out, sizeof out), 0);
+  CHECK(strstr(s_url, "/toggl/describe") != NULL);
+  CHECK(!strcmp(s_body, "description=Gutters"));
+  CHECK(!strcmp(out, "Home: Gutters"));
+  s_reply = "idle\n";
+  CHECK_EQ(app_command(0, ACT_DESCRIBE, 1, argv, out, sizeof out), -1);
 }
 
 /* Local midnight to local midnight, sent in UTC: the zone is UTC-7, so the

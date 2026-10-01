@@ -9,9 +9,12 @@ speaks to this server.
                             running <tab> id <tab> start <tab> description <tab> project
                           or "idle", then up to RECENT lines
                             recent <tab> project id <tab> description <tab> project
+                          then every active project, by name:
+                            project <tab> id <tab> name
                           start is UTC epoch seconds; the device counts from it
     POST /toggl/start     body: description=..\\nproject=ID   -> a "running" line
                           (whatever was running is stopped first)
+    POST /toggl/describe  body: description=..  -> the running line, or "idle"
     POST /toggl/stop      -> stopped <tab> seconds <tab> description, or "idle"
     GET  /toggl/today?from=RFC3339&to=RFC3339
                           -> start <tab> seconds <tab> description <tab> project,
@@ -41,6 +44,7 @@ from . import dash
 
 API = "https://api.track.toggl.com/api/v9"
 RECENT = 10
+PROJECTS_MAX = 20
 PROJECTS_FOR = 600
 ENTRIES_FOR = 60
 
@@ -210,7 +214,22 @@ def status_text():
         out += "recent\t%s\t%s\t%s\n" % (key[1] or "", key[0], clean(names.get(key[1], "")))
         if len(seen) >= RECENT:
             break
+    # Every active project, to start one with no description and add it
+    # later -- which is how a timer is usually started in a hurry.
+    for pid, name in sorted(names.items(), key=lambda kv: kv[1].lower())[:PROJECTS_MAX]:
+        out += "project\t%s\t%s\n" % (pid, clean(name))
     return out
+
+
+def describe(description):
+    """Give the running entry a description; None when nothing runs."""
+    cur = call("GET", "/me/time_entries/current")
+    if not cur:
+        return None
+    e = call("PUT", "/workspaces/%s/time_entries/%s" % (cur["workspace_id"], cur["id"]),
+             {"description": description})
+    drop("current", "recent")
+    return running_line(e, projects())
 
 
 def stop_running():
@@ -295,6 +314,13 @@ def post_stop(h, args):
 
 
 @_route
+def post_describe(h, args):
+    """describe the running Toggl entry"""
+    f = _fields(h.body(1024))
+    return describe(f.get("description", "")) or "idle\n"
+
+
+@_route
 def get_today(h, args):
     """Toggl entries between from and to"""
     frm, to = (args.get("from") or [""])[0], (args.get("to") or [""])[0]
@@ -307,5 +333,6 @@ ROUTES = [
     ("GET", "/toggl/status", get_status),
     ("POST", "/toggl/start", post_start),
     ("POST", "/toggl/stop", post_stop),
+    ("POST", "/toggl/describe", post_describe),
     ("GET", "/toggl/today", get_today),
 ]

@@ -63,6 +63,9 @@ class FakeToggl:
             e, self.running = dict(self.running), None
             e["duration"] = 120
             return 200, e
+        if method == "PUT" and rel == "/workspaces/5/time_entries/99":
+            self.running = dict(self.running, **body)
+            return 200, self.running
         if method == "POST" and rel == "/workspaces/5/time_entries":
             self.running = dict(body, id=99, start=T0, workspace_id=5)
             return 200, self.running
@@ -101,7 +104,9 @@ class TogglTest(unittest.TestCase):
         self.assertEqual(s, 200)
         self.assertEqual(text, "idle\n"
                                "recent\t\tEmail\t\n"
-                               "recent\t10\tWriting\tCardOS\n")
+                               "recent\t10\tWriting\tCardOS\n"
+                               "project\t10\tCardOS\n"
+                               "project\t11\tHome\n")
 
     def test_start_stops_what_was_running_and_says_when_it_began(self):
         self.t.running = {"id": 7, "description": "Old", "project_id": None, "start": T0,
@@ -116,6 +121,21 @@ class TogglTest(unittest.TestCase):
         self.assertEqual((sent["project_id"], sent["duration"]), (10, -1))
         s, text = self.req("GET", "/toggl/status")
         self.assertTrue(text.startswith("running\t99\t"))
+
+    def test_status_lists_the_projects_to_start_from(self):
+        s, text = self.req("GET", "/toggl/status")
+        self.assertTrue(text.endswith("project\t10\tCardOS\nproject\t11\tHome\n"), text)
+
+    def test_a_project_with_no_description_then_described_later(self):
+        s, text = self.req("POST", "/toggl/start", "description=\nproject=11")
+        self.assertEqual((s, text), (200, "running\t99\t%d\t\tHome\n" % T0_EPOCH))
+        s, text = self.req("POST", "/toggl/describe", "description=Gutters")
+        self.assertEqual((s, text), (200, "running\t99\t%d\tGutters\tHome\n" % T0_EPOCH))
+        put = [b for m, r, b in self.t.calls if m == "PUT"][0]
+        self.assertEqual(put, {"description": "Gutters"})
+        self.t.running = None
+        toggl.drop("current")
+        self.assertEqual(self.req("POST", "/toggl/describe", "description=x")[1], "idle\n")
 
     def test_stop(self):
         self.req("POST", "/toggl/start", "description=Email\nproject=")

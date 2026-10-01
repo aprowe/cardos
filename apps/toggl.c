@@ -6,13 +6,15 @@
  * the running timer itself from the start time it was given -- a request a
  * second would be the quota gone in a minute.
  *
- * The list is what to start from: a new entry, then the descriptions and
- * projects of the last two weeks, newest first, each once. Enter starts the
- * highlighted one (whatever was running stops), s stops, n types a new one,
- * r asks again.
+ * The list is what to start from: a new entry, then every project, then the
+ * descriptions and projects of the last two weeks, newest first, each once.
+ * Enter starts the highlighted one (whatever was running stops) -- a project
+ * starts with no description, which d adds while it runs. s stops, n types a
+ * new one, r asks again.
  *
  * Commands: `status`, `start TEXT` (a recent entry's project if the text
- * names one), `stop`, and `today` -- what was tracked today and the total,
+ * names one), `project NAME` (no description), `describe TEXT` (the running
+ * one), `stop`, and `today` -- what was tracked today and the total,
  * which is what Today's page wants from it.
  */
 
@@ -20,10 +22,10 @@
 
 static const CardApi *api;
 
-#define MAX_RECENT 10
+#define MAX_ROWS   30                   /* the server sends 20 projects, 10 recent */
 #define DESC_MAX   40
 #define PROJ_MAX   24
-#define REPLY_MAX  2400
+#define REPLY_MAX  3200                   /* 30 rows of status, about 2.2 KB */
 #define ROW_H      15
 #define TOP_H      18
 #define TIMER_H    34
@@ -37,9 +39,10 @@ static const CardApi *api;
 #define CLR_FOOT   CAPP_RGB(28, 32, 42)
 #define CLR_BAD    CAPP_RGB(240, 110, 96)
 
-enum { ST_IDLE = 0, ST_STATUS, ST_START, ST_STOP };
+enum { ST_IDLE = 0, ST_STATUS, ST_START, ST_STOP, ST_DESCRIBE };
 
 typedef struct {
+  char kind;                      /* 'p' a project, 'r' a recent entry */
   char proj_id[12];
   char desc[DESC_MAX];
   char proj[PROJ_MAX];
@@ -51,7 +54,7 @@ static struct {
   char     desc[DESC_MAX];
   char     proj[PROJ_MAX];
 
-  Recent   rec[MAX_RECENT];
+  Recent   rec[MAX_ROWS];
   int      nrec;
   int      sel;                   /* 0 is "new entry", then rec[sel - 1] */
 
@@ -60,7 +63,7 @@ static struct {
   char     status[48];
   uint32_t shown_sec;             /* the second the timer last painted */
 
-  int      typing;
+  int      typing;                /* 1 a new entry, 2 describing the running one */
   char     draft[DESC_MAX];
   int      dlen;
 
@@ -119,20 +122,31 @@ static void absorb_running(const char *line) {
 }
 
 static void absorb_status(void) {
-  const char *p = G.reply;
+  const char *p;
+  int pass;
   G.running = 0;
   G.nrec = 0;
-  while (*p) {
-    if (starts(p, "running\t")) absorb_running(p);
-    else if (starts(p, "recent\t") && G.nrec < MAX_RECENT) {
-      Recent *r = &G.rec[G.nrec++];
-      field(p, 1, r->proj_id, sizeof r->proj_id);
-      field(p, 2, r->desc, DESC_MAX);
-      field(p, 3, r->proj, PROJ_MAX);
+  /* Projects first -- starting one with no description is the quick way --
+   * then what was done lately. */
+  for (pass = 0; pass < 2; pass++)
+    for (p = G.reply; *p; ) {
+      if (pass == 0 && starts(p, "running\t")) absorb_running(p);
+      else if (G.nrec < MAX_ROWS &&
+               ((pass == 0 && starts(p, "project\t")) || (pass == 1 && starts(p, "recent\t")))) {
+        Recent *r = &G.rec[G.nrec++];
+        r->kind = pass == 0 ? 'p' : 'r';
+        field(p, 1, r->proj_id, sizeof r->proj_id);
+        if (pass == 0) {
+          r->desc[0] = 0;
+          field(p, 2, r->proj, PROJ_MAX);
+        } else {
+          field(p, 2, r->desc, DESC_MAX);
+          field(p, 3, r->proj, PROJ_MAX);
+        }
+      }
+      while (*p && *p != '\n') p++;
+      if (*p) p++;
     }
-    while (*p && *p != '\n') p++;
-    if (*p) p++;
-  }
   if (G.sel > G.nrec) G.sel = G.nrec;
 }
 
@@ -162,7 +176,8 @@ static int ask(const char *method, const char *rel, const char *body, int stage)
   G.stage = stage;
   G.bad = 0;
   api->fmt(G.status, sizeof G.status, "%s", stage == ST_STATUS ? "asking..." :
-           stage == ST_START ? "starting..." : "stopping...");
+           stage == ST_START ? "starting..." :
+           stage == ST_DESCRIBE ? "saving..." : "stopping...");
   return 0;
 }
 
@@ -171,6 +186,11 @@ static void refresh(void) { ask("GET", "/toggl/status", 0, ST_STATUS); }
 static void start_entry(const char *desc, const char *proj_id) {
   api->fmt(G.body, sizeof G.body, "description=%s\nproject=%s", desc, proj_id);
   ask("POST", "/toggl/start", G.body, ST_START);
+}
+
+static void describe_entry(const char *desc) {
+  api->fmt(G.body, sizeof G.body, "description=%s", desc);
+  ask("POST", "/toggl/describe", G.body, ST_DESCRIBE);   /* answers with the running line */
 }
 
 static void stop_entry(void) {
@@ -195,7 +215,8 @@ static int poll(void) {
   } else {
     /* A start answers with its running line, a stop with what stopped;
      * either way the list may have changed, so ask again. */
-    if (G.stage == ST_START && starts(G.reply, "running\t")) absorb_running(G.reply);
+    if ((G.stage == ST_START || G.stage == ST_DESCRIBE) && starts(G.reply, "running\t"))
+      absorb_running(G.reply);
     if (G.stage == ST_STOP) G.running = 0;
     G.stage = ST_IDLE;
     refresh();
@@ -241,10 +262,16 @@ static void paint_row(int i, int y) {
   char line[80];
   api->fill(rect(c.x, y, c.w, ROW_H), bg);
   if (i == 0) {
-    if (G.typing) api->fmt(line, sizeof line, "new: %s_", G.draft);
+    if (G.typing == 1) api->fmt(line, sizeof line, "new: %s_", G.draft);
     else api->fmt(line, sizeof line, "+ new entry");
     draw(G.f_ui, c.x + 8, y + (ROW_H - height(G.f_ui)) / 2, line,
-         G.typing ? CLR_TEXT : CLR_DIM, bg);
+         G.typing == 1 ? CLR_TEXT : CLR_DIM, bg);
+    return;
+  }
+  if (G.rec[i - 1].kind == 'p') {
+    Recent *r = &G.rec[i - 1];
+    api->fill(rect(c.x + 8, y + ROW_H / 2 - 3, 6, 6), CLR_RUN);
+    draw(G.f_ui, c.x + 20, y + (ROW_H - height(G.f_ui)) / 2, r->proj, CLR_TEXT, bg);
     return;
   }
   {
@@ -274,11 +301,20 @@ static void app_paint(void *st, CRect c) {
   paint_timer();
   y = c.y + TOP_H + TIMER_H;
   api->fill(rect(c.x, y, c.w, ROW_H), CLR_BG);
-  if (G.running) {
+  if (G.typing == 2) {
     char line[72];
-    api->fmt(line, sizeof line, "%s%s%s", G.desc[0] ? G.desc : "(no description)",
-             G.proj[0] ? "  " : "", G.proj);
-    draw(G.f_uib, c.x + 8, y + (ROW_H - height(G.f_uib)) / 2, line, CLR_TEXT, CLR_BG);
+    api->fmt(line, sizeof line, "describe: %s_", G.draft);
+    draw(G.f_ui, c.x + 8, y + (ROW_H - height(G.f_ui)) / 2, line, CLR_TEXT, CLR_BG);
+  } else if (G.running) {
+    char line[72];
+    int x = c.x + 8;
+    if (G.proj[0]) {
+      draw(G.f_uib, x, y + (ROW_H - height(G.f_uib)) / 2, G.proj, CLR_TEXT, CLR_BG);
+      x += width(G.f_uib, G.proj) + 8;
+    }
+    api->fmt(line, sizeof line, "%s", G.desc[0] ? G.desc : "d adds a description");
+    draw(G.f_ui, x, y + (ROW_H - height(G.f_ui)) / 2, line,
+         G.desc[0] ? CLR_TEXT : CLR_DIM, CLR_BG);
   }
   y += ROW_H + 2;
   api->fill(rect(c.x, y - 2, c.w, 2), CLR_BG);
@@ -288,7 +324,10 @@ static void app_paint(void *st, CRect c) {
   if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
   api->fill(rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H), CLR_FOOT);
   api->text((int16_t)(c.x + 4), (int16_t)(c.y + c.h - FOOT_H + 2),
-            G.typing ? "enter start  esc cancel" : "enter start  s stop  n new  r refresh",
+            G.typing == 1 ? "enter start  esc cancel" :
+            G.typing == 2 ? "enter save  esc cancel" :
+            G.running ? "enter start  d describe  s stop  n new" :
+                        "enter start  n new  r refresh",
             CLR_DIM, CLR_FOOT);
 }
 
@@ -296,8 +335,10 @@ static void app_paint(void *st, CRect c) {
 
 static int key_typing(uint8_t k) {
   if (k == CAPP_KEY_ENTER) {
+    int was = G.typing;
     G.typing = 0;
-    if (G.dlen) start_entry(G.draft, "");
+    if (was == 2) describe_entry(G.draft);          /* empty clears it */
+    else if (G.dlen) start_entry(G.draft, "");
     return 1;
   }
   if (k == CAPP_KEY_ESC) { G.typing = 0; return 1; }
@@ -328,13 +369,19 @@ static int app_key(void *st, uint8_t k) {
     else start_entry(G.rec[G.sel - 1].desc, G.rec[G.sel - 1].proj_id);
     return 1;
   case 'n': case 'N': begin_typing(); return 1;
+  case 'd': case 'D':
+    if (!G.running) { api->fmt(G.status, sizeof G.status, "nothing is running"); return 1; }
+    G.typing = 2;
+    api->fmt(G.draft, sizeof G.draft, "%s", G.desc);   /* to change, not retype */
+    G.dlen = (int)api->str_len(G.draft);
+    return 1;
   case 's': case 'S': case ' ': stop_entry(); return 1;
   case 'r': case 'R': refresh(); return 1;
   default: return 0;
   }
 }
 
-static int app_wants_text(void *st) { (void)st; return G.typing; }
+static int app_wants_text(void *st) { (void)st; return G.typing != 0; }
 
 static int app_tick(void *st, uint32_t now_ms) {
   int changed;
@@ -351,10 +398,17 @@ static int app_tick(void *st, uint32_t now_ms) {
 
 /* ---- commands -------------------------------------------------------------------------- */
 
-enum { ACT_STATUS = 1, ACT_START, ACT_STOP, ACT_TODAY, ACT_TOMORROW };
+enum { ACT_STATUS = 1, ACT_START, ACT_STOP, ACT_TODAY, ACT_TOMORROW, ACT_PROJECT, ACT_DESCRIBE };
 
 static const CappParam P_START[] = {
   { "what", CAPP_ARG_TEXT, "the description; a recent entry's project comes with it" },
+};
+
+static const CappParam P_PROJECT[] = {
+  { "project", CAPP_ARG_TEXT, "the project, or the start of its name" },
+};
+static const CappParam P_DESCRIBE[] = {
+  { "what", CAPP_ARG_TEXT, "the running entry's description" },
 };
 
 static const CappAction ACTIONS[] = {
@@ -364,6 +418,11 @@ static const CappAction ACTIONS[] = {
     P_START, 1, CAPP_CMD_YES | CAPP_CMD_NET },
   { "stop",   "Stop",   0, 0, ACT_STOP, "stop the running Toggl timer", 0, 0,
     CAPP_CMD_YES | CAPP_CMD_NET },
+  { "project", "Start project", 0, 0, ACT_PROJECT,
+    "start a timer for a project, with no description yet", P_PROJECT, 1,
+    CAPP_CMD_YES | CAPP_CMD_NET },
+  { "describe", "Describe", 0, 0, ACT_DESCRIBE, "give the running Toggl entry a description",
+    P_DESCRIBE, 1, CAPP_CMD_YES | CAPP_CMD_NET },
   { "today",  "Today",  0, 0, ACT_TODAY, "what was tracked today, and the total", 0, 0,
     CAPP_CMD_YES | CAPP_CMD_NET },
   { "tomorrow", "Tomorrow", 0, 0, ACT_TOMORROW, "nothing yet: for Today's tomorrow page", 0, 0,
@@ -464,10 +523,22 @@ static int cmd_today(char *out, size_t n) {
 static const char *project_for(const char *what) {
   int i, k;
   for (i = 0; i < G.nrec; i++) {
+    if (G.rec[i].kind != 'r') continue;
     for (k = 0; what[k] && lower(what[k]) == lower(G.rec[i].desc[k]); k++) {}
     if (!what[k] && k > 0) return G.rec[i].proj_id;
   }
   return "";
+}
+
+/* The project whose name starts with `name`, ignoring case; -1 if none. */
+static int find_project(const char *name) {
+  int i, k;
+  for (i = 0; i < G.nrec; i++) {
+    if (G.rec[i].kind != 'p') continue;
+    for (k = 0; name[k] && lower(name[k]) == lower(G.rec[i].proj[k]); k++) {}
+    if (!name[k] && k > 0) return i;
+  }
+  return -1;
 }
 
 static int app_command(void *st, int action, int argc, const char *const *argv,
@@ -505,6 +576,22 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
       api->fmt(out, n, "stopped %s after %s", desc[0] ? desc : "(no description)", t);
     }
     return 0;
+  case ACT_PROJECT:
+    if ((r = fetch("GET", "/toggl/status", 0)) < 0) return failed(r, out, n);
+    absorb_status();
+    if ((r = find_project(argv[0])) < 0) { api->fmt(out, n, "no project called %s", argv[0]); return -1; }
+    api->fmt(G.body, sizeof G.body, "description=\nproject=%s", G.rec[r].proj_id);
+    if ((r = fetch("POST", "/toggl/start", G.body)) < 0) return failed(r, out, n);
+    absorb_running(G.reply);
+    api->fmt(out, n, "started %s", G.proj);
+    return 0;
+  case ACT_DESCRIBE:
+    api->fmt(G.body, sizeof G.body, "description=%s", argv[0]);
+    if ((r = fetch("POST", "/toggl/describe", G.body)) < 0) return failed(r, out, n);
+    if (starts(G.reply, "idle")) { api->fmt(out, n, "nothing is running"); return -1; }
+    absorb_running(G.reply);
+    api->fmt(out, n, "%s%s%s", G.proj, G.proj[0] ? ": " : "", G.desc);
+    return 0;
   case ACT_TODAY:
     return cmd_today(out, n);
   case ACT_TOMORROW:
@@ -526,9 +613,10 @@ const CappInfo capp_info = {
     0x21, 0x84, 0x41, 0x82, 0x41, 0x82, 0x81, 0x81,
     0x81, 0xF1, 0x80, 0x01, 0x40, 0x02, 0x40, 0x02,
     0x20, 0x04, 0x18, 0x18, 0x07, 0xE0, 0x00, 0x00 },
-  "enter\tstart the highlighted entry\n"
+  "enter\tstart the highlighted project or entry\n"
   "s\tstop the running timer\n"
   "n\ta new entry: type its description\n"
+  "d\tdescribe the running entry\n"
   "r\task Toggl again\n"
   "up/down\tchoose\n"
   "\n"

@@ -630,6 +630,8 @@ void test_todo_held_arrow_moves_but_held_space_does_not_toggle(void);
 void test_toggl_reads_the_status_lines(void);
 void test_toggl_status_says_what_and_how_long(void);
 void test_toggl_start_brings_a_recent_entrys_project(void);
+void test_toggl_project_starts_with_no_description(void);
+void test_toggl_describe_names_the_running_entry(void);
 void test_toggl_today_asks_for_the_local_day_and_reads_local_times(void);
 void test_toggl_dates_are_rfc3339(void);
 void test_toggl_a_refusal_is_said_in_the_servers_words(void);
@@ -1363,6 +1365,8 @@ int main(void) {
   RUN(test_toggl_reads_the_status_lines);
   RUN(test_toggl_status_says_what_and_how_long);
   RUN(test_toggl_start_brings_a_recent_entrys_project);
+  RUN(test_toggl_project_starts_with_no_description);
+  RUN(test_toggl_describe_names_the_running_entry);
   RUN(test_toggl_today_asks_for_the_local_day_and_reads_local_times);
   RUN(test_toggl_dates_are_rfc3339);
   RUN(test_toggl_a_refusal_is_said_in_the_servers_words);
