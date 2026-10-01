@@ -55,6 +55,9 @@ class FakeToggl:
         if rel == "/me/time_entries/current":
             return 200, self.running
         if rel.startswith("/me/time_entries?"):
+            # The real one refuses either date alone (2026-10-01).
+            if "start_date=" not in rel or "end_date=" not in rel:
+                return 400, "start_date and end_date are both required"
             return 200, list(self.entries) + ([self.running] if self.running else [])
         if method == "PATCH" and rel.endswith("/stop"):
             e, self.running = dict(self.running), None

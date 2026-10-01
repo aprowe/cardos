@@ -182,8 +182,13 @@ def current():
 
 def recent_entries():
     def get():
-        since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 14 * 86400))
-        return call("GET", "/me/time_entries?start_date=" + urllib.parse.quote(since)) or []
+        # Both dates or neither: Toggl refuses start_date alone. The end is a
+        # day ahead so a running entry is never cut off by the clock's edge.
+        fmt = "%Y-%m-%dT%H:%M:%SZ"
+        since = time.strftime(fmt, time.gmtime(time.time() - 14 * 86400))
+        until = time.strftime(fmt, time.gmtime(time.time() + 86400))
+        return call("GET", "/me/time_entries?start_date=%s&end_date=%s"
+                    % (urllib.parse.quote(since), urllib.parse.quote(until))) or []
     return cached("recent", ENTRIES_FOR, get)
 
 
