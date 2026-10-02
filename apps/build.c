@@ -87,6 +87,7 @@ static struct {
 
   CRect at;                       /* where we last painted */
   int   have_at;
+  int   marked;                   /* something was marked since tick began */
 } C;
 
 static CRect rect(int x, int y, int w, int h) {
@@ -101,9 +102,9 @@ static CRect rect(int x, int y, int w, int h) {
  * flicker. These were three flags and an expect_paint guess; api->damage
  * says it outright, as apps/claude.c does. Before the first paint there is
  * nowhere to mark, and the shell paints everything anyway. */
-static void mark_bar(void) { if (C.have_at) api->damage(rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
-static void mark_log(void) { if (C.have_at) api->damage(rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
-static void mark_in(void)  { if (C.have_at) api->damage(rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
+static void mark_bar(void) { C.marked = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
+static void mark_log(void) { C.marked = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
+static void mark_in(void)  { C.marked = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
 
 /* ---- the log -------------------------------------------------------------- */
 
@@ -259,7 +260,6 @@ static void poll_now(void) {
   char url[160];
   int n;
 
-  mark_bar();                     /* the dots, the time, or an error */
   api->fmt(url, sizeof url, "%s/chat?id=%d&from=%d", C.base, C.job, C.log_seen);
   n = api->http("GET", url, (const char *)0, (const char *)0,
                 C.token[0] ? C.token : (const char *)0,
@@ -353,49 +353,102 @@ static uint16_t colour_of(int who) {
        : who == WHO_ERR ? CLR_ERR : CLR_DIM;
 }
 
-static void paint_bar(CRect c) {
-  char bar[64];
-  api->fill(rect(c.x, c.y, c.w, BAR_H), CLR_BAR);
+static void fill_if(int x, int y, int w, int h, uint16_t c) {
+  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), c);
+}
+
+/* `s` padded with spaces to `cols` characters, so a line writes over the
+ * one it replaces instead of the row being cleared first: there is no
+ * framebuffer, and a fill followed by text is a blink on the panel. */
+static void text_cols(int x, int y, const char *s, int cols, uint16_t fg, uint16_t bg) {
+  char b[64];
+  int n = 0;
+  if (cols > (int)sizeof b - 1) cols = (int)sizeof b - 1;
+  while (s[n] && n < (int)sizeof b - 1) { b[n] = s[n]; n++; }
+  while (n < cols) b[n++] = ' ';
+  b[n] = 0;
+  api->text((short)x, (short)y, b, fg, bg);
+}
+
+/* What the bar says, worked out apart from drawing it so a tick can tell
+ * whether a poll changed it. */
+static void bar_text(char *bar, size_t n) {
   if (C.job && C.nqueued)
-    api->fmt(bar, sizeof bar, "Build  %.24s +%d",
+    api->fmt(bar, n, "Build  %.24s +%d",
              C.progress[0] ? C.progress : "thinking", C.nqueued);
   else if (C.job)
-    api->fmt(bar, sizeof bar, "Build  %s%s",
+    api->fmt(bar, n, "Build  %s%s",
              C.progress[0] ? C.progress : "thinking",
              C.dots == 0 ? "" : C.dots == 1 ? "." : C.dots == 2 ? ".." : "...");
   else if (C.status[0])
-    api->fmt(bar, sizeof bar, "Build  %s", C.status);
+    api->fmt(bar, n, "Build  %s", C.status);
   else
-    api->fmt(bar, sizeof bar, "Build  %s", C.base);
-  api->text((short)(c.x + 3), (short)(c.y + 1), bar, CLR_FG, CLR_BAR);
+    api->fmt(bar, n, "Build  %s", C.base);
+}
+
+/* The bar is written over itself, padded to its width, with only the pixel
+ * rows above and below the text and its margins filled. It used to be
+ * filled and then written, and the dots move every poll. */
+static void paint_bar(CRect c) {
+  char bar[64];
+  int cols = (c.w - 3 + 5) / 6;          /* the last, cut by the edge, still padded */
+  if (cols > 63) cols = 63;
+  bar_text(bar, sizeof bar);
+  fill_if(c.x, c.y, c.w, 1, CLR_BAR);
+  fill_if(c.x, c.y + 9, c.w, BAR_H - 9, CLR_BAR);
+  fill_if(c.x, c.y + 1, 3, 8, CLR_BAR);
+  fill_if(c.x + 3 + cols * 6, c.y + 1, c.w - 3 - cols * 6, 8, CLR_BAR);
+  text_cols(c.x + 3, c.y + 1, bar, cols, CLR_FG, CLR_BAR);
 }
 
 /* The newest line sits just above the input box; scroll moves the window
- * back through the log. */
-static void paint_log(CRect c) {
+ * back through the log. Each line is padded to the width and written over
+ * the one before it; only the margins, the pixel row under each line and
+ * the rows below the last are filled -- clearing the whole log first
+ * blinked it on every answer and every log line a poll brought. */
+static void paint_log(CRect c, CRect clip) {
   int rows = (c.h - BAR_H - IN_H) / ROW_H;
-  int first, r;
+  int top = c.y + BAR_H, bottom = c.y + c.h - IN_H;
+  int cols = (c.w - 2 + 5) / 6, right;   /* to the edge: a 40-column line reaches it */
+  int first, r, y = top;
 
-  api->fill(rect(c.x, c.y + BAR_H, c.w, c.h - BAR_H - IN_H), CLR_BG);
+  if (cols > 63) cols = 63;
+  right = c.x + 2 + cols * 6;
   first = C.nlines - rows - C.scroll;
   if (first < 0) first = 0;
+  fill_if(c.x, top, 2, bottom - top, CLR_BG);
+  fill_if(right, top, c.x + c.w - right, bottom - top, CLR_BG);
   for (r = 0; r < rows; r++) {
     int i = first + r;
     if (i >= C.nlines) break;
-    api->text((short)(c.x + 2), (short)(c.y + BAR_H + r * ROW_H),
-              C.line[i], colour_of(C.who[i]), CLR_BG);
+    y = top + r * ROW_H;
+    if (y < clip.y + clip.h && y + ROW_H > clip.y) {
+      text_cols(c.x + 2, y, C.line[i], cols, colour_of(C.who[i]), CLR_BG);
+      fill_if(c.x + 2, y + 8, cols * 6, ROW_H - 8, CLR_BG);
+    }
+    y += ROW_H;
   }
+  fill_if(c.x + 2, y, cols * 6, bottom - y, CLR_BG);
 }
 
-/* The input line, showing the tail of what has been typed. */
+/* The input line, showing the tail of what has been typed: the prompt, the
+ * text, the cursor, then spaces to the end -- each drawn over the last, so
+ * a keystroke does not blank the line. */
 static void paint_input(CRect c) {
   int y = c.y + c.h - IN_H;
   int vis = (c.w - 12) / 6;
   int from = C.in_len > vis ? C.in_len - vis : 0;
-  api->fill(rect(c.x, y, c.w, IN_H), CLR_IN);
+  int n = C.in_len - from, cx = c.x + 10 + n * 6, end;
+  fill_if(c.x, y, c.w, 2, CLR_IN);
+  fill_if(c.x, y + 10, c.w, IN_H - 10, CLR_IN);
+  fill_if(c.x, y + 2, 2, 8, CLR_IN);
   api->text((short)(c.x + 2), (short)(y + 2), ">", CLR_DIM, CLR_IN);
+  fill_if(c.x + 8, y + 2, 2, 8, CLR_IN);
   api->text((short)(c.x + 10), (short)(y + 2), C.input + from, CLR_FG, CLR_IN);
-  api->fill(rect(c.x + 10 + (C.in_len - from) * 6, y + 2, 5, 8), CLR_FG);
+  api->fill(rect(cx, y + 2, 5, 8), CLR_FG);
+  text_cols(cx + 5, y + 2, "", vis - n, CLR_FG, CLR_IN);
+  end = cx + 5 + (vis > n ? vis - n : 0) * 6;
+  fill_if(end, y + 2, c.x + c.w - end, 8, CLR_IN);
 }
 
 /* Painted to the clip the shell hands back: our own marks come back as the
@@ -407,7 +460,7 @@ static void app_paint(void *st, CRect c) {
   C.at = c;
   C.have_at = 1;
   if (clip.y < c.y + BAR_H) paint_bar(c);
-  if (clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + BAR_H) paint_log(c);
+  if (clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + BAR_H) paint_log(c, clip);
   if (clip.y + clip.h > c.y + c.h - IN_H) paint_input(c);
 }
 
@@ -516,16 +569,28 @@ static int app_key(void *st, unsigned char k) {
   return 0;
 }
 
+/* A repaint only when something on screen changed. Every poll used to ask
+ * for one, though a "pending" with nothing new in it changes nothing -- and
+ * the bar was marked at the start of each poll whatever came back. Now the
+ * bar is marked when its words differ, and anything that pushed a line or
+ * marked otherwise says so through C.marked. */
 static int app_tick(void *st, uint32_t now) {
+  char before[64], after[64];
+  int i;
   (void)st;
 
-  if (C.sending) { send_now(); return 1; }
-  if (C.check_update) { check_update_now(); return 1; }
-  if (C.job && (int32_t)(now - C.next_poll) >= 0) {
-    poll_now();
-    return 1;
-  }
-  return 0;
+  if (!C.sending && !C.check_update &&
+      !(C.job && (int32_t)(now - C.next_poll) >= 0))
+    return 0;
+  bar_text(before, sizeof before);
+  C.marked = 0;
+  if (C.sending) send_now();
+  else if (C.check_update) check_update_now();
+  else poll_now();
+  bar_text(after, sizeof after);
+  for (i = 0; before[i] && before[i] == after[i]; i++) ;
+  if (before[i] != after[i]) mark_bar();
+  return C.marked;
 }
 
 /* A terminal is always taking text: the prompt is open before the first
