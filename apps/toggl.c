@@ -89,6 +89,9 @@ static struct {
   int      bad;                   /* the status line is an error */
   char     status[48];
   uint32_t shown_sec;             /* the second the timer last painted */
+  /* Where it was drawn, so the next second can mark only its own digits. */
+  int16_t  t_x, t_y, t_w, t_h, t_pre;   /* t_pre: width of "H:MM:" */
+  char     t_str[16];
   uint32_t elapsed0;              /* seconds run when the server answered */
   uint32_t got_ms;                /* our uptime then: the count goes on from it */
 
@@ -386,23 +389,56 @@ static CRect timer_rect(void) {
   return rect(c.x, c.y + TOP_H, c.w, TIMER_H);
 }
 
+/* The time, drawn over itself. It used to clear its strip and then draw:
+ * a second of blank clock each second, the whole clock blinking when only
+ * the seconds had changed. text_font paints its own background, so the
+ * digits are never cleared -- only the margins round them, which were
+ * background already. And app_tick marks only the seconds when only they
+ * changed, so the shell clips this paint to them. */
 static void paint_timer(void) {
   CRect r = timer_rect();
-  char t[16];
+  char t[16], pre[16];
   uint32_t secs = elapsed();
   int big = timer_screen() && G.f_big >= 0, f = big ? G.f_big : G.f_num;
-  api->fill(r, CLR_BG);
+  int x, y, w, h, k;
   if (!G.running) {
+    api->fill(r, CLR_BG);
     draw(G.f_ui, r.x + 8, r.y + (r.h - height(G.f_ui)) / 2, "not running", CLR_DIM, CLR_BG);
+    G.t_str[0] = 0;
     return;
   }
   hms(secs, t, sizeof t);
-  if (timer_screen())
-    draw(f, r.x + (r.w - width(f, t)) / 2, r.y + (r.h - height(f)) / 2, t,
-         proj_colour(G.colour), CLR_BG);
-  else
-    draw(f, r.x + 8, r.y + (r.h - height(f)) / 2, t, proj_colour(G.colour), CLR_BG);
+  w = width(f, t);
+  h = height(f);
+  x = timer_screen() ? r.x + (r.w - w) / 2 : r.x + 8;
+  y = r.y + (r.h - h) / 2;
+  if (x > r.x) api->fill(rect(r.x, r.y, x - r.x, r.h), CLR_BG);
+  if (x + w < r.x + r.w) api->fill(rect(x + w, r.y, r.x + r.w - x - w, r.h), CLR_BG);
+  if (y > r.y) api->fill(rect(x, r.y, w, y - r.y), CLR_BG);
+  if (y + h < r.y + r.h) api->fill(rect(x, y + h, w, r.y + r.h - y - h), CLR_BG);
+  draw(f, x, y, t, proj_colour(G.colour), CLR_BG);
   G.shown_sec = secs;
+  G.t_x = (int16_t)x; G.t_y = (int16_t)y; G.t_w = (int16_t)w; G.t_h = (int16_t)h;
+  api->fmt(G.t_str, sizeof G.t_str, "%s", t);
+  k = (int)api->str_len(t) - 2;              /* "H:MM:" is all but the last two */
+  api->mem_cpy(pre, t, (size_t)k);
+  pre[k] = 0;
+  G.t_pre = (int16_t)width(f, pre);
+}
+
+/* What changed since the timer was drawn: only its seconds, when the rest
+ * reads the same and nothing moved -- else the whole strip. */
+static CRect timer_damage(uint32_t secs) {
+  char t[16];
+  int n;
+  hms(secs, t, sizeof t);
+  n = (int)api->str_len(t);
+  if (G.t_str[0] && n == (int)api->str_len(G.t_str) && n > 2) {
+    int i;
+    for (i = 0; i < n - 2 && t[i] == G.t_str[i]; i++) ;
+    if (i == n - 2) return rect(G.t_x + G.t_pre, G.t_y, G.t_w - G.t_pre, G.t_h);
+  }
+  return timer_rect();
 }
 
 static void paint_row(int i, int y) {
@@ -512,8 +548,17 @@ static void paint_goals(void) {
 }
 
 static void app_paint(void *st, CRect c) {
+  CRect a = api->paint_area(), tr;
   (void)st;
   G.content = c;
+  /* A tick's repaint is the timer and nothing else: the rest of the screen
+   * is not cleared and drawn again under a clip that would hide it anyway. */
+  tr = timer_rect();
+  if (!G.goals && a.x >= tr.x && a.y >= tr.y && a.x + a.w <= tr.x + tr.w &&
+      a.y + a.h <= tr.y + tr.h) {
+    paint_timer();
+    return;
+  }
   paint_top();
   if (G.goals) paint_goals();
   else if (timer_screen()) paint_running();
@@ -603,7 +648,7 @@ static int app_tick(void *st, uint32_t now_ms) {
    * just its strip. Not under the targets, which draw no timer: there
    * shown_sec never caught up, so every tick asked for a repaint. */
   if (!changed && G.running && !G.goals && elapsed() != G.shown_sec) {
-    api->damage(timer_rect());
+    api->damage(timer_damage(elapsed()));
     return 1;
   }
   return changed;

@@ -27,6 +27,12 @@
 #define FOOT_OPT
 #endif
 
+static FOOT_OPT CRect rect_of(int x, int y, int w, int h) {
+  CRect r;
+  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)(w > 0 ? w : 0); r.h = (int16_t)h;
+  return r;
+}
+
 /* The bar across the bottom of `c`, with `keys` in it. */
 static FOOT_OPT void
 footer_paint(const CardApi *api, CRect c, const char *keys) {
@@ -35,7 +41,17 @@ footer_paint(const CardApi *api, CRect c, const char *keys) {
   r.y = (int16_t)(c.y + c.h - FOOT_H);
   r.w = c.w;
   r.h = FOOT_H;
-  api->fill(r, FOOT_BG);
+  /* Round the text, not under it: text paints its own 6x8 background, and
+   * filling the bar first and writing over it blinked the hints on every
+   * repaint that crossed the footer. */
+  {
+    int w = keys ? (int)api->str_len(keys) * 6 : 0;
+    if (c.x + 4 + w > c.x + c.w) w = c.w - 4;
+    api->fill(rect_of(r.x, r.y, r.w, 2), FOOT_BG);                       /* above */
+    api->fill(rect_of(r.x, r.y + 10, r.w, FOOT_H - 10), FOOT_BG);       /* below */
+    api->fill(rect_of(r.x, r.y + 2, 4, 8), FOOT_BG);                     /* left */
+    api->fill(rect_of(r.x + 4 + w, r.y + 2, r.w - 4 - w, 8), FOOT_BG);  /* right */
+  }
   if (keys) api->text((int16_t)(c.x + 4), (int16_t)(r.y + 2), keys, FOOT_FG, FOOT_BG);
 }
 
