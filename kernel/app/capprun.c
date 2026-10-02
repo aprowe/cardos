@@ -795,12 +795,21 @@ static int s_caps_ok;
 static int meet_needs(uint16_t flags) {
   int got = 0;
 
+  static uint32_t s_offline_at;    /* when an app start last found no network */
+  uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+
   if (!(flags & (CAPP_NEEDS_NET | CAPP_NEEDS_PROXY))) return 0;
 
+  /* Out of the house, opening Todo and then Calendar asked twice; a minute
+   * after finding nothing, the answer is still nothing, and the app opens
+   * on its cache at once. An app's own sync (net_connect) still looks. */
+  if (!wifi_is_connected() && s_offline_at && now - s_offline_at < 60000) return 0;
   if (wifi_is_connected() || wifi_connect_saved(20000) == 0) {
     got |= CAPP_CAP_NET;
+    s_offline_at = 0;
   } else {
     ESP_LOGW(TAG, "app needs the network: %s", wifi_status());
+    s_offline_at = now ? now : 1;
     return 0;                       /* no net, so certainly no proxy */
   }
 

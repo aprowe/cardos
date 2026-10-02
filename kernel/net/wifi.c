@@ -406,11 +406,6 @@ int wifi_connect_saved(int timeout_ms) {
   load_list(&w->l);
   total = w->l.n;
 
-  if (total == 1) {
-    rc = wifi_connect(w->l.net[0].ssid, w->l.net[0].pass, timeout_ms);
-    free(w);
-    return rc;
-  }
   if (total == 0) {
     free(w);
     if (connect_driver_config(timeout_ms) == 0) return 0;
@@ -425,6 +420,25 @@ int wifi_connect_saved(int timeout_ms) {
   nseen = wifi_scan(w->aps, WIFI_MAX_SCAN);
   for (i = 0; i < nseen; i++) { w->seen[i] = w->aps[i].ssid; w->rssi[i] = w->aps[i].rssi; }
   n = wifilist_order(&w->l, w->seen, w->rssi, nseen, w->order);
+  /* Only what the scan saw. Asked to, wifilist_order falls back to every
+   * saved network, for a hidden one -- and out of the house that was each
+   * of them in turn until the twenty seconds ran out, every time an app
+   * that wants the network was opened (2026-10-02). Two seconds of scan
+   * says nobody is home; a hidden network is joined by name instead
+   * (`wifi SSID PASS`). One saved network is scanned for too: it used to be
+   * tried blind, for the full timeout. */
+  {
+    int k, j, in_range = 0;
+    for (k = 0; k < total && !in_range; k++)
+      for (j = 0; j < nseen; j++)
+        if (!strcmp(w->seen[j], w->l.net[k].ssid)) { in_range = 1; break; }
+    if (!in_range) {
+      free(w);
+      snprintf(s_detail, sizeof s_detail, "no saved network in range");
+      s_state = WIFI_FAILED;
+      return -1;
+    }
+  }
   for (i = 0; i < n; i++) {
     int64_t left = until - esp_timer_get_time() / 1000;
     int share = (int)(left / (n - i));
