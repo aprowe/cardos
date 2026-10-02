@@ -57,6 +57,9 @@ static struct {
   int      beep_ready;          /* the wav file exists on the card */
   CRect    at;                  /* the app's rect, cached from paint for tick's damage() */
   int      have_at;
+  /* What the running face last drew, so a tick can mark only the seconds
+   * (and the sliver of bar that moved) instead of the whole clock. */
+  int      drawn_mm, drawn_fill, drawn_ok;
 } T;
 
 static CRect rect(int x, int y, int w, int h) {
@@ -319,26 +322,63 @@ static void draw_time(int cx, int y, int minutes, int seconds, uint16_t fg,
   draw_digit(x[3], y, seconds % 10, fg);
 }
 
-static void paint_set(CRect c) {
-  int h = dig_h(), cx = c.x + c.w / 2, y = c.y + c.h / 2 - h / 2 - 6;
-  int pad = 4, fx, fw;
+/* ---- the face, drawn without clearing it --------------------------------
+ *
+ * There is no framebuffer: a fill reaches the panel at once, so clearing
+ * the face and drawing the clock again showed a blank clock for a moment
+ * every second -- the digits blinked. text and text_font paint their own
+ * background, so nothing under them is ever cleared; only the margins round
+ * what is drawn are filled, and those were background already. */
 
+static void fill_if(int x, int y, int w, int h, uint16_t c) {
+  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), c);
+}
+
+/* `outer` less `inner`: the four margins round something about to be
+ * drawn over itself. `inner` lies inside `outer`. */
+static void fill_round(CRect o, CRect i, uint16_t c) {
+  fill_if(o.x, o.y, o.w, i.y - o.y, c);
+  fill_if(o.x, i.y + i.h, o.w, o.y + o.h - i.y - i.h, c);
+  fill_if(o.x, i.y, i.x - o.x, i.h, c);
+  fill_if(i.x + i.w, i.y, o.x + o.w - i.x - i.w, i.h, c);
+}
+
+/* A row of the highlight's padding from x0 to x1: blue across the selected
+ * field (fx..fx+fw, padded), background either side. */
+static void hl_strip(int x0, int x1, int y, int h, int fx, int fw, int pad) {
+  int a = fx - pad, b = fx + fw + pad;
+  if (a < x0) a = x0;
+  if (b > x1) b = x1;
+  fill_if(x0, y, a - x0, h, CLR_BG);
+  fill_if(a, y, b - a, h, CLR_FIELD);
+  fill_if(b, y, x1 - b, h, CLR_BG);
+}
+
+/* The digit band in the set state: the time with the selected field on
+ * blue, padded by `pad` all round. */
+static void paint_set_band(int cx, int y, int h, int pad) {
+  int bw = block_w(), x0 = cx - bw / 2, fx, fw;
   field_span(cx, T.field, &fx, &fw);
-  if (s_font >= 0) {
-    /* Time, then the highlight, then its field again on top: the colon's
-     * line fills its own background, and drawn after the highlight it ate
-     * the padding on that side, leaving the blue flush against the digit. */
-    char v[4];
-    draw_time(cx, y, T.set_min, T.set_sec, CLR_TEXT, CLR_BG, CLR_BG);
-    api->fill(rect(fx - pad, y - pad, fw + 2 * pad, h + 2 * pad), CLR_FIELD);
-    api->fmt(v, sizeof v, "%02d", T.field ? T.set_sec % 60 : T.set_min % 100);
-    api->text_font(s_font, (int16_t)fx, (int16_t)y, v, CLR_TEXT, CLR_FIELD);
-  } else {
+  if (s_font < 0) {
+    /* The segments draw only what is lit, so the block has to be cleared
+     * under them; this is the face for a card with no clock56. */
+    api->fill(rect(x0 - pad, y - pad, bw + 2 * pad, h + 2 * pad), CLR_BG);
     api->fill(rect(fx - pad, y - pad, fw + 2 * pad, h + 2 * pad), CLR_FIELD);
     draw_time(cx, y, T.set_min, T.set_sec, CLR_TEXT, CLR_BG, CLR_BG);
+    return;
   }
-
-  text_center(cx, y - 18, "set", CLR_DIM, CLR_BG);
+  /* Each field on its own colour, then the padding round them. The colon's
+   * line fills its own background, so the blue padding beside the colon is
+   * drawn after it -- four pixels that go background then blue on a key,
+   * where the old fill-then-redraw blinked the whole field. */
+  draw_time(cx, y, T.set_min, T.set_sec, CLR_TEXT,
+            T.field ? CLR_BG : CLR_FIELD, T.field ? CLR_FIELD : CLR_BG);
+  hl_strip(x0 - pad, x0 + bw + pad, y - pad, pad, fx, fw, pad);
+  hl_strip(x0 - pad, x0 + bw + pad, y + h, pad, fx, fw, pad);
+  fill_if(x0 - pad, y, pad, h, T.field ? CLR_BG : CLR_FIELD);
+  fill_if(x0 + bw, y, pad, h, T.field ? CLR_FIELD : CLR_BG);
+  if (T.field) fill_if(fx - pad, y, pad, h, CLR_FIELD);
+  else fill_if(fx + fw, y, pad, h, CLR_FIELD);
 }
 
 /* Green with time to spare, red as it runs out, yellow the midpoint between
@@ -358,43 +398,99 @@ static uint16_t bar_colour(uint32_t remain, uint32_t total) {
   return lerp_rgb(200, 45, 40,  230, 190, 40, (int)pct, 50);                     /* red -> yellow */
 }
 
-/* The track is always the full width, drawn first; the fill sits on top of it
- * and shrinks from the right as remain_ms counts down toward 0, out of
- * total_ms -- the duration when this run started, not remain_at_start, which
- * a pause and resume would otherwise reset to whatever was left. */
+/* The bar is the full block width: the colour from the left, shrinking from
+ * the right as remain_ms counts down toward 0, out of total_ms -- the
+ * duration when this run started, not remain_at_start, which a pause and
+ * resume would otherwise reset to whatever was left. The colour and the
+ * track left over are two fills side by side; filling the track and then
+ * the colour over it blinked the bar every second. */
 #define BAR_H    8
 #define BAR_GAP  6
+static int bar_fill_w(uint32_t remain) {
+  return T.total_ms ? (int)((uint32_t)block_w() * remain / T.total_ms) : 0;
+}
 static void draw_bar(int cx, int y) {
   int w = block_w(), x = cx - w / 2;
-  int fill_w = (int)((uint32_t)w * T.remain_ms / T.total_ms);
-  uint16_t colour = bar_colour(T.remain_ms, T.total_ms);
-
-  api->fill(rect(x, y, w, BAR_H), CLR_BAR_BG);
-  if (fill_w > 0) api->fill(rect(x, y, fill_w, BAR_H), colour);
+  int fill_w = bar_fill_w(T.remain_ms);
+  if (fill_w > w) fill_w = w;
+  if (fill_w > 0) api->fill(rect(x, y, fill_w, BAR_H), bar_colour(T.remain_ms, T.total_ms));
+  fill_if(x + fill_w, y, w - fill_w, BAR_H, CLR_BAR_BG);
+  T.drawn_fill = fill_w;
 }
 
 /* The digit block and the bar beneath it -- the only pixels a running
  * countdown changes once a second; the label above and the hint below stay
- * put between ticks. api->fill(c, CLR_BG) at the top of app_paint still runs
- * across the whole app rect, but the shell clips it to whatever tick last
- * damaged, so scoping that to just this saves the label and the hint from
- * being cleared and redrawn alongside the digits. Without it every tick
- * flashed the whole screen to CLR_BG first -- there is no framebuffer here,
- * writes go straight to the panel, so that flash was visible. */
+ * put between ticks. */
 static CRect time_bar_rect(void) {
   int cx = T.at.x + T.at.w / 2;
   int h  = dig_h(), y = T.at.y + T.at.h / 2 - h / 2 - 6;
   return rect(cx - block_w() / 2, y, block_w(), h + BAR_GAP + BAR_H);
 }
 
-static void paint_running(CRect c, const char *label, uint16_t colour) {
-  int mm, ss, h = dig_h(), cx = c.x + c.w / 2, y = c.y + c.h / 2 - h / 2 - 6;
-  int bar_y = y + h + BAR_GAP;
+/* What a running second changed: the seconds digits, and the sliver of bar
+ * between the old fill and the new -- or the whole block when the minutes
+ * turned over or the face is the segment one, which clears under itself. */
+static void damage_second(int mm) {
+  CRect r = time_bar_rect();
+  int nf;
+  if (s_font < 0 || !T.drawn_ok || mm != T.drawn_mm) { api->damage(r); return; }
+  {
+    int w2 = api->text_width(s_font, "00"), sx = r.x + w2 + api->text_width(s_font, ":");
+    api->damage(rect(sx, r.y, r.x + r.w - sx, dig_h()));
+  }
+  nf = bar_fill_w(T.remain_ms);
+  if (nf > r.w) nf = r.w;
+  if (nf != T.drawn_fill) {
+    int a = nf < T.drawn_fill ? nf : T.drawn_fill;
+    int b = nf < T.drawn_fill ? T.drawn_fill : nf;
+    api->damage(rect(r.x + a, r.y + dig_h() + BAR_GAP, b - a, BAR_H));
+  }
+}
 
-  remain_mmss(T.remain_ms, &mm, &ss);
-  draw_time(cx, y, mm, ss, CLR_TEXT, CLR_BG, CLR_BG);
-  text_center(cx, y - 18, label, colour, CLR_BG);
-  draw_bar(cx, bar_y);
+/* The face for the set, running and paused states: label, time, and the bar
+ * or the highlight, each drawn over itself, with the space between them
+ * filled. */
+static void paint_face(CRect c) {
+  int h = dig_h(), cx = c.x + c.w / 2, y = c.y + c.h / 2 - h / 2 - 6;
+  int bw = block_w(), x0 = cx - bw / 2, ly = y - 18, pad = 0, top, bot, lw;
+  const char *label = "set";
+  uint16_t lc = CLR_DIM;
+
+  if (T.state == ST_RUNNING) { label = "running"; lc = CLR_TEXT; }
+  else if (T.state == ST_PAUSED) { label = "paused"; lc = CLR_PAUSED; }
+  if (T.state == ST_SET) pad = 4;
+  top = y - pad;
+  bot = T.state == ST_SET ? y + h + pad : y + h + BAR_GAP + BAR_H;
+
+  /* Above the label, between it and the time, and below everything. */
+  fill_if(c.x, c.y, c.w, ly - c.y, CLR_BG);
+  fill_if(c.x, ly + 8, c.w, top - ly - 8, CLR_BG);
+  fill_if(c.x, bot, c.w, c.y + c.h - bot, CLR_BG);
+
+  /* The label: its row either side of the word, then the word. A longer
+   * word before ("running" after "set") is covered by the row's fill. */
+  lw = (int)api->str_len(label) * 6;
+  fill_round(rect(c.x, ly, c.w, 8), rect(cx - lw / 2, ly, lw, 8), CLR_BG);
+  api->text((int16_t)(cx - lw / 2), (int16_t)ly, label, lc, CLR_BG);
+
+  /* Either side of the block, the height of the band. */
+  fill_round(rect(c.x, top, c.w, bot - top), rect(x0 - pad, top, bw + 2 * pad, bot - top), CLR_BG);
+
+  if (T.state == ST_SET) {
+    paint_set_band(cx, y, h, pad);
+    T.drawn_ok = 0;
+    return;
+  }
+  {
+    int mm, ss;
+    remain_mmss(T.remain_ms, &mm, &ss);
+    if (s_font < 0) api->fill(rect(x0, y, bw, h), CLR_BG);   /* segments: see paint_set_band */
+    draw_time(cx, y, mm, ss, CLR_TEXT, CLR_BG, CLR_BG);
+    fill_if(x0, y + h, bw, BAR_GAP, CLR_BG);
+    draw_bar(cx, y + h + BAR_GAP);
+    T.drawn_mm = mm;
+    T.drawn_ok = 1;
+  }
 }
 
 static void paint_done(CRect c) {
@@ -435,13 +531,8 @@ static void app_paint(void *st, CRect full) {
   if (T.state != ST_DONE) face.h = (int16_t)(c.h - FOOT_H);
   T.at = face;
   T.have_at = 1;
-  if (T.state != ST_DONE) api->fill(face, CLR_BG);
-  switch (T.state) {
-  case ST_SET:     paint_set(face); break;
-  case ST_RUNNING: paint_running(face, "running", CLR_TEXT); break;
-  case ST_PAUSED:  paint_running(face, "paused", CLR_PAUSED); break;
-  case ST_DONE:    paint_done(face); break;
-  }
+  if (T.state == ST_DONE) { T.drawn_ok = 0; paint_done(face); }
+  else paint_face(face);
   if (T.state != ST_DONE) footer_paint(api, c, hint());
   toolbar_paint_menu(full);
 }
@@ -533,8 +624,10 @@ static int app_tick(void *st, uint32_t now_ms) {
     uint32_t remain = elapsed >= T.remain_at_start ? 0 : T.remain_at_start - elapsed;
     if (!remain) { go_off(now_ms); return 1; }
     if ((remain + 999) / 1000 != (T.remain_ms + 999) / 1000) {
+      int mm, ss;
       T.remain_ms = remain;
-      if (T.have_at) api->damage(time_bar_rect());
+      remain_mmss(remain, &mm, &ss);
+      if (T.have_at) damage_second(mm);
       return 1;
     }
     T.remain_ms = remain;
