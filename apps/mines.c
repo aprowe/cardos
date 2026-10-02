@@ -126,8 +126,18 @@ static void mark(int x, int y) {
   if (S.have_at && x >= 0 && y >= 0 && x < W && y < H) api->damage(cell_rect(x, y));
 }
 
-static void mark_head(void) {
-  if (S.have_at) api->damage(rect(S.at.x + S.offx, S.at.y + S.offy, BOARD_W, HEAD));
+/* The two counters, each in its sunken box, content-relative to the board's
+ * corner. A second that ticks marks only the timer's box: marking the whole
+ * strip repainted the face and the mine counter every second for nothing. */
+static CRect mines_box(int ox, int oy) { return rect(ox + 1, oy + 2, 26, 12); }
+static CRect timer_box(int ox, int oy) { return rect(ox + BOARD_W - 27, oy + 2, 26, 12); }
+
+static void mark_timer(void) {
+  if (S.have_at) api->damage(timer_box(S.at.x + S.offx, S.at.y + S.offy));
+}
+
+static void mark_mines(void) {
+  if (S.have_at) api->damage(mines_box(S.at.x + S.offx, S.at.y + S.offy));
 }
 
 static void mark_all(void) { if (S.have_at) api->damage(S.at); }
@@ -172,7 +182,7 @@ static void toggle_flag(int x, int y) {
   S.flag[y][x] ^= 1;
   S.flags += S.flag[y][x] ? 1 : -1;
   mark(x, y);
-  mark_head();                /* the mine counter went with it */
+  mark_mines();               /* the mine counter went with it */
 }
 
 /* ------------------------------------------------------------ drawing ---- */
@@ -185,14 +195,6 @@ static void raised(CRect r) {
   api->fill(rect(r.x, r.y, 1, r.h), CLR_LIGHT);
   api->fill(rect(r.x, r.y + r.h - 1, r.w, 1), CLR_DARK);
   api->fill(rect(r.x + r.w - 1, r.y, 1, r.h), CLR_DARK);
-}
-
-static void sunken(CRect r) {
-  api->fill(r, CLR_FACE);
-  api->fill(rect(r.x, r.y, r.w, 1), CLR_DARK);
-  api->fill(rect(r.x, r.y, 1, r.h), CLR_DARK);
-  api->fill(rect(r.x, r.y + r.h - 1, r.w, 1), CLR_LIGHT);
-  api->fill(rect(r.x + r.w - 1, r.y, 1, r.h), CLR_LIGHT);
 }
 
 /* An opened cell is flat, with the grid line above and to its left -- which is
@@ -220,14 +222,34 @@ static void draw_flag(CRect c) {
   api->fill(rect(x + 1, y + 6, 5, 1), CLR_BLACK);    /* the base */
 }
 
-/* Red on black, as on the original's counters. */
+static void fill_if(int x, int y, int w, int h, uint16_t c) {
+  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), c);
+}
+
+/* Red on black, as on the original's counters. The digits paint their own
+ * black, so only the margin round them is filled: filling the box and then
+ * writing over it blinked the timer every second -- there is no
+ * framebuffer, and the black reached the panel before the digits did. */
 static void draw_counter(CRect box, int value) {
   char buf[8];
+  int tx = box.x + 2, ty = box.y + 1, tw = 18, th = 8;   /* three 6x8 digits */
   if (value < 0) value = 0;
   if (value > 999) value = 999;
-  api->fill(box, CLR_BLACK);
+  fill_if(box.x, box.y, box.w, ty - box.y, CLR_BLACK);
+  fill_if(box.x, ty + th, box.w, box.y + box.h - ty - th, CLR_BLACK);
+  fill_if(box.x, ty, tx - box.x, th, CLR_BLACK);
+  fill_if(tx + tw, ty, box.x + box.w - tx - tw, th, CLR_BLACK);
   api->fmt(buf, sizeof buf, "%03d", value);
-  api->text((short)(box.x + 2), (short)(box.y + 1), buf, CLR_RED, CLR_BLACK);
+  api->text((short)tx, (short)ty, buf, CLR_RED, CLR_BLACK);
+}
+
+/* raised() turned over, and without its fill: the bevel round a counter,
+ * whose box covers everything inside it, so nothing under it is cleared. */
+static void sunken_edge(CRect r) {
+  api->fill(rect(r.x, r.y, r.w, 1), CLR_DARK);
+  api->fill(rect(r.x, r.y, 1, r.h), CLR_DARK);
+  api->fill(rect(r.x, r.y + r.h - 1, r.w, 1), CLR_LIGHT);
+  api->fill(rect(r.x + r.w - 1, r.y, 1, r.h), CLR_LIGHT);
 }
 
 static void draw_face(CRect box) {
@@ -270,14 +292,31 @@ static int elapsed(void) {
   return (int)((end - S.start_ms) / 1000u);
 }
 
-static void paint_head(CRect c) {
-  api->fill(rect(c.x, c.y, BOARD_W, HEAD), CLR_FACE);
-  sunken(rect(c.x + 1, c.y + 2, 26, 12));
-  draw_counter(rect(c.x + 2, c.y + 3, 24, 10), MINES - S.flags);
-  sunken(rect(c.x + BOARD_W - 27, c.y + 2, 26, 12));
-  draw_counter(rect(c.x + BOARD_W - 26, c.y + 3, 24, 10), elapsed());
-  draw_face(face_box(c.x, c.y));
-  S.shown_time = elapsed();
+static int overlaps(CRect a, CRect b);
+
+/* The strip's grey is filled only between the counters and the face, never
+ * under them, and each of the three is drawn only when the clip reaches it
+ * -- a tick marks the timer alone, so the face and the mine counter are
+ * left as they are. */
+static void paint_head(CRect c, CRect clip) {
+  CRect mb = mines_box(c.x, c.y), tb = timer_box(c.x, c.y), fb = face_box(c.x, c.y);
+  int my = mb.y, mh = mb.h;
+  fill_if(c.x, c.y, BOARD_W, my - c.y, CLR_FACE);
+  fill_if(c.x, my + mh, BOARD_W, c.y + HEAD - my - mh, CLR_FACE);
+  fill_if(c.x, my, mb.x - c.x, mh, CLR_FACE);
+  fill_if(mb.x + mb.w, my, fb.x - mb.x - mb.w, fb.h, CLR_FACE);
+  fill_if(fb.x + fb.w, my, tb.x - fb.x - fb.w, mh, CLR_FACE);
+  fill_if(tb.x + tb.w, my, c.x + BOARD_W - tb.x - tb.w, mh, CLR_FACE);
+  if (overlaps(clip, mb)) {
+    sunken_edge(mb);
+    draw_counter(rect(mb.x + 1, mb.y + 1, mb.w - 2, mb.h - 2), MINES - S.flags);
+  }
+  if (overlaps(clip, tb)) {
+    sunken_edge(tb);
+    draw_counter(rect(tb.x + 1, tb.y + 1, tb.w - 2, tb.h - 2), elapsed());
+    S.shown_time = elapsed();   /* only when it was drawn, or tick would wait */
+  }
+  if (overlaps(clip, fb)) draw_face(fb);
 }
 
 static void paint_cell(CRect c, int x, int y) {
@@ -359,7 +398,7 @@ static void app_paint(void *st, CRect c) {
     api->fill(rect(b.x + b.w, b.y, c.x + c.w - b.x - b.w, b.h), CLR_DESK);
   }
 
-  if (overlaps(clip, rect(b.x, b.y, BOARD_W, HEAD))) paint_head(b);
+  if (overlaps(clip, rect(b.x, b.y, BOARD_W, HEAD))) paint_head(b, clip);
   for (y = 0; y < H; y++)
     for (x = 0; x < W; x++)
       if (overlaps(clip, cell_rect(x, y))) paint_cell(b, x, y);
@@ -397,7 +436,7 @@ static int app_tick(void *st, uint32_t now) {
   (void)st; (void)now;
   if (!S.started || S.dead || S.won) return 0;
   if (elapsed() == S.shown_time) return 0;
-  mark_head();
+  mark_timer();
   return 1;
 }
 
