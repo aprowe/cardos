@@ -86,6 +86,59 @@ void test_quoridor_face_to_face_jumps_over_or_round(void) {
   CHECK(left && right);
 }
 
+void test_quoridor_a_step_toward_goes_one_cell_or_over_the_pawn(void) {
+  Quoridor q;
+  int r, c;
+  q_init(&q);
+  CHECK(q_step_toward(&q, 0, 0, &r, &c));
+  CHECK_EQ(r, 7); CHECK_EQ(c, 4);
+  CHECK(!q_step_toward(&q, 0, 1, &r, &c));         /* the edge */
+  q.r[1] = 7; q.c[1] = 4;                          /* face to face */
+  CHECK(q_step_toward(&q, 0, 0, &r, &c));
+  CHECK_EQ(r, 6); CHECK_EQ(c, 4);                  /* over */
+  q.h[6][4] = 1;                                   /* a wall behind it */
+  CHECK(!q_step_toward(&q, 0, 0, &r, &c));         /* sideways is not "up" */
+}
+
+void test_quoridor_a_wall_remembers_who_laid_it(void) {
+  Quoridor q;
+  q_init(&q);
+  CHECK_EQ(q_play(&q, wall(2, 2, 0)), 0);
+  CHECK_EQ(q_play(&q, wall(5, 5, 1)), 0);
+  CHECK_EQ(q.h[2][2], 1);
+  CHECK_EQ(q.v[5][5], 2);
+}
+
+static int play_out(int lv0, int lv1, uint32_t seed) {
+  Quoridor q;
+  int turns = 0;
+  q_init(&q);
+  while (q.winner < 0 && turns < 400) {
+    QMove m = q_ai_level(&q, q.turn, q.turn ? lv1 : lv0, seed + (uint32_t)turns * 7919u);
+    if (q_play(&q, m) != 0) return -2;           /* an illegal move */
+    turns++;
+  }
+  return q.winner;
+}
+
+void test_quoridor_every_level_plays_by_the_rules(void) {
+  int g, lv;
+  for (lv = Q_EASY; lv <= Q_HARD; lv++)
+    for (g = 0; g < 4; g++) CHECK(play_out(lv, Q_MEDIUM, (uint32_t)(g * 1013 + lv)) >= 0);
+}
+
+void test_quoridor_hard_beats_easy_mostly(void) {
+  int g, won = 0;
+  for (g = 0; g < 10; g++) {
+    /* Each side first half the time: moving first is worth a step. */
+    int hard_first = g & 1;
+    int w = play_out(hard_first ? Q_HARD : Q_EASY, hard_first ? Q_EASY : Q_HARD,
+                     (uint32_t)(g * 2654435761u));
+    if (w == (hard_first ? 0 : 1)) won++;
+  }
+  CHECK(won >= 8);
+}
+
 void test_quoridor_reaching_the_far_row_wins(void) {
   Quoridor q;
   q_init(&q);

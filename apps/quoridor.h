@@ -148,13 +148,32 @@ static int q_step_ok(const Quoridor *q, int who, int r, int c) {
   return 0;
 }
 
+/* The step `who` would take in direction d (Q_DR/Q_DC order): the next
+ * cell, or over the other pawn when it is there. 1 with the cell, or 0 when
+ * there is none that way -- a wall, the edge, or a jump that would have to
+ * go sideways round the pawn, which one direction cannot choose. */
+static int q_step_toward(const Quoridor *q, int who, int d, int *out_r, int *out_c) {
+  int8_t sr[5], sc[5];
+  int n = q_steps(q, who, sr, sc), i, k;
+  for (k = 1; k <= 2; k++)
+    for (i = 0; i < n; i++)
+      if (sr[i] == q->r[who] + k * Q_DR[d] && sc[i] == q->c[who] + k * Q_DC[d]) {
+        *out_r = sr[i];
+        *out_c = sc[i];
+        return 1;
+      }
+  return 0;
+}
+
 /* Play a turn for whoever's turn it is. 0 if done, -1 if not allowed. */
 static int q_play(Quoridor *q, QMove m) {
   int who = q->turn;
   if (q->winner >= 0) return -1;
   if (m.wall) {
     if (!q_wall_ok(q, who, m.r, m.c, m.vert)) return -1;
-    if (m.vert) q->v[m.r][m.c] = 1; else q->h[m.r][m.c] = 1;
+    /* Who laid it, as 1 or 2: anything not 0 blocks, and the board can
+     * draw each wall in its player's colour. */
+    if (m.vert) q->v[m.r][m.c] = (uint8_t)(who + 1); else q->h[m.r][m.c] = (uint8_t)(who + 1);
     q->left[who]--;
   } else {
     if (!q_step_ok(q, who, m.r, m.c)) return -1;
@@ -204,6 +223,115 @@ static QMove q_ai(Quoridor *q, int who, uint32_t seed) {
       return wall;
   }
   return step;
+}
+
+/* ---- three computers --------------------------------------------------------------
+ *
+ * Easy is Medium with its mind elsewhere: a third of its steps are any step
+ * at all, and it walls only when you are about to win, and then half the
+ * time. Medium is q_ai above. Hard looks one reply ahead: each move it
+ * could make, against the best answer to it, scored by how much shorter
+ * its way home is than yours afterwards.
+ */
+enum { Q_EASY = 0, Q_MEDIUM = 1, Q_HARD = 2 };
+
+static uint32_t q_rand(uint32_t *s) {
+  *s = *s * 1664525u + 1013904223u;
+  return *s >> 8;
+}
+
+/* Struct assignment would be a call to memcpy, which an app does not have. */
+static void q_copy(Quoridor *d, const Quoridor *s) {
+  const uint8_t *a = (const uint8_t *)s;
+  uint8_t *b = (uint8_t *)d;
+  unsigned i;
+  for (i = 0; i < sizeof *s; i++) b[i] = a[i];
+}
+
+/* How it stands for `who`: the other's way home less its own. */
+static int q_eval(const Quoridor *q, int who) {
+  return q_path(q, 1 - who) - q_path(q, who);
+}
+
+/* Moves worth thinking about for `who`: every step, and the `nwalls` walls
+ * that do the most good by themselves. Returns how many, into `out`. */
+static int q_candidates(Quoridor *q, int who, QMove *out, int nwalls) {
+  int8_t sr[5], sc[5];
+  int gain[16], n = q_steps(q, who, sr, sc), i, k, j, r, c, vert, base = q_eval(q, who), nw = 0;
+  QMove w[16];
+  for (i = 0; i < n; i++) { out[i].wall = 0; out[i].vert = 0; out[i].r = sr[i]; out[i].c = sc[i]; }
+  if (nwalls > 16) nwalls = 16;
+  if (q->left[who] > 0)
+    for (vert = 0; vert < 2; vert++)
+      for (r = 0; r < Q_G; r++)
+        for (c = 0; c < Q_G; c++) {
+          int g;
+          if (!q_wall_ok(q, who, r, c, vert)) continue;
+          if (vert) q->v[r][c] = 1; else q->h[r][c] = 1;
+          g = q_eval(q, who) - base;
+          if (vert) q->v[r][c] = 0; else q->h[r][c] = 0;
+          if (g <= 0) continue;
+          for (k = nw; k > 0 && gain[k - 1] < g; k--) ;
+          if (k >= nwalls) continue;
+          if (nw < nwalls) nw++;
+          for (j = nw - 1; j > k; j--) { w[j] = w[j - 1]; gain[j] = gain[j - 1]; }
+          w[k].wall = 1; w[k].vert = (int8_t)vert; w[k].r = (int8_t)r; w[k].c = (int8_t)c;
+          gain[k] = g;
+        }
+  for (i = 0; i < nw; i++) out[n + i] = w[i];
+  return n + nw;
+}
+
+static QMove q_ai_hard(Quoridor *q, int who, uint32_t seed) {
+  QMove mine[5 + 12], theirs[5 + 8], best = { 0, 0, 0, 0 };
+  Quoridor a, b;
+  int n = q_candidates(q, who, mine, 12), i, j, best_score = -10000;
+  for (i = 0; i < n; i++) {
+    int worst = 10000, m;
+    q_copy(&a, q);
+    a.turn = (int8_t)who;
+    if (q_play(&a, mine[i]) != 0) continue;
+    if (a.winner == who) return mine[i];                 /* it wins: take it */
+    m = q_candidates(&a, 1 - who, theirs, 8);
+    for (j = 0; j < m && worst > -10000; j++) {
+      int s;
+      q_copy(&b, &a);
+      if (q_play(&b, theirs[j]) != 0) continue;
+      s = b.winner == 1 - who ? -1000 : q_eval(&b, who);
+      if (s < worst) worst = s;
+    }
+    if (worst == 10000) worst = q_eval(&a, who);
+    /* Steps before walls when it comes to the same: walls are spent once. */
+    worst = worst * 4 - (mine[i].wall ? 2 : 0) + (int)(q_rand(&seed) & 1);
+    if (worst > best_score) { best_score = worst; best = mine[i]; }
+  }
+  if (best_score == -10000) return q_ai(q, who, seed);
+  return best;
+}
+
+static QMove q_ai_easy(Quoridor *q, int who, uint32_t seed) {
+  QMove m = q_ai(q, who, seed);
+  int8_t sr[5], sc[5];
+  int n;
+  if (m.wall) {
+    /* Only to stop you winning, and not always then. */
+    if (q_path(q, 1 - who) <= 2 && (q_rand(&seed) & 1)) return m;
+  } else if (q_rand(&seed) % 3) {
+    return m;
+  }
+  n = q_steps(q, who, sr, sc);
+  m.wall = 0; m.vert = 0;
+  if (n) {
+    int i = (int)(q_rand(&seed) % (uint32_t)n);
+    m.r = sr[i]; m.c = sc[i];
+  }
+  return m;
+}
+
+static QMove q_ai_level(Quoridor *q, int who, int level, uint32_t seed) {
+  if (level == Q_EASY) return q_ai_easy(q, who, seed);
+  if (level == Q_HARD) return q_ai_hard(q, who, seed);
+  return q_ai(q, who, seed);
 }
 
 #endif /* CARDOS_QUORIDOR_H */
