@@ -341,10 +341,16 @@ static int mark(CRect r) {
 
 static int top_changed(void) { return mark(rect(G.at.x, G.at.y, G.at.w, TOP_H)); }
 
+/* A line in the big font at y. Its height is not asked before there has
+ * been a paint: before one, nothing is marked anyway. */
+static int line_changed(int y) {
+  return G.at.w > 0 ? mark(rect(G.at.x, y, G.at.w, height(G.f_uib))) : 1;
+}
+
 /* The draft line: a typed key changes it and nothing else. */
 static int draft_changed(void) {
   top_changed();
-  return mark(rect(G.at.x, G.draft_y, G.at.w, height(G.f_uib)));
+  return line_changed(G.draft_y);
 }
 
 /* A key in a box, then what it does; returns the x after it. */
@@ -527,7 +533,7 @@ static int app_tick(void *st, uint32_t now_ms) {
   /* A reply changes the status and, for a key, the last button's line. */
   if (changed) {
     top_changed();
-    mark(rect(G.at.x, G.last_y, G.at.w, height(G.f_uib)));
+    line_changed(G.last_y);
   }
   return changed;
 }
