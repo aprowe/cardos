@@ -155,3 +155,27 @@ void test_today_first_page_uses_todos_current_list(void) {
     CHECK(!strcmp(list, "Chores"));
   }
 }
+
+/* `daily focus` / `daily fact` are the server's, asked with the page's date
+ * -- tomorrow's on tomorrow's page. */
+static char s_url[200];
+static int d_http(const char *m, const char *url, const char *body, const char *ct,
+                  const char *bearer, char *out, size_t n, int ms) {
+  (void)m; (void)body; (void)ct; (void)bearer; (void)ms;
+  snprintf(s_url, sizeof s_url, "%s", url);
+  return snprintf(out, n, "Breathe first.\n");
+}
+static const char *d_proxy(void) { return "http://srv"; }
+
+void test_today_daily_sections_come_from_the_server(void) {
+  dopen();
+  DF.http = d_http;
+  DF.proxy = d_proxy;
+  add_section("Focus", "daily", "focus");
+  gather_all();
+  CHECK(strstr(s_url, "/daily?date=2026-09-29&kind=focus") != NULL);
+  CHECK(strstr(D.page, "## Focus\nBreathe first.\n") != NULL);
+  D.ahead = 1;
+  gather_all();
+  CHECK(strstr(s_url, "date=2026-09-30") != NULL);
+}

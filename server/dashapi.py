@@ -203,6 +203,45 @@ def post_toggl_token(h, args):
 
 
 @_api
+def get_toggl_targets(h, args):
+    """the Toggl targets, their progress, and the projects to pick from"""
+    from . import toggl
+    try:
+        off = int((args.get("off") or ["0"])[0])
+    except ValueError:
+        off = 0
+    try:
+        names = toggl.projects()
+        prog = toggl.progress(off)
+    except toggl.TogglError as e:
+        _json(h, {"error": e.why}, 400)
+        return
+    _json(h, {"projects": [{"id": k, "name": v, "color": toggl.color(k)}
+                           for k, v in sorted(names.items(), key=lambda kv: kv[1].lower())],
+              "targets": [{"project": t["project"], "name": names.get(t["project"], "?"),
+                           "color": toggl.color(t["project"]), "kind": t["kind"],
+                           "hours": t["hours"], "since": t.get("since"), "done": done}
+                          for t, done in prog]})
+
+
+@_api
+def post_toggl_target(h, args):
+    """set or (hours 0) remove a Toggl target"""
+    from . import toggl
+    try:
+        b = _body_json(h)
+        toggl.set_target(b.get("project"), b.get("kind", "week"), b.get("hours", 0),
+                         b.get("since"))
+    except toggl.TogglError as e:
+        _json(h, {"error": e.why}, 400)
+        return
+    except (ValueError, TypeError) as e:
+        _json(h, {"error": str(e)}, 400)
+        return
+    _json(h, {"ok": True})
+
+
+@_api
 def post_toggl_forget(h, args):
     """disconnect Toggl"""
     from . import toggl
@@ -220,5 +259,7 @@ ROUTES = [
     ("POST", "/dash/api/google/forget", post_google_forget, "open"),
     ("POST", "/dash/api/toggl/token", post_toggl_token, "open"),
     ("POST", "/dash/api/toggl/forget", post_toggl_forget, "open"),
+    ("GET", "/dash/api/toggl/targets", get_toggl_targets, "open"),
+    ("POST", "/dash/api/toggl/target", post_toggl_target, "open"),
     ("POST", "/dash/api/logout", post_logout, "open"),
 ]

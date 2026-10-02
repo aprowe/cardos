@@ -24,7 +24,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 
-from . import chat, dash, dashapi, files, google, notes, shots, toggl, tz, updates, voice
+from . import chat, daily, dash, dashapi, files, google, notes, shots, toggl, tz, updates, voice
 from .chat import ROOT as ROOT_DIR
 
 
@@ -104,7 +104,7 @@ def _normalise(routes):
 
 ALL_ROUTES = _normalise(SERVER_ROUTES + chat.ROUTES + updates.ROUTES +
                         voice.ROUTES + shots.ROUTES + tz.ROUTES + dash.ROUTES + dashapi.ROUTES +
-                        google.ROUTES + files.ROUTES + toggl.ROUTES + notes.ROUTES +
+                        google.ROUTES + files.ROUTES + toggl.ROUTES + notes.ROUTES + daily.ROUTES +
                         _render_routes() +
                         _screen_routes())
 

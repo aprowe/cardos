@@ -16,6 +16,13 @@ speaks to this server.
                           (whatever was running is stopped first)
     POST /toggl/describe  body: description=..  -> the running line, or "idle"
     POST /toggl/stop      -> stopped <tab> seconds <tab> description, or "idle"
+    GET  /toggl/targets?off=SECONDS
+                          -> target <tab> project <tab> #colour <tab> week|total
+                             <tab> seconds done <tab> seconds wanted <tab> since,
+                             one a target. off is the device's offset from UTC,
+                             so "this week" starts at its Monday
+    POST /toggl/target    body: project=NAME\\nkind=week|total\\nhours=H[\\nsince=YYYY-MM-DD]
+                          -> ok; hours=0 removes it
     GET  /toggl/today?from=RFC3339&to=RFC3339
                           -> start <tab> seconds <tab> description <tab> project,
                              a line an entry, then "total <tab> seconds"
@@ -288,6 +295,117 @@ def today_text(frm, to):
     return out + "total\t%d\n" % total
 
 
+# ---- targets: hours a project should get ----------------------------------------------
+#
+# Kept with the token in toggl.json: a list of
+#   {"project": id, "kind": "week" | "total", "hours": 10, "since": "2026-10-01"}
+# A weekly one counts Monday to now; a total one counts from `since` (when the
+# contract was booked; moving it is re-booking). Toggl lists entries for about
+# the last three months, which is where a total can look back to.
+
+from datetime import timedelta, timezone
+
+
+def targets():
+    return (load() or {}).get("targets") or []
+
+
+def set_target(project, kind, hours, since=None):
+    """Add, change (same project and kind) or, with hours 0, remove a target."""
+    c = load()
+    if not c:
+        raise TogglError(401, "no Toggl token: connect Toggl at /dash")
+    names = projects()
+    pid = None
+    if str(project).isdigit() and int(project) in names:
+        pid = int(project)
+    else:
+        low = str(project).strip().lower()
+        for k, v in names.items():
+            if v.lower() == low or (pid is None and v.lower().startswith(low) and low):
+                pid = k
+                if v.lower() == low:
+                    break
+    if pid is None:
+        raise ValueError("no project called %s" % project)
+    if kind not in ("week", "total"):
+        raise ValueError("kind is week or total")
+    hours = float(hours)
+    if hours < 0 or hours > 1000:
+        raise ValueError("hours from 0 to 1000")
+    if kind == "total":
+        since = since or time.strftime("%Y-%m-%d")
+        datetime.strptime(since, "%Y-%m-%d")         # a date, or ValueError
+    ts = [t for t in c.get("targets") or [] if not (t["project"] == pid and t["kind"] == kind)]
+    if hours > 0:
+        t = {"project": pid, "kind": kind, "hours": hours}
+        if kind == "total":
+            t["since"] = since
+        ts.append(t)
+    c["targets"] = ts
+    save(c)
+    return pid
+
+
+def _entries_since(start_epoch):
+    """Entries from start_epoch to now, cached two minutes: a page of targets
+    must not cost a request each."""
+    def get():
+        fmt = "%Y-%m-%dT%H:%M:%SZ"
+        a = time.strftime(fmt, time.gmtime(start_epoch))
+        b = time.strftime(fmt, time.gmtime(time.time() + 86400))
+        return call("GET", "/me/time_entries?start_date=%s&end_date=%s"
+                    % (urllib.parse.quote(a), urllib.parse.quote(b))) or []
+    return cached("since:%d" % (start_epoch // 3600), 120, get)
+
+
+def week_start(now, off):
+    """This week's Monday 00:00, local to `off` seconds from UTC, as epoch."""
+    local = datetime.fromtimestamp(now + off, timezone.utc)
+    monday = (local - timedelta(days=local.weekday())).replace(hour=0, minute=0, second=0,
+                                                               microsecond=0)
+    return int(monday.timestamp()) - off
+
+
+def progress(off=0):
+    """[(target, seconds done)] for every target."""
+    ts = targets()
+    if not ts:
+        return []
+    now = int(time.time())
+    starts = []
+    for t in ts:
+        if t["kind"] == "week":
+            starts.append(week_start(now, off))
+        else:
+            d = datetime.strptime(t["since"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            starts.append(int(d.timestamp()) - off)
+    entries = _entries_since(min(starts))
+    out = []
+    for t, start in zip(ts, starts):
+        done = 0
+        for e in entries:
+            if e.get("project_id") != t["project"]:
+                continue
+            s = epoch(e["start"])
+            if s < start:
+                continue
+            d = e.get("duration") or 0
+            done += (now - s) if d < 0 else d
+        out.append((t, done))
+    return out
+
+
+def targets_text(off=0):
+    names = projects()
+    lines = []
+    for t, done in progress(off):
+        lines.append("target\t%s\t%s\t%s\t%d\t%d\t%s\n" % (
+            clean(names.get(t["project"], "?")), color(t["project"]), t["kind"], done,
+            int(t["hours"] * 3600), t.get("since", "")))
+    return "".join(lines)
+
+
 # ---- routes ---------------------------------------------------------------------------
 
 def _fields(body):
@@ -341,6 +459,24 @@ def post_describe(h, args):
 
 
 @_route
+def get_targets(h, args):
+    """each target: project, how far, of how much"""
+    try:
+        off = int((args.get("off") or ["0"])[0])
+    except ValueError:
+        raise ValueError("off= is seconds")
+    return targets_text(off)
+
+
+@_route
+def post_target(h, args):
+    """set a target: project, week|total, hours (0 removes)"""
+    f = _fields(h.body(1024))
+    set_target(f.get("project", ""), f.get("kind", "week"), f.get("hours", "0"), f.get("since"))
+    return "ok\n"
+
+
+@_route
 def get_today(h, args):
     """Toggl entries between from and to"""
     frm, to = (args.get("from") or [""])[0], (args.get("to") or [""])[0]
@@ -355,4 +491,6 @@ ROUTES = [
     ("POST", "/toggl/stop", post_stop),
     ("POST", "/toggl/describe", post_describe),
     ("GET", "/toggl/today", get_today),
+    ("GET", "/toggl/targets", get_targets),
+    ("POST", "/toggl/target", post_target),
 ]

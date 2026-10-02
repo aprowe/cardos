@@ -95,7 +95,9 @@ const char *printdoc_status_text(const uint8_t *reply, size_t n) {
 
 /* ------------------------------------------------------------- renderer -- */
 
-enum { PD_TEXT, PD_CHECK, PD_CHECKED, PD_SUB, PD_HEAD, PD_RULE, PD_BLANK, PD_BITS };
+enum { PD_TEXT, PD_CHECK, PD_CHECKED, PD_SUB, PD_HEAD, PD_RULE, PD_BLANK, PD_BITS, PD_BAR };
+
+#define BAR_H    18                    /* the bar, outline included */
 
 #define USABLE     (PRINT_WIDTH - 2 * PRINT_MARGIN)   /* 352 */
 #define BOX        16                                  /* the checkbox, square */
@@ -304,6 +306,10 @@ static void bits_row(uint8_t (*block)[PRINT_ROW_BYTES], int rows, int y,
 static int classify(const char *line, int len, const char **text, int *tlen) {
   *text = line; *tlen = len;
   if (len == 0) return PD_BLANK;
+  if (len >= 5 && !strncmp(line, "%bar ", 5)) {
+    *text = line + 5; *tlen = len - 5;
+    return PD_BAR;
+  }
   if (line[0] == '%' && bits_repeat(line, len)) return PD_BITS;
   if (len >= 3 && line[0] == '-' && line[1] == '-' && line[2] == '-') return PD_RULE;
   if (len >= 2 && line[0] == '#' && line[1] == '#') {
@@ -380,6 +386,35 @@ static int next_block_font(PrintDoc *d, const CFont *f) {
   return 1;
 }
 
+/* "%bar NN label": the label on one line (cut, not wrapped), the bar under
+ * it -- a two-pixel outline the width of the page, filled from the left. */
+static void bar_block(PrintDoc *d) {
+  const char *s = d->rest;
+  int len = d->rest_len, pct = 0, th, rows, y, inner, n, skip;
+  const CFont *f = style_font(d, PD_TEXT);
+  while (len && *s >= '0' && *s <= '9') { pct = pct * 10 + (*s - '0'); s++; len--; }
+  while (len && *s == ' ') { s++; len--; }
+  if (pct > 100) pct = 100;
+  th = f ? f->height : FONT_H * 2;
+  rows = th + 4 + BAR_H + 8;
+  if (rows > PRINTDOC_LINE_H_MAX) rows = PRINTDOC_LINE_H_MAX;
+  d->block_rows = rows;
+  if (f) {
+    n = wrap_px(f, s, len, USABLE, &skip);
+    font_text(d->block, rows, PRINT_MARGIN, 0, f, s, n);
+  } else {
+    n = len < USABLE / (FONT_W * 2) ? len : USABLE / (FONT_W * 2);
+    text_at(d->block, rows, PRINT_MARGIN, 0, s, n, 2, 0);
+  }
+  y = th + 4;
+  fill(d->block, rows, PRINT_MARGIN, y, USABLE, 2);
+  fill(d->block, rows, PRINT_MARGIN, y + BAR_H - 2, USABLE, 2);
+  fill(d->block, rows, PRINT_MARGIN, y, 2, BAR_H);
+  fill(d->block, rows, PRINT_MARGIN + USABLE - 2, y, 2, BAR_H);
+  inner = (USABLE - 8) * pct / 100;
+  fill(d->block, rows, PRINT_MARGIN + 4, y + 4, inner, BAR_H - 8);
+}
+
 /* Render the next block: the next wrapped line of the current source line,
  * or the first of a new one. 0 when there is nothing left. */
 static int next_block(PrintDoc *d) {
@@ -397,6 +432,10 @@ static int next_block(PrintDoc *d) {
     return 1;
   case PD_RULE:
     rule(d->block, d->block_rows, 8);
+    d->rest = NULL;
+    return 1;
+  case PD_BAR:
+    bar_block(d);
     d->rest = NULL;
     return 1;
   case PD_BITS: {

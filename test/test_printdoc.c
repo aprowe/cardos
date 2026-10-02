@@ -425,3 +425,29 @@ void test_printdoc_bits_line_carries_raw_pixels_after_an_equals(void) {
   CHECK(drain("%%=ab,c", NULL) >= 16);
   CHECK(drain("%%1=a b", NULL) >= 16);
 }
+
+/* "%bar NN label": a label, then an outlined bar filled NN percent of the way
+ * -- the outline full width, the fill only part of it. */
+void test_printdoc_a_bar_is_outlined_and_filled_to_its_percent(void) {
+  PrintDoc d;
+  uint8_t row[PRINT_ROW_BYTES];
+  int r = 0, y_fill = -1, black_at_left = 0, black_at_right = 0;
+  printdoc_begin(&d, "%bar 25 CardOS 2:30 of 10:00\n");
+  while (printdoc_next_row(&d, row)) {
+    /* a row inside the bar: its left edge and well into the fill are black,
+     * three quarters across is not */
+    int inner_left = PRINT_MARGIN + 6, three_q = PRINT_MARGIN + 3 * (PRINT_WIDTH - 2 * PRINT_MARGIN) / 4;
+    if (r == 16 + 4 + 9) {
+      y_fill = r;
+      black_at_left = (row[inner_left >> 3] >> (inner_left & 7)) & 1;
+      black_at_right = (row[three_q >> 3] >> (three_q & 7)) & 1;
+    }
+    r++;
+  }
+  CHECK_EQ(r, 16 + 4 + 18 + 8);          /* 2x the 8-pixel font, gap, bar, gap */
+  CHECK(y_fill >= 0);
+  CHECK_EQ(black_at_left, 1);
+  CHECK_EQ(black_at_right, 0);
+  /* Over a hundred is full, not past the outline. */
+  CHECK_EQ(printdoc_count_rows("%bar 250 over\n"), 16 + 4 + 18 + 8);
+}

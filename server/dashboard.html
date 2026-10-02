@@ -276,6 +276,15 @@ section.block{margin-top:0}
 .running .what b{display:block}
 .running .what span{font-size:13px;color:var(--ink2)}
 .proj-dot{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:0}
+.tgs{display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line);padding-top:14px}
+.tgs h4{margin:0;font-size:14px}
+.tg{display:grid;grid-template-columns:1fr auto auto;gap:4px 10px;align-items:center;font-size:13.5px}
+.tg .bar{grid-column:1/-1;height:10px;border-radius:5px;background:var(--panel2);overflow:hidden;box-shadow:inset 0 0 0 1px var(--line)}
+.tg .bar i{display:block;height:100%;border-radius:5px}
+.tg .n{color:var(--ink2);font-variant-numeric:tabular-nums}
+.tg-form{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.tg-form .inp{width:auto;flex:1 1 120px;font-family:inherit}
+.tg-form .inp.h{flex:0 0 76px}
 .field{display:flex;flex-direction:column;gap:6px}
 .field label{font-size:13px;font-weight:600}
 .field .hint{font-size:12.5px;color:var(--ink3)}
@@ -1192,7 +1201,9 @@ function renderToggl(){
       :r?`<div class="running"><span class="dot ok live"></span><div class="what"><b>${esc(r.description||'(no description)')}</b><span>${r.project?`<i class="proj-dot" style="background:#e57cd8"></i>${esc(r.project)}`:'No project'}</span></div><div class="clk js-toggl">${h}:${String(m).padStart(2,'0')}<small>:${String(s).padStart(2,'0')}</small></div></div>`
       :'<div class="running"><span class="dot off"></span><div class="what"><b>Nothing running</b><span>Start a timer from the device or Toggl itself.</span></div></div>'}
       <dl class="facts"><dt>Account</dt><dd>${esc(t.name||'(unknown)')}</dd><dt>Connected</dt><dd>${fmtEpoch(t.since)}</dd></dl>
+      <div class="tgs" id="tgs"></div>
       <div class="acts"><button class="btn ghost" data-act="t-disconnect">Disconnect</button></div>`;
+    renderTargets(); if(!TG.data&&!TG.loading&&!TG.err) loadTargets();
     return;
   }
   el.innerHTML=head+`
@@ -1206,6 +1217,48 @@ function renderToggl(){
       <div class="acts"><button class="btn primary" type="submit" ${tChecking?'disabled':''}>${tChecking?'<span class="spin"></span>Checking with Toggl…':'Connect'}</button></div>
     </form>`;
 }
+/* targets: hours a project should get, weekly or in total since a date */
+const TG={data:null,err:'',loading:false};
+const hm=s=>`${Math.floor(s/3600)}:${String(Math.floor(s/60)%60).padStart(2,'0')}`;
+async function loadTargets(){
+  TG.loading=true; renderTargets();
+  try{ TG.data=await api('GET','/dash/api/toggl/targets?off='+(-new Date().getTimezoneOffset()*60)); TG.err=''; }
+  catch(e){ TG.err=e.message; }
+  TG.loading=false; renderTargets();
+}
+function renderTargets(){
+  const el=$('#tgs'); if(!el) return;
+  const d=TG.data, keep=$('#tg-form')?['tg-p','tg-h','tg-k','tg-s'].map(i=>$('#'+i).value):null;
+  let h=`<h4>Targets <span class="faint" style="font-weight:400">— hours a project should get</span></h4>`;
+  if(TG.err) h+=`<div class="note warn"><b>Couldn’t add up the hours.</b> ${esc(TG.err)}</div>`;
+  if(!d){ el.innerHTML=h+(TG.err?'':'<p class="dim" style="margin:0"><span class="spin"></span>Adding up…</p>'); return; }
+  if(!d.targets.length) h+='<p class="dim" style="margin:0">None yet. A weekly target restarts each Monday; a total one counts from the day the contract was booked.</p>';
+  for(const t of d.targets){
+    const want=t.hours*3600, pct=want?Math.min(100,t.done*100/want):0;
+    const when=t.kind==='week'?'this week':`since ${new Date(t.since+'T12:00').toLocaleDateString(undefined,{day:'numeric',month:'short'})}`;
+    h+=`<div class="tg"><b><i class="proj-dot" style="background:${esc(t.color)}"></i>${esc(t.name)}</b>
+      <span class="n">${hm(t.done)} of ${hm(want)} ${when}</span>
+      <button class="btn sm ghost" data-act="tg-del" data-p="${t.project}" data-k="${t.kind}" aria-label="Remove target">✕</button>
+      <div class="bar"><i style="width:${pct.toFixed(1)}%;background:${esc(t.color)}"></i></div></div>`;
+  }
+  const today=new Date().toISOString().slice(0,10);
+  h+=`<form class="tg-form" id="tg-form" autocomplete="off">
+    <select class="inp" id="tg-p" aria-label="Project">${d.projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
+    <input class="inp h" id="tg-h" type="number" min="0" step="0.5" placeholder="hours" aria-label="Hours">
+    <select class="inp" id="tg-k" aria-label="Kind" style="flex:0 0 auto"><option value="week">a week</option><option value="total">in total</option></select>
+    <input class="inp" id="tg-s" type="date" value="${today}" aria-label="Since" style="flex:0 0 auto;display:none" title="Counted from this day">
+    <button class="btn sm primary" type="submit">Set</button></form>
+    <span class="hint faint" style="font-size:12.5px">Setting a project again changes its target; a new total date is re-booking. Toggl keeps about three months of entries.</span>`;
+  el.innerHTML=h;
+  if(keep){ ['tg-p','tg-h','tg-k','tg-s'].forEach((i,n)=>{ $('#'+i).value=keep[n]; }); $('#tg-s').style.display=keep[2]==='total'?'':'none'; }
+  $('#tg-k').onchange=e=>{ $('#tg-s').style.display=e.target.value==='total'?'':'none'; };
+}
+async function setTarget(project,kind,hours,since){
+  try{ await api('POST','/dash/api/toggl/target',{project,kind,hours,since}); toast(hours?'Target set.':'Target removed.'); }
+  catch(e){ toast(e.message,'err'); return; }
+  loadTargets();
+}
+
 async function tConnect(){
   const v=$('#t-token').value.trim();
   if(!v){ $('#t-err').textContent='Paste a token first.'; $('#t-token').focus(); return; }
@@ -1440,6 +1493,7 @@ document.addEventListener('click',e=>{
     case 'g-signin': gSignIn(); break;
     case 'g-signout': gSignOut(); break;
     case 't-disconnect': tDisconnect(); break;
+    case 'tg-del': setTarget(b.dataset.p,b.dataset.k,0); break;
     case 't-show': { const i=$('#t-token'); i.type=i.type==='password'?'text':'password'; b.textContent=i.type==='password'?'Show':'Hide'; break; }
     case 'state-refresh': e.preventDefault(); loadState(false); break;
     case 'theme': setTheme(b.dataset.t,true); break;
@@ -1457,7 +1511,11 @@ document.addEventListener('click',e=>{
   }
 });
 function fallbackCopy(v,done){ const t=document.createElement('textarea'); t.value=v; document.body.appendChild(t); t.select(); let ok=false; try{ ok=document.execCommand('copy'); }catch(e){} t.remove(); if(ok) done(); else toast(`Couldn’t reach the clipboard. The hash is ${v}.`,'err'); }
-document.addEventListener('submit',e=>{ if(e.target.id==='t-form'){ e.preventDefault(); tConnect(); } });
+document.addEventListener('submit',e=>{
+  if(e.target.id==='t-form'){ e.preventDefault(); tConnect(); }
+  if(e.target.id==='tg-form'){ e.preventDefault(); const h=parseFloat($('#tg-h').value); if(!(h>0)){ $('#tg-h').focus(); return; }
+    const k=$('#tg-k').value; setTarget($('#tg-p').value,k,h,k==='total'?$('#tg-s').value:undefined); }
+});
 $('#upfile').onchange=e=>{ upload(e.target.files,S.cwd); e.target.value=''; };
 $('#asearch').oninput=e=>{ S.appQuery=e.target.value.trim(); renderUpdates(); };
 document.addEventListener('keydown',e=>{

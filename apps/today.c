@@ -25,6 +25,11 @@
  * (Calendar's, Habits') is asked `tomorrow` instead, and the rest as they
  * are. `do today tomorrow` prints it, for the night before.
  *
+ * Two sections come from the server rather than an app: `daily focus` (one
+ * thing to be mindful of today) and `daily fact` (a fun fact), the same all
+ * day (server/daily.py). Lines written `%bar NN label` -- Toggl's targets --
+ * are drawn as bars here and printed as bars.
+ *
  * Gathering is one command a tick: a network one (stocks) takes a second or
  * two, and one at a time the screen says which it is waiting on rather than
  * freezing on the lot. What was gathered is what prints: nothing is fetched
@@ -270,6 +275,8 @@ static void load_sections(void) {
   }
   add_section("Habits", "habits", "today");
   add_section("Stocks", "stocks", "portfolio");
+  add_section("Focus", "daily", "focus");
+  add_section("Fun fact", "daily", "fact");
   save_sections();
   D.cfg_size = config_size();
 }
@@ -318,6 +325,21 @@ static void begin_page(void) {
 
 /* One section: its heading, and the app's answer line by line. A section
  * whose app could not answer says so, in its own place, and the rest go on. */
+/* `daily focus` / `daily fact`: the server's line for this page's date. */
+static int daily_answer(const char *kind, char *out, int n) {
+  CappTime t;
+  char url[128];
+  int y, m, d, r;
+  api->now(&t);
+  if (!t.synced) { api->fmt(out, (size_t)n, "the clock is not set"); return -1; }
+  y = t.year; m = t.month; d = t.day;
+  if (D.ahead) next_day(&y, &m, &d);
+  api->fmt(url, sizeof url, "%s/daily?date=%04d-%02d-%02d&kind=%s", api->proxy(), y, m, d, kind);
+  r = api->http("GET", url, 0, 0, "", out, (size_t)n, 120000);
+  if (r < 0) { api->fmt(out, (size_t)n, "the server did not answer (%d)", r); return -1; }
+  return 0;
+}
+
 static void gather_one(int i) {
   char *answer = s_answer;
   char head[HEAD_MAX + 8];
@@ -331,7 +353,10 @@ static void gather_one(int i) {
     api->fmt(moved, sizeof moved, "tomorrow%s", line + 5);
     line = moved;
   }
-  rc = api->run_command(D.sect[i].app, line, answer, ANSWER_MAX);
+  if (starts(D.sect[i].app, "daily") && !D.sect[i].app[5])
+    rc = daily_answer(D.sect[i].line, answer, ANSWER_MAX);
+  else
+    rc = api->run_command(D.sect[i].app, line, answer, ANSWER_MAX);
   api->fmt(head, sizeof head, "\n## %s\n", D.sect[i].head);
   put(head);
   if (rc != 0) { put("("); put(answer[0] ? answer : "no answer"); put(")\n"); return; }
@@ -371,6 +396,19 @@ static void paint_line(const char *s, int len, int y, int x, int w) {
   api->mem_cpy(buf, s, (size_t)n);
   buf[n] = 0;
   api->fill(rect(x, y, w, ROW_H), CLR_BG);
+  if (starts(buf, "%bar ")) {
+    /* "%bar NN label": the label, and a bar filled NN percent on the right. */
+    const char *p = buf + 5;
+    int pct = 0, bw = 70, bx = x + w - 8 - bw, f;
+    while (*p >= '0' && *p <= '9') pct = pct * 10 + (*p++ - '0');
+    while (*p == ' ') p++;
+    if (pct > 100) pct = 100;
+    api->text_font(D.f_ui, (int16_t)(x + 8), (int16_t)font_y(D.f_ui, y, ROW_H), p, CLR_TEXT, CLR_BG);
+    api->fill(rect(bx, y + ROW_H / 2 - 4, bw, 8), CLR_BOX);
+    f = (bw - 2) * pct / 100;
+    if (f > 0) api->fill(rect(bx + 1, y + ROW_H / 2 - 3, f, 6), CLR_DONE);
+    return;
+  }
   if (starts(buf, "## ")) {
     api->text_font(D.f_uib, (int16_t)(x + 6), (int16_t)font_y(D.f_uib, y, ROW_H), buf + 3,
                    CLR_ACCENT, CLR_BG);

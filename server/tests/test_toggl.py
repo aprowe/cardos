@@ -148,6 +148,36 @@ class TogglTest(unittest.TestCase):
         secs = int(text.splitlines()[0].split("\t")[6])
         self.assertTrue(124 <= secs <= 130, secs)
 
+    def test_targets_count_this_week_and_since_a_date(self):
+        now = time.time()
+        iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        monday = toggl.week_start(int(now), 0)
+        self.t.entries = [
+            # this week: 2 h of CardOS, 1 h of Home
+            {"id": 1, "project_id": 10, "start": iso(monday + 3600), "duration": 7200, "workspace_id": 5},
+            {"id": 2, "project_id": 11, "start": iso(monday + 7200), "duration": 3600, "workspace_id": 5},
+            # last week: CardOS, counts for the total only
+            {"id": 3, "project_id": 10, "start": iso(monday - 86400 * 3), "duration": 1800, "workspace_id": 5},
+        ]
+        since = time.strftime("%Y-%m-%d", time.gmtime(monday - 86400 * 6))
+        self.assertEqual(self.req("POST", "/toggl/target", "project=cardos\nkind=week\nhours=10"),
+                         (200, "ok\n"))
+        self.req("POST", "/toggl/target", "project=CardOS\nkind=total\nhours=20\nsince=" + since)
+        s, text = self.req("GET", "/toggl/targets?off=0")
+        lines = [l.split("\t") for l in text.splitlines()]
+        week = [l for l in lines if l[3] == "week"][0]
+        total = [l for l in lines if l[3] == "total"][0]
+        self.assertEqual((week[1], week[2], week[4], week[5]), ("CardOS", "#0b83d9", "7200", "36000"))
+        self.assertEqual((total[4], total[5], total[6]), ("9000", "72000", since))
+
+    def test_a_target_is_changed_in_place_and_removed_with_zero(self):
+        self.req("POST", "/toggl/target", "project=Home\nkind=week\nhours=5")
+        self.req("POST", "/toggl/target", "project=Home\nkind=week\nhours=8")
+        self.assertEqual([t["hours"] for t in toggl.targets()], [8.0])
+        self.req("POST", "/toggl/target", "project=Home\nkind=week\nhours=0")
+        self.assertEqual(toggl.targets(), [])
+        self.assertEqual(self.req("POST", "/toggl/target", "project=Nope\nkind=week\nhours=1")[0], 400)
+
     def test_stop(self):
         self.req("POST", "/toggl/start", "description=Email\nproject=")
         self.assertEqual(self.req("POST", "/toggl/stop"), (200, "stopped\t120\tEmail\n"))

@@ -12,6 +12,10 @@
  * starts with no description, which d adds while it runs. s stops, n types a
  * new one, r asks again.
  *
+ * Targets: hours a project should get, weekly or in total since a date --
+ * set on the dashboard or with `target`. g shows them as bars filling up in
+ * each project's colour, and `targets` gives Today the same as %bar lines.
+ *
  * A running timer has the screen to itself: its project, in the project's
  * own colour from Toggl, the time in clock56, the description, and the keys
  * in the bar. l goes to the list and back; starting anything comes back to
@@ -44,7 +48,17 @@ static const CardApi *api;
 #define CLR_FOOT   CAPP_RGB(28, 32, 42)
 #define CLR_BAD    CAPP_RGB(240, 110, 96)
 
-enum { ST_IDLE = 0, ST_STATUS, ST_START, ST_STOP, ST_DESCRIBE };
+enum { ST_IDLE = 0, ST_STATUS, ST_START, ST_STOP, ST_DESCRIBE, ST_TARGETS };
+
+#define MAX_TARGETS 8
+
+typedef struct {
+  char     proj[PROJ_MAX];
+  uint16_t colour;
+  char     week;                  /* 1 weekly, 0 total since `since` */
+  uint32_t done, want;            /* seconds */
+  char     since[12];
+} Target;
 
 typedef struct {
   char kind;                      /* 'p' a project, 'r' a recent entry */
@@ -61,6 +75,9 @@ static struct {
   char     proj[PROJ_MAX];
   uint16_t colour;                /* the running project's, or 0 */
   int      list;                  /* the list, not the timer, while one runs */
+  int      goals;                 /* the targets view is up (g) */
+  Target   tg[MAX_TARGETS];
+  int      ntg;
 
   Recent   rec[MAX_ROWS];
   int      nrec;
@@ -198,6 +215,59 @@ static void absorb_status(void) {
   if (G.sel > G.nrec) G.sel = G.nrec;
 }
 
+static int ask(const char *method, const char *rel, const char *body, int stage);
+
+static void absorb_targets(void) {
+  const char *p;
+  char num[16];
+  G.ntg = 0;
+  for (p = G.reply; *p && G.ntg < MAX_TARGETS; ) {
+    if (starts(p, "target\t")) {
+      Target *g = &G.tg[G.ntg++];
+      field(p, 1, g->proj, PROJ_MAX);
+      field(p, 2, num, sizeof num);
+      g->colour = parse_colour(num);
+      field(p, 3, num, sizeof num);
+      g->week = num[0] == 'w';
+      field(p, 4, num, sizeof num);
+      g->done = (uint32_t)to_long(num);
+      field(p, 5, num, sizeof num);
+      g->want = (uint32_t)to_long(num);
+      field(p, 6, g->since, sizeof g->since);
+    }
+    while (*p && *p != '\n') p++;
+    if (*p) p++;
+  }
+}
+
+static int pct_of(const Target *g) {
+  uint32_t p = g->want ? g->done * 100u / g->want : 0;
+  return p > 999 ? 999 : (int)p;
+}
+
+/* "6:30 of 10:00 this week", "12:00 of 20:00 since 1 Oct". */
+static void target_words(const Target *g, char *out, int n) {
+  static const char *const MON[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+  char a[12], b[12];
+  api->fmt(a, sizeof a, "%lu:%02lu", (unsigned long)(g->done / 3600), (unsigned long)(g->done / 60 % 60));
+  api->fmt(b, sizeof b, "%lu:%02lu", (unsigned long)(g->want / 3600), (unsigned long)(g->want / 60 % 60));
+  if (g->week) api->fmt(out, (size_t)n, "%s of %s this week", a, b);
+  else {
+    int m = (int)to_long(g->since + 5), d = (int)to_long(g->since + 8);
+    if (m >= 1 && m <= 12) api->fmt(out, (size_t)n, "%s of %s since %d %s", a, b, d, MON[m - 1]);
+    else api->fmt(out, (size_t)n, "%s of %s in total", a, b);
+  }
+}
+
+static long utc_offset(void);
+
+static void ask_targets(void) {
+  char rel[48];
+  api->fmt(rel, sizeof rel, "/toggl/targets?off=%ld", utc_offset());
+  ask("GET", rel, 0, ST_TARGETS);
+}
+
 /* "error why" from the server, or a status code, as a line for the screen. */
 static void say_failure(int n) {
   G.bad = 1;
@@ -225,7 +295,8 @@ static int ask(const char *method, const char *rel, const char *body, int stage)
   G.bad = 0;
   api->fmt(G.status, sizeof G.status, "%s", stage == ST_STATUS ? "asking..." :
            stage == ST_START ? "starting..." :
-           stage == ST_DESCRIBE ? "saving..." : "stopping...");
+           stage == ST_DESCRIBE ? "saving..." :
+           stage == ST_TARGETS ? "adding up..." : "stopping...");
   return 0;
 }
 
@@ -256,7 +327,11 @@ static int poll(void) {
     say_failure(n);
     return 1;
   }
-  if (G.stage == ST_STATUS) {
+  if (G.stage == ST_TARGETS) {
+    absorb_targets();
+    G.status[0] = 0;
+    G.stage = ST_IDLE;
+  } else if (G.stage == ST_STATUS) {
     absorb_status();
     G.status[0] = 0;
     G.stage = ST_IDLE;
@@ -407,11 +482,34 @@ static void paint_list(void) {
                          "enter start  n new  r refresh");
 }
 
+/* Each target: its project in its colour, the hours, and a bar filling up. */
+static void paint_goals(void) {
+  CRect c = G.content;
+  int y = c.y + TOP_H, i, rowh = 30;
+  char words[48];
+  api->fill(rect(c.x, y, c.w, c.h - TOP_H - FOOT_H), CLR_BG);
+  if (!G.ntg)
+    draw(G.f_ui, c.x + 8, y + 6, G.stage == ST_TARGETS ? "adding up..." :
+         "no targets: set them on the dashboard", CLR_DIM, CLR_BG);
+  for (i = 0; i < G.ntg && y + rowh <= c.y + c.h - FOOT_H; i++, y += rowh) {
+    const Target *g = &G.tg[i];
+    uint16_t col = proj_colour(g->colour);
+    int bw = c.w - 16, fill = pct_of(g) >= 100 ? bw - 2 : (bw - 2) * pct_of(g) / 100;
+    target_words(g, words, sizeof words);
+    draw(G.f_uib, c.x + 8, y + 1, g->proj, col, CLR_BG);
+    draw(G.f_ui, c.x + c.w - 8 - width(G.f_ui, words), y + 1, words, CLR_DIM, CLR_BG);
+    api->fill(rect(c.x + 8, y + 18, bw, 8), CLR_SEL);
+    if (fill > 0) api->fill(rect(c.x + 9, y + 19, fill, 6), col);
+  }
+  paint_foot("g back  r again");
+}
+
 static void app_paint(void *st, CRect c) {
   (void)st;
   G.content = c;
   paint_top();
-  if (timer_screen()) paint_running();
+  if (G.goals) paint_goals();
+  else if (timer_screen()) paint_running();
   else paint_list();
 }
 
@@ -445,6 +543,12 @@ static void begin_typing(void) {
 static int app_key(void *st, uint8_t k) {
   (void)st;
   if (G.typing) return key_typing(k);
+  if (G.goals) {
+    if (k == 'g' || k == 'G' || k == CAPP_KEY_ESC) { G.goals = 0; return 1; }
+    if (k == 'r' || k == 'R') { ask_targets(); return 1; }
+    return 1;
+  }
+  if (k == 'g' || k == 'G') { G.goals = 1; ask_targets(); return 1; }
   if (timer_screen()) {
     switch (k) {
     case 'l': case 'L': case CAPP_KEY_DOWN: G.list = 1; return 1;
@@ -491,7 +595,8 @@ static int app_tick(void *st, uint32_t now_ms) {
 
 /* ---- commands -------------------------------------------------------------------------- */
 
-enum { ACT_STATUS = 1, ACT_START, ACT_STOP, ACT_TODAY, ACT_TOMORROW, ACT_PROJECT, ACT_DESCRIBE };
+enum { ACT_STATUS = 1, ACT_START, ACT_STOP, ACT_TODAY, ACT_TOMORROW, ACT_PROJECT, ACT_DESCRIBE,
+       ACT_TARGETS, ACT_TARGET };
 
 static const CappParam P_START[] = {
   { "what", CAPP_ARG_TEXT, "the description; a recent entry's project comes with it" },
@@ -499,6 +604,11 @@ static const CappParam P_START[] = {
 
 static const CappParam P_PROJECT[] = {
   { "project", CAPP_ARG_TEXT, "the project, or the start of its name" },
+};
+static const CappParam P_TARGET[] = {
+  { "project", CAPP_ARG_TEXT, "the project, or the start of its name" },
+  { "hours", CAPP_ARG_INT, "hours wanted; 0 removes the target" },
+  { "kind", CAPP_ARG_CHOICE, "week|total" },
 };
 static const CappParam P_DESCRIBE[] = {
   { "what", CAPP_ARG_TEXT, "the running entry's description" },
@@ -513,6 +623,12 @@ static const CappAction ACTIONS[] = {
     CAPP_CMD_YES | CAPP_CMD_NET },
   { "project", "Start project", 0, 0, ACT_PROJECT,
     "start a timer for a project, with no description yet", P_PROJECT, 1,
+    CAPP_CMD_YES | CAPP_CMD_NET },
+  { "targets", "Targets", 0, 0, ACT_TARGETS,
+    "each project's hours against its target, as bars (for Today)", 0, 0,
+    CAPP_CMD_YES | CAPP_CMD_NET },
+  { "target", "Set target", 0, 0, ACT_TARGET,
+    "hours a project should get each week, or in total from today", P_TARGET, 3,
     CAPP_CMD_YES | CAPP_CMD_NET },
   { "describe", "Describe", 0, 0, ACT_DESCRIBE, "give the running Toggl entry a description",
     P_DESCRIBE, 1, CAPP_CMD_YES | CAPP_CMD_NET },
@@ -685,6 +801,27 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
     absorb_running(G.reply);
     api->fmt(out, n, "%s%s%s", G.proj, G.proj[0] ? ": " : "", G.desc);
     return 0;
+  case ACT_TARGETS: {
+    char rel[48], words[48];
+    size_t o = 0;
+    int i;
+    api->fmt(rel, sizeof rel, "/toggl/targets?off=%ld", utc_offset());
+    if ((r = fetch("GET", rel, 0)) < 0) return failed(r, out, n);
+    absorb_targets();
+    if (!G.ntg) { api->fmt(out, n, "no targets set"); return 0; }
+    for (i = 0; i < G.ntg && o + 80 < n; i++) {
+      target_words(&G.tg[i], words, sizeof words);
+      o += (size_t)api->fmt(out + o, n - o, "%s%%bar %d %s  %s", i ? "\n" : "",
+                            pct_of(&G.tg[i]), G.tg[i].proj, words);
+    }
+    return 0;
+  }
+  case ACT_TARGET:
+    api->fmt(G.body, sizeof G.body, "project=%s\nhours=%s\nkind=%s", argv[0], argv[1], argv[2]);
+    if ((r = fetch("POST", "/toggl/target", G.body)) < 0) return failed(r, out, n);
+    api->fmt(out, n, to_long(argv[1]) ? "%s: %s hours a %s" : "%s: target removed",
+             argv[0], argv[1], argv[2][0] == 'w' ? "week" : "contract");
+    return 0;
   case ACT_TODAY:
     return cmd_today(out, n);
   case ACT_TOMORROW:
@@ -711,6 +848,7 @@ const CappInfo capp_info = {
   "n\ta new entry: type its description\n"
   "d\tdescribe the running entry\n"
   "l\tthe list, and back to the timer\n"
+  "g\ttargets: hours against each project's target\n"
   "r\task Toggl again\n"
   "up/down\tchoose\n"
   "\n"

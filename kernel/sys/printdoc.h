@@ -18,6 +18,9 @@
  *      [x] task           ticked checkbox
  *      ---                horizontal rule
  *      text               2x text, word-wrapped; a blank line is a gap
+ *      %bar NN label      the label, and under it a bar filled to NN percent
+ *                         (0..100; more is shown full) -- progress toward a
+ *                         target, Toggl's on Today's page
  *      %%N*w,b,w,b=RAW    N identical pixel rows (N 1..64, default 1):
  *                         run lengths alternating white and black from
  *                         x = 0, then, optionally, raw pixels after `=`
