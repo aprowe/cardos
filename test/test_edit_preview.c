@@ -14,12 +14,6 @@
 
 #include "tinytest.h"
 
-/* apps/footer.h marks its helper unused with GCC's spelling, which MSVC
- * does not know; the host build has no use for it. */
-#if !defined(__GNUC__) && !defined(__attribute__)
-#define __attribute__(x)
-#endif
-
 #define capp_info edit_capp_info
 #define capp_main edit_capp_main
 #include "apps/edit.c"
