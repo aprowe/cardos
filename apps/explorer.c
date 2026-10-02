@@ -541,8 +541,11 @@ static void paint_footer(CRect c) {
     api->text(x, y, X.buf + from, C_TYPED, FOOT_BG);
     api->fill(rect(x + (X.buf_len - from) * 6, y, 5, 8), C_TYPED);
   } else if (X.ask == ASK_DELETE) {
+    /* The name cut short enough that the question still fits. */
+    char t[24];
+    api->fmt(t, sizeof t, "%s", at(X.sel)->name);
     footer_paint(api, c, 0);
-    api->fmt(line, sizeof line, "delete %s? y / n", at(X.sel)->name);
+    api->fmt(line, sizeof line, "delete %s? y / n", t);
     api->text((short)(c.x + 4), y, line, C_WARN, FOOT_BG);
   } else if (X.status[0]) {
     api->fmt(line, sizeof line, "%s", X.status);
