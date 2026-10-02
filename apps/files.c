@@ -2,27 +2,33 @@
  *
  * The same listing, driven two ways, because this machine is two machines. On
  * the launcher it is a keyboard device: one column, arrows, and a letter per
- * action. On the desktop, with a mouse, it is a toolbar and rows you click.
+ * action. On the desktop, with a mouse, it has a menu bar and rows you click.
  *
- * It does not ask which. The mode follows the last thing that was used -- a
- * keypress puts it in keyboard mode, a mouse event puts it in mouse mode --
- * because that is always right and never needs configuring. The toolbar
- * appears when a pointer does.
+ * It does not ask which. The menu bar is apps/toolbar.h, which appears when a
+ * pointer first moves (or with fn-b, which also puts the keyboard in it), and
+ * its menus come from the same action table as everything else. This used to
+ * be a mode of its own -- a strip of six hand-drawn buttons that a keypress
+ * took away again -- and switching back to the keys moved every row while
+ * marking only two of them, which left the screen half old.
  *
  * What it can do: walk the card, make folders, rename, move, delete, and open
  * a file in the app that suits it. Opening is `api->run`, so this contains no
  * editor, no image decoder and no browser -- it knows which app to hand a name
  * to, and that is all a file manager should know.
+ *
+ * The keys are the shared vocabulary (CLAUDE.md, "Every app speaks the same
+ * keys"): e renames, o opens in the editor, v pastes, r reads again, d
+ * deletes after asking, and Escape backs out of whatever is being asked.
  */
 
 #include "kernel/app/capp.h"
+#include "apps/toolbar.h"
+#include "apps/footer.h"
 
 #define MAX_ENTRIES  96
 #define PATH_MAX    128
 #define ROW_H         9
 #define BAR_H        10          /* the path, along the top */
-#define TOOL_H       13          /* the button strip, mouse mode only */
-#define STATUS_H     10
 
 #define CLR_BG      CAPP_RGB(20, 22, 28)
 #define CLR_BAR     CAPP_RGB(38, 44, 64)
@@ -31,13 +37,10 @@
 #define CLR_DIR     CAPP_RGB(240, 200, 110)
 #define CLR_SEL     CAPP_RGB(58, 92, 150)
 #define CLR_MARK    CAPP_RGB(120, 200, 140)
-#define CLR_FACE    CAPP_RGB(196, 200, 210)
-#define CLR_FACE_HI CAPP_RGB(240, 242, 248)
-#define CLR_FACE_LO CAPP_RGB(110, 114, 124)
-#define CLR_TEXT_D  CAPP_RGB(24, 26, 32)
 #define CLR_ERR     CAPP_RGB(236, 120, 110)
 
-enum { MODE_KEYS = 0, MODE_MOUSE };
+#define KEY_DEL     0x7F         /* Delete on a Bluetooth keyboard */
+
 enum { ASK_NONE = 0, ASK_NEWDIR, ASK_RENAME, ASK_DELETE };
 
 static const CardApi *api;
@@ -55,15 +58,15 @@ static struct {
   int       top;                 /* first visible row */
   int       rows;                /* how many fit, from the last paint */
 
-  int       mode;
   int       ask;                 /* a prompt is open */
   char      buf[CAPP_NAME_MAX + 1];
   int       buf_len;
 
   char      marked[PATH_MAX];    /* the file waiting to be moved */
-  char      status[64];
+  char      status[64];          /* what just happened; shown until a key */
 
-  CRect     at;
+  CRect     full;                /* the app's rectangle, toolbar included */
+  CRect     at;                  /* below the toolbar */
   int       have_at;
 } F;
 
@@ -92,7 +95,43 @@ static int ext_is(const char *ext, const char *want) {
   }
 }
 
-static void say(const char *s) { api->fmt(F.status, sizeof F.status, "%s", s); }
+/* ---- what changed ---------------------------------------------------------
+ *
+ * Moving the selection changes two rows out of thirteen. Saying so is the
+ * difference between a keypress costing two rows and costing the window; the
+ * shell clips the next paint to whatever is marked here. Marking nothing
+ * means the whole window. Once anything is marked, though, only the marks are
+ * painted -- so whatever changes the listing marks all of it (reload). */
+
+static int list_top(void) { return F.at.y + BAR_H; }
+
+static void damage_row(int idx) {
+  if (!F.have_at || idx < F.top || idx >= F.top + F.rows) return;
+  api->damage(rect(F.at.x, list_top() + (idx - F.top) * ROW_H, F.at.w, ROW_H));
+}
+
+/* The footer, which is also the prompt and the status line. */
+static void damage_footer(void) {
+  if (!F.have_at) return;
+  api->damage(rect(F.at.x, F.at.y + F.at.h - FOOT_H, F.at.w, FOOT_H));
+}
+
+static void damage_all(void) {
+  if (F.have_at) api->damage(F.at);
+}
+
+static void say(const char *s) {
+  api->fmt(F.status, sizeof F.status, "%s", s);
+  damage_footer();
+}
+
+/* A key or a click puts the hints back: a message is for the moment after
+ * whatever caused it, not for good. */
+static void unsay(void) {
+  if (!F.status[0]) return;
+  F.status[0] = 0;
+  damage_footer();
+}
 
 /* Join a directory and a name into a path, without the double slash that a
  * naive concatenation produces at the root. */
@@ -164,6 +203,7 @@ static void reload(void) {
   if (F.sel >= F.n) F.sel = F.n ? F.n - 1 : 0;
   if (F.sel < 0) F.sel = 0;
   F.top = 0;
+  damage_all();
 }
 
 static void go_to(const char *path) {
@@ -195,95 +235,92 @@ static void enter_selected(void) {
     const char *app = opener(e->name);
     if (!app) {
       /* A program: run it, rather than showing someone its bytes. */
-      if (api->run(e->name, (const char *)0) == 0) say("started");
-      else say("would not start");
+      say(api->run(e->name, (const char *)0) == 0 ? "started" : "would not start");
       return;
     }
     if (api->run(app, path) == 0) api->fmt(F.status, sizeof F.status, "%s %s", app, e->name);
     else api->fmt(F.status, sizeof F.status, "no %s app", app);
+    damage_footer();
   }
+}
+
+/* Whatever it is, as text: a .c file opens in the editor rather than being
+ * run, and a picture shows its bytes, which is sometimes what you wanted. */
+static void open_in_editor(void) {
+  char path[PATH_MAX];
+  if (!F.n || at(F.sel)->is_dir) return;
+  join(path, sizeof path, F.cwd, at(F.sel)->name);
+  if (api->run("edit", path) != 0) say("no edit app");
 }
 
 /* ---- the operations -------------------------------------------------------- */
 
 static void begin_ask(int what) {
+  if (what != ASK_NEWDIR && !F.n) return;
   F.ask = what;
   F.buf[0] = 0;
   F.buf_len = 0;
-  if (what == ASK_RENAME && F.n) {
+  if (what == ASK_RENAME) {
     api->fmt(F.buf, sizeof F.buf, "%s", at(F.sel)->name);
     F.buf_len = (int)api->str_len(F.buf);
   }
+  damage_footer();
+}
+
+static void cancel_ask(void) {
+  if (F.ask == ASK_NONE) return;
+  F.ask = ASK_NONE;
+  damage_footer();
 }
 
 static void finish_ask(void) {
   char path[PATH_MAX], to[PATH_MAX];
+  int what = F.ask;
 
-  if (F.ask == ASK_NEWDIR && F.buf_len) {
+  F.ask = ASK_NONE;
+  damage_footer();
+  if (what == ASK_NEWDIR && F.buf_len) {
     join(path, sizeof path, F.cwd, F.buf);
-    if (api->mkdir(path) == 0) say("folder made");
-    else say("could not make it");
+    say(api->mkdir(path) == 0 ? "folder made" : "could not make it");
     reload();
-  } else if (F.ask == ASK_RENAME && F.buf_len && F.n) {
+  } else if (what == ASK_RENAME && F.buf_len && F.n) {
     join(path, sizeof path, F.cwd, at(F.sel)->name);
     join(to, sizeof to, F.cwd, F.buf);
-    if (api->rename(path, to) == 0) say("renamed");
-    else say("could not rename");
+    say(api->rename(path, to) == 0 ? "renamed" : "could not rename");
     reload();
   }
-  F.ask = ASK_NONE;
 }
 
 static void mark_for_move(void) {
   if (!F.n) return;
   join(F.marked, sizeof F.marked, F.cwd, at(F.sel)->name);
-  api->fmt(F.status, sizeof F.status, "move %s -- go and press p",
-           at(F.sel)->name);
+  damage_footer();                     /* the footer says what is held */
 }
 
 static void paste_here(void) {
   char to[PATH_MAX];
-  if (!F.marked[0]) { say("nothing marked -- press m first"); return; }
+  if (!F.marked[0]) { say("nothing marked: m marks one"); return; }
   join(to, sizeof to, F.cwd, leaf(F.marked));
   /* A rename across directories is a move on FAT, and it costs nothing: no
    * bytes are copied, only the entry. */
-  if (api->rename(F.marked, to) == 0) say("moved");
-  else say("could not move it");
+  say(api->rename(F.marked, to) == 0 ? "moved" : "could not move it");
   F.marked[0] = 0;
   reload();
 }
 
+static void ask_delete(void) {
+  if (!F.n) return;
+  F.ask = ASK_DELETE;
+  damage_footer();
+}
+
 static void delete_selected(void) {
   char path[PATH_MAX];
+  F.ask = ASK_NONE;
   if (!F.n) return;
   join(path, sizeof path, F.cwd, at(F.sel)->name);
-  if (api->remove(path) == 0) say("deleted");
-  else say("could not delete it");
-  F.ask = ASK_NONE;
+  say(api->remove(path) == 0 ? "deleted" : "could not delete it");
   reload();
-}
-
-/* ---- what changed ---------------------------------------------------------
- *
- * Moving the selection changes two rows out of thirteen. Saying so is the
- * difference between a keypress costing two rows and costing the window; the
- * shell clips the next paint to whatever is marked here. Marking nothing --
- * which is what everything else in this app does -- means the whole window,
- * exactly as before. */
-
-static int list_top(void) {
-  return F.at.y + BAR_H + (F.mode == MODE_MOUSE ? TOOL_H : 0);
-}
-
-static void damage_row(int idx) {
-  if (!F.have_at || idx < F.top || idx >= F.top + F.rows) return;
-  api->damage(rect(F.at.x, list_top() + (idx - F.top) * ROW_H, F.at.w, ROW_H));
-}
-
-/* The status strip, which is also the prompt. */
-static void damage_status(void) {
-  if (!F.have_at) return;
-  api->damage(rect(F.at.x, F.at.y + F.at.h - STATUS_H, F.at.w, STATUS_H));
 }
 
 /* Moving the selection: the row it left and the row it arrived at. */
@@ -293,35 +330,115 @@ static void select_row(int idx) {
   F.sel = idx;
   damage_row(F.sel);
   /* Scrolling changes every row, so if the new selection is off-screen the
-   * marks above are not enough -- say nothing and take the full repaint. */
-  if (F.sel < F.top || F.sel >= F.top + F.rows) api->damage(F.at);
+   * marks above are not enough -- mark the whole listing. */
+  if (F.sel < F.top || F.sel >= F.top + F.rows) damage_all();
+}
+
+/* ---- the action table -------------------------------------------------------
+ *
+ * The menus (fn-b, or a mouse) and the keys reach the same place. None of
+ * these has a chord: a chord is matched before the key handler in every view,
+ * and the letters must type into a name while one is being asked for.
+ *
+ * `ls`: what is in a folder, for a sentence or an AI to read -- folders with a
+ * slash, files with their size. Read straight off the card, so it answers the
+ * same with this app closed. */
+enum {
+  ACT_LS = 1, ACT_OPEN, ACT_EDITOR, ACT_NEWDIR, ACT_RENAME, ACT_DELETE,
+  ACT_MARK, ACT_PASTE, ACT_UP, ACT_REREAD
+};
+
+static const CappParam P_PATH[] = { { "path", CAPP_ARG_TEXT, "a folder, like /home" } };
+
+static const CappAction ACTIONS[] = {
+  { "open",    "Open",           "File", 0, ACT_OPEN },
+  { "editor",  "Open in Edit",   "File", 0, ACT_EDITOR },
+  { "newdir",  "New folder",     "File", 0, ACT_NEWDIR },
+  { "rename",  "Rename",         "File", 0, ACT_RENAME },
+  { "delete",  "Delete",         "File", 0, ACT_DELETE },
+  { "mark",    "Move...",        "Edit", 0, ACT_MARK },
+  { "paste",   "Paste here",     "Edit", 0, ACT_PASTE },
+  { "up",      "Up a folder",    "View", 0, ACT_UP },
+  { "reread",  "Read again",     "View", 0, ACT_REREAD },
+  { "ls", "List", 0, 0, ACT_LS, "what is in a folder, with sizes", P_PATH, 1, CAPP_CMD_YES },
+};
+#define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
+
+static const TbIcon ICONS[] = { { "+", ACT_NEWDIR }, { "^", ACT_UP } };
+
+/* The one place that knows what anything does. A menu item can arrive while
+ * a name is being typed (the bar takes the keyboard from the prompt), and
+ * then the prompt is abandoned, as clicking away from a dialogue would. */
+static int do_action(int a) {
+  if (a != ACT_LS) cancel_ask();
+  switch (a) {
+  case ACT_OPEN:   enter_selected(); return 1;
+  case ACT_EDITOR: open_in_editor(); return 1;
+  case ACT_NEWDIR: begin_ask(ASK_NEWDIR); return 1;
+  case ACT_RENAME: begin_ask(ASK_RENAME); return 1;
+  case ACT_DELETE: ask_delete(); return 1;
+  case ACT_MARK:   mark_for_move(); return 1;
+  case ACT_PASTE:  paste_here(); return 1;
+  case ACT_UP:     go_up(); return 1;
+  case ACT_REREAD: reload(); say("read again"); return 1;
+  default: return 0;
+  }
 }
 
 /* ---- painting -------------------------------------------------------------- */
 
-static void button(CRect r, const char *label, int on) {
-  api->bevel(r, CLR_FACE, on ? CLR_FACE_LO : CLR_FACE_HI,
-             on ? CLR_FACE_HI : CLR_FACE_LO);
-  api->text((short)(r.x + 3), (short)(r.y + 3), label, CLR_TEXT_D, CLR_FACE);
+/* The bottom line: what is being asked, else what just happened, else what
+ * is held for moving, else the keys. One footer (apps/footer.h), so it looks
+ * like every other app's. */
+static void paint_footer(CRect c) {
+  char line[FOOT_CHARS + 1];
+  short y = (short)(c.y + c.h - FOOT_H + 2);
+
+  if (F.ask == ASK_NEWDIR || F.ask == ASK_RENAME) {
+    const char *label = F.ask == ASK_NEWDIR ? "folder: " : "name: ";
+    int lw = (int)api->str_len(label), room = FOOT_CHARS - lw - 1;
+    /* The end of a long name, since that is where the typing is. */
+    int from = F.buf_len > room ? F.buf_len - room : 0;
+    short x = (short)(c.x + 4 + lw * 6);
+    footer_paint(api, c, label);
+    api->text(x, y, F.buf + from, CLR_FG, FOOT_BG);
+    api->fill(rect(x + (F.buf_len - from) * 6, y, 5, 8), CLR_FG);
+  } else if (F.ask == ASK_DELETE) {
+    footer_paint(api, c, 0);
+    api->fmt(line, sizeof line, "delete %s? y / n", at(F.sel)->name);
+    api->text((short)(c.x + 4), y, line, CLR_ERR, FOOT_BG);
+  } else if (F.status[0]) {
+    api->fmt(line, sizeof line, "%s", F.status);
+    footer_paint(api, c, line);
+  } else if (F.marked[0]) {
+    footer_paint(api, c, 0);
+    api->fmt(line, sizeof line, "v paste %s here", leaf(F.marked));
+    api->text((short)(c.x + 4), y, line, CLR_MARK, FOOT_BG);
+  } else {
+    footer_paint(api, c, "enter open  n new  e rename  d delete");
+  }
 }
 
-/* The toolbar, in mouse mode. Six buttons across 240 pixels is 38 each, which
- * fits three characters and a margin -- hence the abbreviations. */
-#define NBUTTONS 6
-static const char *BTN[NBUTTONS] = { "up", "new", "ren", "mov", "del", "opn" };
-
-static CRect button_box(CRect c, int i) {
-  int w = c.w / NBUTTONS;
-  return rect(c.x + i * w, c.y + BAR_H, (i == NBUTTONS - 1) ? c.w - i * w : w - 1,
-              TOOL_H - 1);
-}
-
-static void app_paint(void *st, CRect c) {
-  int list_top = c.y + BAR_H + (F.mode == MODE_MOUSE ? TOOL_H : 0);
-  int list_h = c.h - (list_top - c.y) - STATUS_H;
-  int i;
+static void app_paint(void *st, CRect full) {
+  CRect c;
+  int top, list_h, i;
   (void)st;
 
+  /* Only the dropdown moved: draw it and nothing else. Repainting the list
+   * underneath first is what makes a menu flicker. */
+  if (toolbar_only_menu()) { toolbar_paint_menu(full); return; }
+  if (toolbar_only_bar()) { toolbar_paint_bar(full); return; }
+  toolbar_paint_bar(full);
+  c = toolbar_rest(full);
+
+  /* The rectangles are needed by click and damage, and only paint is told
+   * them, so paint records them. */
+  F.full = full;
+  F.at = c;
+  F.have_at = 1;
+
+  top = c.y + BAR_H;
+  list_h = c.h - BAR_H - FOOT_H;
   F.rows = list_h / ROW_H;
   if (F.rows < 1) F.rows = 1;
   if (F.sel < F.top) F.top = F.sel;
@@ -331,28 +448,24 @@ static void app_paint(void *st, CRect c) {
   api->fill(rect(c.x, c.y, c.w, BAR_H), CLR_BAR);
   api->text((short)(c.x + 2), (short)(c.y + 1), F.cwd, CLR_FG, CLR_BAR);
 
-  if (F.mode == MODE_MOUSE)
-    for (i = 0; i < NBUTTONS; i++) button(button_box(c, i), BTN[i], 0);
-
-  api->fill(rect(c.x, list_top, c.w, list_h), CLR_BG);
+  api->fill(rect(c.x, top, c.w, list_h), CLR_BG);
   for (i = 0; i < F.rows; i++) {
     int idx = F.top + i;
-    short y = (short)(list_top + i * ROW_H);
+    short y = (short)(top + i * ROW_H);
     const CappEntry *e;
-    uint16_t fg;
+    uint16_t fg, bg;
 
     if (idx >= F.n) break;
     e = at(idx);
 
+    bg = idx == F.sel ? CLR_SEL : CLR_BG;
     if (idx == F.sel) api->fill(rect(c.x, y, c.w, ROW_H), CLR_SEL);
     fg = e->is_dir ? CLR_DIR : CLR_FG;
 
     /* A folder gets a slash rather than an icon: at nine pixels a row, one
      * character says it more clearly than four pixels of drawing. */
-    api->text((short)(c.x + 3), (short)(y + 1), e->is_dir ? "/" : " ", fg,
-              idx == F.sel ? CLR_SEL : CLR_BG);
-    api->text((short)(c.x + 11), (short)(y + 1), e->name, fg,
-              idx == F.sel ? CLR_SEL : CLR_BG);
+    api->text((short)(c.x + 3), (short)(y + 1), e->is_dir ? "/" : " ", fg, bg);
+    api->text((short)(c.x + 11), (short)(y + 1), e->name, fg, bg);
 
     if (!e->is_dir) {
       char size[12];
@@ -361,59 +474,60 @@ static void app_paint(void *st, CRect c) {
       if (e->size < 1024) api->fmt(size, sizeof size, "%luB", (unsigned long)e->size);
       else api->fmt(size, sizeof size, "%luK", (unsigned long)(e->size / 1024));
       api->text((short)(c.x + c.w - 6 * (int)api->str_len(size) - 3), (short)(y + 1),
-                size, CLR_DIM, idx == F.sel ? CLR_SEL : CLR_BG);
+                size, CLR_DIM, bg);
     }
   }
 
   if (!F.n)
-    api->text((short)(c.x + 6), (short)(list_top + 6), "(empty)", CLR_DIM, CLR_BG);
+    api->text((short)(c.x + 6), (short)(top + 6), "(empty)", CLR_DIM, CLR_BG);
 
-  /* The status line doubles as the prompt: one row at the bottom that is
-   * either telling you what happened or asking for a name. */
-  {
-    short y = (short)(c.y + c.h - STATUS_H);
-    api->fill(rect(c.x, y, c.w, STATUS_H), CLR_BAR);
-    if (F.ask == ASK_NEWDIR || F.ask == ASK_RENAME) {
-      api->text((short)(c.x + 2), (short)(y + 1),
-                F.ask == ASK_NEWDIR ? "folder:" : "name:", CLR_DIM, CLR_BAR);
-      api->text((short)(c.x + 50), (short)(y + 1), F.buf, CLR_FG, CLR_BAR);
-      api->fill(rect(c.x + 50 + F.buf_len * 6, y + 1, 5, 8), CLR_FG);
-    } else if (F.ask == ASK_DELETE) {
-      api->text((short)(c.x + 2), (short)(y + 1), "delete? y/n", CLR_ERR, CLR_BAR);
-    } else if (F.marked[0]) {
-      api->text((short)(c.x + 2), (short)(y + 1), "holding:", CLR_MARK, CLR_BAR);
-      api->text((short)(c.x + 52), (short)(y + 1), leaf(F.marked), CLR_MARK, CLR_BAR);
-    } else {
-      api->text((short)(c.x + 2), (short)(y + 1), F.status, CLR_DIM, CLR_BAR);
-    }
-  }
+  paint_footer(c);
+
+  /* Last: a dropdown is drawn over the list it covers. */
+  toolbar_paint_menu(full);
 }
 
 /* ---- keys ------------------------------------------------------------------ */
 
 static int key_prompt(unsigned char k) {
   if (k == CAPP_KEY_ENTER) { finish_ask(); return 1; }
+  if (k == CAPP_KEY_ESC) { cancel_ask(); return 1; }
   if (k == CAPP_KEY_BACK) {
-    if (F.buf_len) { F.buf[--F.buf_len] = 0; damage_status(); }
-    else F.ask = ASK_NONE;
+    if (F.buf_len) { F.buf[--F.buf_len] = 0; damage_footer(); }
+    else cancel_ask();
     return 1;
   }
   if (k >= ' ' && k < 0x7F && F.buf_len < CAPP_NAME_MAX) {
     F.buf[F.buf_len++] = (char)k;
     F.buf[F.buf_len] = 0;
-    damage_status();
-    return 1;
+    damage_footer();
   }
   return 1;
 }
 
-static int app_key(void *st, unsigned char k) {
-  (void)st;
-  F.mode = MODE_KEYS;
+/* The bar first: while it has the keyboard it answers for every key. */
+static int menu_key(unsigned char k, int *handled) {
+  int a = toolbar_key(k);
+  *handled = 1;
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return do_action(a);
+  *handled = 0;
+  return 0;
+}
 
+static int app_key(void *st, unsigned char k) {
+  int handled, r;
+  (void)st;
+
+  r = menu_key(k, &handled);
+  if (handled) return r;
+  unsay();
+
+  /* Asked to delete: y does it, and anything else -- n, Escape, Backspace
+   * -- is a no. */
   if (F.ask == ASK_DELETE) {
     if (k == 'y' || k == 'Y') delete_selected();
-    else F.ask = ASK_NONE;
+    else cancel_ask();
     return 1;
   }
   if (F.ask != ASK_NONE) return key_prompt(k);
@@ -421,66 +535,58 @@ static int app_key(void *st, unsigned char k) {
   switch (k) {
   case CAPP_KEY_UP:    select_row(F.sel - 1); return 1;
   case CAPP_KEY_DOWN:  select_row(F.sel + 1); return 1;
-  case CAPP_KEY_LEFT:  go_up(); return 1;
-  case CAPP_KEY_RIGHT:
-  case CAPP_KEY_ENTER: enter_selected(); return 1;
+  case CAPP_KEY_LEFT:
   case CAPP_KEY_BACK:  go_up(); return 1;
-  case 'n': case 'N':  begin_ask(ASK_NEWDIR); return 1;
-  case 'r': case 'R':  begin_ask(ASK_RENAME); return 1;
-  case 'm': case 'M':  mark_for_move(); return 1;
-  case 'p': case 'P':  paste_here(); return 1;
-  case 'd': case 'D':  if (F.n) F.ask = ASK_DELETE; return 1;
-  case 'e': case 'E': {
-    char path[PATH_MAX];
-    if (!F.n || at(F.sel)->is_dir) return 1;
-    join(path, sizeof path, F.cwd, at(F.sel)->name);
-    api->run("edit", path);
+  case CAPP_KEY_RIGHT:
+  case CAPP_KEY_ENTER: return do_action(ACT_OPEN);
+  case 'n': case 'N':  return do_action(ACT_NEWDIR);
+  case 'e': case 'E':  return do_action(ACT_RENAME);
+  case 'm': case 'M':  return do_action(ACT_MARK);
+  case 'v': case 'V':  return do_action(ACT_PASTE);
+  case 'd': case 'D':
+  case KEY_DEL:        return do_action(ACT_DELETE);
+  case 'o': case 'O':  return do_action(ACT_EDITOR);
+  case 'r': case 'R':  return do_action(ACT_REREAD);
+  case CAPP_KEY_ESC:
+    /* A file held for moving is a step in, so Escape lets go of it. With
+     * nothing held this is the top level, which keeps Escape. */
+    if (!F.marked[0]) return 0;
+    F.marked[0] = 0;
+    damage_footer();
     return 1;
-  }
-  case 'g': case 'G':  reload(); say("reread"); return 1;
   default: return 0;
   }
 }
 
 /* ---- mouse ------------------------------------------------------------------ */
 
-static void do_button(int i) {
-  switch (i) {
-  case 0: go_up(); break;
-  case 1: begin_ask(ASK_NEWDIR); break;
-  case 2: begin_ask(ASK_RENAME); break;
-  case 3: if (F.marked[0]) paste_here(); else mark_for_move(); break;
-  case 4: if (F.n) F.ask = ASK_DELETE; break;
-  case 5: enter_selected(); break;
-  default: break;
-  }
+/* The first sign of a mouse brings the menu bar, which moves everything down
+ * by its height -- the whole window, whatever else was marked. */
+static void saw_mouse(void) {
+  if (toolbar_saw_mouse() && F.have_at) api->damage(F.full);
 }
 
 static int app_click(void *st, short x, short y, int button) {
-  CRect c = F.at;
-  int list_top, i;
+  int a;
   (void)st;
 
-  F.mode = MODE_MOUSE;            /* a pointer arrived: show the toolbar */
   if (!F.have_at) return 1;
+  saw_mouse();
+  a = toolbar_click(x, y);
+  if (a == TB_CONSUMED) return 1;             /* opened or closed a menu */
+  if (a != TB_NONE) return do_action(a);
+  y = (short)(y - toolbar_h());
+  unsay();
 
-  /* The prompt takes the screen while it is open: a click anywhere cancels,
+  /* A prompt takes the screen while it is open: a click anywhere cancels,
    * which is what clicking away from a dialogue means everywhere else. */
-  if (F.ask != ASK_NONE) { F.ask = ASK_NONE; return 1; }
+  if (F.ask != ASK_NONE) { cancel_ask(); return 1; }
 
   if (y < BAR_H) { go_up(); return 1; }        /* the path bar walks up */
-
-  list_top = BAR_H + TOOL_H;
-  if (y < list_top) {
-    for (i = 0; i < NBUTTONS; i++) {
-      CRect b = button_box(rect(0, 0, c.w, c.h), i);
-      if (x >= b.x && x < b.x + b.w) { do_button(i); return 1; }
-    }
-    return 1;
-  }
+  if (y >= F.at.h - FOOT_H) return 1;
 
   {
-    int row = (y - list_top) / ROW_H;
+    int row = (y - BAR_H) / ROW_H;
     int idx = F.top + row;
     if (idx < 0 || idx >= F.n) return 1;
 
@@ -494,46 +600,32 @@ static int app_click(void *st, short x, short y, int button) {
 }
 
 static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
-  (void)st; (void)x; (void)y; (void)buttons;
-  if (F.mode != MODE_MOUSE) { F.mode = MODE_MOUSE; if (!wheel) return 1; }
-  if (!wheel) return 0;
-  {
+  int changed = 0;
+  (void)st; (void)buttons;
+  if (!F.have_at) return 0;
+  if (toolbar_saw_mouse()) { api->damage(F.full); changed = 1; }
+  if (toolbar_hover(x, y)) changed = 1;
+  if (wheel) {
     int want = F.sel - wheel;
     if (want < 0) want = 0;
     if (want >= F.n) want = F.n ? F.n - 1 : 0;
     select_row(want);
+    changed = 1;
   }
-  return 1;
+  return changed;
 }
 
 static int app_wants_text(void *st) {
   (void)st;
+  /* Not while the menu has the keyboard: a spoken sentence would otherwise
+   * type into a name that is not listening. */
+  if (toolbar_has_keys()) return 0;
   return F.ask == ASK_NEWDIR || F.ask == ASK_RENAME;
 }
 
-/* The content rect is needed by the click handler and only paint is told it,
- * so paint records it. */
-static void paint_and_remember(void *st, CRect c) {
-  F.at = c;
-  F.have_at = 1;
-  app_paint(st, c);
-}
+/* ---- commands --------------------------------------------------------------- */
 
-/* ---- commands ---------------------------------------------------------------
- *
- * `ls`: what is in a folder, for a sentence or an AI to read -- folders with a
- * slash, files with their size. Read straight off the card, so it answers the
- * same with this app closed. */
-enum { ACT_LS = 1 };
-
-static const CappParam P_PATH[] = { { "path", CAPP_ARG_TEXT, "a folder, like /home" } };
-
-static const CappAction ACTIONS[] = {
-  { "ls", "List", 0, 0, ACT_LS, "what is in a folder, with sizes", P_PATH, 1, CAPP_CMD_YES },
-};
-#define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
-
-static int app_action(void *st, int a) { (void)st; (void)a; return 0; }
+static int app_action(void *st, int a) { (void)st; return do_action(a); }
 
 static int app_command(void *st, int action, int argc, const char *const *argv,
                        char *out, size_t n) {
@@ -565,9 +657,11 @@ const CappInfo capp_info = {
     0x80, 0x04, 0x80, 0x04, 0x80, 0x04, 0x80, 0x04,
     0x80, 0x04, 0x80, 0x04, 0x80, 0x04, 0x80, 0x04,
     0x80, 0x04, 0xFF, 0xFC, 0x00, 0x00, 0x00, 0x00 },
-  "arrows\tmove, left is up a folder\nenter\topen\nn r\tnew folder, rename\n"
-  "m p\tmark a file, then move it here\nd\tdelete\ne\topen in the editor\n"
-  "g\tread the folder again\n",
+  "up down\tmove\nenter right\topen; a folder goes in\n"
+  "left backspace\tup a folder\nn\tnew folder\ne\trename\n"
+  "d\tdelete: y yes, n or esc no\nm\tmark a file to move\nv\tpaste it here\n"
+  "esc\tlet go of the marked file\no\topen in the editor\n"
+  "r\tread the folder again\nfn-b\tthe menus\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
 };
@@ -585,10 +679,10 @@ int capp_main(const CardApi *a, int argc, char **argv) {
     if (api->stat(argv[1], &st) == 0 && st.is_dir)
       api->fmt(F.cwd, sizeof F.cwd, "%s", argv[1]);
   }
-  say("n new  r rename  m move  d delete");
   reload();
+  toolbar_init(api, ACTIONS, NACT, ICONS, 2);
 
-  UI.paint = paint_and_remember;
+  UI.paint = app_paint;
   UI.key = app_key;
   UI.click = app_click;
   UI.mouse = app_mouse;
