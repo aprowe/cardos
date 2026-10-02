@@ -101,6 +101,16 @@ class NotesTest(unittest.TestCase):
         s, body = self.req("GET", "/dash/notes", bearer=None)
         self.assertEqual((s, json.loads(body)), (200, []))
 
+    def test_the_dashboard_reaches_a_note_under_dash(self):
+        # nginx passes only /dash* on the public name.
+        self.cookie = True
+        s, line = self.req("POST", "/dash/notes/note", "# Plans\nsoon\n", bearer=None)
+        self.assertEqual(s, 200)
+        nid = line.split("\t")[0]
+        self.assertEqual(self.req("GET", "/dash/notes/note?id=" + nid, bearer=None),
+                         (200, "# Plans\nsoon\n"))
+        self.assertEqual(self.req("DELETE", "/dash/notes/note?id=" + nid, bearer=None)[0], 200)
+
     def test_bad_ids_are_refused(self):
         self.assertEqual(self.req("GET", "/notes/note?id=../google")[0], 400)
         self.assertEqual(self.req("POST", "/notes/note?id=nope", "x")[0], 404)

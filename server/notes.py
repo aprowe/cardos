@@ -229,4 +229,10 @@ ROUTES = [
     ("DELETE", "/notes/note", delete_note, "open"),
     ("POST", "/notes/audio", post_audio, "open"),
     ("GET", "/dash/notes", get_dash_list, "open"),
+    # The same, under /dash: on the public name nginx passes only /dash*, so
+    # the page's /notes/note calls never reached here -- the list loaded and
+    # every note clicked was an error (2026-10-02).
+    ("GET", "/dash/notes/note", get_note, "open"),
+    ("POST", "/dash/notes/note", post_note, "open"),
+    ("DELETE", "/dash/notes/note", delete_note, "open"),
 ]

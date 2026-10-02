@@ -1413,7 +1413,7 @@ function noteGuard(){ return !noteDirty()||confirm('Discard the unsaved changes 
 async function noteOpen(id){
   if(id===N.id||!noteGuard()) return;
   try{
-    const text=await noteFetch('GET','/notes/note?id='+encodeURIComponent(id));
+    const text=await noteFetch('GET','/dash/notes/note?id='+encodeURIComponent(id));
     N.id=id; N.clean=text; $('#note-text').value=text;
     const n=N.list.find(n=>n.id===id); noteMeta(n?'saved '+new Date(n.updated*1000).toLocaleString():'');
     renderNotes();
@@ -1428,7 +1428,7 @@ async function noteSave(){
   if(!text.trim()){ toast('Write something first — the first line is the title.','err'); return; }
   N.busy=true; renderNotes();
   try{
-    const line=await noteFetch('POST','/notes/note'+(N.id?'?id='+encodeURIComponent(N.id):''),text);
+    const line=await noteFetch('POST','/dash/notes/note'+(N.id?'?id='+encodeURIComponent(N.id):''),text);
     N.id=line.split('\t')[0]; N.clean=text; noteMeta('saved just now');
     await notesLoad();
   }catch(e){ toast(e.message,'err'); }
@@ -1437,7 +1437,7 @@ async function noteSave(){
 async function noteDelete(){
   if(!N.id){ noteNew(); return; }
   if(!confirm('Delete this note? The device deletes its copy at its next sync.')) return;
-  try{ await noteFetch('DELETE','/notes/note?id='+encodeURIComponent(N.id)); N.id=null; N.clean=''; $('#note-text').value=''; noteMeta(''); await notesLoad(); toast('Deleted.','info'); }
+  try{ await noteFetch('DELETE','/dash/notes/note?id='+encodeURIComponent(N.id)); N.id=null; N.clean=''; $('#note-text').value=''; noteMeta(''); await notesLoad(); toast('Deleted.','info'); }
   catch(e){ toast(e.message,'err'); }
 }
 $('#note-text').addEventListener('input',()=>{ $('#note-state').textContent=noteDirty()?'unsaved changes':''; });
