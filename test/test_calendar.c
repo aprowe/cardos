@@ -1040,3 +1040,197 @@ void test_calendar_edit_is_one_of_the_apps_declared_actions(void) {
     if (MAIN_ACTIONS[i].action == ACT_EDIT) found = 1;
   CHECK(found);
 }
+
+/* ---- one key vocabulary ------------------------------------------------------
+ *
+ * Escape goes back one level out of everything, d always asks, and a chord
+ * from the action table -- matched by the shell before any key handler, in
+ * every view -- only does what the view on screen means.
+ */
+
+/* The form ignored Escape: it fell through every test in key_add and came
+ * back declined. It is a form, so Escape cancels it, back to where it came
+ * from. */
+void test_calendar_escape_cancels_the_form_back_to_where_it_came_from(void) {
+  three_events_no_zone();
+  C.sel = 0;
+  key_agenda(CAPP_KEY_ENTER);
+  CHECK_EQ(VIEW_DAY, C.view);
+  key_day('n');
+  CHECK_EQ(VIEW_ADD, C.view);
+  key_add('x');
+  CHECK_EQ(1, app_key(0, CAPP_KEY_ESC));
+  CHECK_EQ(VIEW_DAY, C.view);
+  CHECK_EQ(3, C.n);                           /* nothing added */
+
+  app_key(0, CAPP_KEY_ESC);                   /* the day view's own Escape */
+  CHECK_EQ(VIEW_AGENDA, C.view);
+  app_key(0, 'a');
+  CHECK_EQ(VIEW_ADD, C.view);
+  CHECK_EQ(1, app_key(0, CAPP_KEY_ESC));
+  CHECK_EQ(VIEW_AGENDA, C.view);
+}
+
+/* ctrl-g, ctrl-y, ctrl-n and ctrl-d used to fire in the form: out of it to
+ * another view with the form's menus still up, or a delete of whatever the
+ * agenda had selected. */
+void test_calendar_view_chords_do_nothing_in_the_form(void) {
+  three_events_no_zone();
+  C.sel = 0;
+  key_agenda('e');
+  CHECK_EQ(VIEW_ADD, C.view);
+  CHECK_EQ(1, app_action(0, ACT_AGENDA));
+  CHECK_EQ(1, app_action(0, ACT_DAY));
+  CHECK_EQ(1, app_action(0, ACT_MONTH));
+  CHECK_EQ(1, app_action(0, ACT_DELETE));
+  CHECK_EQ(VIEW_ADD, C.view);
+  CHECK_EQ(0, C.confirm);
+  CHECK_EQ(1, C.form_edit);                   /* still editing it */
+  CHECK_EQ(1, app_action(0, ACT_CANCEL));
+  CHECK_EQ(VIEW_AGENDA, C.view);
+  CHECK_EQ(0, C.form_edit);
+}
+
+/* Two unsynced events, one each on two days. ctrl-d in the day view of the
+ * second deleted the agenda's selection -- the first. It must ask about the
+ * one highlighted on screen, and only y deletes it. */
+void test_calendar_delete_in_the_day_view_asks_about_that_days_event(void) {
+  int32_t a = days_from_civil(2026, 9, 13), b = days_from_civil(2026, 9, 14);
+  use_fake_api();
+  C.offset = 0;
+  add_event("First", a, 9, 0);
+  add_event("Second", b, 9, 0);
+  C.sel = 0;                                  /* the agenda is on First */
+  open_day(b, VIEW_AGENDA);
+
+  CHECK_EQ(1, app_action(0, ACT_DELETE));
+  CHECK_EQ(1, C.confirm);
+  CHECK(strcmp(C.ev[asking_index()].summary, "Second") == 0);
+  CHECK_EQ(1, app_key(0, CAPP_KEY_DOWN));     /* not an answer: swallowed */
+  CHECK_EQ(1, C.confirm);
+  CHECK_EQ(1, app_key(0, 'n'));
+  CHECK_EQ(0, C.confirm);
+  CHECK_EQ(2, C.n);
+
+  app_key(0, 'd');
+  CHECK_EQ(1, C.confirm);
+  app_key(0, CAPP_KEY_BACK);
+  CHECK_EQ(0, C.confirm);
+  CHECK_EQ(2, C.n);
+  app_key(0, 0x7F);
+  app_key(0, 'y');
+  CHECK_EQ(0, C.confirm);
+  CHECK_EQ(1, C.n);
+  CHECK(strcmp(C.ev[0].summary, "First") == 0);
+  CHECK_EQ(VIEW_DAY, C.view);
+}
+
+/* Google's events cannot be deleted from here (the server has no delete),
+ * so d says so rather than asking a question it cannot act on. */
+void test_calendar_delete_of_a_synced_event_says_where_instead_of_asking(void) {
+  three_events_no_zone();
+  C.sel = 0;
+  key_agenda('d');
+  CHECK_EQ(0, C.confirm);
+  CHECK(strstr(C.status, "Google Calendar") != NULL);
+  CHECK_EQ(3, C.n);
+}
+
+void test_calendar_n_is_new_and_r_syncs(void) {
+  use_sync_api();
+  C.view = VIEW_AGENDA;
+  key_agenda('n');
+  CHECK_EQ(VIEW_ADD, C.view);
+  app_key(0, CAPP_KEY_ESC);
+  CHECK_EQ(VIEW_AGENDA, C.view);
+  key_agenda('r');
+  CHECK_EQ(1, STARTS);
+}
+
+/* ---- paper ------------------------------------------------------------------ */
+
+static char PRINTED[2600];
+static int fake_print(const char *doc, const char *body, const char *bold,
+                      const char *head) {
+  (void)body; (void)bold; (void)head;
+  snprintf(PRINTED, sizeof PRINTED, "%s", doc);
+  return 0;
+}
+static void fake_print_now(CappTime *t) {
+  memset(t, 0, sizeof *t);
+  t->synced = 2; t->year = 2026; t->month = 9; t->day = 20; t->hour = 10; t->min = 5;
+}
+
+/* The agenda as it reads: a heading per day, a line per event. */
+void test_calendar_prints_the_agenda_a_heading_per_day(void) {
+  three_events_no_zone();
+  FAKE.print_fonts = fake_print;
+  FAKE.now = fake_print_now;
+  C.view = VIEW_AGENDA;
+  CHECK_EQ(1, app_action(0, ACT_PRINT));
+  CHECK(strcmp(PRINTED,
+    "# Calendar\n## Sun 13 Sep\n08:30 Standup\n13:00 Dentist\n"
+    "## Mon 14 Sep\nall day Birthday\n---\nprinted 20 Sep 10:05\n") == 0);
+  CHECK_EQ(1, C.printing);
+}
+
+/* The day view prints that day, under its full date -- empty or not. */
+void test_calendar_prints_the_day_on_screen(void) {
+  three_events_no_zone();
+  FAKE.print_fonts = fake_print;
+  FAKE.now = fake_print_now;
+  C.sel = 0;
+  key_agenda(CAPP_KEY_ENTER);
+  key_day('p');
+  CHECK(strcmp(PRINTED,
+    "# Sun 13 Sep 2026\n08:30 Standup\n13:00 Dentist\n---\nprinted 20 Sep 10:05\n") == 0);
+  key_day(CAPP_KEY_LEFT);
+  key_day('p');
+  CHECK(strstr(PRINTED, "# Sat 12 Sep 2026\nNothing on.\n") == PRINTED);
+}
+
+/* fn-p is the print chord in every app that prints: an action with the key. */
+void test_calendar_print_is_fn_p_in_the_action_table(void) {
+  int i, found = 0;
+  for (i = 0; i < NMAIN; i++)
+    if (MAIN_ACTIONS[i].action == ACT_PRINT && MAIN_ACTIONS[i].key == CAPP_KEY_PRINT)
+      found = 1;
+  CHECK(found);
+}
+
+/* ---- repainting only what changed ------------------------------------------- */
+
+static CRect DAMAGED[8];
+static int   NDAMAGED;
+static void record_damage(CRect r) {
+  if (NDAMAGED < 8) DAMAGED[NDAMAGED] = r;
+  NDAMAGED++;
+}
+static int fake_not_headless(void) { return 0; }
+
+/* A sync in the air used to make every tick answer "repaint" with nothing
+ * marked -- the whole window, every 5 ms, for the length of a request. Now a
+ * tick with nothing new asks for nothing, and a status that moved asks for
+ * the footer alone. */
+void test_calendar_a_sync_in_the_air_does_not_repaint_the_window(void) {
+  CRect c;
+  use_sync_api();
+  FAKE.damage = record_damage;
+  FAKE.headless = fake_not_headless;
+  c.x = 0; c.y = 0; c.w = 240; c.h = 135;
+  C.full = c;
+  C.content = c;
+  sync_begin("s");
+  CHECK(C.stage != SYNC_IDLE);
+  snprintf(C.last_status, sizeof C.last_status, "%s", C.status);
+
+  NDAMAGED = 0;
+  CHECK_EQ(0, app_tick(0, fake_ticks()));
+  CHECK_EQ(0, NDAMAGED);
+
+  say("something new");
+  CHECK_EQ(1, app_tick(0, fake_ticks()));
+  CHECK_EQ(1, NDAMAGED);
+  CHECK_EQ(135 - FOOT_H, DAMAGED[0].y);
+  CHECK_EQ(FOOT_H, DAMAGED[0].h);
+}

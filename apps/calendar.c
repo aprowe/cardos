@@ -17,10 +17,10 @@
  * draws.
  *
  * The day view is a layer, not a fourth place to be: it remembers whether the
- * agenda or the grid opened it and Escape goes back there. Escape reaches an
- * app before the shell acts on it, so returning 1 keeps the app open and
- * returning 0 leaves it -- which is why key_agenda, the top level, must not
- * claim it.
+ * agenda or the grid opened it and Escape goes back there. The form, too,
+ * goes back to whichever view opened it. The agenda is the top level and
+ * declines Escape, which keeps the app open: fn-` is the way out, and it is
+ * the OS's.
  *
  * THE MEMORY PROBLEM, AND THE ONE TRICK THAT SOLVES IT. A Google event is
  * about 700 bytes of JSON -- attendees, reminders, conferencing, html links,
@@ -58,6 +58,8 @@
 
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
+#include "apps/safefile.h"
+#include "apps/footer.h"
 
 #define MAX_EVENTS  40
 #define SUMMARY_MAX 34
@@ -71,7 +73,9 @@
 #define ROW_H       11
 #define SCREEN_W    240
 #define SCREEN_H    135
-#define BAR_H       10
+/* The footer (apps/footer.h): the status line in the agenda, grid and day,
+ * the form's keys in the form, the question while a delete is asked. */
+#define BAR_H       FOOT_H
 
 #define DAY_SECS    86400u
 #define WINDOW_DAYS 60          /* how far ahead a sync looks */
@@ -128,6 +132,9 @@ typedef struct {
    * reason `sending` is one: a sync that lands while the form is up sorts
    * and rebuilds the array under it. absorb puts it back by id. */
   uint8_t  editing;
+  /* The footer is asking "delete this?" about this event. A flag for the
+   * same reason again: a sync may land between the question and the y. */
+  uint8_t  asking;
 } Event;
 
 static const CardApi *api;
@@ -164,8 +171,21 @@ static struct {
   int   draft_hour, draft_min;
   int32_t draft_day;                /* days since the epoch, local */
 
+  View  form_back;                  /* where the form returns to */
+  int   confirm;                    /* a delete is waiting for y or n */
+  int   partial;                    /* this key marked its own damage */
+  CRect full;                       /* what the last paint was given */
+  CRect content;                    /* the same, below the toolbar */
+
   char  status[64];
+  char  last_status[64];            /* to know when only the footer changed */
   char  reply[REPLY_MAX];
+
+  /* Paper: the agenda, or one day, in the print markup Todo and Today use.
+   * Its own buffer, because a sync may be filling reply[] at the moment
+   * fn-p is pressed; print copies the page at once. */
+  char  page[2560];
+  int   printing;                   /* mirror the job's status into the footer */
 
   /* The sync, which no longer blocks. See CardApi.http_start: the request
    * runs on a task of its own and this polls it from tick, so the screen
@@ -461,20 +481,23 @@ static int day_position_of(int32_t day, int idx) {
  *
  * One line an event: flags, the two instants, the id, then the summary last
  * because it is the only field that can hold a space. */
+/* Through apps/safefile.h. The cache is also the queue of events made here
+ * and not yet pushed, and a rewrite in place cut short by a pulled battery
+ * lost the lot. */
 static void cache_save(void) {
   char line[ID_MAX + SUMMARY_MAX + 48];
-  int fd, i;
+  SafeFile f;
+  int i;
 
-  fd = api->open(CACHE_PATH, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
-  if (fd < 0) return;
+  if (safe_begin(&f, api, CACHE_PATH) != 0) return;
   for (i = 0; i < C.n; i++) {
     int n = api->fmt(line, sizeof line, "%d %d %d %lu %lu %s %s\n",
                      C.ev[i].all_day, C.ev[i].dirty, C.ev[i].deleted,
                      (unsigned long)C.ev[i].start, (unsigned long)C.ev[i].end,
                      C.ev[i].id[0] ? C.ev[i].id : "-", C.ev[i].summary);
-    api->write(fd, line, (size_t)n);
+    safe_write(&f, line, (size_t)n);
   }
-  api->close(fd);
+  safe_commit(&f);
 }
 
 static unsigned long scan_ul(const char *s, int *pos) {
@@ -491,7 +514,7 @@ static void cache_load(void) {
   int fd, n, i, len = 0;
 
   C.n = 0;
-  fd = api->open(CACHE_PATH, CAPP_O_READ);
+  fd = safe_open_read(api, CACHE_PATH);
   if (fd < 0) return;
 
   while ((n = api->read(fd, buf, sizeof buf)) > 0) {
@@ -836,6 +859,7 @@ static void begin_add(void) {
               : (C.have_clock ? days_from_civil(C.cur_y, C.cur_m, C.cur_d) : 0);
   C.draft_hour = 9;
   C.draft_min = 0;
+  C.form_back = C.view;
   C.view = VIEW_ADD;
 }
 
@@ -881,6 +905,7 @@ static int begin_edit(int i) {
   if (e->all_day) { C.draft_hour = 0; C.draft_min = 0; }
   else local_hm(e->start, &C.draft_hour, &C.draft_min);
   C.field = FIELD_TITLE;
+  C.form_back = C.view;
   C.view = VIEW_ADD;
   return 0;
 }
@@ -917,36 +942,86 @@ static int commit_edit(void) {
   return 0;
 }
 
+/* Out of the form, back one level: to whichever view opened it. A form
+ * opened from the day view used to drop you in the agenda. */
+static void form_leave(void) {
+  View back = C.form_back;
+  if (back != VIEW_MONTH && back != VIEW_DAY) back = VIEW_AGENDA;
+  C.view = back;
+}
+
 static void commit_add(void) {
   if (C.form_edit) {
     if (!C.draft_len) { say("an event needs a title"); return; }
     if (commit_edit() != 0) say("that event is gone -- a sync removed it");
     else { say("changed"); sync_begin("edit"); }
-    C.view = VIEW_AGENDA;
+    form_leave();
     return;
   }
-  if (!C.draft_len) { C.view = VIEW_AGENDA; return; }
+  if (!C.draft_len) { form_leave(); return; }
   if (add_event(C.draft, C.draft_day, C.draft_hour, C.draft_min) != 0)
     say("the list is full");
   else
-    say("added -- press s to sync");
-  C.view = VIEW_AGENDA;
+    say("added -- r syncs");
+  form_leave();
 }
 
-static void delete_selected(void) {
-  if (C.sel < 0 || C.sel >= C.n) return;
-  /* Only what has never been pushed can be dropped outright. Anything Google
-   * knows about would come straight back on the next fetch, so rather than
-   * pretend, this says what it can and cannot do. */
-  if (C.ev[C.sel].id[0]) { say("delete it in Google Calendar"); return; }
-  {
-    int i;
-    for (i = C.sel; i + 1 < C.n; i++)
-      api->mem_cpy(&C.ev[i], &C.ev[i + 1], sizeof C.ev[0]);
-    C.n--;
-    if (C.sel >= C.n) C.sel = C.n ? C.n - 1 : 0;
+/* The selected event, whichever view is up: the agenda's, or the day's. */
+static int selected_event(void) {
+  if (C.view == VIEW_DAY) return day_event_at(C.day_shown, C.day_sel);
+  if (C.view == VIEW_AGENDA && C.sel >= 0 && C.sel < C.n) return C.sel;
+  return -1;
+}
+
+static int asking_index(void) {
+  int i;
+  for (i = 0; i < C.n; i++) if (C.ev[i].asking) return i;
+  return -1;
+}
+
+static void clear_asking(void) {
+  int i;
+  for (i = 0; i < C.n; i++) C.ev[i].asking = 0;
+  C.confirm = 0;
+}
+
+/* d, Delete, ctrl-d or the menu, on the event selected in the view on
+ * screen -- ctrl-d in the day view used to delete the agenda's selection,
+ * which was some other event on some other day.
+ *
+ * Only what has never been pushed can be dropped. Anything Google knows
+ * about would come straight back on the next fetch (the server has no
+ * delete for events), so rather than pretend, this says what it can and
+ * cannot do; the same goes for one whose POST is in the air. What can go is
+ * asked about first, as every delete is. */
+static void ask_delete(void) {
+  int i = selected_event();
+  if (i < 0) { say("pick an event to delete"); return; }
+  if (C.ev[i].id[0]) { say("delete it in Google Calendar"); return; }
+  if (C.ev[i].sending) { say("being sent -- delete it in Google Calendar"); return; }
+  clear_asking();
+  C.ev[i].asking = 1;
+  C.confirm = 1;
+}
+
+/* y: the event asked about goes, if it is still there and still ours. */
+static void delete_asked(void) {
+  int i = asking_index(), j, left;
+  clear_asking();
+  if (i < 0 || C.ev[i].id[0] || C.ev[i].sending) {
+    say("not deleted -- it reached Google meanwhile");
+    return;
   }
+  for (j = i; j + 1 < C.n; j++)
+    api->mem_cpy(&C.ev[j], &C.ev[j + 1], sizeof C.ev[0]);
+  C.n--;
+  if (C.sel >= C.n) C.sel = C.n ? C.n - 1 : 0;
+  if (C.top > C.sel) C.top = C.sel;
+  left = day_event_count(C.day_shown);
+  if (C.day_sel >= left) C.day_sel = left ? left - 1 : 0;
+  if (C.day_top > C.day_sel) C.day_top = C.day_sel;
   cache_save();
+  say("deleted");
 }
 
 /* ---- painting -------------------------------------------------------------- */
@@ -960,12 +1035,18 @@ static void day_label(int32_t day, char *out, int n) {
   api->fmt(out, (size_t)n, "%s %d %s", WDAY[weekday_of_day(day)], d, MON[m - 1]);
 }
 
+/* The footer: the status line -- what the last sync or edit did -- or,
+ * while a delete waits for its answer, the question. Key hints are in the
+ * help (fn-h) and in the empty views' own text; the form shows its own. Cut
+ * at FOOT_CHARS so a long sentence cannot run off the screen. */
 static void paint_bar(CRect c) {
-  char bar[64];
-  api->fill(rect(c.x, c.y + c.h - BAR_H, c.w, BAR_H), CLR_BAR);
-  api->fmt(bar, sizeof bar, "%s", C.status);
-  api->text((short)(c.x + 2), (short)(c.y + c.h - BAR_H + 1), bar,
-            C.have_clock ? CLR_BARFG : CLR_WARN, CLR_BAR);
+  char bar[FOOT_CHARS + 1];
+  int i = asking_index();
+  if (C.confirm && i >= 0)
+    api->fmt(bar, sizeof bar, "delete %.16s? y yes  n no", C.ev[i].summary);
+  else
+    api->fmt(bar, sizeof bar, "%s", C.status);
+  footer_paint(api, c, bar);
 }
 
 static void paint_agenda(CRect c) {
@@ -978,13 +1059,15 @@ static void paint_agenda(CRect c) {
   if (!C.n) {
     api->text((short)(c.x + 8), (short)(c.y + 20), "Nothing in the diary.",
               CLR_DIM, CLR_BG);
-    api->text((short)(c.x + 8), (short)(c.y + 34), "a  add an event",
+    api->text((short)(c.x + 8), (short)(c.y + 34), "n      new event",
               CLR_DIM, CLR_BG);
-    api->text((short)(c.x + 8), (short)(c.y + 46), "s  sync with Google",
+    api->text((short)(c.x + 8), (short)(c.y + 46), "r      sync with Google",
               CLR_DIM, CLR_BG);
-    api->text((short)(c.x + 8), (short)(c.y + 58), "m  month view",
+    api->text((short)(c.x + 8), (short)(c.y + 58), "m      month view",
               CLR_DIM, CLR_BG);
-    api->text((short)(c.x + 8), (short)(c.y + 70), "d  one day on its own",
+    /* Not `d`: d deletes, here and in every app. It said "d" for a while
+     * after the key had gone to Enter, which is what this view does. */
+    api->text((short)(c.x + 8), (short)(c.y + 70), "enter  today on its own",
               CLR_DIM, CLR_BG);
     paint_bar(c);
     return;
@@ -1073,7 +1156,7 @@ static void paint_day(CRect c) {
     api->text((short)(c.x + 8), (short)(c.y + DAY_HEAD_H + 26),
               "left/right  another day", CLR_DIM, CLR_BG);
     api->text((short)(c.x + 8), (short)(c.y + DAY_HEAD_H + 38),
-              "a  add   esc  back", CLR_DIM, CLR_BG);
+              "n  new   esc  back", CLR_DIM, CLR_BG);
     C.day_rows = 0;
     paint_bar(c);
     return;
@@ -1177,17 +1260,18 @@ static void paint_add(CRect c) {
   }
 
   api->text((short)(c.x + 4), (short)(c.y + 76),
-            "tab field  arrows adjust", CLR_DIM, CLR_BG);
-  api->text((short)(c.x + 4), (short)(c.y + 88),
-            "enter save  backspace back", CLR_DIM, CLR_BG);
-  paint_bar(c);
+            "arrows change the day and time", CLR_DIM, CLR_BG);
+  /* The form's footer is its keys, not the status: what it was doing before
+   * the form opened is not what anyone typing a title needs to read. */
+  footer_paint(api, c, "tab field  enter save  esc cancel");
 }
 
 /* Everything this app can be asked to do, stated once: the ctrl chords, the
  * menu bar, the help panel and the names a script or a model would use all
  * come out of this table. See CappUi.actions. */
 enum { ACT_ADD = 1, ACT_DELETE, ACT_SYNC, ACT_AGENDA, ACT_MONTH, ACT_DAY,
-       ACT_SAVE, ACT_CANCEL, ACT_TODAY, ACT_UPCOMING, ACT_EDIT, ACT_TOMORROW };
+       ACT_SAVE, ACT_CANCEL, ACT_TODAY, ACT_UPCOMING, ACT_EDIT, ACT_TOMORROW,
+       ACT_PRINT };
 
 /* Commands (CAPP_CMD_YES). add's title comes last so a sentence needs no
  * quotes: `add tomorrow 3pm dentist appointment`. */
@@ -1221,6 +1305,7 @@ static const CappAction MAIN_ACTIONS[] = {
   { "month",  "Month",    "View",  0x0E, ACT_MONTH },   /* ctrl-n */
   { "sync",   "Sync now", "View",  0x13, ACT_SYNC,      /* ctrl-s */
     "sync with Google Calendar", 0, 0, CAPP_CMD_YES | CAPP_CMD_NET },
+  { "print",  "Print",    "View",  CAPP_KEY_PRINT, ACT_PRINT },  /* fn-p */
 };
 
 static const CappAction ADD_ACTIONS[] = {
@@ -1238,6 +1323,98 @@ static const TbIcon MAIN_ICONS[] = {
 
 static void use_main_menus(void) { toolbar_set(MAIN_ACTIONS, NMAIN, MAIN_ICONS, 2); }
 static void use_add_menus(void)  { toolbar_set(ADD_ACTIONS, NADD, 0, 0); }
+
+/* ---- paper ---------------------------------------------------------------
+ *
+ * The markup Todo and Today print (kernel/sys/printdoc.c): `# ` a title,
+ * `## ` a heading, anything else a line of text. The agenda prints as it
+ * reads, a heading per day; the day view, and the grid's highlighted day,
+ * print that day under its full date. */
+
+#define PAGE_MAX ((int)sizeof C.page)
+
+/* One line onto the page. Refuses quietly at the end, so a page that stops
+ * short is still a page. */
+static int page_line(int at, const char *prefix, const char *text) {
+  int n;
+  if (at >= PAGE_MAX - 1) return at;
+  n = api->fmt(C.page + at, (size_t)(PAGE_MAX - at), "%s%s\n", prefix, text);
+  if (n < 0) return at;
+  if (at + n > PAGE_MAX - 1) { C.page[at] = 0; return at; }
+  return at + n;
+}
+
+/* "09:30 Dentist", or "all day Holiday". */
+static int page_event(int at, const Event *e) {
+  char line[SUMMARY_MAX + 16];
+  int h, m;
+  if (e->all_day) api->fmt(line, sizeof line, "all day %s", e->summary);
+  else {
+    local_hm(e->start, &h, &m);
+    api->fmt(line, sizeof line, "%02d:%02d %s", h, m, e->summary);
+  }
+  return page_line(at, "", line);
+}
+
+static int page_footer(int at) {
+  CappTime t;
+  char when[32];
+  api->now(&t);
+  if (t.synced && t.month >= 1 && t.month <= 12)
+    api->fmt(when, sizeof when, "%d %s %02d:%02d", t.day, MON[t.month - 1], t.hour, t.min);
+  else
+    api->fmt(when, sizeof when, "%s", "undated");
+  at = page_line(at, "---", "");
+  return page_line(at, "printed ", when);
+}
+
+static void page_day(int32_t day) {
+  char head[32];
+  int i, at, any = 0;
+  day_heading(day, head, sizeof head);
+  at = page_line(0, "# ", head);
+  for (i = 0; i < C.n; i++) {
+    if (C.ev[i].deleted || ev_day(&C.ev[i]) != day) continue;
+    at = page_event(at, &C.ev[i]);
+    any = 1;
+  }
+  if (!any) at = page_line(at, "", "Nothing on.");
+  page_footer(at);
+}
+
+static void page_agenda(void) {
+  char head[24];
+  int i, at;
+  int32_t last = -999999;
+  at = page_line(0, "# ", "Calendar");
+  for (i = 0; i < C.n; i++) {
+    int32_t d;
+    if (C.ev[i].deleted) continue;
+    d = ev_day(&C.ev[i]);
+    if (d != last) {
+      day_label(d, head, sizeof head);
+      at = page_line(at, "## ", head);
+      last = d;
+    }
+    at = page_event(at, &C.ev[i]);
+  }
+  if (last == -999999) at = page_line(at, "", "Nothing in the diary.");
+  page_footer(at);
+}
+
+/* In the faces Todo and Edit print in (fonts/fonts.txt); a card without
+ * them prints in 6x8. The job loads them, so leaving mid-print is fine. */
+static void print_page(void) {
+  int rc;
+  if (C.view == VIEW_DAY) page_day(C.day_shown);
+  else if (C.view == VIEW_MONTH) page_day(days_from_civil(C.cur_y, C.cur_m, C.cur_d));
+  else page_agenda();
+  rc = api->print_fonts(C.page, "print24", "print24b", "print34b");
+  if (rc == 0)       { C.printing = 1; say("printing..."); }
+  else if (rc == -1) say("still printing the last one");
+  else if (rc == -2) say("no printer: print scan in the console");
+  else               say("could not print: no memory");
+}
 
 /* The month grid opens on today, or -- with no clock to say what today is --
  * on the first event, rather than on 1970. */
@@ -1268,24 +1445,38 @@ static int32_t day_for_selection(void) {
   return C.n ? ev_day(&C.ev[0]) : 0;
 }
 
-/* The selected event, whichever view is up: the agenda's, or the day's. */
-static int selected_event(void) {
-  if (C.view == VIEW_DAY) return day_event_at(C.day_shown, C.day_sel);
-  if (C.view == VIEW_AGENDA && C.sel >= 0 && C.sel < C.n) return C.sel;
-  return -1;
+/* Does action `a` mean anything in the view on screen? The shell matches
+ * MAIN_ACTIONS' chords before any key handler, in every view: in the form,
+ * ctrl-g, ctrl-y and ctrl-n used to leave it for another view with the
+ * form's menus still up and the edit still marked, and ctrl-d deleted
+ * whatever the agenda had selected. A chord that does not fit does nothing,
+ * and is still consumed. While a delete is asked about, only the answer
+ * counts. */
+static int action_fits(int a) {
+  if (C.confirm) return 0;
+  switch (C.view) {
+  case VIEW_ADD:   return a == ACT_SAVE || a == ACT_CANCEL;
+  case VIEW_MONTH: return a != ACT_SAVE && a != ACT_CANCEL &&
+                          a != ACT_EDIT && a != ACT_DELETE;
+  case VIEW_DAY:   return a != ACT_SAVE && a != ACT_CANCEL && a != ACT_DAY;
+  default:         return a != ACT_SAVE && a != ACT_CANCEL;
+  }
 }
 
 /* The one place that knows what anything does. */
 static int do_action(int a) {
+  if (!action_fits(a)) return 1;
+  /* ctrl-n in the grid goes back, as m does. */
+  if (a == ACT_MONTH && C.view == VIEW_MONTH) a = ACT_AGENDA;
   switch (a) {
   case ACT_ADD:    begin_add(); use_add_menus(); return 1;
   case ACT_EDIT:
-    if (C.view == VIEW_ADD) return 1;
     if (begin_edit(selected_event()) != 0) { say("pick an event to edit"); return 1; }
     use_add_menus();
     return 1;
-  case ACT_DELETE: delete_selected(); return 1;
+  case ACT_DELETE: ask_delete(); return 1;
   case ACT_SYNC:   sync_begin("s"); return 1;
+  case ACT_PRINT:  print_page(); return 1;
   case ACT_AGENDA: C.view = VIEW_AGENDA; return 1;
   case ACT_DAY:
     /* From the grid the highlighted cell is the day; from anywhere else it is
@@ -1297,7 +1488,7 @@ static int do_action(int a) {
     return 1;
   case ACT_MONTH:  goto_month(); return 1;
   case ACT_SAVE:   commit_add(); use_main_menus(); return 1;
-  case ACT_CANCEL: clear_editing(); C.view = VIEW_AGENDA; use_main_menus(); return 1;
+  case ACT_CANCEL: clear_editing(); form_leave(); use_main_menus(); return 1;
   default: return 0;
   }
 }
@@ -1313,6 +1504,8 @@ static void app_paint(void *st, CRect c) {
     if (toolbar_only_bar()) { toolbar_paint_bar(full); return; }
     toolbar_paint_bar(full);
     c = toolbar_rest(full);
+    C.full = full;                   /* what damage() is expressed in */
+    C.content = c;
     if (C.view == VIEW_MONTH)    paint_month(c);
     else if (C.view == VIEW_DAY) paint_day(c);
     else if (C.view == VIEW_ADD) paint_add(c);
@@ -1341,9 +1534,14 @@ static int key_agenda(unsigned char k) {
   case CAPP_KEY_UP:   if (C.sel > 0) { C.sel--; scroll_to_sel(); } return 1;
   case CAPP_KEY_DOWN: if (C.sel + 1 < C.n) { C.sel++; scroll_to_sel(); } return 1;
   case 'm': case 'M': return do_action(ACT_MONTH);
+  /* n and r are new and refresh in every app; a and s were this one's, and
+   * stay. p only ever prints. */
+  case 'n': case 'N':
   case 'a': case 'A': return do_action(ACT_ADD);
   case 'e': case 'E': return do_action(ACT_EDIT);
+  case 'r': case 'R':
   case 's': case 'S': return do_action(ACT_SYNC);
+  case 'p': case 'P': return do_action(ACT_PRINT);
   /* Enter opens the day the selected event is on. A letter for it was tried
    * and taken back: `d` deletes in Todo, and the same key meaning "delete"
    * in one app and "show me this day" in another is exactly the sort of
@@ -1352,8 +1550,8 @@ static int key_agenda(unsigned char k) {
   case CAPP_KEY_ENTER: return do_action(ACT_DAY);
   case 'd': case 'D':
   case 0x7F: return do_action(ACT_DELETE);
-  /* The agenda is the top of this app: Escape here is the shell's, and
-   * answering 0 is what lets it leave. */
+  /* The agenda is the top of this app: it declines Escape, which keeps the
+   * app open. fn-` is the way out, and it is the OS's. */
   case CAPP_KEY_ESC: return 0;
   default: return 0;
   }
@@ -1380,6 +1578,7 @@ static void day_move(int to) {
   }
   if (a.w) api->damage(a);
   if (b.w) api->damage(b);
+  C.partial = 1;                     /* app_key must not widen it */
 }
 
 static int key_day(unsigned char k) {
@@ -1409,9 +1608,15 @@ static int key_day(unsigned char k) {
     return 1;
   }
   case 'm': case 'M': return do_action(ACT_MONTH);
+  case 'n': case 'N':
   case 'a': case 'A': return do_action(ACT_ADD);
   case 'e': case 'E': return do_action(ACT_EDIT);
+  /* The event highlighted in this day -- not the agenda's. */
+  case 'd': case 'D':
+  case 0x7F:          return do_action(ACT_DELETE);
+  case 'r': case 'R':
   case 's': case 'S': return do_action(ACT_SYNC);
+  case 'p': case 'P': return do_action(ACT_PRINT);
   default: return 0;
   }
 }
@@ -1423,8 +1628,11 @@ static int key_month(unsigned char k) {
   case CAPP_KEY_UP:    month_step(-7); return 1;
   case CAPP_KEY_DOWN:  month_step(7);  return 1;
   case 'm': case 'M':  return do_action(ACT_AGENDA);
+  case 'n': case 'N':
   case 'a': case 'A':  return do_action(ACT_ADD);
+  case 'r': case 'R':
   case 's': case 'S':  return do_action(ACT_SYNC);
+  case 'p': case 'P':  return do_action(ACT_PRINT);    /* the highlighted day */
   /* Into that day. This used to jump to the agenda at the first event on or
    * after the cell, which answered a question nobody asked of a date picker:
    * clicking a day and being shown the day after it is not picking a day. */
@@ -1439,6 +1647,10 @@ static int key_month(unsigned char k) {
 
 static int key_add(unsigned char k) {
   if (k == CAPP_KEY_ENTER) return do_action(ACT_SAVE);
+  /* Back one level, out of the form and to the view it came from. It used
+   * to fall through every test below and come back declined, so the form
+   * kept Escape and the only way out was Backspace or Enter. */
+  if (k == CAPP_KEY_ESC) return do_action(ACT_CANCEL);
   if (k == '\t') {
     C.field = (Field)((C.field + 1) % FIELD_COUNT);
     if (C.field == FIELD_TIME && C.draft_all_day) C.field = FIELD_TITLE;
@@ -1494,22 +1706,54 @@ static int menu_key(unsigned char k, int *handled) {
   return 0;
 }
 
+/* Everything, said out loud. The tick marks only the footer when only the
+ * status moved, and marks are unioned until the next paint -- so a key that
+ * changed the view after such a tick, and marked nothing itself, would be
+ * painted through the footer's clip and never seen. */
+static void damage_all(void) {
+  if (C.full.w > 0 && api->damage) api->damage(C.full);
+}
+
+/* The answer to "delete this?": y yes; n, Escape or Backspace no. Anything
+ * else is swallowed, so a stray arrow cannot move the selection out from
+ * under the question. */
+static int key_confirm(unsigned char k) {
+  if (api->key_repeat && api->key_repeat()) return 1;
+  switch (k) {
+  case 'y': case 'Y': delete_asked(); return 1;
+  case 'n': case 'N':
+  case CAPP_KEY_ESC:
+  case CAPP_KEY_BACK: clear_asking(); return 1;
+  default: return 1;
+  }
+}
+
 static int app_key(void *st, unsigned char k) {
   int handled, r;
   (void)st;
+  /* The question before the menu bar: it is what the footer is asking. */
+  if (C.confirm) { r = key_confirm(k); damage_all(); return r; }
   r = menu_key(k, &handled);
   if (handled) return r;
-  if (C.view == VIEW_ADD)   return key_add(k);
-  if (C.view == VIEW_DAY)   return key_day(k);
-  if (C.view == VIEW_MONTH) return key_month(k);
-  return key_agenda(k);
+  C.partial = 0;
+  if (C.view == VIEW_ADD)        r = key_add(k);
+  else if (C.view == VIEW_DAY)   r = key_day(k);
+  else if (C.view == VIEW_MONTH) r = key_month(k);
+  else                           r = key_agenda(k);
+  /* Moving within a day marks its two rows itself; anything else, all. */
+  if (r && !C.partial) damage_all();
+  C.partial = 0;
+  return r;
 }
 
 /* What the shell calls for a chord out of the table, and what the menu bar
  * and any script reach through. */
 static int app_action(void *st, int a) {
+  int r;
   (void)st;
-  return do_action(a);
+  r = do_action(a);
+  if (r) damage_all();
+  return r;
 }
 
 /* ---- commands: words for a day and a time --------------------------------- */
@@ -1639,13 +1883,26 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
   return -1;
 }
 
+static int click_content(short y);
+
 static int app_click(void *st, short x, short y, int button) {
-  (void)st; (void)button; (void)x;
+  int r;
+  (void)st; (void)button;
   {
     int a = toolbar_click(x, y);
     if (a == TB_CONSUMED) return 1;             /* opened or closed a menu */
-    if (a != TB_NONE) return do_action(a);
+    if (a != TB_NONE) return app_action(0, a);
   }
+  /* A delete is being asked about the selection; a click must not move it. */
+  if (C.confirm) return 0;
+  C.partial = 0;
+  r = click_content(y);
+  if (r && !C.partial) damage_all();
+  C.partial = 0;
+  return r;
+}
+
+static int click_content(short y) {
   y = (short)(y - toolbar_h());
   if (C.view == VIEW_DAY) {
     /* Fixed pitch here, unlike the agenda: one day needs no day headers
@@ -1680,15 +1937,35 @@ static int app_click(void *st, short x, short y, int button) {
  * and starts one when it is due -- the sync is automatic, so a diary edited
  * on a laptop turns up without anybody pressing anything. Returns 1 to ask
  * for a repaint, which is only when something actually changed. */
+/* The footer, and nothing else: while a sync runs the status is the only
+ * thing on screen that changes. */
+static void damage_footer(void) {
+  CRect c = C.content;
+  if (c.w <= 0 || c.h < BAR_H || !api->damage) return;
+  api->damage(rect(c.x, c.y + c.h - BAR_H, c.w, BAR_H));
+}
+
+static int status_changed(void) {
+  if (same(C.status, C.last_status)) return 0;
+  api->fmt(C.last_status, sizeof C.last_status, "%s", C.status);
+  return 1;
+}
+
 static int app_tick(void *st, uint32_t now_ms) {
-  int was = C.stage, n = C.n;
+  int was = C.stage, n = C.n, redraw = 0;
   (void)st;
 
   sync_tick();
   toolbar_busy(C.stage != SYNC_IDLE);
-  /* Just the bar, so the dots can move without redrawing the window. */
-  if (C.stage != SYNC_IDLE) toolbar_damage_bar();
-  toolbar_busy(C.stage != SYNC_IDLE);
+
+  /* While a page prints, its progress is the footer; the last word --
+   * "printed", or why not -- stays until something else is said. */
+  if (C.printing) {
+    const char *ps = api->print_status();
+    say(ps);
+    if (!(ps[0] == 's' || ps[0] == 'c' || (ps[0] == 'p' && ps[5] == 'i')))
+      C.printing = 0;                 /* not starting/connecting/printing */
+  }
 
   /* The first sync is on open rather than on a timer: the reason to open a
    * calendar is to find out what is in it. */
@@ -1704,9 +1981,19 @@ static int app_tick(void *st, uint32_t now_ms) {
       (!C.tried_once || (int32_t)(now_ms - C.next_auto) >= 0))
     sync_begin(C.tried_once ? "auto" : "opened");
 
-  /* Repaint while waiting, so the bar's dots animate. Otherwise only when
-   * something actually changed. */
-  return was != C.stage || n != C.n || C.stage != SYNC_IDLE;
+  /* Only what changed. This used to answer "repaint" on every tick of a
+   * sync with nothing marked, which is the whole window -- agenda, grid and
+   * all -- redrawn every 5 ms for the length of a request. Now: everything
+   * when the events or the stage changed (a fetch landed, a push went), the
+   * footer when only the status moved, and the toolbar's busy dots only
+   * when there is a toolbar to draw them in. */
+  if (was != C.stage || n != C.n) { damage_all(); redraw = 1; }
+  if (status_changed()) { damage_footer(); redraw = 1; }
+  if (C.stage != SYNC_IDLE && toolbar_bar_rect().w) {
+    toolbar_damage_bar();
+    redraw = 1;
+  }
+  return redraw;
 }
 
 static int app_mouse(void *st, int16_t x, int16_t y, int buttons, int wheel) {
@@ -1732,9 +2019,11 @@ const CappInfo capp_info = {
     0x7F, 0xFE, 0x40, 0x02, 0x55, 0x52, 0x40, 0x02,
     0x55, 0x52, 0x40, 0x02, 0x55, 0x52, 0x40, 0x02,
     0x7F, 0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-  "arrows\tmove\nenter\tthis day on its own\nm\tmonth view / agenda\n"
-  "esc\tback, then out\na\tadd an event\ne\tedit the selected event\n"
-  "d / del\tdelete (unsynced only)\ns\tsync with Google\n",
+  "arrows\tmove\nenter\tthis day on its own\nleft/right\tin a day: the next day\n"
+  "m\tmonth view / agenda\nesc\tback\nn (or a)\tnew event\n"
+  "e\tedit the selected event\nd, del\tdelete, unsynced only (y yes, n no)\n"
+  "r (or s)\tsync with Google\np\tprint the agenda, or the day\n"
+  "tab\tform: next field\narrows\tform: change the day, time\n",
   MAIN_ACTIONS,
   sizeof MAIN_ACTIONS / sizeof MAIN_ACTIONS[0],
 };
@@ -1759,10 +2048,10 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   if (!C.have_clock)
     say("clock not set -- times may be wrong");
   else if (C.n)
-    api->fmt(C.status, sizeof C.status, "%d event%s -- s to sync",
+    api->fmt(C.status, sizeof C.status, "%d event%s -- r syncs",
              C.n, C.n == 1 ? "" : "s");
   else
-    say("press s to sync");
+    say("press r to sync");
 
   toolbar_init(api, MAIN_ACTIONS, NMAIN, MAIN_ICONS, 2);
 
