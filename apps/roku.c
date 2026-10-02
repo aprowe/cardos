@@ -68,6 +68,12 @@ static struct {
 
   int   f_ui, f_uib;
   char  reply[REPLY_MAX];
+
+  /* Where the last paint put the lines that change, so a change can mark
+   * just its line: the rect paint was given (w 0 until the first paint),
+   * the last button's line and the draft's. */
+  CRect at;
+  int   last_y, draft_y;
 } G;
 
 static CRect rect(int x, int y, int w, int h) {
@@ -303,23 +309,75 @@ static int width(int f, const char *s) {
 
 static int height(int f) { return f >= 0 ? api->font_height(f) : 8; }
 
+/* r less the part `hole` covers, in up to four fills. The hole is where
+ * text is about to go, and text paints its own background: filling under it
+ * first blinks it, on a panel with no framebuffer. */
+static void fill_round(CRect r, CRect hole, uint16_t colour) {
+  int x0 = hole.x > r.x ? hole.x : r.x;
+  int y0 = hole.y > r.y ? hole.y : r.y;
+  int x1 = hole.x + hole.w < r.x + r.w ? hole.x + hole.w : r.x + r.w;
+  int y1 = hole.y + hole.h < r.y + r.h ? hole.y + hole.h : r.y + r.h;
+  if (r.w <= 0 || r.h <= 0) return;
+  if (x0 >= x1 || y0 >= y1) { api->fill(r, colour); return; }
+  if (y0 > r.y) api->fill(rect(r.x, r.y, r.w, y0 - r.y), colour);
+  if (y1 < r.y + r.h) api->fill(rect(r.x, y1, r.w, r.y + r.h - y1), colour);
+  if (x0 > r.x) api->fill(rect(r.x, y0, x0 - r.x, y1 - y0), colour);
+  if (x1 < r.x + r.w) api->fill(rect(x1, y0, r.x + r.w - x1, y1 - y0), colour);
+}
+
+/* One line of text at x in font f, and the rest of the row [c.x, c.x+c.w)
+ * in the background: a line that got shorter is covered, nothing blinks. */
+static void line_at(CRect c, int f, int x, int y, const char *s, uint16_t fg) {
+  fill_round(rect(c.x, y, c.w, height(f)), rect(x, y, s[0] ? width(f, s) : 0, height(f)), CLR_BG);
+  if (s[0]) draw(f, x, y, s, fg, CLR_BG);
+}
+
+/* Marks r for the next paint -- once there has been one, so the rects
+ * mean something. Returns 1, for a handler to return. */
+static int mark(CRect r) {
+  if (G.at.w > 0) api->damage(r);
+  return 1;
+}
+
+static int top_changed(void) { return mark(rect(G.at.x, G.at.y, G.at.w, TOP_H)); }
+
+/* A line in the big font at y. Its height is not asked before there has
+ * been a paint: before one, nothing is marked anyway. */
+static int line_changed(int y) {
+  return G.at.w > 0 ? mark(rect(G.at.x, y, G.at.w, height(G.f_uib))) : 1;
+}
+
+/* The draft line: a typed key changes it and nothing else. */
+static int draft_changed(void) {
+  top_changed();
+  return line_changed(G.draft_y);
+}
+
 /* A key in a box, then what it does; returns the x after it. */
 static int hint(int x, int y, const char *key, const char *what) {
-  int kw = width(-1, key) + 6;
-  api->fill(rect(x, y + 1, kw, ROW_H - 2), CLR_CHIP);
-  api->text((int16_t)(x + 3), (int16_t)(y + (ROW_H - 8) / 2), key, CLR_TEXT, CLR_CHIP);
+  int kw = width(-1, key) + 6, ty = y + (ROW_H - 8) / 2;
+  fill_round(rect(x, y + 1, kw, ROW_H - 2), rect(x + 3, ty, width(-1, key), 8), CLR_CHIP);
+  api->text((int16_t)(x + 3), (int16_t)ty, key, CLR_TEXT, CLR_CHIP);
   x += kw + 4;
   draw(G.f_ui, x, y + (ROW_H - height(G.f_ui)) / 2, what, CLR_DIM, CLR_BG);
   return x + width(G.f_ui, what) + 10;
 }
 
+/* "Roku" on the left, the status or the TV's name on the right, and the
+ * background round them -- split between the two, so a status that got
+ * shorter is covered by the fill and neither text is filled under. */
 static void paint_top(CRect c) {
   const char *right = G.status[0] ? G.status : G.name;
-  api->fill(rect(c.x, c.y, c.w, TOP_H), CLR_BG);
-  draw(G.f_uib, c.x + 8, c.y + (TOP_H - height(G.f_uib)) / 2, "Roku", CLR_ROKU, CLR_BG);
-  if (right[0])
-    draw(G.f_ui, c.x + c.w - 8 - width(G.f_ui, right), c.y + (TOP_H - height(G.f_ui)) / 2,
-         right, G.bad ? CLR_BAD : CLR_DIM, CLR_BG);
+  int tw = width(G.f_uib, "Roku"), th = height(G.f_uib);
+  int rw = right[0] ? width(G.f_ui, right) : 0, rh = height(G.f_ui);
+  int tx = c.x + 8, rx = c.x + c.w - 8 - rw, mid = (tx + tw + rx) / 2;
+  int ty = c.y + (TOP_H - th) / 2, ry = c.y + (TOP_H - rh) / 2;
+  if (mid < c.x) mid = c.x;
+  if (mid > c.x + c.w) mid = c.x + c.w;
+  fill_round(rect(c.x, c.y, mid - c.x, TOP_H), rect(tx, ty, tw, th), CLR_BG);
+  fill_round(rect(mid, c.y, c.x + c.w - mid, TOP_H), rect(rx, ry, rw, rh), CLR_BG);
+  draw(G.f_uib, tx, ty, "Roku", CLR_ROKU, CLR_BG);
+  if (right[0]) draw(G.f_ui, rx, ry, right, G.bad ? CLR_BAD : CLR_DIM, CLR_BG);
 }
 
 static void paint_foot(CRect c, const char *keys) { footer_paint(api, c, keys); }
@@ -338,8 +396,8 @@ static void paint_remote(CRect c) {
   x = hint(x, y, "ok", "enter");
   hint(x, y, "back", "del");
   y += ROW_H + 8;
-  if (G.last[0])
-    draw(G.f_uib, c.x + (c.w - width(G.f_uib, G.last)) / 2, y, G.last, CLR_ROKU, CLR_BG);
+  G.last_y = y;
+  line_at(c, G.f_uib, c.x + (c.w - width(G.f_uib, G.last)) / 2, y, G.last, CLR_ROKU);
   paint_foot(c, G.ip[0] ? "space play  tab type  i address"
                         : "i address");
 }
@@ -350,7 +408,8 @@ static void paint_typing(CRect c) {
   draw(G.f_ui, c.x + 8, y, "Typing to the TV", CLR_DIM, CLR_BG);
   y += ROW_H + 6;
   api->fmt(line, sizeof line, "%s_", G.draft);
-  draw(G.f_uib, c.x + 8, y, line, CLR_TEXT, CLR_BG);
+  G.draft_y = y;
+  line_at(c, G.f_uib, c.x + 8, y, line, CLR_TEXT);
   paint_foot(c, "enter enter  del erase  esc done");
 }
 
@@ -360,7 +419,8 @@ static void paint_address(CRect c) {
   draw(G.f_ui, c.x + 8, y, "The TV's address:", CLR_DIM, CLR_BG);
   y += ROW_H + 4;
   api->fmt(line, sizeof line, "%s_", G.draft);
-  draw(G.f_uib, c.x + 8, y, line, CLR_TEXT, CLR_BG);
+  G.draft_y = y;
+  line_at(c, G.f_uib, c.x + 8, y, line, CLR_TEXT);
   y += ROW_H + 8;
   draw(G.f_ui, c.x + 8, y, "On the TV: Settings > Network", CLR_DIM, CLR_BG);
   draw(G.f_ui, c.x + 8, y + ROW_H, "> About shows it.", CLR_DIM, CLR_BG);
@@ -368,8 +428,15 @@ static void paint_address(CRect c) {
 }
 
 static void app_paint(void *st, CRect c) {
+  CRect a = api->paint_area();
   (void)st;
-  api->fill(c, CLR_BG);
+  G.at = c;
+  /* The whole background only when the whole screen is being repaired: a
+   * mode change, or something of the shell's that was over it. A key or a
+   * reply marks only the lines it changed, and those draw over themselves --
+   * this fill on every key and every reply blinked the screen. */
+  if (a.x <= c.x && a.y <= c.y && a.x + a.w >= c.x + c.w && a.y + a.h >= c.y + c.h)
+    api->fill(c, CLR_BG);
   paint_top(c);
   if (G.mode == M_ADDRESS) paint_address(c);
   else if (G.mode == M_TYPING) paint_typing(c);
@@ -393,12 +460,12 @@ static int key_address(uint8_t k) {
     if (!G.ip[0]) { G.bad = 1; api->fmt(G.status, sizeof G.status, "no TV address: i sets it"); }
     return 1;
   }
-  if (k == CAPP_KEY_BACK) { if (G.dlen) G.draft[--G.dlen] = 0; return 1; }
+  if (k == CAPP_KEY_BACK) { if (G.dlen) G.draft[--G.dlen] = 0; return draft_changed(); }
   if (k == CAPP_KEY_ENTER) {
     if (!valid_ip(G.draft)) {
       G.bad = 1;
       api->fmt(G.status, sizeof G.status, "four numbers, like 192.168.1.50");
-      return 1;
+      return top_changed();
     }
     api->fmt(G.ip, sizeof G.ip, "%s", G.draft);
     G.name[0] = 0;
@@ -414,18 +481,20 @@ static int key_address(uint8_t k) {
   if (((k >= '0' && k <= '9') || k == '.') && G.dlen < IP_MAX - 1) {
     G.draft[G.dlen++] = (char)k;
     G.draft[G.dlen] = 0;
+    return draft_changed();
   }
-  return 1;
+  return top_changed();
 }
 
 static int key_typing(uint8_t k) {
   char lk[KEY_MAX];
   if (k == CAPP_KEY_ESC || k == '\t') { G.mode = M_REMOTE; return 1; }
-  if (k == CAPP_KEY_ENTER) { press("Enter"); G.dlen = 0; G.draft[0] = 0; return 1; }
+  /* Below, only the draft line changes: the screen stays as it is. */
+  if (k == CAPP_KEY_ENTER) { press("Enter"); G.dlen = 0; G.draft[0] = 0; return draft_changed(); }
   if (k == CAPP_KEY_BACK) {
     press("Backspace");
     if (G.dlen) G.draft[--G.dlen] = 0;
-    return 1;
+    return draft_changed();
   }
   if (k >= 32 && k < 127) {
     lit_key((char)k, lk, sizeof lk);
@@ -437,8 +506,9 @@ static int key_typing(uint8_t k) {
     }
     G.draft[G.dlen++] = (char)k;
     G.draft[G.dlen] = 0;
+    return draft_changed();
   }
-  return 1;
+  return top_changed();
 }
 
 static int app_key(void *st, uint8_t k) {
@@ -448,7 +518,8 @@ static int app_key(void *st, uint8_t k) {
   if (G.mode == M_TYPING) return key_typing(k);
   if (k == '\t') { G.mode = M_TYPING; G.dlen = 0; G.draft[0] = 0; return 1; }
   if (k == 'i' || k == 'I') { begin_address(); return 1; }
-  if ((ecp = ecp_for_key(k)) != 0) { press(ecp); return 1; }
+  /* Queued, not sent: nothing on screen changes until the TV answers. */
+  if ((ecp = ecp_for_key(k)) != 0) { press(ecp); return top_changed(); }
   return 0;
 }
 
@@ -459,6 +530,11 @@ static int app_tick(void *st, uint32_t now_ms) {
   (void)st; (void)now_ms;
   changed = poll();
   send_next();
+  /* A reply changes the status and, for a key, the last button's line. */
+  if (changed) {
+    top_changed();
+    line_changed(G.last_y);
+  }
   return changed;
 }
 

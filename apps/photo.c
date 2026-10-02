@@ -55,6 +55,7 @@ static struct {
   int   show;                      /* slideshow running */
   uint32_t next_slide, caption_until;
   int   ask_delete;
+  CRect at;                        /* the rect the last paint was given */
   uint16_t row[SCR_W];
 } P;
 
@@ -286,12 +287,48 @@ static void delete_current(void) {
 
 /* ---- the screen ------------------------------------------------------------------- */
 
-/* Draws the current picture centred, leaving whatever it does not cover black.
+/* Where the status is: the caption strip over a picture, or the status line
+ * of the empty screen. A status change marks only this, so the shell clips
+ * the repaint to it -- a sync step used to re-read and redraw the whole
+ * picture from the card, and every step of a sync is a status change. */
+static CRect status_rect(void) {
+  CRect c = P.at;
+  if (P.count) return rect(c.x, c.y + c.h - 9, c.w, 9);
+  return rect(c.x, c.y + 22, c.w, 8);
+}
+
+static int status_changed(void) {
+  api->damage(status_rect());
+  return 1;
+}
+
+/* r, less the part `hole` covers: up to four fills round it. The hole is
+ * where text is about to go, and text paints its own background -- filling
+ * under it first is a blink of the text on every repaint. */
+static void fill_round(CRect r, CRect hole, uint16_t colour) {
+  int x0 = hole.x > r.x ? hole.x : r.x;
+  int y0 = hole.y > r.y ? hole.y : r.y;
+  int x1 = hole.x + hole.w < r.x + r.w ? hole.x + hole.w : r.x + r.w;
+  int y1 = hole.y + hole.h < r.y + r.h ? hole.y + hole.h : r.y + r.h;
+  if (r.w <= 0 || r.h <= 0) return;
+  if (x0 >= x1 || y0 >= y1) { api->fill(r, colour); return; }
+  if (y0 > r.y) api->fill(rect(r.x, r.y, r.w, y0 - r.y), colour);
+  if (y1 < r.y + r.h) api->fill(rect(r.x, y1, r.w, r.y + r.h - y1), colour);
+  if (x0 > r.x) api->fill(rect(r.x, y0, x0 - r.x, y1 - y0), colour);
+  if (x1 < r.x + r.w) api->fill(rect(x1, y0, r.x + r.w - x1, y1 - y0), colour);
+}
+
+/* Draws the current picture centred, the bands it does not cover black, and
+ * nothing under `hole` -- the caption, drawn next, would cover it anyway, and
+ * a picture row under the caption and then the caption over it blinks the
+ * caption. Only the rows the paint is repairing are read: a caption that
+ * comes or goes reads nine rows of the file, not 135.
  * Returns 0 if the file could not be shown. */
-static int show(CRect c) {
+static int show(CRect c, CRect hole) {
   char path[96];
   unsigned char hdr[8];
-  int fd, w, h, ox, oy, y;
+  int fd, w, h, ox, oy, y, y0, y1, base = 8;
+  CRect a = api->paint_area(), b;
 
   api->fmt(path, sizeof path, "%s/%s", P.dir, P.files[P.cur]);
   fd = api->open(path, CAPP_O_READ);
@@ -303,55 +340,112 @@ static int show(CRect c) {
   } else {
     w = SCR_W;
     h = SCR_H;
-    api->seek(fd, 0, 0);         /* headerless: rewind, those were pixels */
+    base = 0;                    /* headerless: those were pixels */
   }
   if (w <= 0 || h <= 0 || w > SCR_W || h > SCR_H) { api->close(fd); return 0; }
 
   ox = c.x + (c.w - w) / 2;
   oy = c.y + (c.h - h) / 2;
-  if (w < c.w || h < c.h) api->fill(c, CAPP_BLACK);
-  for (y = 0; y < h; y++) {
-    if (api->read(fd, P.row, (size_t)w * 2) != w * 2) break;
-    api->pixels(rect(ox, oy + y, w, 1), P.row);
+  if (w < c.w || h < c.h) {
+    /* Four bands round the picture, rather than the whole screen black and
+     * the picture over it: that was a black flash on every repaint. */
+    b = rect(ox, oy, w, h);
+    fill_round(rect(c.x, c.y, c.w, b.y - c.y), hole, CAPP_BLACK);
+    fill_round(rect(c.x, b.y + h, c.w, c.y + c.h - b.y - h), hole, CAPP_BLACK);
+    fill_round(rect(c.x, b.y, b.x - c.x, h), hole, CAPP_BLACK);
+    fill_round(rect(b.x + w, b.y, c.x + c.w - b.x - w, h), hole, CAPP_BLACK);
+  }
+  y0 = a.y - oy;
+  y1 = a.y + a.h - oy;
+  if (y0 < 0) y0 = 0;
+  if (y1 > h) y1 = h;
+  if (y0 < y1 && api->seek(fd, (int32_t)(base + y0 * w * 2), 0) >= 0) {
+    for (y = y0; y < y1; y++) {
+      int sy = oy + y, hx0 = hole.x, hx1 = hole.x + hole.w;
+      if (api->read(fd, P.row, (size_t)w * 2) != w * 2) break;
+      if (hole.w <= 0 || sy < hole.y || sy >= hole.y + hole.h) {
+        api->pixels(rect(ox, sy, w, 1), P.row);
+        continue;
+      }
+      if (hx0 > ox + w) hx0 = ox + w;
+      if (hx1 < ox) hx1 = ox;
+      if (hx0 > ox) api->pixels(rect(ox, sy, hx0 - ox, 1), P.row);
+      if (hx1 < ox + w) api->pixels(rect(hx1, sy, ox + w - hx1, 1), P.row + (hx1 - ox));
+    }
   }
   api->close(fd);
   return 1;
 }
 
+/* s, padded with spaces to n characters: a line drawn this way covers the
+ * longer one it replaces, so nothing is cleared before it. */
+static void padded(char *out, int n, const char *s) {
+  int i = 0;
+  while (s[i] && i < n) { out[i] = s[i]; i++; }
+  while (i < n) out[i++] = ' ';
+  out[n] = 0;
+}
+
+/* No pictures: five lines, each drawn over its old self and padded to the
+ * edge, and only the gaps between them filled. */
+static void paint_empty(CRect c) {
+  static const int Y[5] = { 6, 22, 40, 50, 66 };
+  const char *s[5];
+  char line[64];
+  int i, prev = 0, n = (c.w - 6) / 6;
+  if (n > (int)sizeof line - 1) n = sizeof line - 1;
+  s[0] = "Photos";
+  s[1] = P.sync ? P.status : P.status[0] ? P.status : "no photos yet";
+  s[2] = "drag pictures onto the";
+  s[3] = "dashboard's Photos page";
+  s[4] = "r syncs";
+  for (i = 0; i < 5; i++) {
+    uint16_t fg = i == 0 ? CAPP_WHITE : i == 1 && P.bad ? CAPP_RED : CAPP_GREY;
+    api->fill(rect(c.x, c.y + prev, c.w, Y[i] - prev), CAPP_BLACK);
+    api->fill(rect(c.x, c.y + Y[i], 6, 8), CAPP_BLACK);
+    padded(line, n, s[i]);
+    api->text((short)(c.x + 6), (short)(c.y + Y[i]), line, fg, CAPP_BLACK);
+    if (6 + n * 6 < c.w)
+      api->fill(rect(c.x + 6 + n * 6, c.y + Y[i], c.w - 6 - n * 6, 8), CAPP_BLACK);
+    prev = Y[i] + 8;
+  }
+  api->fill(rect(c.x, c.y + prev, c.w, c.h - prev), CAPP_BLACK);
+}
+
 static void app_paint(void *st, CRect c) {
   char line[64];
   int showing_caption = (int32_t)(api->ticks_ms() - P.caption_until) < 0;
+  int caption = 1, len;
+  uint16_t fg = CAPP_WHITE, bg = CAPP_BLACK;
+  CRect hole;
   (void)st;
-  if (!P.count) {
-    api->fill(c, CAPP_BLACK);
-    api->text((short)(c.x + 6), (short)(c.y + 6), "Photos", CAPP_WHITE, CAPP_BLACK);
-    api->text((short)(c.x + 6), (short)(c.y + 22),
-              P.sync ? P.status : P.status[0] ? P.status : "no photos yet",
-              P.bad ? CAPP_RED : CAPP_GREY, CAPP_BLACK);
-    api->text((short)(c.x + 6), (short)(c.y + 40), "drag pictures onto the", CAPP_GREY, CAPP_BLACK);
-    api->text((short)(c.x + 6), (short)(c.y + 50), "dashboard's Photos page", CAPP_GREY, CAPP_BLACK);
-    api->text((short)(c.x + 6), (short)(c.y + 66), "r syncs", CAPP_GREY, CAPP_BLACK);
-    return;
-  }
-  if (!show(c)) {
-    api->fill(c, CAPP_BLACK);
-    api->fmt(line, sizeof line, "cannot show %s", P.files[P.cur]);
-    api->text((short)(c.x + 4), (short)(c.y + 4), line, CAPP_RED, CAPP_BLACK);
-  }
+  P.at = c;
+  if (!P.count) { paint_empty(c); return; }
   /* A caption over the bottom, for a moment after a change -- not over
    * the picture all the time -- and always while asking or syncing. */
   if (P.ask_delete) {
     api->fmt(line, sizeof line, "delete %s? y yes  n no", title_of(P.cur));
-    api->text((short)(c.x + 2), (short)(c.y + c.h - 9), line, CAPP_WHITE, CAPP_RED);
+    bg = CAPP_RED;
   } else if (P.sync || showing_caption) {
     if (P.sync || P.status[0])
       api->fmt(line, sizeof line, "%s", P.status);
     else
       api->fmt(line, sizeof line, "%d/%d %s%s", P.cur + 1, P.count, title_of(P.cur),
                P.show ? "  (slideshow)" : "");
-    api->text((short)(c.x + 2), (short)(c.y + c.h - 9), line,
-              P.bad ? CAPP_RED : CAPP_WHITE, CAPP_BLACK);
+    if (P.bad) fg = CAPP_RED;
+  } else {
+    caption = 0;
   }
+  len = caption ? (int)api->str_len(line) * 6 : 0;
+  if (len > c.w - 2) len = c.w - 2;
+  hole = rect(c.x + 2, c.y + c.h - 9, len, 8);
+  if (!show(c, hole)) {
+    api->fill(c, CAPP_BLACK);
+    api->fmt(line, sizeof line, "cannot show %s", P.files[P.cur]);
+    api->text((short)(c.x + 4), (short)(c.y + 4), line, CAPP_RED, CAPP_BLACK);
+    return;
+  }
+  if (caption) api->text((short)(c.x + 2), (short)(c.y + c.h - 9), line, fg, bg);
 }
 
 static void moved(int by) {
@@ -372,10 +466,11 @@ static void slideshow(int on) {
 
 static int do_action(int a) {
   switch (a) {
-  case ACT_PRINT:  print_current(); return 1;
-  case ACT_SYNC:   sync_begin(); return 1;
-  case ACT_SHOW:   slideshow(!P.show); return 1;
-  case ACT_DELETE: if (P.count) P.ask_delete = 1; return 1;
+  /* Each of these changes the caption and nothing else. */
+  case ACT_PRINT:  print_current(); return status_changed();
+  case ACT_SYNC:   sync_begin(); return status_changed();
+  case ACT_SHOW:   slideshow(!P.show); return status_changed();
+  case ACT_DELETE: if (P.count) P.ask_delete = 1; return status_changed();
   }
   return 0;
 }
@@ -384,8 +479,8 @@ static int app_key(void *st, unsigned char k) {
   (void)st;
   if (P.ask_delete) {
     P.ask_delete = 0;
-    if (k == 'y' || k == 'Y') delete_current();
-    return 1;
+    if (k == 'y' || k == 'Y') { delete_current(); return 1; }
+    return status_changed();     /* the question goes; the picture stays */
   }
   switch (k) {
   case CAPP_KEY_LEFT:
@@ -399,7 +494,7 @@ static int app_key(void *st, unsigned char k) {
   case 'd': case 'D':
   case 0x7F:           return do_action(ACT_DELETE);   /* Delete, on a Bluetooth keyboard */
   case CAPP_KEY_ESC:
-    if (P.show) { slideshow(0); return 1; }
+    if (P.show) { slideshow(0); return status_changed(); }
     return 0;
   }
   return 0;
@@ -409,8 +504,18 @@ static int app_action(void *st, int a) { (void)st; return do_action(a); }
 
 static int app_tick(void *st, uint32_t now) {
   (void)st;
-  if (P.sync == SYNC_LIST) { sync_list(); return 1; }
-  if (P.sync == SYNC_GET) { sync_get(); return 1; }
+  if (P.sync != SYNC_IDLE) {
+    /* A step changes the status; only when it changes which pictures there
+     * are, or which one is on screen, is the whole screen repainted. */
+    char keep[NAMELEN];
+    int before = P.count;
+    keep[0] = 0;
+    if (P.count) api->fmt(keep, sizeof keep, "%s", P.files[P.cur]);
+    if (P.sync == SYNC_LIST) sync_list();
+    else sync_get();
+    if (P.count != before || (P.count && !same(P.files[P.cur], keep))) return 1;
+    return status_changed();
+  }
   if (P.show && P.count > 1 && (int32_t)(now - P.next_slide) >= 0) {
     P.cur = (P.cur + 1) % P.count;
     P.next_slide = now + SHOW_MS;
@@ -420,7 +525,7 @@ static int app_tick(void *st, uint32_t now) {
   if (P.caption_until && (int32_t)(now - P.caption_until) >= 0) {
     P.caption_until = 0;
     if (!P.sync) P.status[0] = 0;
-    return 1;
+    return status_changed();
   }
   return 0;
 }
@@ -461,6 +566,7 @@ static CappUi UI;
 
 int capp_main(const CardApi *a, int argc, char **argv) {
   api = a;
+  P.at = rect(0, 0, SCR_W, SCR_H);   /* until the first paint says otherwise */
   api->fmt(P.dir, sizeof P.dir, "%s", DIR);
   index_load();
   rescan();
