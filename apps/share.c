@@ -41,46 +41,98 @@ static void stop(void) {
   api->fmt(S.status, sizeof S.status, "stopped");
 }
 
+/* The panel has no framebuffer: filling a line and writing over it is a
+ * blink you can see, and Explorer sends requests in bursts, so the whole
+ * screen used to flash with every one. text paints its own background, so
+ * every line is written padded with spaces to the full width -- it covers
+ * what was there -- and only what no text covers is filled: the margins and
+ * the gaps between lines, background over background. */
+#define TOP_LOG   62               /* y of the first log line */
+#define PITCH     10
+
+static CRect C;                    /* the rect the last paint was given */
+
+static CRect rect(int x, int y, int w, int h) {
+  CRect r;
+  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)(w > 0 ? w : 0); r.h = (int16_t)h;
+  return r;
+}
+
+/* Log lines the screen has room for, ending clear of the request count.
+ * Seven were asked for and six fit on 135 rows: the seventh was written
+ * over the count. */
+static int log_rows(CRect c) {
+  int room = (c.h - 10 - 2) - TOP_LOG - 8, n;
+  if (room < 0) return 0;
+  n = room / PITCH + 1;
+  return n > LINES ? LINES : n;
+}
+
+/* One line at y, from the left margin to the right edge; `*cur` is how far
+ * down the screen is already drawn, and the gap above this line is filled. */
+static void line(CRect c, int *cur, int y, const char *s, uint16_t fg) {
+  char buf[64];
+  int cols = (c.w - 8) / 6, i = 0;
+  if (cols > (int)sizeof buf - 1) cols = (int)sizeof buf - 1;
+  if (cols < 0) cols = 0;
+  if (y > *cur) api->fill(rect(c.x, *cur, c.w, y - *cur), CLR_BG);
+  for (; s && s[i] && i < cols; i++) buf[i] = s[i];
+  for (; i < cols; i++) buf[i] = ' ';
+  buf[cols] = 0;
+  api->fill(rect(c.x, y, 8, 8), CLR_BG);
+  api->text((int16_t)(c.x + 8), (int16_t)y, buf, fg, CLR_BG);
+  api->fill(rect(c.x + 8 + cols * 6, y, c.w - 8 - cols * 6, 8), CLR_BG);
+  *cur = y + 8;
+}
+
 static void app_paint(void *st, CRect c) {
-  int i, y;
+  int i, cur = c.y, rows = log_rows(c), first;
+  char bar[48];
   (void)st;
-  api->fill(c, CLR_BG);
-  api->text((short)(c.x + 8), (short)(c.y + 6), "Share", CLR_FG, CLR_BG);
+  C = c;
+  line(c, &cur, c.y + 6, "Share", CLR_FG);
   if (S.on) {
-    api->text((short)(c.x + 8), (short)(c.y + 20), "the card is on the network at",
-              CLR_DIM, CLR_BG);
-    api->text((short)(c.x + 8), (short)(c.y + 32), S.status, CLR_URL, CLR_BG);
-    api->text((short)(c.x + 8), (short)(c.y + 46),
-              "map it as a drive. space stops", CLR_DIM, CLR_BG);
+    line(c, &cur, c.y + 20, "the card is on the network at", CLR_DIM);
+    line(c, &cur, c.y + 32, S.status, CLR_URL);
+    line(c, &cur, c.y + 46, "map it as a drive. space stops", CLR_DIM);
   } else {
-    api->text((short)(c.x + 8), (short)(c.y + 20), "not sharing:", CLR_DIM, CLR_BG);
-    api->text((short)(c.x + 8), (short)(c.y + 32), S.status, CLR_BAD, CLR_BG);
-    api->text((short)(c.x + 8), (short)(c.y + 46), "enter or space starts it again", CLR_DIM, CLR_BG);
+    line(c, &cur, c.y + 20, "not sharing:", CLR_DIM);
+    line(c, &cur, c.y + 32, S.status, CLR_BAD);
+    line(c, &cur, c.y + 46, "enter or space starts it again", CLR_DIM);
   }
-  y = c.y + 62;
-  for (i = 0; i < S.nlog; i++, y += 10)
-    api->text((short)(c.x + 8), (short)y, S.log[i], CLR_FG, CLR_BG);
-  {
-    char bar[48];
-    api->fmt(bar, sizeof bar, "%lu requests", (unsigned long)S.count);
-    api->text((short)(c.x + 8), (short)(c.y + c.h - 10), bar, CLR_DIM, CLR_BG);
-  }
+  /* The newest `rows` lines; rows not yet used are blank lines, written. */
+  first = S.nlog > rows ? S.nlog - rows : 0;
+  for (i = 0; i < rows; i++)
+    line(c, &cur, c.y + TOP_LOG + i * PITCH,
+         first + i < S.nlog ? S.log[first + i] : "", CLR_FG);
+  api->fmt(bar, sizeof bar, "%lu requests", (unsigned long)S.count);
+  line(c, &cur, c.y + c.h - 10, bar, CLR_DIM);
+  if (c.y + c.h > cur) api->fill(rect(c.x, cur, c.w, c.y + c.h - cur), CLR_BG);
 }
 
 static int app_tick(void *st, uint32_t now) {
   const char *l;
-  int changed = 0;
+  int changed = 0, shown_before = S.nlog, rows = log_rows(C), from;
   (void)st; (void)now;
   while ((l = api->share_take_log()) != NULL) {
     if (S.nlog == LINES) {
       api->mem_move(S.log[0], S.log[1], sizeof S.log - sizeof S.log[0]);
       S.nlog--;
+      shown_before = rows;              /* everything moved up */
     }
     api->fmt(S.log[S.nlog++], LINE_MAX, "%s", l);
     S.count++;
     changed = 1;
   }
-  return changed;
+  if (!changed) return 0;
+  if (C.w == 0) return 1;               /* not painted yet: all of it */
+  /* Only the log and the count changed. While the list is still filling,
+   * the lines above the new ones stay where they are; once it scrolls,
+   * every log line moved. */
+  from = (shown_before >= rows || S.nlog > rows) ? 0 : shown_before;
+  api->damage(rect(C.x, C.y + TOP_LOG + from * PITCH, C.w,
+                   C.h - TOP_LOG - from * PITCH));
+  return 1;
 }
 
 static int app_key(void *st, unsigned char k) {

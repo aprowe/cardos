@@ -761,6 +761,9 @@ static int wrap_row(int k, int cols, int *line, int *from, int *to) {
 
 /* The width the last paint folded at, for a click to find the same rows. */
 static int shown_cols = (240 - GUTTER) / CHARW;
+/* And the rows, and where the editor was: a key marks rows of that paint. */
+static int shown_rows = 1;
+static CRect shown_edit;
 
 static void scroll_wrapped(int rows, int cols) {
   int i, below;
@@ -779,23 +782,33 @@ static void paint_edit(CRect c) {
   int cols = (c.w - GUTTER) / CHARW;
   char buf[MAXCOL + 8];
   int r;
+  CRect area;
 
   if (rows < 1) rows = 1;
   if (cols < 1) cols = 1;
   shown_cols = cols;
   if (E.wrap) scroll_wrapped(rows, cols);
   else scroll_to_cursor(rows, cols);
+  shown_rows = rows;
+  shown_edit = c;
+  area = api->paint_area ? api->paint_area() : c;
 
-  /* No full-screen clear. Each row paints its own background as it goes, so a
-   * keystroke redraws rows rather than wiping 240x135 to one colour and
-   * drawing over it -- which at 40MHz is 12ms of flat background on every
-   * character typed, and reads as a flash. */
+  /* No clear, not even of a row. The panel has no framebuffer, so a fill
+   * that text then writes over is a blink you can see -- and every visible
+   * row filled its gutter and its background on every keystroke. text
+   * paints its own 6x8 background, so the number and the text are drawn
+   * first and only what they leave is filled: the gutter round the digits,
+   * the row right of the text, and the ninth pixel row, which ROWH has and
+   * the font does not. Background over background does not show. */
   for (r = 0; r < rows; r++) {
     int i = E.top + r, from = E.leftcol, to = 0, last = 1;
     short y = (short)(c.y + r * ROWH);
-    int on_cursor;
+    int on_cursor, numbered, tx;
     uint16_t bg;
     int n;
+
+    /* Outside what this paint repairs: the shell clips it away anyway. */
+    if (y + ROWH <= area.y || y >= area.y + area.h) continue;
 
     /* Wrapped, a screen row is a piece of a line rather than a line. */
     if (E.wrap && !wrap_row(r, cols, &i, &from, &to)) i = E.nlines;
@@ -804,25 +817,37 @@ static void paint_edit(CRect c) {
 
     on_cursor = (i == E.cy);
     bg = on_cursor ? CLR_CUR_BG : CLR_BG;
-    api->fill(rect(c.x, y, GUTTER, ROWH), CLR_GUTTER);
-    api->fill(rect(c.x + GUTTER, y, c.w - GUTTER, ROWH), bg);
 
-    if (i >= E.nlines) continue;      /* cleared, so deleted lines disappear */
-
-    /* The number on a line's first row only, so a folded line reads as one. */
-    if (from == 0 || !E.wrap) {
-      api->fmt(buf, sizeof buf, "%3d", i + 1);
-      api->text((short)(c.x + 1), y, buf,
-                on_cursor ? CLR_TEXT : CLR_LINENO, CLR_GUTTER);
+    if (i >= E.nlines) {              /* past the end: nothing to draw over */
+      api->fill(rect(c.x, y, GUTTER, ROWH), CLR_GUTTER);
+      api->fill(rect(c.x + GUTTER, y, c.w - GUTTER, ROWH), bg);
+      continue;
     }
+
+    /* The number on a line's first row only, so a folded line reads as one.
+     * Its three cells are exactly the gutter. They were drawn a pixel to the
+     * right, so the last cell's blank column was written and then written
+     * again by the text: a one-pixel stripe blinking down every row. */
+    numbered = from == 0 || !E.wrap;
+    if (numbered) {
+      api->fmt(buf, sizeof buf, "%3d", i + 1);
+      api->text((short)c.x, y, buf, on_cursor ? CLR_TEXT : CLR_LINENO, CLR_GUTTER);
+    } else {
+      api->fill(rect(c.x, y, GUTTER, 8), CLR_GUTTER);
+    }
+    api->fill(rect(c.x, y + 8, GUTTER, ROWH - 8), CLR_GUTTER);
 
     n = to - from;
     if (n > cols) n = cols;
+    if (n < 0) n = 0;
     if (n > 0) {
       api->mem_cpy(buf, E.line[i] + from, (size_t)n);
       buf[n] = 0;
       api->text((short)(c.x + GUTTER), y, buf, CLR_TEXT, bg);
     }
+    tx = GUTTER + n * CHARW;          /* right of the text */
+    if (c.w > tx) api->fill(rect(c.x + tx, y, c.w - tx, 8), bg);
+    api->fill(rect(c.x + GUTTER, y + 8, c.w - GUTTER, ROWH - 8), bg);
 
     if (on_cursor && E.cx >= from && (!E.wrap || E.cx < to || last)) {
       short cxp = (short)(c.x + GUTTER + (E.cx - from) * CHARW);
@@ -833,12 +858,51 @@ static void paint_edit(CRect c) {
   /* Status bar: the two things you look down for are which file and whether it
    * is saved. The dot is the unsaved marker, coloured rather than lettered so
    * it reads without being parsed. It is the shared footer's strip, holding a
-   * status rather than keys: the keys are in the help. */
-  footer_paint(api, c, NULL);
-  if (E.dirty) api->fill(rect(c.x + 2, c.y + c.h - FOOT_H + 4, 3, 3), CLR_DIRTY);
-  api->fmt(buf, sizeof buf, "%s  %d:%d  %s", E.path, E.cy + 1, E.cx + 1, E.status);
-  api->text((short)(c.x + 7), (short)(c.y + c.h - FOOT_H + 2), buf,
-            FOOT_FG, FOOT_BG);
+   * status rather than keys: the keys are in the help. Drawn here rather than
+   * by footer_paint, which would fill the bar the status is then written
+   * over: the same blink, at the bottom, on every key. */
+  {
+    int fy = c.y + c.h - FOOT_H, fw, fcols = (c.w - 7) / CHARW;
+    if (fy + FOOT_H > area.y && fy < area.y + area.h) {
+      api->fmt(buf, sizeof buf, "%s  %d:%d  %s", E.path, E.cy + 1, E.cx + 1, E.status);
+      if (fcols < 0) fcols = 0;
+      if ((int)api->str_len(buf) > fcols) buf[fcols] = 0;
+      fw = (int)api->str_len(buf) * CHARW;
+      api->fill(rect(c.x, fy, c.w, 2), FOOT_BG);
+      api->fill(rect(c.x, fy + 10, c.w, FOOT_H - 10), FOOT_BG);
+      if (E.dirty) {                  /* round the dot, then the dot */
+        api->fill(rect(c.x, fy + 2, 2, 8), FOOT_BG);
+        api->fill(rect(c.x + 5, fy + 2, 2, 8), FOOT_BG);
+        api->fill(rect(c.x + 2, fy + 2, 3, 2), FOOT_BG);
+        api->fill(rect(c.x + 2, fy + 7, 3, 3), FOOT_BG);
+        api->fill(rect(c.x + 2, fy + 4, 3, 3), CLR_DIRTY);
+      } else {
+        api->fill(rect(c.x, fy + 2, 7, 8), FOOT_BG);
+      }
+      api->text((short)(c.x + 7), (short)(fy + 2), buf, FOOT_FG, FOOT_BG);
+      if (c.w > 7 + fw) api->fill(rect(c.x + 7 + fw, fy + 2, c.w - 7 - fw, 8), FOOT_BG);
+    }
+  }
+}
+
+/* After a key that did not scroll, add or remove lines, or fold anything,
+ * only the rows it touched changed: the cursor's old and new rows, and the
+ * one above (Backspace at a continuation takes that line's last character).
+ * Mark those and the status bar, so the paint is a few rows, not the whole
+ * editor. Anything else marks nothing and gets the whole of it. */
+static void damage_after_key(int top0, int left0, int cy0, int n0, int view0) {
+  CRect c = shown_edit;
+  int a, b;
+  if (!api->damage || c.w == 0 || E.wrap || view0 != VIEW_EDIT || E.view != VIEW_EDIT)
+    return;
+  scroll_to_cursor(shown_rows, shown_cols);   /* what the paint would do */
+  if (E.top != top0 || E.leftcol != left0 || E.nlines != n0) return;
+  a = (cy0 < E.cy ? cy0 : E.cy) - 1 - E.top;
+  b = (cy0 > E.cy ? cy0 : E.cy) - E.top;
+  if (a < 0) a = 0;
+  if (b >= shown_rows) b = shown_rows - 1;
+  if (b >= a) api->damage(rect(c.x, c.y + a * ROWH, c.w, (b - a + 1) * ROWH));
+  api->damage(rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H));
 }
 
 /* What this editor can be asked to do. Keys map onto these and so do menu
@@ -1116,7 +1180,12 @@ static int app_key(void *st, unsigned char k) {
   r = menu_key(k, &handled);
   if (handled) return r;
   if (E.view == VIEW_PREVIEW) return key_preview(k);
-  return key_edit(k);
+  {
+    int top0 = E.top, left0 = E.leftcol, cy0 = E.cy, n0 = E.nlines;
+    r = key_edit(k);
+    if (r) damage_after_key(top0, left0, cy0, n0, VIEW_EDIT);
+    return r;
+  }
 }
 
 static int app_click(void *st, short x, short y, int button) {

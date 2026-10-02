@@ -41,6 +41,13 @@ static const CardApi *api;
 #define CLR_OK    CAPP_RGB(120, 220, 140)
 #define CLR_BAD   CAPP_RGB(240, 120, 100)
 
+/* What changed since the last paint, so a tick marks only those lines. */
+#define D_LINK    1                     /* the "linked" line */
+#define D_LOG     2                     /* the log */
+#define D_COUNTS  4                     /* jobs and bytes, at the bottom */
+
+#define TOP_LOG   50                    /* y of the first log line */
+
 static struct {
   int      inflight;
   int      last_id;                 /* the job `answer` belongs to; 0 none */
@@ -50,7 +57,7 @@ static struct {
   uint32_t jobs, bytes_in, bytes_out;
   char     log[LINES][LINE_W];
   int      nlog;
-  int      dirty;
+  int      dirty;                   /* D_* bits: which lines changed */
   CRect    at;                      /* the last paint, for damage */
   int      have_at;
   char     job[JOB_MAX];
@@ -61,6 +68,12 @@ static struct {
     char          sh[SH_MAX];
   } u;
 } R;
+
+static CRect rect(int x, int y, int w, int h) {
+  CRect r;
+  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)(w > 0 ? w : 0); r.h = (int16_t)h;
+  return r;
+}
 
 /* ---- base64 ------------------------------------------------------------------ */
 
@@ -142,7 +155,7 @@ static void note(const char *op, const char *path, int n) {
   }
   if (n >= 0) api->fmt(R.log[R.nlog++], LINE_W, "%s %s %d", op, path, n);
   else api->fmt(R.log[R.nlog++], LINE_W, "%s %s", op, path);
-  R.dirty = 1;
+  R.dirty |= D_LOG;
 }
 
 static int fail(const char *why) {
@@ -232,7 +245,7 @@ static int handle_job(void) {
   }
   data = p;
   R.jobs++;
-  R.dirty = 1;
+  R.dirty |= D_COUNTS;              /* and the byte counts, which move with it */
   if (!path_ok(f[2])) { fail("bad path"); return to_int(f[0]); }
 
   if (same(f[1], "list")) do_list(f[2]);
@@ -286,7 +299,7 @@ static void poll_start(uint32_t now) {
 }
 
 static int app_tick(void *st, uint32_t now) {
-  int n, was = R.connected;
+  int n, was = R.connected, was_err = R.err;
   (void)st;
   if (!R.inflight) {
     if ((int32_t)(now - R.next_try) >= 0) poll_start(now);
@@ -307,44 +320,63 @@ static int app_tick(void *st, uint32_t now) {
       }
     }
   }
-  if (was != R.connected) R.dirty = 1;
+  if (was != R.connected || was_err != R.err) R.dirty |= D_LINK;
   n = R.dirty;
   R.dirty = 0;
-  /* Only what moves: the link line, the log and the counts. The name and
-   * the address above them never change, and an app that returns 1 without
-   * saying what changed has its whole screen redrawn -- once a poll, every
-   * second and a half, for as long as it is open. */
+  /* Only what moved: the link line, the log, the counts -- each marked on
+   * its own, so a chunk of a transfer, which changes only the counts,
+   * repaints one line. An app that returns 1 without saying what changed
+   * has its whole screen redrawn, once a poll, every second and a half. */
   if (n && R.have_at) {
-    CRect d;
-    d.x = R.at.x; d.y = (short)(R.at.y + 34);
-    d.w = R.at.w; d.h = (short)(R.at.h - 34);
-    api->damage(d);
+    if (n & D_LINK) api->damage(rect(R.at.x, R.at.y + 34, R.at.w, 8));
+    if (n & D_LOG) api->damage(rect(R.at.x, R.at.y + TOP_LOG, R.at.w, LINES * 10));
+    if (n & D_COUNTS) api->damage(rect(R.at.x, R.at.y + R.at.h - 10, R.at.w, 8));
   }
-  return n;
+  return n != 0;
+}
+
+/* The panel has no framebuffer: filling a line and writing over it is a
+ * blink you can see, and the old fill under the damage flashed the log and
+ * the counts once a job -- every 3 KB chunk of a transfer. text paints its
+ * own background, so every line is written padded with spaces to the full
+ * width, over what was there, and only what no text covers is filled: the
+ * margins and the gaps between lines, background over background. */
+static void line(CRect c, int *cur, int y, const char *s, uint16_t fg) {
+  char buf[64];
+  int cols = (c.w - 8) / 6, i = 0;
+  if (cols > (int)sizeof buf - 1) cols = (int)sizeof buf - 1;
+  if (cols < 0) cols = 0;
+  if (y > *cur) api->fill(rect(c.x, *cur, c.w, y - *cur), CLR_BG);
+  for (; s && s[i] && i < cols; i++) buf[i] = s[i];
+  for (; i < cols; i++) buf[i] = ' ';
+  buf[cols] = 0;
+  api->fill(rect(c.x, y, 8, 8), CLR_BG);
+  api->text((int16_t)(c.x + 8), (int16_t)y, buf, fg, CLR_BG);
+  api->fill(rect(c.x + 8 + cols * 6, y, c.w - 8 - cols * 6, 8), CLR_BG);
+  *cur = y + 8;
 }
 
 static void app_paint(void *st, CRect c) {
-  int i, y;
-  char line[48];
+  int i, cur = c.y;
+  char ln[48];
   (void)st;
   R.at = c;
   R.have_at = 1;
-  api->fill(c, CLR_BG);                     /* clipped to the damage, if any */
-  api->text((short)(c.x + 8), (short)(c.y + 6), "Dashboard Link", CLR_FG, CLR_BG);
-  api->text((short)(c.x + 8), (short)(c.y + 20), "files and console at /dash", CLR_DIM, CLR_BG);
+  line(c, &cur, c.y + 6, "Dashboard Link", CLR_FG);
+  line(c, &cur, c.y + 20, "files and console at /dash", CLR_DIM);
   if (R.connected)
-    api->text((short)(c.x + 8), (short)(c.y + 34), "linked: the dashboard can reach it", CLR_OK, CLR_BG);
+    line(c, &cur, c.y + 34, "linked: the dashboard can reach it", CLR_OK);
   else {
-    api->fmt(line, sizeof line, "cannot reach the server (%d)", R.err);
-    api->text((short)(c.x + 8), (short)(c.y + 34), R.err ? line : "connecting...",
-              R.err ? CLR_BAD : CLR_DIM, CLR_BG);
+    api->fmt(ln, sizeof ln, "cannot reach the server (%d)", R.err);
+    line(c, &cur, c.y + 34, R.err ? ln : "connecting...", R.err ? CLR_BAD : CLR_DIM);
   }
-  y = c.y + 50;
-  for (i = 0; i < R.nlog; i++, y += 10)
-    api->text((short)(c.x + 8), (short)y, R.log[i], CLR_FG, CLR_BG);
-  api->fmt(line, sizeof line, "%lu jobs  in %lu KB  out %lu KB", (unsigned long)R.jobs,
+  /* Every row, used or not: a blank one is a line of spaces. */
+  for (i = 0; i < LINES; i++)
+    line(c, &cur, c.y + TOP_LOG + i * 10, i < R.nlog ? R.log[i] : "", CLR_FG);
+  api->fmt(ln, sizeof ln, "%lu jobs  in %lu KB  out %lu KB", (unsigned long)R.jobs,
            (unsigned long)(R.bytes_in / 1024), (unsigned long)(R.bytes_out / 1024));
-  api->text((short)(c.x + 8), (short)(c.y + c.h - 10), line, CLR_DIM, CLR_BG);
+  line(c, &cur, c.y + c.h - 10, ln, CLR_DIM);
+  if (c.y + c.h > cur) api->fill(rect(c.x, cur, c.w, c.y + c.h - cur), CLR_BG);
 }
 
 const CappInfo capp_info = {

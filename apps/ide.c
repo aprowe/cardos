@@ -429,28 +429,52 @@ static void finish_name(void) {
  * a delete pending, the question. */
 static int browse_rows = 1;     /* from the last paint, for a click */
 
+/* The panel has no framebuffer, so a fill that text is then written over
+ * is a blink you can see -- and these screens filled everything and wrote
+ * over it on every key. text paints its own 6x8 background, so this draws
+ * a band of `h` rows from bx, bw wide, with `s` at tx in its first eight,
+ * and fills only what the text leaves. Background over background does not
+ * show. */
+static void band_text(int bx, int bw, int tx, int y, int h, const char *s,
+                      uint16_t fg, uint16_t bg) {
+  char buf[64];
+  int n = 0, max = (bx + bw - tx) / CHARW, end;
+  if (max > (int)sizeof buf - 1) max = (int)sizeof buf - 1;
+  if (max < 0) max = 0;
+  while (s && s[n] && n < max) { buf[n] = s[n]; n++; }
+  buf[n] = 0;
+  if (tx > bx) api->fill(rect(bx, y, tx - bx, 8), bg);
+  if (n) api->text((short)tx, (short)y, buf, fg, bg);
+  end = tx + n * CHARW;
+  if (bx + bw > end) api->fill(rect(end, y, bx + bw - end, 8), bg);
+  if (h > 8) api->fill(rect(bx, y + 8, bw, h - 8), bg);
+}
+
 static void paint_browse(CRect c) {
   int rows = (c.h - ROWH - FOOT_H) / ROWH;
-  int top = 0, i;
+  int top = 0, i, below;
   short y0 = (short)(c.y + ROWH);
 
-  api->fill(c, CLR_BG);
-  api->fill(rect(c.x, c.y, c.w, ROWH), CLR_GUTTER);
-  api->text((short)(c.x + 3), c.y, E.status, CLR_DIM, CLR_GUTTER);
+  band_text(c.x, c.w, c.x + 3, c.y, ROWH, E.status, CLR_DIM, CLR_GUTTER);
   if (rows < 1) rows = 1;
   browse_rows = rows;
   if (E.bsel >= rows) top = E.bsel - rows + 1;
 
-  for (i = 0; i < rows && top + i < E.ndir; i++) {
+  for (i = 0; i < rows; i++) {
     int idx = top + i;
     short y = (short)(y0 + i * ROWH);
     int sel = (idx == E.bsel);
-    api->fill(rect(c.x, y, c.w, ROWH), sel ? CLR_SEL : CLR_BG);
-    api->text((short)(c.x + 3), y, E.names[idx],
-              sel ? CLR_BAR_FG : CLR_TEXT, sel ? CLR_SEL : CLR_BG);
+    if (idx < E.ndir)
+      band_text(c.x, c.w, c.x + 3, y, ROWH, E.names[idx],
+                sel ? CLR_BAR_FG : CLR_TEXT, sel ? CLR_SEL : CLR_BG);
+    else if (i == 0)
+      band_text(c.x, c.w, c.x + 3, y, ROWH, "empty", CLR_DIM, CLR_BG);
+    else
+      api->fill(rect(c.x, y, c.w, ROWH), CLR_BG);
   }
-  if (E.ndir == 0)
-    api->text((short)(c.x + 3), y0, "empty", CLR_DIM, CLR_BG);
+  below = y0 + rows * ROWH;
+  if (c.y + c.h - FOOT_H > below)
+    api->fill(rect(c.x, below, c.w, c.y + c.h - FOOT_H - below), CLR_BG);
 
   if (E.confirm) {
     /* The name cut to fit, so the keys at the end are never what is lost. */
@@ -713,50 +737,73 @@ static void paint_console(CRect c) {
   short y0;
   if (!h) return;
   y0 = (short)(c.y + c.h - FOOT_H - h);
-  api->fill(rect(c.x, y0, c.w, h), CLR_GUTTER);
+  /* Each line over the last, not a cleared pane and then the lines. */
   api->fill(rect(c.x, y0, c.w, 1), CLR_SEL);
-  for (i = 0; i < G.nout && i < CON_LINES; i++)
-    api->text((short)(c.x + 2), (short)(y0 + 2 + i * 8), G.out[i],
+  api->fill(rect(c.x, y0 + 1, c.w, 1), CLR_GUTTER);
+  for (i = 0; i < CON_LINES; i++)
+    band_text(c.x, c.w, c.x + 2, y0 + 2 + i * 8, 8, i < G.nout ? G.out[i] : "",
               CLR_TEXT, CLR_GUTTER);
 }
+
+/* What the last paint of the editor was, so a key can mark rows of it. */
+static int shown_rows = 1, shown_cols = 1;
+static CRect shown_edit;
 
 static void paint_edit(CRect c) {
   int rows = (c.h - FOOT_H - console_h()) / ROWH;
   int cols = (c.w - GUTTER) / CHARW;
   char buf[MAXCOL + 8];
   int r;
+  CRect area;
 
   if (rows < 1) rows = 1;
   if (cols < 1) cols = 1;
   scroll_to_cursor(rows, cols);
+  shown_rows = rows;
+  shown_cols = cols;
+  shown_edit = c;
+  area = api->paint_area ? api->paint_area() : c;
 
-  /* No full-screen clear. Each row paints its own background as it goes, so a
-   * keystroke redraws rows rather than wiping 240x135 to one colour and
-   * drawing over it -- which at 40MHz is 12ms of flat background on every
-   * character typed, and reads as a flash. */
+  /* No clear, not even of a row. The panel has no framebuffer, so a fill
+   * that text then writes over is a blink you can see -- and every visible
+   * row filled its gutter and its background on every keystroke. text
+   * paints its own 6x8 background, so the number and the text are drawn
+   * first and only what they leave is filled: the row right of the text,
+   * and the ninth pixel row, which ROWH has and the font does not. */
   for (r = 0; r < rows; r++) {
-    int i = E.top + r;
+    int i = E.top + r, tx;
     short y = (short)(c.y + r * ROWH);
     int on_cursor = (i == E.cy);
     uint16_t bg = on_cursor ? CLR_CUR_BG : CLR_BG;
     int n;
 
-    api->fill(rect(c.x, y, GUTTER, ROWH), CLR_GUTTER);
-    api->fill(rect(c.x + GUTTER, y, c.w - GUTTER, ROWH), bg);
+    /* Outside what this paint repairs: the shell clips it away anyway. */
+    if (y + ROWH <= area.y || y >= area.y + area.h) continue;
 
-    if (i >= E.nlines) continue;      /* cleared, so deleted lines disappear */
+    if (i >= E.nlines) {              /* past the end: nothing to draw over */
+      api->fill(rect(c.x, y, GUTTER, ROWH), CLR_GUTTER);
+      api->fill(rect(c.x + GUTTER, y, c.w - GUTTER, ROWH), bg);
+      continue;
+    }
 
+    /* The number's three cells are exactly the gutter. They were drawn a
+     * pixel to the right, so the last cell's blank column was written and
+     * then written again by the text: a one-pixel stripe down every row. */
     api->fmt(buf, sizeof buf, "%3d", i + 1);
-    api->text((short)(c.x + 1), y, buf,
-              on_cursor ? CLR_TEXT : CLR_LINENO, CLR_GUTTER);
+    api->text((short)c.x, y, buf, on_cursor ? CLR_TEXT : CLR_LINENO, CLR_GUTTER);
+    api->fill(rect(c.x, y + 8, GUTTER, ROWH - 8), CLR_GUTTER);
 
     n = E.len[i] - E.leftcol;
     if (n > cols) n = cols;
+    if (n < 0) n = 0;
     if (n > 0) {
       api->mem_cpy(buf, E.line[i] + E.leftcol, (size_t)n);
       buf[n] = 0;
       api->text((short)(c.x + GUTTER), y, buf, CLR_TEXT, bg);
     }
+    tx = GUTTER + n * CHARW;          /* right of the text */
+    if (c.w > tx) api->fill(rect(c.x + tx, y, c.w - tx, 8), bg);
+    api->fill(rect(c.x + GUTTER, y + 8, c.w - GUTTER, ROWH - 8), bg);
 
     if (on_cursor) {
       short cxp = (short)(c.x + GUTTER + (E.cx - E.leftcol) * CHARW);
@@ -767,31 +814,72 @@ static void paint_edit(CRect c) {
   /* Status bar: the two things you look down for are which file and whether it
    * is saved. The dot is the unsaved marker, coloured rather than lettered so
    * it reads without being parsed. It is the shared footer's strip, holding
-   * a status rather than keys: the keys are in the help. */
-  paint_console(c);
-  footer_paint(api, c, NULL);
-  if (E.dirty) api->fill(rect(c.x + 2, c.y + c.h - FOOT_H + 4, 3, 3), CLR_DIRTY);
-  api->fmt(buf, sizeof buf, "%s  %d:%d  %s", E.path, E.cy + 1, E.cx + 1, E.status);
-  api->text((short)(c.x + 7), (short)(c.y + c.h - FOOT_H + 2), buf,
-            FOOT_FG, FOOT_BG);
+   * a status rather than keys: the keys are in the help. Drawn here rather
+   * than by footer_paint, which would fill the bar the status is then
+   * written over: the same blink, at the bottom, on every key. */
+  {
+    int fy = c.y + c.h - FOOT_H, h = console_h();
+    if (h && c.y + c.h - FOOT_H > area.y && c.y + c.h - FOOT_H - h < area.y + area.h)
+      paint_console(c);
+    if (fy + FOOT_H > area.y && fy < area.y + area.h) {
+      api->fmt(buf, sizeof buf, "%s  %d:%d  %s", E.path, E.cy + 1, E.cx + 1, E.status);
+      api->fill(rect(c.x, fy, c.w, 2), FOOT_BG);
+      api->fill(rect(c.x, fy + 10, c.w, FOOT_H - 10), FOOT_BG);
+      if (E.dirty) {                  /* round the dot, then the dot */
+        api->fill(rect(c.x, fy + 2, 2, 8), FOOT_BG);
+        api->fill(rect(c.x + 5, fy + 2, 2, 8), FOOT_BG);
+        api->fill(rect(c.x + 2, fy + 2, 3, 2), FOOT_BG);
+        api->fill(rect(c.x + 2, fy + 7, 3, 3), FOOT_BG);
+        api->fill(rect(c.x + 2, fy + 4, 3, 3), CLR_DIRTY);
+      } else {
+        api->fill(rect(c.x, fy + 2, 7, 8), FOOT_BG);
+      }
+      band_text(c.x + 7, c.w - 7, c.x + 7, fy + 2, 8, buf, FOOT_FG, FOOT_BG);
+    }
+  }
 }
 
+/* After a key that did not scroll or add or remove a line, only the rows
+ * it touched changed: the cursor's old row and its new one. Mark those and
+ * the status bar, so the paint is two rows, not the whole editor. Anything
+ * else marks nothing and gets the whole of it. */
+static void damage_after_key(int top0, int left0, int cy0, int n0) {
+  CRect c = shown_edit;
+  int a, b;
+  if (!api->damage || c.w == 0 || E.view != VIEW_EDIT) return;
+  scroll_to_cursor(shown_rows, shown_cols);   /* what the paint would do */
+  if (E.top != top0 || E.leftcol != left0 || E.nlines != n0) return;
+  a = (cy0 < E.cy ? cy0 : E.cy) - E.top;
+  b = (cy0 > E.cy ? cy0 : E.cy) - E.top;
+  if (a < 0) a = 0;
+  if (b >= shown_rows) b = shown_rows - 1;
+  if (b >= a) api->damage(rect(c.x, c.y + a * ROWH, c.w, (b - a + 1) * ROWH));
+  api->damage(rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H));
+}
+
+/* The prompt, each part drawn over itself: a typed letter used to clear
+ * the screen and draw it all again. */
 static void paint_name(CRect c) {
   char shown[sizeof E.name + 2];
   short y = (short)(c.y + c.h / 2 - 18);
+  int bw = c.w - 12, below = y + 37, foot = c.y + c.h - FOOT_H;
 
-  api->fill(c, CLR_BG);
-  api->text((short)(c.x + 8), y,
+  if (y > c.y) api->fill(rect(c.x, c.y, c.w, y - c.y), CLR_BG);
+  band_text(c.x, c.w, c.x + 8, y, 11,
             E.name_for == NAME_NEW ? "New file" :
             E.name_for == NAME_RENAME ? "Rename" : "Save as", CLR_BAR_FG, CLR_BG);
-  api->text((short)(c.x + 8), (short)(y + 11), E.dir, CLR_DIM, CLR_BG);
+  band_text(c.x, c.w, c.x + 8, y + 11, 13, E.dir, CLR_DIM, CLR_BG);
 
-  api->fill(rect(c.x + 6, y + 24, c.w - 12, 13), CLR_CUR_BG);
-  api->fill(rect(c.x + 6, y + 24, c.w - 12, 1), CLR_SEL);
+  /* The field: a line along its top, then the name and its caret. */
+  api->fill(rect(c.x, y + 24, 6, 13), CLR_BG);
+  api->fill(rect(c.x + 6 + bw, y + 24, c.w - 6 - bw, 13), CLR_BG);
+  api->fill(rect(c.x + 6, y + 24, bw, 1), CLR_SEL);
+  api->fill(rect(c.x + 6, y + 25, bw, 2), CLR_CUR_BG);
   api->mem_cpy(shown, E.name, (size_t)E.name_len);
   shown[E.name_len] = '_';
   shown[E.name_len + 1] = 0;
-  api->text((short)(c.x + 9), (short)(y + 27), shown, CLR_TEXT, CLR_CUR_BG);
+  band_text(c.x + 6, bw, c.x + 9, y + 27, 10, shown, CLR_TEXT, CLR_CUR_BG);
+  if (foot > below) api->fill(rect(c.x, below, c.w, foot - below), CLR_BG);
 
   footer_paint(api, c, "enter ok  esc cancel");
 }
@@ -987,7 +1075,12 @@ static int app_key(void *st, unsigned char k) {
   }
   r = menu_key(k, &handled);
   if (handled) return r;
-  return key_edit(k);
+  {
+    int top0 = E.top, left0 = E.leftcol, cy0 = E.cy, n0 = E.nlines;
+    r = key_edit(k);
+    if (r) damage_after_key(top0, left0, cy0, n0);
+    return r;
+  }
 }
 
 static int app_click(void *st, short x, short y, int button) {
