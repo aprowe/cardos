@@ -184,7 +184,7 @@ const CappInfo capp_info = {
     0x43, 0xC2, 0x41, 0x82, 0x40, 0x02, 0x40, 0x02,
     0x40, 0x82, 0x41, 0xC2, 0x43, 0xE2, 0x47, 0xF2,
     0x4F, 0xFA, 0x5F, 0xFE, 0x7F, 0xFE, 0x00, 0x00 },
-  "arrows\tprevious and next\nspace\tnext\nclick\tleft back, right forward\nr\trescan the folder\n",
+  "arrows\tprevious and next\nspace, enter\tnext\nclick\tleft back, right forward\nr\trescan the folder\n",
 };
 
 /* Static, not a local: the shell keeps calling into this long after

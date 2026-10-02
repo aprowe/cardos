@@ -33,6 +33,14 @@ static void start(void) {
   api->fmt(S.status, sizeof S.status, "%s", api->share_status());
 }
 
+/* Space is the switch, as it is in every app: the drive goes away without
+ * leaving, and comes back on the same key. */
+static void stop(void) {
+  api->share_stop();
+  S.on = 0;
+  api->fmt(S.status, sizeof S.status, "stopped");
+}
+
 static void app_paint(void *st, CRect c) {
   int i, y;
   (void)st;
@@ -43,11 +51,11 @@ static void app_paint(void *st, CRect c) {
               CLR_DIM, CLR_BG);
     api->text((short)(c.x + 8), (short)(c.y + 32), S.status, CLR_URL, CLR_BG);
     api->text((short)(c.x + 8), (short)(c.y + 46),
-              "map it as a drive on the pc. esc stops", CLR_DIM, CLR_BG);
+              "map it as a drive. space stops", CLR_DIM, CLR_BG);
   } else {
     api->text((short)(c.x + 8), (short)(c.y + 20), "not sharing:", CLR_DIM, CLR_BG);
     api->text((short)(c.x + 8), (short)(c.y + 32), S.status, CLR_BAD, CLR_BG);
-    api->text((short)(c.x + 8), (short)(c.y + 46), "enter to try again", CLR_DIM, CLR_BG);
+    api->text((short)(c.x + 8), (short)(c.y + 46), "enter or space starts it again", CLR_DIM, CLR_BG);
   }
   y = c.y + 62;
   for (i = 0; i < S.nlog; i++, y += 10)
@@ -78,6 +86,7 @@ static int app_tick(void *st, uint32_t now) {
 static int app_key(void *st, unsigned char k) {
   (void)st;
   if ((k == CAPP_KEY_ENTER || k == ' ') && !S.on) { start(); return 1; }
+  if (k == ' ' && S.on) { stop(); return 1; }
   return 0;
 }
 
@@ -122,8 +131,9 @@ const CappInfo capp_info = {
     0x20, 0x40, 0x2F, 0x40, 0x20, 0x40, 0x2F, 0x48,
     0x20, 0x44, 0x20, 0x52, 0x20, 0x4A, 0x20, 0x4A,
     0x3F, 0xD2, 0x00, 0x04, 0x00, 0x08, 0x00, 0x00 },
-  "fn-`\tstop sharing and leave\n"
-  "enter\ttry again after a failure\n"
+  "space\tstop sharing, or start it again\n"
+  "enter\tstart again after a failure or a stop\n"
+  "leaving Share stops sharing too\n"
   "\n"
   "on the pc: map network drive to the url shown, no password.\n"
   "windows refuses files over 50 MB by default (WebClient\n"

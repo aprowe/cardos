@@ -51,6 +51,8 @@ static struct {
   char     log[LINES][LINE_W];
   int      nlog;
   int      dirty;
+  CRect    at;                      /* the last paint, for damage */
+  int      have_at;
   char     job[JOB_MAX];
   char     answer[ANS_MAX];
   union {
@@ -308,6 +310,16 @@ static int app_tick(void *st, uint32_t now) {
   if (was != R.connected) R.dirty = 1;
   n = R.dirty;
   R.dirty = 0;
+  /* Only what moves: the link line, the log and the counts. The name and
+   * the address above them never change, and an app that returns 1 without
+   * saying what changed has its whole screen redrawn -- once a poll, every
+   * second and a half, for as long as it is open. */
+  if (n && R.have_at) {
+    CRect d;
+    d.x = R.at.x; d.y = (short)(R.at.y + 34);
+    d.w = R.at.w; d.h = (short)(R.at.h - 34);
+    api->damage(d);
+  }
   return n;
 }
 
@@ -315,7 +327,9 @@ static void app_paint(void *st, CRect c) {
   int i, y;
   char line[48];
   (void)st;
-  api->fill(c, CLR_BG);
+  R.at = c;
+  R.have_at = 1;
+  api->fill(c, CLR_BG);                     /* clipped to the damage, if any */
   api->text((short)(c.x + 8), (short)(c.y + 6), "Dashboard Link", CLR_FG, CLR_BG);
   api->text((short)(c.x + 8), (short)(c.y + 20), "files and console at /dash", CLR_DIM, CLR_BG);
   if (R.connected)
@@ -342,11 +356,9 @@ const CappInfo capp_info = {
     0x20, 0x78, 0x24, 0x08, 0x2E, 0x08, 0x24, 0x08,
     0x24, 0x48, 0x20, 0x48, 0x20, 0xE8, 0x20, 0x48,
     0x3F, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-  "fn-`\tunlink and leave\n"
-  "\n"
   "while this is open, the dashboard (/dash on\n"
   "the server) can browse and change the card\n"
-  "and run console commands here.\n",
+  "and run console commands here. leaving unlinks it.\n",
   0,
   0,
 };
