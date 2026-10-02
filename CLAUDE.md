@@ -251,6 +251,21 @@ focus` and `daily fact` come from `/daily` (`server/daily.py`): one
 stateless Claude call a day, cached; a fallback line when Claude fails, not
 cached, so the day is still written once Claude is back.
 
+**One app opening another closes it first, and quitting goes back**
+(2026-10-02). `api->run` from the app on screen used to load the new app
+beside the old one -- Edit beside Notes did not fit, and the key did
+nothing, with no message, because `launch_with` returned quietly when
+`capprun_start` failed. Now the launcher queues the request, lets the
+caller go on its next tick, loads the new app into the room, and
+remembers the caller (`s_back`, four deep); fn-` from the new app opens
+the caller again, fresh. A start that fails says why on the row
+(`capprun_start_error`: "not enough memory", ...), and a memory failure
+first lets go of the block Today's commands keep and tries once more.
+**Space in the launcher is search** (`kernel/ui/appsearch.c`,
+host-tested): type part of a name, arrows choose, Enter opens; every app
+in every folder, best match first (name start, word start, anywhere,
+letters in order).
+
 **The launcher's order is chosen, not the card's** (2026-10-01).
 `/config/favorites.txt` (written with a default at first boot, hand-
 editable) lists apps or folders, in order: those come first, and a

@@ -579,7 +579,12 @@ static int memo_to_note(const char *path, char *out, int n) {
   int r;
   if (!api->http_upload) { api->fmt(out, (size_t)n, "this firmware cannot send files: update os"); return -1; }
   if (!api->net_ready() && api->net_connect(15000) != 0) { api->fmt(out, (size_t)n, "offline"); return -1; }
-  api->fmt(url, sizeof url, "%s/notes/audio", api->proxy());
+  {
+    /* Its name -- MMDD-HHMMSS.wav, Memo's clock -- titles the note. */
+    const char *base = path, *p;
+    for (p = path; *p; p++) if (*p == '/') base = p + 1;
+    api->fmt(url, sizeof url, "%s/notes/audio?name=%s", api->proxy(), base);
+  }
   r = api->http_upload(url, path, "audio/wav", N.line, sizeof N.line, 120000);
   if (r < 0) {
     if (N.line[0] == 'e') api->fmt(out, (size_t)n, "%s", N.line + 6);

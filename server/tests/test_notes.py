@@ -82,7 +82,16 @@ class NotesTest(unittest.TestCase):
         s, line = self.req("POST", "/notes/audio", b"RIFF" + b"\0" * 200)
         self.assertEqual(s, 200)
         nid, h, title = line.strip().split("\t")
-        self.assertEqual(title, "Buy oat milk and call the dentist")
+        self.assertEqual(title, "Voice memo")
+        self.assertEqual(notes.load(nid)["text"],
+                         "# Voice memo\n\nBuy oat milk and call the dentist\n")
+        s, line = self.req("POST", "/notes/audio?name=1001-164847.wav", b"RIFF" + b"\0" * 200)
+        self.assertEqual(line.strip().split("\t")[2], "Voice memo, 1 Oct 16:48")
+
+    def test_a_memo_title_from_its_file_name(self):
+        self.assertEqual(notes.memo_title("/home/memos/1225-0700.wav"), "Voice memo, 25 Dec 07:00")
+        self.assertEqual(notes.memo_title("memo3.wav"), "Voice memo, memo3")
+        self.assertEqual(notes.memo_title(""), "Voice memo")
 
     def test_cookie_or_bearer_and_nothing_else(self):
         self.assertEqual(self.req("GET", "/notes", bearer=None)[0], 403)

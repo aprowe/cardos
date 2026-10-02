@@ -85,6 +85,9 @@ void capprun_unload_all(void);
  * shell's job everywhere else, and there is no reason for it to be the
  * program's here. Returns the exit status, or -1 if the slot is empty. */
 int capprun_start(int slot, const char *name, const char *args);
+/* Why the last capprun_start started nothing ("not enough memory"), or "" --
+ * which, with capprun_is_app false, means it was a command and is done. */
+const char *capprun_start_error(void);
 
 /* Did the program that just ran install a user interface? Non-zero means there
  * is an app to host; zero means it was a command and has already finished. */

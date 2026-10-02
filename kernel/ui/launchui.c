@@ -29,6 +29,7 @@
 #include "kernel/drv/bthid.h"
 #include "kernel/net/wifi.h"
 #include "kernel/ui/help.h"
+#include "kernel/ui/appsearch.h"
 #include "kernel/ui/picker.h"
 #include "kernel/ui/icons_builtin.h"
 #include "kernel/sys/hotkeys.h"
@@ -72,6 +73,26 @@ static int            s_app_clear;    /* the screen still has the carousel on it
 static int            s_help;         /* the key list is over everything */
 static int            s_binding;      /* k was pressed: the next letter binds */
 static int            s_pointer_on;   /* a mouse has moved: there is a cursor */
+
+/* The way back. An app that opens another -- Notes opening a note in Edit,
+ * Files a file -- is closed first and remembered here, and leaving the one
+ * it opened opens it again. Closed first because both at once did not fit:
+ * Edit would not load beside Notes, and the key that asked did nothing at
+ * all. Names, not runs: the app comes back fresh, as it would from the row. */
+#define BACK_MAX 4
+static char s_back[BACK_MAX][20];
+static int  s_nback;
+static char s_next[20], s_next_args[128];   /* asked for from a handler */
+static int  s_has_next;
+
+/* The search (Space): what has been typed, and the best matches for it as
+ * flat icon indices. */
+#define HITS 6
+static int  s_search;
+static char s_q[24];
+static int  s_hit[HITS], s_nhit, s_hsel;
+
+static void paint_search(void);   /* with the rest of the search, below */
 
 /* Defined below, beside the rest of the running-app code. */
 static void paint_spinner(uint32_t ms);
@@ -308,7 +329,8 @@ static const char *shell_keys(void) {
   /* The bindings are listed here rather than on a screen of their own: the
    * key list is where someone looks to find out what opt-p does. */
   snprintf(buf, sizeof buf,
-           "arrows\tmove along the row\nenter\topen\nk\tbind opt-letter to this app\n"
+           "arrows\tmove along the row\nenter\topen\nspace\tsearch: type a name, enter opens\n"
+           "k\tbind opt-letter to this app\n"
            "r\treload the app list\nd\tswitch to the desktop\n"
            "escape\tout of a folder\nfn-`\tout of a folder, or the console (or opt-backspace)\nfn-h\tclose this\n");
   n = strlen(buf);
@@ -359,7 +381,8 @@ static void flush(void) {
   if (!s_dirty) return;
   s_dirty = 0;
   paint_bar();
-  paint_carousel();
+  if (s_search) paint_search();
+  else paint_carousel();
   if (httpq_active()) paint_spinner(s_now_ms);
 }
 
@@ -414,6 +437,31 @@ static void leave_app(void) {
   flush();
 }
 
+static int run_now(const char *name, const char *args);
+
+/* Leaving an app by the quit key: back to the app that opened it, if one
+ * did, or to the row. */
+static void quit_app(void) {
+  char name[20];
+  leave_app();
+  if (s_nback > 0) {
+    snprintf(name, sizeof name, "%s", s_back[--s_nback]);
+    run_now(name, NULL);
+  }
+}
+
+/* A start that started nothing and said why: on the row, where the eye is,
+ * and on the console if that is where it was typed. */
+static int said_why(const char *name) {
+  const char *why = capprun_start_error();
+  if (!why[0]) return 0;
+  snprintf(s_note, sizeof s_note, "%s: %s", name, why);
+  if (ui_shell() != UI_LAUNCHER) con_printf("%s: %s\n", name, why);
+  s_dirty = 1;
+  flush();
+  return 1;
+}
+
 static void open_folder(int flat) {
   s_folder = flat;
   s_sel = 0;
@@ -466,7 +514,7 @@ static void launch_with(int i, const char *args) {
      * it has and installs an interface if it wants one. A program that
      * installs nothing was a command, and has already finished. */
     capprun_start(ic->slot, ic->name, args);
-    if (!capprun_is_app(ic->slot)) return;
+    if (!capprun_is_app(ic->slot)) { said_why(ic->name); return; }
     a = capprun_def(ic->slot);
     if (!a) return;
   } else {
@@ -486,7 +534,98 @@ static void launch_with(int i, const char *args) {
 }
 
 /* `pos` is a carousel position at the current level. */
-static void launch(int pos) { launch_with(icon_index(at(pos)), NULL); }
+static void launch(int pos) {
+  s_nback = 0;                    /* opened from the row: back is the row */
+  launch_with(icon_index(at(pos)), NULL);
+}
+
+/* ------------------------------------------------------------- search --- */
+
+/* Every app, in the order the row shows them -- favourites first, then each
+ * folder's apps where the folder is -- once each, then ranked. */
+static void search_update(void) {
+  const char *names[64];
+  int flat[64], got[HITS], n = 0, i, j, k, top = icons_in_count(-1);
+  for (i = 0; i < top && n < 64; i++) {
+    const Icon *ic = icons_in_at(-1, i);
+    int inside = ic && ic->kind == ICON_FOLDER ? icons_in_count(icon_index(ic)) : 0;
+    for (j = -1; j < inside && n < 64; j++) {
+      const Icon *x = j < 0 ? ic : icons_in_at(icon_index(ic), j);
+      int f = icon_index(x), dup = 0;
+      if (!x || x->cli || x->kind == ICON_FOLDER || x->kind == ICON_FIRMWARE) continue;
+      for (k = 0; k < n; k++) if (flat[k] == f) dup = 1;
+      if (dup) continue;
+      names[n] = x->name;
+      flat[n++] = f;
+    }
+  }
+  s_nhit = appsearch_rank(names, n, s_q, got, HITS);
+  for (i = 0; i < s_nhit; i++) s_hit[i] = flat[got[i]];
+  s_hsel = 0;
+}
+
+static void search_open(void) {
+  s_search = 1;
+  s_q[0] = 0;
+  search_update();
+  s_dirty = 1;
+  flush();
+}
+
+static void paint_search(void) {
+  int i, y = BAR_H + 26;
+  char line[32];
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  draw_rect(R(0, BAR_H, DISPLAY_W, DISPLAY_H - BAR_H), C_DESKTOP);
+  draw_rect(R(8, BAR_H + 5, DISPLAY_W - 16, 16), C_TITLE);
+  snprintf(line, sizeof line, "> %s_", s_q);
+  draw_text(14, BAR_H + 9, line, C_TITLE_FG, C_TITLE);
+  if (!s_nhit) {
+    draw_text(14, y + 4, "no app called that", C_DESK_DIM, C_DESKTOP);
+    return;
+  }
+  for (i = 0; i < s_nhit; i++, y += 17) {
+    const Icon *ic = icon_at(s_hit[i]);
+    const Icon *in = ic && ic->parent >= 0 ? icon_at(ic->parent) : NULL;
+    uint16_t bg = i == s_hsel ? C_TITLE : C_DESKTOP;
+    if (!ic) continue;
+    draw_rect(R(8, y, DISPLAY_W - 16, 17), bg);
+    paint_icon(s_hit[i], 12, (int16_t)(y + 1), 1, C_TITLE_FG);
+    draw_text(34, (int16_t)(y + 5), ic->name, C_TITLE_FG, bg);
+    if (in) draw_text((int16_t)(DISPLAY_W - 12 - draw_text_width(in->name)), (int16_t)(y + 5),
+                      in->name, C_DESK_DIM, bg);
+  }
+}
+
+/* Typing finds, arrows choose, enter opens, escape (or deleting past the
+ * start) closes. Arrives with ; and . already turned into up and down. */
+static int search_key(uint8_t key) {
+  int n = (int)strlen(s_q);
+  if (key == KEY_ESC || key == KEY_QUIT) s_search = 0;
+  else if (key == KEY_UP) { if (s_hsel > 0) s_hsel--; }
+  else if (key == KEY_DOWN) { if (s_hsel + 1 < s_nhit) s_hsel++; }
+  else if (key == KEY_ENTER) {
+    if (s_nhit) {
+      int f = s_hit[s_hsel];
+      s_search = 0;
+      s_nback = 0;
+      select_flat(f);              /* leaving the app lands on it */
+      s_dirty = 1;
+      launch_with(f, NULL);
+      return 0;
+    }
+  } else if (key == KEY_BACKSPACE) {
+    if (n) { s_q[n - 1] = 0; search_update(); }
+    else s_search = 0;
+  } else if (key >= 32 && key < 127 && n < (int)sizeof s_q - 1) {
+    s_q[n] = (char)key;
+    s_q[n + 1] = 0;
+    search_update();
+  }
+  s_dirty = 1;
+  flush();
+  return 0;
+}
 
 static void move(int delta) {
   if (icons_in_count(s_folder) == 0) return;
@@ -522,6 +661,9 @@ static void need_icons(void) {
 void launchui_init(void) {
   capprun_release(s_app);      /* from the last visit, if any */
   s_app = NULL;
+  s_nback = 0;
+  s_has_next = 0;
+  s_search = 0;
   icons_reload();
   s_sel = 0;
   s_folder = -1;
@@ -569,7 +711,55 @@ static int from_dashboard(int slot) {
   return 1;
 }
 
+/* Is there an app (or command) by this name? */
+static int find_named(const char *name) {
+  int i;
+  need_icons();
+  for (i = 0; i < icons_total(); i++) {
+    const Icon *ic = icon_at(i);
+    if (ic && same_name(ic->name, name)) return 1;
+  }
+  return 0;
+}
+
+/* The one asked for from a handler, now that the handler has returned: the
+ * app that asked goes first, then this one loads into the room it left. */
+static void run_next(void) {
+  char name[20], args[128];
+  s_has_next = 0;
+  snprintf(name, sizeof name, "%s", s_next);
+  snprintf(args, sizeof args, "%s", s_next_args);
+  if (s_app) {
+    if (s_nback == BACK_MAX) {
+      memmove(s_back[0], s_back[1], sizeof s_back - sizeof s_back[0]);
+      s_nback--;
+    }
+    snprintf(s_back[s_nback++], sizeof s_back[0], "%s", s_app->name);
+    leave_app();
+  }
+  if (run_now(name, args[0] ? args : NULL) != 0 || !s_app) {
+    /* It did not open, and the row says why; going back to the app that
+     * asked would hide that. */
+    if (s_nback) s_nback--;
+  }
+}
+
 int launchui_run(const char *name, const char *args) {
+  if (!name || !*name) return -1;
+  /* From the handler of the app on screen: later, once it has been let go.
+   * Its code is on the stack now, so it cannot go yet -- and loading the
+   * next one beside it is what ran out of room. */
+  if (s_app && capprun_caller() == s_app->state && ui_shell() == UI_LAUNCHER) {
+    if (!find_named(name)) return -1;
+    snprintf(s_next, sizeof s_next, "%s", name);
+    snprintf(s_next_args, sizeof s_next_args, "%s", args ? args : "");
+    s_has_next = 1;
+    return 0;
+  }
+  return run_now(name, args);
+}
+
+static int run_now(const char *name, const char *args) {
   int i;
 
   if (!name || !*name) return -1;
@@ -583,7 +773,12 @@ int launchui_run(const char *name, const char *args) {
      * else is an app, and the launcher takes over to host it. */
     if (ic->kind == ICON_CAPP) {
       capprun_start(ic->slot, ic->name, args);
-      if (!capprun_is_app(ic->slot)) return 0;
+      if (!capprun_is_app(ic->slot)) {
+        /* A command, and it is done -- or an app that would not start, and
+         * the reason has been said. Either way the name was not unknown. */
+        if (said_why(ic->name) && ui_shell() == UI_LAUNCHER) select_flat(i);
+        return 0;
+      }
       if (from_dashboard(ic->slot)) return 0;
       select_flat(i);
       enter();
@@ -649,12 +844,12 @@ int launchui_key(uint8_t key) {
   if (key == KEY_HELP) { s_help = 1; flush(); return 0; }
   /* The window modifier, in a shell whose windows are the whole screen:
    * closing the app is the only frame operation there is. */
-  if (key == KEY_FN_LETTER('w') && s_app) { leave_app(); return 0; }
+  if (key == KEY_FN_LETTER('w') && s_app) { quit_app(); return 0; }
 
   /* The file picker has every key while it is up, except the ones that
    * leave the app -- those close it on the way out. */
   if (picker_active() && s_app) {
-    if (key == KEY_QUIT) { leave_app(); return 0; }
+    if (key == KEY_QUIT) { quit_app(); return 0; }
     if (!picker_wants_text()) {
       uint8_t arrow = keyboard_arrow_for(key);
       if (arrow) key = arrow;
@@ -697,13 +892,15 @@ int launchui_key(uint8_t key) {
      * away; then leaving when the app declined it, which is the same
      * surprise one level down -- back out of a subview once too often and
      * the app is gone. fn-` (KEY_QUIT) is the way out, and the only one. */
-    if (key == KEY_QUIT) { leave_app(); return 0; }
+    if (key == KEY_QUIT) { quit_app(); return 0; }
     if (s_app->key && s_app->key(s_app->state, key)) {
       s_app_dirty = 1;
       flush();
     }
     return 0;
   }
+
+  if (s_search) return search_key(key);
 
   switch (key) {
   case KEY_ESC:
@@ -722,8 +919,10 @@ int launchui_key(uint8_t key) {
   case KEY_DOWN:  move(1);  return 0;
 
   case KEY_ENTER:
-  case ' ':
     if (icons_in_count(s_folder)) launch(s_sel);
+    return 0;
+  case ' ':
+    search_open();
     return 0;
 
   case 'k': case 'K': {
@@ -773,6 +972,7 @@ int launchui_button(int event, const char *text) {
 
 int launchui_wants_text(void) {
   if (picker_active()) return picker_wants_text();
+  if (!s_app && s_search) return 1;
   if (!s_app || !s_app->wants_text) return 0;
   return s_app->wants_text(s_app->state);
 }
@@ -790,6 +990,8 @@ void launchui_note(const char *text) {
 void launchui_tick(uint32_t ms) {
   uint32_t before = s_now_ms / 1000u;
   s_now_ms = ms;
+
+  if (s_has_next) run_next();
 
   /* An app that animates gets every pass, not every second: a game at one
    * frame a second is a slideshow. It runs before the once-a-second work

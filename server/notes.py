@@ -22,6 +22,7 @@ asking the server to merge.
 import hmac
 import json
 import os
+import re
 import secrets
 import sys
 import threading
@@ -175,6 +176,20 @@ def delete_note(h, args):
     h.text("ok\n")
 
 
+MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+
+
+def memo_title(name):
+    """"Voice memo, 1 Oct 16:48" from Memo's file name (MMDD-HHMMSS.wav, the
+    device's own clock), or "Voice memo, NAME" for one named by count."""
+    stem = os.path.basename(name or "").rsplit(".", 1)[0]
+    m = re.fullmatch(r"(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)?", stem)
+    if m and 1 <= int(m.group(1)) <= 12:
+        return "Voice memo, %d %s %s:%s" % (int(m.group(2)), MONTHS[int(m.group(1)) - 1],
+                                            m.group(3), m.group(4))
+    return "Voice memo, " + stem if stem else "Voice memo"
+
+
 @_route
 def post_audio(h, args):
     """a voice memo, transcribed into a new note"""
@@ -189,7 +204,10 @@ def post_audio(h, args):
         h.text("error %s\n" % err, 502)
         return
     text = (text or "").strip() or "(nothing heard)"
-    n = save(None, text + "\n")
+    # A heading, then the words. The words alone made a one-line note, and a
+    # note's first line is its title: a sentence of memo arrived as a title
+    # over an empty page.
+    n = save(None, "# %s\n\n%s\n" % (memo_title((args.get("name") or [""])[0]), text))
     sys.stderr.write("notes: memo -> %s\n" % n["id"])
     h.text("%s\t%s\t%s\n" % (n["id"], n["hash"], n["title"]))
 

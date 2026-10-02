@@ -655,12 +655,27 @@ int capprun_scan_load(const char *path, uint32_t size, uint32_t mtime) {
 int capprun_load_once(const char *path) { return load_entry(path, 1, 1); }
 
 /* Bring the image back for a run that is about to start. */
+/* Why the last capprun_start did not start anything; "" if it did. A
+ * launcher that only knew "not an app" opened nothing and said nothing --
+ * the commonest case being executable RAM, which reads as a dead key. */
+static char s_start_error[64];
+
+const char *capprun_start_error(void) { return s_start_error; }
+
 static int ensure_loaded(Run *s) {
   CappResult r;
   if (s->loaded) return 0;
   r = capp_load(s->entry->path, &s->la);
+  if (r == CAPP_ERR_NO_MEMORY && s_hold_owner == NULL) {
+    /* The block kept between another app's commands is heap nothing else
+     * can use until it is let go; let go of it and try once more. */
+    capp_hold_code(0);
+    r = capp_load(s->entry->path, &s->la);
+  }
   if (r != CAPP_OK) {
     ESP_LOGE(TAG, "%s: %s", s->entry->path, capp_strerror(r));
+    snprintf(s_start_error, sizeof s_start_error, "%s",
+             r == CAPP_ERR_NO_MEMORY ? "not enough memory" : capp_strerror(r));
     return -1;
   }
   s->loaded = 1;
@@ -820,6 +835,7 @@ int capprun_start(int slot, const char *name, const char *args) {
   Run *s;
   extern const CardApi *cardos_api(void);
 
+  s_start_error[0] = 0;
   if (!e) return -1;
   s = e->run;
 
@@ -832,9 +848,13 @@ int capprun_start(int slot, const char *name, const char *args) {
    * itself from one of its own handlers is refused: its code is on the
    * stack. */
   if (s) {
-    if (s == s_active || s == s_running) return -1;
+    if (s == s_active || s == s_running) {
+      snprintf(s_start_error, sizeof s_start_error, "it is already running");
+      return -1;
+    }
     if (s->loaded && s->has_ui) release_image(s);
   } else if ((s = run_new(e)) == NULL) {
+    snprintf(s_start_error, sizeof s_start_error, "too many apps open");
     return -1;
   }
   s->has_ui = 0;
