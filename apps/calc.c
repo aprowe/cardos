@@ -1056,7 +1056,7 @@ static void paint_calc(CRect c) {
     static const char *const hint[] = {
       "type a sum and press Enter:", "  2^10   sqrt(2)*3   5!   a=7",
       "or an equation to graph it:", "  y=x^2-3   y=sin(x)   y=2x+1",
-      "Tab shows the graphs", "fn-p prints   fn-h for the rest",
+      "Tab shows the graphs", "fn-p prints   fn-b the menus",
     };
     for (i = 0; i < 6; i++)
       api->text((int16_t)(c.x + 4), (int16_t)(top + 4 + i * 11), hint[i],
