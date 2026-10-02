@@ -142,40 +142,88 @@ static uint16_t colour_of(int who) {
        : who == WHO_ERR ? CLR_ERR : CLR_DIM;
 }
 
+static void fill_if(int x, int y, int w, int h, uint16_t c) {
+  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), c);
+}
+
+/* `s` padded with spaces to `cols` characters, so a line writes over the
+ * one it replaces instead of the row being cleared first: there is no
+ * framebuffer, and a fill followed by text is a blink on the panel. */
+static void text_cols(int x, int y, const char *s, int cols, uint16_t fg, uint16_t bg) {
+  char b[64];
+  int n = 0;
+  if (cols > (int)sizeof b - 1) cols = (int)sizeof b - 1;
+  while (s[n] && n < (int)sizeof b - 1) { b[n] = s[n]; n++; }
+  while (n < cols) b[n++] = ' ';
+  b[n] = 0;
+  api->text((short)x, (short)y, b, fg, bg);
+}
+
+/* Written over itself, padded to the width, with only the pixel rows above
+ * and below the text and its margins filled: the dots move every 400 ms,
+ * and filling the bar before writing it blinked it each time. */
 static void paint_bar(CRect c) {
   char bar[64];
   const char *s = agent->status();
-  api->fill(rect(c.x, c.y, c.w, BAR_H), CLR_BAR);
+  int cols = (c.w - 3 + 5) / 6;          /* the last, cut by the edge, still padded */
+  if (cols > 63) cols = 63;
   if (s[0])
     api->fmt(bar, sizeof bar, "Claude  %s%s", s,
              C.dots == 0 ? "" : C.dots == 1 ? "." : C.dots == 2 ? ".." : "...");
   else
     api->fmt(bar, sizeof bar, "Claude  api.anthropic.com");
-  api->text((short)(c.x + 3), (short)(c.y + 1), bar, CLR_FG, CLR_BAR);
+  fill_if(c.x, c.y, c.w, 1, CLR_BAR);
+  fill_if(c.x, c.y + 9, c.w, BAR_H - 9, CLR_BAR);
+  fill_if(c.x, c.y + 1, 3, 8, CLR_BAR);
+  fill_if(c.x + 3 + cols * 6, c.y + 1, c.w - 3 - cols * 6, 8, CLR_BAR);
+  text_cols(c.x + 3, c.y + 1, bar, cols, CLR_FG, CLR_BAR);
 }
 
-static void paint_log(CRect c) {
+/* Each line padded to the width and written over the one before it; only
+ * the margins, the pixel row under each line and the rows below the last
+ * are filled. Clearing the whole log first blinked it on every answer. */
+static void paint_log(CRect c, CRect clip) {
   int rows = (c.h - BAR_H - IN_H) / ROW_H;
-  int first, r;
-  api->fill(rect(c.x, c.y + BAR_H, c.w, c.h - BAR_H - IN_H), CLR_BG);
+  int top = c.y + BAR_H, bottom = c.y + c.h - IN_H;
+  int cols = (c.w - 2 + 5) / 6, right;   /* to the edge: a 40-column line reaches it */
+  int first, r, y = top;
+
+  if (cols > 63) cols = 63;
+  right = c.x + 2 + cols * 6;
   first = C.nlines - rows - C.scroll;
   if (first < 0) first = 0;
+  fill_if(c.x, top, 2, bottom - top, CLR_BG);
+  fill_if(right, top, c.x + c.w - right, bottom - top, CLR_BG);
   for (r = 0; r < rows; r++) {
     int i = first + r;
     if (i >= C.nlines) break;
-    api->text((short)(c.x + 2), (short)(c.y + BAR_H + r * ROW_H),
-              C.line[i], colour_of(C.who[i]), CLR_BG);
+    y = top + r * ROW_H;
+    if (y < clip.y + clip.h && y + ROW_H > clip.y) {
+      text_cols(c.x + 2, y, C.line[i], cols, colour_of(C.who[i]), CLR_BG);
+      fill_if(c.x + 2, y + 8, cols * 6, ROW_H - 8, CLR_BG);
+    }
+    y += ROW_H;
   }
+  fill_if(c.x + 2, y, cols * 6, bottom - y, CLR_BG);
 }
 
+/* The prompt, the text, the cursor, then spaces to the end -- each drawn
+ * over the last, so a keystroke does not blank the line. */
 static void paint_input(CRect c) {
   int y = c.y + c.h - IN_H;
   int vis = (c.w - 12) / 6;
   int from = C.in_len > vis ? C.in_len - vis : 0;
-  api->fill(rect(c.x, y, c.w, IN_H), CLR_IN);
+  int n = C.in_len - from, cx = c.x + 10 + n * 6, end;
+  fill_if(c.x, y, c.w, 2, CLR_IN);
+  fill_if(c.x, y + 10, c.w, IN_H - 10, CLR_IN);
+  fill_if(c.x, y + 2, 2, 8, CLR_IN);
   api->text((short)(c.x + 2), (short)(y + 2), ">", CLR_DIM, CLR_IN);
+  fill_if(c.x + 8, y + 2, 2, 8, CLR_IN);
   api->text((short)(c.x + 10), (short)(y + 2), C.input + from, CLR_FG, CLR_IN);
-  api->fill(rect(c.x + 10 + (C.in_len - from) * 6, y + 2, 5, 8), CLR_FG);
+  api->fill(rect(cx, y + 2, 5, 8), CLR_FG);
+  text_cols(cx + 5, y + 2, "", vis - n, CLR_FG, CLR_IN);
+  end = cx + 5 + (vis > n ? vis - n : 0) * 6;
+  fill_if(end, y + 2, c.x + c.w - end, 8, CLR_IN);
 }
 
 /* Painted to the clip the shell hands back: our own damage marks come back
@@ -186,7 +234,7 @@ static void app_paint(void *st, CRect c) {
   C.at = c;
   C.have_at = 1;
   if (clip.y < c.y + BAR_H) paint_bar(c);
-  if (clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + BAR_H) paint_log(c);
+  if (clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + BAR_H) paint_log(c, clip);
   if (clip.y + clip.h > c.y + c.h - IN_H) paint_input(c);
 }
 
