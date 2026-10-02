@@ -59,6 +59,13 @@ class DailyTest(unittest.TestCase):
         self.req("?date=2026-10-03&kind=focus")
         self.assertEqual(self.calls, 2)               # a new day, a new ask
 
+    def test_a_fallback_is_not_kept_for_the_day(self):
+        daily.generate = lambda date, chat: (self.__dict__.__setitem__("calls", self.calls + 1)
+                                             or daily.fallback(date))
+        self.req("?date=2026-10-04&kind=focus")
+        self.req("?date=2026-10-04&kind=fact")
+        self.assertEqual(self.calls, 2)               # asked again: Claude may be back
+
     def test_bad_arguments(self):
         self.assertEqual(self.req("?date=tomorrow&kind=focus")[0], 400)
         self.assertEqual(self.req("?date=2026-10-02&kind=joke")[0], 400)

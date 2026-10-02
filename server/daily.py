@@ -70,8 +70,11 @@ def _save(d):
 
 
 def fallback(date):
+    """Lines written here, chosen by date. Marked, so they are not kept:
+    a Claude that is back in an hour should still get to write the day."""
     n = zlib.crc32(date.encode())
-    return {"focus": FOCUS[n % len(FOCUS)], "fact": FACT[(n // 7) % len(FACT)]}
+    return {"focus": FOCUS[n % len(FOCUS)], "fact": FACT[(n // 7) % len(FACT)],
+            "fallback": True}
 
 
 def generate(date, chat):
@@ -85,7 +88,10 @@ def generate(date, chat):
         r = subprocess.run(cmd, cwd=chat.cwd, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=90,
                            env=chat._child_env())
-        out = json.loads(r.stdout or "{}").get("result") or ""
+        j = json.loads(r.stdout or "{}")
+        if j.get("is_error"):
+            raise ValueError(j.get("result") or "claude failed")
+        out = j.get("result") or ""
     except (OSError, subprocess.TimeoutExpired, ValueError) as e:
         sys.stderr.write("daily: %s\n" % e)
         return fallback(date)
@@ -95,8 +101,9 @@ def generate(date, chat):
         for key in ("focus", "fact"):
             if line.lower().startswith(key + ":"):
                 got[key] = line[len(key) + 1:].strip().strip('"')
-    base = fallback(date)
-    return {"focus": got.get("focus") or base["focus"], "fact": got.get("fact") or base["fact"]}
+    if not got.get("focus") or not got.get("fact"):
+        return fallback(date)
+    return got
 
 
 def for_date(date, chat):
@@ -105,6 +112,8 @@ def for_date(date, chat):
         if date in d:
             return d[date]
     day = generate(date, chat)
+    if day.get("fallback"):
+        return day
     with _lock:
         d = _load()
         d.setdefault(date, day)
