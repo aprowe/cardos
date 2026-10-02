@@ -18,7 +18,7 @@
  *
  * ONE SWEEP, AT OPEN. Opening the app fetches the lists, pushes and pulls the
  * list on screen, then pulls every other list into its own cache file -- and
- * then stops. Nothing starts on its own after that; `s` runs the sweep again.
+ * then stops. Nothing starts on its own after that; `r` runs the sweep again.
  * It used to pull the current list every ten minutes, which meant the app
  * reached out and rearranged the screen while you were reading it, and the
  * list you were not looking at was never fetched at all, so `o` had nothing
@@ -37,6 +37,8 @@
 
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
+#include "apps/safefile.h"
+#include "apps/footer.h"
 
 #define MAX_ITEMS  40
 #define TITLE_MAX  38
@@ -171,6 +173,10 @@ static struct {
   short   oy[OVER_MAX];
 
   CRect content;                    /* what paint was last given, for damage */
+  CRect full;                       /* the same, toolbar included */
+  /* `d` asked "delete it?" and the answer is the next key: y yes, n, Escape
+   * or Backspace no. The question is the footer; the list stays on screen. */
+  int   confirm;
   char  last_status[52];            /* to know whether the strip changed */
   char  list_id[ID_MAX];
   char status[52];
@@ -251,19 +257,21 @@ static const char *cache_path(void) {
   return path;
 }
 
+/* Through apps/safefile.h: the cache holds edits not yet pushed, and a
+ * rewrite in place cut short by a pulled battery lost every one of them. */
 static void cache_save(void) {
   char line[ID_MAX + TITLE_MAX + 16];
-  int fd, i;
+  SafeFile f;
+  int i;
 
-  fd = api->open(cache_path(), CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
-  if (fd < 0) return;
+  if (safe_begin(&f, api, cache_path()) != 0) return;
   for (i = 0; i < T.n; i++) {
     int n = api->fmt(line, sizeof line, "%d %d %d %s %s\n",
                      T.item[i].done, T.item[i].deleted, T.item[i].dirty,
                      T.item[i].id[0] ? T.item[i].id : "-", T.item[i].title);
-    api->write(fd, line, (size_t)n);
+    safe_write(&f, line, (size_t)n);
   }
-  api->close(fd);
+  safe_commit(&f);
 }
 
 static void cache_load(void) {
@@ -271,7 +279,7 @@ static void cache_load(void) {
   int fd, n, i, len = 0;
 
   T.n = 0;
-  fd = api->open(cache_path(), CAPP_O_READ);
+  fd = safe_open_read(api, cache_path());
   if (fd < 0) return;
 
   while ((n = api->read(fd, buf, sizeof buf)) > 0) {
@@ -326,19 +334,20 @@ static int same_ci(const char *a, const char *b) {
   }
 }
 
+/* State, not a cache (see LISTS_PATH), so safely: write aside, then swap. */
 static void lists_save(void) {
   char line[ID_MAX + NAME_MAX + 4];
-  int fd, i, n;
+  SafeFile f;
+  int i, n;
 
-  fd = api->open(LISTS_PATH, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
-  if (fd < 0) return;
+  if (safe_begin(&f, api, LISTS_PATH) != 0) return;
   n = api->fmt(line, sizeof line, "%s\n", T.list_id[0] ? T.list_id : "-");
-  api->write(fd, line, (size_t)n);
+  safe_write(&f, line, (size_t)n);
   for (i = 0; i < T.nlists; i++) {
     n = api->fmt(line, sizeof line, "%s %s\n", T.lists[i].id, T.lists[i].name);
-    api->write(fd, line, (size_t)n);
+    safe_write(&f, line, (size_t)n);
   }
-  api->close(fd);
+  safe_commit(&f);
 }
 
 static void lists_load(void) {
@@ -347,7 +356,7 @@ static void lists_load(void) {
 
   T.nlists = 0;
   T.cur = -1;
-  fd = api->open(LISTS_PATH, CAPP_O_READ);
+  fd = safe_open_read(api, LISTS_PATH);
   if (fd < 0) return;
   while ((n = api->read(fd, buf, sizeof buf)) > 0) {
     for (i = 0; i < n; i++) {
@@ -416,7 +425,7 @@ static void absorb_lists(void) {
  * means the item is pushed again -- twice at Google -- so that one is
  * waited for. It is one small request, not a whole sync. */
 static void select_list(int i) {
-  if (T.nlists == 0) { say("no lists yet -- s syncs"); return; }
+  if (T.nlists == 0) { say("no lists yet -- r syncs"); return; }
   if (T.stage == SYNC_PUSH) { say("sending -- wait a moment"); return; }
   if (T.stage == SYNC_SWEEP) { say("syncing -- wait a moment"); return; }
   if (i < 0) i = T.nlists - 1;
@@ -430,7 +439,7 @@ static void select_list(int i) {
   cache_load();
   T.sel = 0;
   lists_save();
-  api->fmt(T.status, sizeof T.status, "%d cached -- s syncs", T.n);
+  api->fmt(T.status, sizeof T.status, "%d cached -- r syncs", T.n);
   /* Sync it as soon as the tick comes round, not in ten minutes. */
   T.tried_once = 0;
 }
@@ -519,7 +528,7 @@ static void over_scan(int li) {
   int fd, n, i, len = 0, first = 1;
 
   api->fmt(path, sizeof path, CACHE_FMT, T.lists[li].id);
-  fd = api->open(path, CAPP_O_READ);
+  fd = safe_open_read(api, path);
   if (fd < 0) return;
 
   while ((n = api->read(fd, buf, sizeof buf)) > 0) {
@@ -599,7 +608,7 @@ static void delete_selected(void) {
     it->deleted = 0;
     it->dirty = 1;
     cache_save();
-    say("kept -- s syncs");
+    say("kept -- r syncs");
     return;
   }
   if (!it->id[0]) {
@@ -611,7 +620,7 @@ static void delete_selected(void) {
   it->deleted = 1;
   it->dirty = 1;
   cache_save();
-  say("deleted -- d undoes, s syncs");
+  say("deleted -- d undoes, r syncs");
 }
 
 /* ---- syncing, without stopping the world ---------------------------------
@@ -700,21 +709,21 @@ static void absorb_tasks(void) {
 static int absorb_into(const char *list_id, int *count_out) {
   char *p = T.reply, *f[3];
   char path[ID_MAX + 16], line[ID_MAX + TITLE_MAX + 16];
-  int fd, count = 0;
+  SafeFile sf;
+  int count = 0;
 
   api->fmt(path, sizeof path, CACHE_FMT, list_id);
-  fd = api->open(path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
-  if (fd < 0) return -1;
+  if (safe_begin(&sf, api, path) != 0) return -1;
 
   while (count < MAX_ITEMS && reply_line(&p, f, 3) == 3) {
     int n;
     if (!f[2][0]) continue;
     n = api->fmt(line, sizeof line, "%d %d %d %s %.*s\n",
                  f[1][0] == '1', 0, 0, f[0][0] ? f[0] : "-", TITLE_MAX, f[2]);
-    api->write(fd, line, (size_t)n);
+    safe_write(&sf, line, (size_t)n);
     count++;
   }
-  api->close(fd);
+  if (safe_commit(&sf) != 0) return -1;
   if (count_out) *count_out = count;
   return 0;
 }
@@ -756,7 +765,7 @@ static void sweep_step(const char *tok) {
   api->fmt(url, sizeof url, TASKS_URL, api->proxy(), T.lists[i].id);
   if (api->http_start("GET", url, 0, 0, tok, 20000) != 0) {
     /* The queue is busy. One list missing from the overview is not worth
-     * wedging the sweep over: stop here and let `s` try again. */
+     * wedging the sweep over: stop here and let `r` try again. */
     logf("sweep: %s refused, stopping", T.lists[i].name);
     sweep_done();
     return;
@@ -835,7 +844,7 @@ static void sync_tick(void) {
       /* Without these the open-time sweep counted as never tried and began
        * again the next tick: twice a second, a log line on the card each
        * time (2026-10-01). A refused login is not fixed by asking again --
-       * that is this open's sweep, and `s` asks for another; anything else
+       * that is this open's sweep, and `r` asks for another; anything else
        * is tried again after RETRY_MS. */
       if (n == -401 || n == -403) T.synced_once = 1;
       T.next_auto = api->ticks_ms() + RETRY_MS;
@@ -936,7 +945,7 @@ static void toggle(void) {
   T.item[T.sel].done = !T.item[T.sel].done;
   T.item[T.sel].dirty = 1;
   cache_save();
-  say("ticked -- s syncs");
+  say("ticked -- r syncs");
 }
 
 /* A new task on top of the current list, saved and marked for the next
@@ -971,7 +980,7 @@ static int add_text(const char *text) {
 }
 
 static void add_draft(void) {
-  if (T.draft_len && add_text(T.draft) == 0) say("added -- s syncs");
+  if (T.draft_len && add_text(T.draft) == 0) say("added -- r syncs");
   T.draft[0] = 0;
   T.draft_len = 0;
   T.view = VIEW_LIST;
@@ -1028,7 +1037,7 @@ static void paint_list(CRect c) {
   if (T.n == 0) {
     api->fill(rect(c.x, c.y, c.w, c.h - ROW_H), CLR_BG);
     api->text((short)(c.x + 6), (short)(c.y + 6), "nothing to do", CLR_DONE, CLR_BG);
-    api->text((short)(c.x + 6), (short)(c.y + 20), "a adds  s syncs", CLR_DONE, CLR_BG);
+    api->text((short)(c.x + 6), (short)(c.y + 20), "n new  r sync", CLR_DONE, CLR_BG);
   }
 }
 
@@ -1074,16 +1083,14 @@ static void paint_all(CRect c) {
 
   if (!T.nover)
     api->text((short)(c.x + 6), (short)(c.y + 6),
-              T.nlists ? "nothing to do anywhere" : "no lists yet -- s syncs",
+              T.nlists ? "nothing to do anywhere" : "no lists yet -- r syncs",
               CLR_DONE, CLR_BG);
 
-  api->fill(rect(c.x, c.y + c.h - ROW_H, c.w, ROW_H), CLR_BAR);
   {
-    char bar[52];
-    api->fmt(bar, sizeof bar, "%d task%s%s   enter opens", T.nover,
+    char bar[FOOT_CHARS + 1];
+    api->fmt(bar, sizeof bar, "%d task%s%s  enter open  esc back", T.nover,
              T.nover == 1 ? "" : "s", T.over_full ? "+" : "");
-    api->text((short)(c.x + 3), (short)(c.y + c.h - ROW_H + 2), bar,
-              CLR_BARFG, CLR_BAR);
+    footer_paint(api, c, bar);
   }
 }
 
@@ -1101,11 +1108,9 @@ static void paint_lists(CRect c) {
     api->text((short)(c.x + 14), (short)(y + 2), T.lists[r].name, CLR_TEXT, bg);
   }
   if (!T.nlists)
-    api->text((short)(c.x + 6), (short)(c.y + 6), "no lists yet -- s syncs",
+    api->text((short)(c.x + 6), (short)(c.y + 6), "no lists yet -- r syncs",
               CLR_DONE, CLR_BG);
-  api->fill(rect(c.x, c.y + c.h - ROW_H, c.w, ROW_H), CLR_BAR);
-  api->text((short)(c.x + 3), (short)(c.y + c.h - ROW_H + 2),
-            "enter opens   backspace cancels", CLR_BARFG, CLR_BAR);
+  footer_paint(api, c, "enter open  esc back");
 }
 
 static void paint_add(CRect c) {
@@ -1122,9 +1127,8 @@ static void paint_add(CRect c) {
   shown[T.draft_len + 1] = 0;
   api->text((short)(c.x + 8), (short)(c.y + 29), shown, CLR_TEXT, CLR_ROW);
 
-  api->text((short)(c.x + 6), (short)(c.y + 48),
-            T.draft_list ? "enter makes it   backspace cancels"
-                         : "enter adds   backspace cancels", CLR_DONE, CLR_BG);
+  footer_paint(api, c, T.draft_list ? "enter make it  esc cancel"
+                                    : "enter add  esc cancel");
 }
 
 /* Everything this app can be asked to do, stated once.
@@ -1280,12 +1284,28 @@ static void print_page(void) {
   else               say("could not print: no memory");
 }
 
+/* The list's footer is its status line, not key hints: which list, whether
+ * it is online, what the last sync or edit did. The keys are in the help
+ * (fn-h) and in the empty list's own text. While a delete waits for its
+ * answer, the footer is the question. Cut at FOOT_CHARS so a long list name
+ * and a long sentence cannot run off the screen. */
+static void list_footer(char *bar, int n) {
+  if (T.confirm && T.sel >= 0 && T.sel < T.n) {
+    api->fmt(bar, (size_t)n, "delete %.16s? y yes  n no", T.item[T.sel].title);
+    return;
+  }
+  api->fmt(bar, (size_t)n, "%s%s%s%s", T.online ? "" : "offline  ",
+           T.cur >= 0 ? T.lists[T.cur].name : "",
+           T.cur >= 0 ? "  " : "", T.status);
+}
+
 static void app_paint(void *st, CRect c) {
-  char bar[64];
+  char bar[FOOT_CHARS + 1];
   (void)st;
 
   {
     CRect full = c;
+    T.full = full;
     /* Only the dropdown moved: draw it and nothing else. Repainting the
      * content underneath first is what made the menu flicker. */
     if (toolbar_only_menu()) { toolbar_paint_menu(full); return; }
@@ -1300,13 +1320,8 @@ static void app_paint(void *st, CRect c) {
     else if (T.view == VIEW_LISTS) paint_lists(c);
     else {
       paint_list(c);
-
-      api->fill(rect(c.x, c.y + c.h - ROW_H, c.w, ROW_H), CLR_BAR);
-      api->fmt(bar, sizeof bar, "%s%s%s%s", T.online ? "" : "offline  ",
-               T.cur >= 0 ? T.lists[T.cur].name : "",
-               T.cur >= 0 ? "  " : "", T.status);
-      api->text((short)(c.x + 3), (short)(c.y + c.h - ROW_H + 2), bar,
-                T.online ? CLR_BARFG : CLR_WARN, CLR_BAR);
+      list_footer(bar, sizeof bar);
+      footer_paint(api, c, bar);
     }
     /* Last: a dropdown is drawn over the content it covers. */
     toolbar_paint_menu(full);
@@ -1317,8 +1332,57 @@ static void app_paint(void *st, CRect c) {
 
 static int app_key(void *st, unsigned char k);
 
+/* Does action `a` mean anything in the view on screen? The shell matches
+ * LIST_ACTIONS' chords before any key handler, in every view, so without
+ * this ctrl-d deleted the highlighted task from under a draft being typed,
+ * and ctrl-t ticked it. A chord that does not fit the view does nothing --
+ * and is still consumed, so it cannot type a control byte into the draft.
+ * While a delete is being asked about, nothing but the answer counts. */
+static int action_fits(int a) {
+  if (T.confirm) return 0;
+  switch (T.view) {
+  case VIEW_ADD:   return a == ACT_SAVE || a == ACT_CANCEL;
+  case VIEW_LISTS: return a == ACT_OPEN || a == ACT_CANCEL || a == ACT_SYNC ||
+                          a == ACT_LISTS;
+  case VIEW_ALL:   return a == ACT_GOTO || a == ACT_CANCEL || a == ACT_SYNC ||
+                          a == ACT_PRINT || a == ACT_ALL;
+  default:         return a != ACT_SAVE && a != ACT_OPEN && a != ACT_GOTO &&
+                          a != ACT_CANCEL;
+  }
+}
+
+/* `d`, Delete, ctrl-d or the menu: ask first, always. Taking back a delete
+ * not yet sent is the exception -- that is not destructive, it is undo. */
+static void ask_delete(void) {
+  if (T.sel < 0 || T.sel >= T.n) return;
+  if (T.item[T.sel].deleted) { delete_selected(); return; }
+  T.confirm = 1;
+}
+
+/* The answer. Anything that is not one is swallowed rather than acted on:
+ * a stray arrow should not leave the question open over another task. */
+static int key_confirm(unsigned char k) {
+  if (api->key_repeat()) return 1;
+  switch (k) {
+  case 'y': case 'Y':
+    T.confirm = 0;
+    delete_selected();
+    return 1;
+  case 'n': case 'N':
+  case CAPP_KEY_ESC:
+  case CAPP_KEY_BACK:
+    T.confirm = 0;
+    return 1;
+  default: return 1;
+  }
+}
+
 /* The one place that knows what anything does. */
 static int do_action(int a) {
+  if (!action_fits(a)) return 1;
+  /* The same chord that opened a subview closes it, as the letter does. */
+  if ((a == ACT_LISTS && T.view == VIEW_LISTS) || (a == ACT_ALL && T.view == VIEW_ALL))
+    a = ACT_CANCEL;
   switch (a) {
   case ACT_ADD:
   case ACT_NEWLIST:
@@ -1330,7 +1394,7 @@ static int do_action(int a) {
     use_add_menus();
     return 1;
   case ACT_TICK:   toggle(); return 1;
-  case ACT_DELETE: delete_selected(); return 1;
+  case ACT_DELETE: ask_delete(); return 1;
   case ACT_SYNC:   sync_begin(); return 1;
   case ACT_LISTS:
     T.psel = T.cur < 0 ? 0 : T.cur;
@@ -1392,7 +1456,11 @@ static int key_list(unsigned char k) {
   case CAPP_KEY_RIGHT: select_list(T.cur + 1); return 1;
   case CAPP_KEY_ENTER:
   case ' ':           return do_action(ACT_TICK);
+  /* n and r are what every app says for new and refresh; a and s are what
+   * this one always said, and stay. */
+  case 'n': case 'N':
   case 'a': case 'A': return do_action(ACT_ADD);
+  case 'r': case 'R':
   case 's': case 'S': return do_action(ACT_SYNC);
   case 'l': case 'L': return do_action(ACT_LISTS);
   case 'o': case 'O': return do_action(ACT_ALL);
@@ -1425,9 +1493,8 @@ static int key_add(unsigned char k) {
   return 0;
 }
 
-/* The picker. Escape reaches an app before the shell acts on it now, so it
- * means "back to the list" here -- and the shell only leaves the app when a
- * view declines it, which the list view does. */
+/* The picker. Escape means "back to the list" here; the list itself
+ * declines it, and since 2026-09-20 a declined Escape leaves nothing. */
 static int key_pick(unsigned char k) {
   switch (k) {
   case CAPP_KEY_UP:   if (T.psel > 0) T.psel--; return 1;
@@ -1449,10 +1516,20 @@ static int key_all(unsigned char k) {
   case CAPP_KEY_ESC:
   case CAPP_KEY_BACK:
   case 'o': case 'O':  return do_action(ACT_CANCEL);
+  case 'r': case 'R':
   case 's': case 'S':  return do_action(ACT_SYNC);
   case 'p': case 'P':  return do_action(ACT_PRINT);
   default: return 0;
   }
+}
+
+/* Everything, explicitly. The tick marks only the footer when only the
+ * status moved, and marks are unioned until the next paint -- so a key that
+ * changed the list after such a tick, and marked nothing itself, was painted
+ * through the footer's clip and never seen. A handled key says "all of it"
+ * out loud instead of relying on having marked nothing. */
+static void damage_all(void) {
+  if (T.full.w > 0 && api->damage) api->damage(T.full);
 }
 
 /* The bar first, and it answers for every key while it has them. fn-b puts
@@ -1471,10 +1548,12 @@ static int menu_key(unsigned char k, int *handled) {
  * title is being typed the words are typed into it instead, as anywhere. */
 static int app_button(void *st, int event, const char *text) {
   (void)st;
-  if (event == CAPP_G0_ASK) return T.view == VIEW_LIST ? CAPP_G0_WORDS : CAPP_G0_NONE;
+  if (event == CAPP_G0_ASK)
+    return (T.view == VIEW_LIST && !T.confirm) ? CAPP_G0_WORDS : CAPP_G0_NONE;
   if (event == CAPP_G0_HEARD && text && text[0]) {
-    if (add_text(text) == 0) say("added -- s syncs");
+    if (add_text(text) == 0) say("added -- r syncs");
     else say("the list is full");
+    damage_all();
     return 1;
   }
   return 0;
@@ -1483,22 +1562,30 @@ static int app_button(void *st, int event, const char *text) {
 static int app_key(void *st, unsigned char k) {
   int handled, r;
   (void)st;
+  /* The question first, ahead of the menu bar: it is what the footer is
+   * asking, and fn-b opening a menu over it would leave it unanswerable. */
+  if (T.confirm) { r = key_confirm(k); damage_all(); return r; }
   r = menu_key(k, &handled);
   if (handled) return r;
-  if (T.view == VIEW_ADD) return key_add(k);
-  if (T.view == VIEW_LISTS) return key_pick(k);
-  if (T.view == VIEW_ALL) return key_all(k);
-  /* The list is the top level: it declines Escape, and the shell takes that
-   * as "leave the app". Every view above returns 1 for it and goes back a
-   * step instead, which is the whole point of the app seeing it first. */
-  return key_list(k);
+  if (T.view == VIEW_ADD) r = key_add(k);
+  else if (T.view == VIEW_LISTS) r = key_pick(k);
+  else if (T.view == VIEW_ALL) r = key_all(k);
+  /* The list is the top level: it declines Escape, which keeps the app
+   * open (fn-` is the way out). Every view above returns 1 for it and goes
+   * back a step, which is the whole point of the app seeing it first. */
+  else r = key_list(k);
+  if (r) damage_all();
+  return r;
 }
 
 /* What the shell calls for a chord out of the table, and what the menu bar
  * and any script reach through. */
 static int app_action(void *st, int a) {
+  int r;
   (void)st;
-  return do_action(a);
+  r = do_action(a);
+  if (r) damage_all();
+  return r;
 }
 
 /* Lower-case compare of `needle` somewhere in `hay`. */
@@ -1622,9 +1709,10 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
   return -1;
 }
 
+static int click_content(short x, short y);
+
 static int app_click(void *st, short x, short y, int button) {
-  int row;
-  int i;
+  int r;
   (void)st; (void)button;
 
   /* The strip first. A hit is an action, so this works identically whether
@@ -1632,8 +1720,20 @@ static int app_click(void *st, short x, short y, int button) {
   {
     int a = toolbar_click(x, y);
     if (a == TB_CONSUMED) return 1;             /* opened or closed a menu */
-    if (a != TB_NONE) return do_action(a);
+    if (a != TB_NONE) return app_action(0, a);
   }
+  /* A question is open about the highlighted task; a click elsewhere must
+   * not move the highlight out from under it. */
+  if (T.confirm) return 0;
+  r = click_content(x, y);
+  if (r) damage_all();
+  return r;
+}
+
+static int click_content(short x, short y) {
+  int row;
+  int i;
+
   y = (short)(y - toolbar_h());
   row = y / ROW_H;
 
@@ -1726,7 +1826,7 @@ static int app_tick(void *st, uint32_t now_ms) {
    * now: the lists, the list on screen, then the rest into their files. What
    * used to happen instead was a pull of the current list every ten minutes,
    * which rearranged the screen under whoever was reading it and still left
-   * every other list unfetched. `s` is how you ask for another.
+   * every other list unfetched. `r` is how you ask for another.
    *
    * The exception is a sweep that could not start at all -- no radio yet, no
    * token yet -- which is not a sweep and is retried shortly. */
@@ -1737,7 +1837,9 @@ static int app_tick(void *st, uint32_t now_ms) {
       (!T.tried_once || (int32_t)(now_ms - T.next_auto) >= 0))
     sync_begin();
 
-  if (was != T.stage || n != T.n) redraw = 1;
+  /* The tasks may have changed: everything, said out loud, or the footer's
+   * mark below would clip the new list away. */
+  if (was != T.stage || n != T.n) { damage_all(); redraw = 1; }
   if (status_changed()) { damage_status(); redraw = 1; }
   /* The bar's dots animate off the clock, so while one is in the air the bar
    * asks for itself back -- and only the bar. When there is no bar (no mouse
@@ -1775,9 +1877,10 @@ const CappInfo capp_info = {
     0x30, 0x0C, 0x37, 0x8C, 0x33, 0x0C, 0x30, 0x0C,
     0x36, 0x0C, 0x33, 0x0C, 0x31, 0x8C, 0x30, 0xCC,
     0x30, 0x6C, 0x3F, 0xFC, 0x00, 0x00, 0x00, 0x00 },
-  "arrows\tmove\nenter\ttick it off\na\tadd a task\nd\tdelete / undo\n"
-  "s\tsync every list\nleft/right\tnext list\nl\tchoose a list\n"
-  "o\tall lists at once\np\tprint it\nescape\tback a level\nfn-`\tleave\n",
+  "up/down\tmove\nenter, space\ttick it off\nn (or a)\tnew task\n"
+  "d, del\tdelete (y yes, n no) / undo\nr (or s)\tsync every list\n"
+  "left/right\tnext list\nl\tchoose a list\no\tall lists at once\n"
+  "p\tprint it\nesc\tback a level\n",
   LIST_ACTIONS,
   sizeof LIST_ACTIONS / sizeof LIST_ACTIONS[0],
 };
@@ -1802,7 +1905,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   /* From the cache files, so `o` shows everything the last sweep left even
    * on a device that has not been online since. */
   over_build();
-  api->fmt(T.status, sizeof T.status, "%d cached -- s syncs", T.n);
+  api->fmt(T.status, sizeof T.status, "%d cached -- r syncs", T.n);
 
   toolbar_init(api, LIST_ACTIONS, NLIST, LIST_ICONS, 1);
 

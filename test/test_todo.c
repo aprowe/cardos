@@ -96,6 +96,12 @@ static void host_clean(void) {
   for (i = 0; i < sizeof paths / sizeof paths[0]; i++) fake_remove(paths[i]);
 }
 
+/* safefile.h asks after a NAME.tmp when NAME will not open. */
+static int fake_stat(const char *path, CappStat *st) {
+  (void)st;
+  return host_exists(path) ? 0 : -1;
+}
+
 static int fake_repeat;
 static int fake_key_repeat(void) { return fake_repeat; }
 
@@ -116,6 +122,7 @@ static void use_fake_api(void) {
   FAKE.rename = fake_rename;
   FAKE.log = fake_log;
   FAKE.key_repeat = fake_key_repeat;
+  FAKE.stat = fake_stat;
   api = &FAKE;
   memset(&T, 0, sizeof T);
   host_clean();
@@ -1010,4 +1017,108 @@ void test_todo_held_arrow_moves_but_held_space_does_not_toggle(void) {
   fake_repeat = 0;
   key_list(' ');
   CHECK_EQ(T.item[1].done, 1);          /* a real press toggles */
+}
+
+/* ---- one key vocabulary -------------------------------------------------- */
+
+/* d asks first, always: y deletes, n / Escape / Backspace keep it, and
+ * anything else is swallowed rather than acted on under the question. */
+void test_todo_delete_asks_and_only_y_answers_yes(void) {
+  use_fake_api();
+  /* The bar's state is the header's static: an earlier test leaves it
+   * holding the keyboard, and every key here would go to the menu. */
+  toolbar_init(&FAKE, LIST_ACTIONS, NLIST, LIST_ICONS, 1);
+  add_item("g1", "Keep me", 0, 0, 0);
+  T.sel = 0;
+  T.view = VIEW_LIST;
+
+  CHECK_EQ(app_key(0, 'd'), 1);
+  CHECK_EQ(T.confirm, 1);
+  CHECK_EQ(T.item[0].deleted, 0);         /* not yet */
+  CHECK_EQ(app_key(0, ' '), 1);           /* not an answer: swallowed */
+  CHECK_EQ(T.item[0].done, 0);
+  CHECK_EQ(T.confirm, 1);
+  CHECK_EQ(app_key(0, 'n'), 1);
+  CHECK_EQ(T.confirm, 0);
+  CHECK_EQ(T.item[0].deleted, 0);
+
+  app_key(0, 0x7F);                       /* Delete asks too */
+  CHECK_EQ(T.confirm, 1);
+  CHECK_EQ(app_key(0, CAPP_KEY_ESC), 1);  /* Escape is no, and stays in the app */
+  CHECK_EQ(T.confirm, 0);
+  app_key(0, 'd');
+  app_key(0, CAPP_KEY_BACK);
+  CHECK_EQ(T.confirm, 0);
+  CHECK_EQ(T.item[0].deleted, 0);
+
+  app_action(0, ACT_DELETE);              /* ctrl-d and the menu ask as well */
+  CHECK_EQ(T.confirm, 1);
+  app_key(0, 'y');
+  CHECK_EQ(T.confirm, 0);
+  CHECK_EQ(T.item[0].deleted, 1);
+
+  /* Taking a pending delete back is undo, not a delete: no question. */
+  app_key(0, 'd');
+  CHECK_EQ(T.confirm, 0);
+  CHECK_EQ(T.item[0].deleted, 0);
+  host_clean();
+}
+
+/* The chords are matched before any key handler, in every view. Typing a
+ * task, ctrl-d and ctrl-t must not reach the task highlighted underneath. */
+void test_todo_list_chords_do_nothing_while_typing(void) {
+  use_fake_api();
+  add_item("g1", "Under the draft", 0, 0, 0);
+  T.sel = 0;
+  do_action(ACT_ADD);
+  CHECK_EQ(T.view, VIEW_ADD);
+
+  CHECK_EQ(app_action(0, ACT_DELETE), 1);
+  CHECK_EQ(app_action(0, ACT_TICK), 1);
+  CHECK_EQ(app_action(0, ACT_LISTS), 1);
+  CHECK_EQ(T.confirm, 0);
+  CHECK_EQ(T.item[0].done, 0);
+  CHECK_EQ(T.item[0].deleted, 0);
+  CHECK_EQ(T.view, VIEW_ADD);             /* still typing */
+
+  CHECK_EQ(app_action(0, ACT_CANCEL), 1); /* the form's own still work */
+  CHECK_EQ(T.view, VIEW_LIST);
+  host_clean();
+}
+
+/* n is new and r is refresh in every app; a and s stay as Todo's aliases. */
+void test_todo_n_is_new_and_r_syncs(void) {
+  use_script_api();
+  CHECK_EQ(app_key(0, 'n'), 1);
+  CHECK_EQ(T.view, VIEW_ADD);
+  CHECK_EQ(T.draft_list, 0);
+  app_key(0, CAPP_KEY_ESC);
+  CHECK_EQ(app_key(0, 'a'), 1);
+  CHECK_EQ(T.view, VIEW_ADD);
+  app_key(0, CAPP_KEY_ESC);
+
+  CHECK_EQ(app_key(0, 'r'), 1);
+  CHECK(T.stage != SYNC_IDLE);
+  CHECK(S.asked >= 1);
+  host_clean();
+}
+
+/* The saves go through safefile.h: a NAME.tmp a power cut stranded after
+ * the old file was removed is put back when the list is next read. */
+void test_todo_a_stranded_cache_tmp_is_recovered(void) {
+  use_fake_api();
+  snprintf(T.list_id, sizeof T.list_id, "%s", "listA");
+  add_item("g1", "Survives a cut", 0, 1, 0);
+  cache_save();
+  CHECK(host_exists("/cache/todo/listA.cache"));
+  CHECK(!host_exists("/cache/todo/listA.cache.tmp"));
+
+  /* As if the cut came between the remove and the rename. */
+  fake_rename("/cache/todo/listA.cache", "/cache/todo/listA.cache.tmp");
+  T.n = 0;
+  cache_load();
+  CHECK_EQ(T.n, 1);
+  CHECK(!strcmp(T.item[0].title, "Survives a cut"));
+  CHECK(host_exists("/cache/todo/listA.cache"));
+  host_clean();
 }
