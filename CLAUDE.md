@@ -226,6 +226,31 @@ output fills a buffer and nothing is drawn over the app on screen; lines
 that would take the screen (launch, desk, run, ...) are refused, and so is
 an app on PATH that wants it. Closed, nothing is reachable.
 
+**Work on the device over USB with `tools/cardctl.py`, never by typing**
+(2026-10-01). `state` (which shell and app are up), `sh "LINE"` (a console
+line, output back, nothing drawn), `ls`, `cat`, `get`, `put`, `append`,
+`rm`, `mv`, `mkdir`, `open APP`, `key quit|enter|text:...`, `shot out.png`.
+It speaks frames (`kernel/sys/serframe.c`, host-tested): STX, tab-separated
+fields, a CRC32, ETX -- handled by `kernel/sys/serlink.c` on the shell's
+loop whatever is on screen, while every other serial byte is still a
+keystroke. Replies are base64 with a CRC, picked out of the log lines.
+Two hardware limits shaped it: the USB serial driver's rings were 256
+bytes, a write larger than the TX ring is refused outright (replies go in
+128-byte pieces), and RX drops what does not fit while the shell is busy
+(the ring is 2 KB now and a put carries at most 1 KB). 50 KB up takes
+about 6 s. In Git Bash set `MSYS_NO_PATHCONV=1` or `/config` becomes a
+Windows path. Typing at the console with con.py is how a carriage return
+in the launcher opened apps nobody asked for.
+
+**Toggl targets and the day's focus** (2026-10-01). A target is hours a
+project should get, weekly from Monday or in total since a date
+(`server/toggl.py`, set on the dashboard's Toggl card or `do toggl target
+NAME 10 week`); `toggl targets` answers `%bar NN label` lines, which Today
+draws and the printer prints as filled bars (`printdoc.c`). Today's `daily
+focus` and `daily fact` come from `/daily` (`server/daily.py`): one
+stateless Claude call a day, cached; a fallback line when Claude fails, not
+cached, so the day is still written once Claude is back.
+
 **The launcher's order is chosen, not the card's** (2026-10-01).
 `/config/favorites.txt` (written with a default at first boot, hand-
 editable) lists apps or folders, in order: those come first, and a

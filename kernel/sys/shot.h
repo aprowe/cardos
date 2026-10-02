@@ -18,6 +18,10 @@
 int shot_take(const char *name, void (*repaint)(void));
 const char *shot_error(void);
 
+/* The card half alone: the file, and no post to the proxy. The serial link
+ * takes a shot this way and fetches the file itself. */
+int shot_capture(const char *name, void (*repaint)(void));
+
 /* Where the last one went on the card, for a shell that wants to say. */
 const char *shot_last_path(void);
 

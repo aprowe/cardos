@@ -50,6 +50,7 @@
 #include "kernel/sys/tzlookup.h"
 #include "kernel/sys/busy.h"
 #include "kernel/sys/shot.h"
+#include "kernel/sys/serlink.h"
 #include "kernel/sys/alarm.h"
 #include "kernel/sys/agent.h"
 #include "kernel/net/httpq.h"
@@ -1054,6 +1055,25 @@ static int factory_is_newer(const esp_partition_t *self) {
   return build_stamp(&theirs) > build_stamp(ours);
 }
 
+/* The serial link's hooks (kernel/sys/serlink.h): a PC working on the
+ * device over USB, whatever is on screen. */
+static int link_open(const char *name, const char *args) {
+  if (shell_exec(name, (args && *args) ? args : NULL) != 0) return -1;
+  if (ui_shell() == UI_LAUNCHER) s_mode = MODE_LAUNCHER;
+  return 0;
+}
+
+static void link_state(char *out, size_t n) {
+  const AppDef *a = s_mode == MODE_LAUNCHER ? launchui_running()
+                  : s_mode == MODE_DESKTOP ? desktop_focused_app() : NULL;
+  snprintf(out, n, "shell=%s app=%s heap=%u low=%u up=%lus",
+           s_mode == MODE_LAUNCHER ? "launcher" : s_mode == MODE_DESKTOP ? "desktop" : "console",
+           a && a->name ? a->name : "-",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+           (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
+           (unsigned long)(esp_timer_get_time() / 1000000));
+}
+
 /* Monotonic milliseconds for the scheduler. */
 /* Hands the busy indicator a way to undo itself. There is no back buffer, so
  * the only way to remove the badge is to redraw what was under it.
@@ -1341,6 +1361,10 @@ void app_main(void) {
    * does: through the launcher. */
   capprun_set_opener(launchui_run);
   capprun_set_shell(shell_remote);
+  {
+    static const SerlinkHooks hooks = { shell_remote, link_open, link_state, repaint_all };
+    serlink_init(&hooks);
+  }
   alarm_set_repaint(repaint_all);    /* what a ringing alarm's panel covered */
 
   /* The icon scan, whichever shell comes up. It is also what writes a new
@@ -1408,7 +1432,9 @@ void app_main(void) {
 
     int from_serial = 0;
     if (!k) {
-      int sc = con_serial_key();
+      int link = 0;
+      int sc = serlink_key(&link);   /* a frame from tools/cardctl.py is handled here */
+      if (link) bg_note_activity();
       /* Not a key: 0xFF is outside the alphabet, and it means "screenshot".
        * Taken here, before any app sees it, so a shot can be of anything. */
       if (sc == 0xFF) { serial_shot(); sc = 0; }

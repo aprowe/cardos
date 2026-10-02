@@ -108,6 +108,11 @@ void con_repaint(void) {
 void con_set_serial(int on) {
   usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
 
+  /* Room for a whole serial-link frame (kernel/sys/serlink.c). The default
+   * is 256 bytes, and the driver drops what does not fit: the shell takes
+   * one byte a pass until it sees the frame start, so the rest of a frame
+   * longer than the ring was lost before anything read it. */
+  cfg.rx_buffer_size = 2048;
   s_serial = 0;
   if (!on) return;
 

@@ -34,10 +34,9 @@ static void tap(int x, int y, int w, int h, const uint16_t *px) {
   }
 }
 
-int shot_take(const char *name, void (*repaint)(void)) {
+int shot_capture(const char *name, void (*repaint)(void)) {
   static const uint16_t zero[DISPLAY_W];
-  char url[160], reply[64];
-  int y, n;
+  int y;
 
   s_error[0] = 0;
   if (!name || !*name) name = "shot";
@@ -58,6 +57,14 @@ int shot_take(const char *name, void (*repaint)(void)) {
   display_set_tap(NULL);
   fs_close(s_fd);
   s_fd = -1;
+  return 0;
+}
+
+int shot_take(const char *name, void (*repaint)(void)) {
+  char url[160], reply[64];
+  int n;
+  if (shot_capture(name, repaint) != 0) return -1;
+  if (!name || !*name) name = "shot";
 
   snprintf(url, sizeof url, "%s/shot?name=%s", update_base(), name);
   /* With the device's shared secret, as voice and update send it: a remote

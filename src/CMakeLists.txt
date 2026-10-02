@@ -42,6 +42,8 @@ idf_component_register(
     "../kernel/sys/bg.c"
     "../kernel/sys/busy.c"
     "../kernel/sys/shot.c"
+    "../kernel/sys/serframe.c"
+    "../kernel/sys/serlink.c"
     "../kernel/sys/agent.c"
     "../kernel/sys/chatlog.c"
     "../kernel/net/httpq.c"
