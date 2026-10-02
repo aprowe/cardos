@@ -156,6 +156,47 @@ void test_today_first_page_uses_todos_current_list(void) {
   }
 }
 
+/* e puts the todo lists in the sections file before Edit opens it, and does
+ * that in the page's buffer. The page used to be left blank on the promise
+ * of a regather when the file changed -- and back from Edit unchanged, it
+ * stayed blank. Now it is gathered again at once. A card that refuses the
+ * write still borrowed the buffer, so this one refuses it. */
+static const char *s_cfg = "# The Today app's page\nCalendar | calendar today\n";
+static size_t s_cfg_at;
+static int d_open(const char *p, int flags) {
+  (void)p;
+  if (flags & CAPP_O_WRITE) return -1;
+  s_cfg_at = 0;
+  return 3;
+}
+static int d_read(int fd, void *b, size_t n) {
+  size_t left = strlen(s_cfg) - s_cfg_at;
+  (void)fd;
+  if (n > left) n = left;
+  memcpy(b, s_cfg + s_cfg_at, n);
+  s_cfg_at += n;
+  return (int)n;
+}
+static void d_close(int fd) { (void)fd; }
+static int d_stat(const char *p, CappStat *st) { (void)p; (void)st; return -1; }
+static int s_ran;
+static int d_runapp(const char *name, const char *args) { (void)name; (void)args; s_ran = 1; return 0; }
+static void d_font_free(int f) { (void)f; }
+
+void test_today_editing_the_sections_does_not_leave_the_page_blank(void) {
+  dopen();
+  DF.open = d_open; DF.read = d_read; DF.close = d_close; DF.stat = d_stat;
+  DF.run = d_runapp; DF.font_free = d_font_free;
+  add_section("Calendar", "calendar", "today");
+  gather_all();
+  CHECK(D.next == -1 && D.len > 0);
+  s_ran = 0;
+  do_action(ACT_EDIT);
+  CHECK_EQ(s_ran, 1);
+  CHECK_EQ(D.next, 0);                    /* gathering again, a section a tick */
+  CHECK(!strncmp(D.page, "# Tuesday 29 September\n", 23));
+}
+
 /* `daily focus` / `daily fact` are the server's, asked with the page's date
  * -- tomorrow's on tomorrow's page. */
 static char s_url[200];

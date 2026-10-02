@@ -10,9 +10,15 @@
  * file), so a short square wave is synthesised once into /cache and replayed
  * from there. No card, no beep; the flash still happens, because the alarm
  * should not depend on the SD card working.
+ *
+ * The keys are the hint bar along the bottom (apps/footer.h), the same bar
+ * every app has; Start and Reset are also a menu (apps/toolbar.h), fn-b or
+ * a mouse, from the same action table as the ctrl-r chord.
  */
 
 #include "kernel/app/capp.h"
+#include "apps/toolbar.h"
+#include "apps/footer.h"
 
 static const CardApi *api;
 static const CappAudio *au;
@@ -22,6 +28,7 @@ static const CappAudio *au;
 #define BEEP_FREQ 1000u
 #define BEEP_MS   220u
 #define BEEP_AMPL 9000
+#define BEEP_BYTES (44u + BEEP_RATE * BEEP_MS / 1000u * 2u)   /* header + samples */
 
 #define RING_PERIOD_MS 900      /* how often a fresh beep is fired while ringing */
 #define FLASH_MS       400      /* how fast the alarm screen flips */
@@ -111,10 +118,15 @@ static void make_beep(void) {
   api->close(fd);
 }
 
+/* There and the right size. Existing was not enough: a write cut short -- a
+ * full card, the power pulled mid-way -- left a file that stat finds, so it
+ * was never made again and the alarm stayed silent, or played a header
+ * promising samples that were not there. The size is fixed by the defines,
+ * so anything else is a beep to write again. */
 static void ensure_beep(void) {
   CappStat st;
   if (T.beep_ready) return;
-  if (api->stat(BEEP_PATH, &st) != 0) make_beep();
+  if (api->stat(BEEP_PATH, &st) != 0 || st.is_dir || st.size != BEEP_BYTES) make_beep();
   T.beep_ready = 1;
 }
 
@@ -327,8 +339,6 @@ static void paint_set(CRect c) {
   }
 
   text_center(cx, y - 18, "set", CLR_DIM, CLR_BG);
-  text_center(cx, y + h + pad + 14, "left/right field  up/down +-1", CLR_DIM, CLR_BG);
-  text_center(cx, y + h + pad + 26, "digits type  space start", CLR_DIM, CLR_BG);
 }
 
 /* Green with time to spare, red as it runs out, yellow the midpoint between
@@ -385,7 +395,6 @@ static void paint_running(CRect c, const char *label, uint16_t colour) {
   draw_time(cx, y, mm, ss, CLR_TEXT, CLR_BG, CLR_BG);
   text_center(cx, y - 18, label, colour, CLR_BG);
   draw_bar(cx, bar_y);
-  text_center(cx, bar_y + BAR_H + 12, "space pause  r reset", CLR_DIM, CLR_BG);
 }
 
 static void paint_done(CRect c) {
@@ -397,25 +406,63 @@ static void paint_done(CRect c) {
   text_center(c.x + c.w / 2, y + 20, "any key stops it", CLR_TEXT, bg);
 }
 
-static void app_paint(void *st, CRect c) {
-  (void)st;
-  T.at = c;
-  T.have_at = 1;
-  if (T.state != ST_DONE) api->fill(c, CLR_BG);
+/* What the bar says in each state. The paused one says resume: it used to
+ * say "space pause" while already paused, which is the one thing space would
+ * not do. */
+static const char *hint(void) {
   switch (T.state) {
-  case ST_SET:     paint_set(c); break;
-  case ST_RUNNING: paint_running(c, "running", CLR_TEXT); break;
-  case ST_PAUSED:  paint_running(c, "paused", CLR_PAUSED); break;
-  case ST_DONE:    paint_done(c); break;
+  case ST_SET:     return "arrows set  digits type  space start";
+  case ST_RUNNING: return "space pause  r reset";
+  case ST_PAUSED:  return "space resume  r reset";
+  default:         return 0;
   }
+}
+
+static void app_paint(void *st, CRect full) {
+  CRect c, face;
+  (void)st;
+  /* The menu bar's two fast paths (apps/toolbar.h): a highlight moving down
+   * an open menu, or the bar alone, repaint only themselves. */
+  if (toolbar_only_menu()) { toolbar_paint_menu(full); return; }
+  if (toolbar_only_bar()) { toolbar_paint_bar(full); return; }
+  toolbar_paint_bar(full);
+  c = toolbar_rest(full);
+
+  /* The face is centred above the hint bar. Ringing, the whole of it
+   * flashes, bar and all: the alarm is the screen, and "any key stops it"
+   * is written in the middle. */
+  face = c;
+  if (T.state != ST_DONE) face.h = (int16_t)(c.h - FOOT_H);
+  T.at = face;
+  T.have_at = 1;
+  if (T.state != ST_DONE) api->fill(face, CLR_BG);
+  switch (T.state) {
+  case ST_SET:     paint_set(face); break;
+  case ST_RUNNING: paint_running(face, "running", CLR_TEXT); break;
+  case ST_PAUSED:  paint_running(face, "paused", CLR_PAUSED); break;
+  case ST_DONE:    paint_done(face); break;
+  }
+  if (T.state != ST_DONE) footer_paint(api, c, hint());
+  toolbar_paint_menu(full);
 }
 
 /* ---- input ------------------------------------------------------------- */
 
+static int app_action(void *st, int a);
+
 static int app_key(void *st, uint8_t k) {
+  int a;
   (void)st;
 
+  /* Ringing, any key stops it -- fn-b included; the bar can wait. */
   if (T.state == ST_DONE) { dismiss(); return 1; }
+
+  /* The bar first, as in apps/todo.c: while it has the keyboard it answers
+   * for every key, and an item chosen there is the same action a click or
+   * the chord would be. */
+  a = toolbar_key(k);
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return app_action(0, a);
 
   if (api->key_repeat() && k != CAPP_KEY_UP && k != CAPP_KEY_DOWN)
     return 0;
@@ -456,6 +503,24 @@ static int app_key(void *st, uint8_t k) {
   default:
     return 0;
   }
+}
+
+static int app_click(void *st, int16_t x, int16_t y, int button) {
+  int a;
+  (void)st; (void)button;
+  if (T.state == ST_DONE) { dismiss(); return 1; }
+  a = toolbar_click(x, y);
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return app_action(0, a);
+  return 0;
+}
+
+static int app_mouse(void *st, int16_t x, int16_t y, int buttons, int wheel) {
+  int ch;
+  (void)st; (void)buttons; (void)wheel;
+  ch = toolbar_saw_mouse();
+  if (toolbar_hover(x, y)) ch = 1;
+  return ch;
 }
 
 static int app_wants_text(void *st) { (void)st; return 0; }
@@ -526,8 +591,9 @@ const CappInfo capp_info = {
     0x41, 0x82, 0x81, 0x81, 0x81, 0x81, 0x81, 0xF9,
     0x81, 0x81, 0x81, 0x81, 0x40, 0x02, 0x60, 0x06,
     0x30, 0x0C, 0x0C, 0x30, 0x03, 0xC0, 0x00, 0x00 },
-  "digits\ttype minutes/seconds\nleft/right\tswitch field\nup/down\t+-1\n"
-  "space\tstart, pause, resume\nr\treset\nany key\tstops the alarm\n",
+  "digits\ttype minutes/seconds\nleft/right tab\tswitch field\nup/down\t+-1\n"
+  "space enter\tstart, pause, resume\nr bksp\treset; again to clear the time\n"
+  "any key\tstops the alarm\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
 };
@@ -553,6 +619,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   /* Asked for, not assumed: -1 is the seven-segment face. The OS frees it
    * when the app closes. */
   s_font = api->headless() ? -1 : api->font_load(CLOCK_FONT);
+  if (!api->headless()) toolbar_init(api, ACTIONS, NACT, 0, 0);
 
   minutes =argc > 1 ? parse_minutes(argv[1]) : 0;
   if (minutes) {
@@ -562,6 +629,8 @@ int capp_main(const CardApi *a, int argc, char **argv) {
 
   UI.paint = app_paint;
   UI.key = app_key;
+  UI.click = app_click;
+  UI.mouse = app_mouse;
   UI.tick = app_tick;
   UI.wants_text = app_wants_text;
   UI.actions = ACTIONS;

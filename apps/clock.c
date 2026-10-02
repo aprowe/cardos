@@ -27,11 +27,11 @@
 #include "kernel/sys/alarmfmt.h"
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
+#include "apps/footer.h"
 
 static const CardApi *api;
 
 #define ROW_H   22
-#define FOOT_H  11
 
 #define CLR_BG      CAPP_RGB(12, 14, 20)
 #define CLR_TEXT    CAPP_RGB(238, 241, 247)
@@ -42,8 +42,6 @@ static const CardApi *api;
 #define CLR_ON      CAPP_RGB(76, 196, 128)
 #define CLR_OFF     CAPP_RGB(54, 60, 74)
 #define CLR_FIELD   CAPP_RGB(40, 64, 100)
-#define CLR_FOOT    CAPP_RGB(28, 32, 42)
-#define CLR_WARN    CAPP_RGB(236, 104, 84)
 
 enum { VIEW_FACE = 0, VIEW_LIST, VIEW_EDIT };
 enum { F_HOUR = 0, F_MIN, F_DAY0, F_LABEL = F_DAY0 + 7 };
@@ -166,10 +164,9 @@ static void next_text(const CappTime *t, char *out, size_t n) {
 
 static int font_y(int f, int y, int h) { return y + (h - api->font_height(f)) / 2; }
 
-static void paint_foot(const char *s, uint16_t fg) {
-  CRect f = rect(K.content.x, K.content.y + K.content.h - FOOT_H, K.content.w, FOOT_H);
-  api->fill(f, CLR_FOOT);
-  api->text((int16_t)(f.x + 4), (int16_t)(f.y + 2), s, fg, CLR_FOOT);
+/* The shared hint bar, apps/footer.h: one height and one colour in every app. */
+static void paint_foot(const char *s) {
+  footer_paint(api, K.content, s);
 }
 
 /* The hours and minutes, and the seconds after them, as one line centred:
@@ -225,8 +222,7 @@ static void paint_face(void) {
       api->text_font(K.f_ui, (int16_t)(c.x + (c.w - w) / 2), (int16_t)y, s, CLR_ACCENT, CLR_BG);
     }
   }
-  paint_foot(K.hold ? "a alarms   k lets the screen sleep" : "a alarms   k keeps the screen on",
-             K.hold ? CLR_ACCENT : CLR_DIM);
+  paint_foot(K.hold ? "a alarms  k let the screen sleep" : "a alarms  k keep the screen on");
 }
 
 static void paint_switch(int x, int y, int on, uint16_t bg) {
@@ -268,12 +264,13 @@ static void paint_list(void) {
     if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
   }
   if (K.ask_delete) {
+    /* The time names it; a label could run the question off the bar. */
     char q[48];
-    api->fmt(q, sizeof q, "delete %02u:%02u %s?  y/n", K.list[K.sel].hour, K.list[K.sel].min,
-             K.list[K.sel].label);
-    paint_foot(q, CLR_WARN);
+    api->fmt(q, sizeof q, "delete the %02u:%02u alarm? y/n", K.list[K.sel].hour,
+             K.list[K.sel].min);
+    paint_foot(q);
   } else {
-    paint_foot("spc on/off  enter edit  n new  d del", CLR_DIM);
+    paint_foot("spc on/off  enter edit  n new  d del");
   }
 }
 
@@ -313,8 +310,10 @@ static void paint_edit(void) {
   api->text_font(K.f_ui, (int16_t)(c.x + 14), (int16_t)font_y(K.f_ui, y, 20),
                  shown[0] ? shown : "label", shown[0] ? CLR_TEXT : CLR_FAINT,
                  K.field == F_LABEL ? CLR_FIELD : CLR_SEL);
-  paint_foot(K.edit.days ? "</> field  up/dn  spc day  enter saves"
-                         : "no days: rings once   enter saves", CLR_DIM);
+  /* Up/down, digits and space on a day are in the help; the bar has room
+   * for the two things nobody would guess. */
+  paint_foot(K.edit.days ? "left/right field  enter save  esc"
+                         : "no days: rings once  enter save");
 }
 
 static void app_paint(void *st, CRect full) {
@@ -521,7 +520,8 @@ static int key_face(uint8_t k) {
 
 static int key_list(uint8_t k) {
   if (K.ask_delete) {
-    if (k == 'y' || k == 'Y' || k == CAPP_KEY_ENTER) delete_selected();
+    /* y and only y: Enter is edit here, one key from a mistake. */
+    if (k == 'y' || k == 'Y') delete_selected();
     else if (!(k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK)) return 1;
     K.ask_delete = 0;
     return 1;
@@ -648,8 +648,10 @@ const CappInfo capp_info = {
     0x40, 0x42, 0x40, 0x02, 0x20, 0x04, 0x20, 0x04,
     0x10, 0x08, 0x0F, 0xF0, 0x18, 0x18, 0x00, 0x00 },
   "a / enter\talarms\nk\tkeep the screen on\nn\tnew alarm\n"
-  "space\t(alarms) on / off\nenter\t(alarms) edit\nd\t(alarms) delete\n"
-  "left/right\t(editor) field\nup/down\t(editor) change it\n",
+  "space\t(alarms) on / off\nenter\t(alarms) edit\n"
+  "d / del\t(alarms) delete: y yes, n esc bksp no\nesc / bksp\t(alarms) back to the clock\n"
+  "left/right\t(editor) field\nup/down\t(editor) change it\n0-9\t(editor) type the hour or minute\n"
+  "space\t(editor) a day on / off\nenter\t(editor) save\nesc\t(editor) cancel\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
 };

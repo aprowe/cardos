@@ -19,8 +19,16 @@
 #define FOOT_FG     CAPP_RGB(128, 136, 152)
 #define FOOT_CHARS  38          /* (240 - 4) / 6, less one for luck */
 
+/* MSVC builds these same files for the host tests and does not know the
+ * attribute, as apps/toolbar.h found first. */
+#if defined(__GNUC__)
+#define FOOT_OPT __attribute__((unused))
+#else
+#define FOOT_OPT
+#endif
+
 /* The bar across the bottom of `c`, with `keys` in it. */
-static void __attribute__((unused))
+static FOOT_OPT void
 footer_paint(const CardApi *api, CRect c, const char *keys) {
   CRect r;
   r.x = c.x;
