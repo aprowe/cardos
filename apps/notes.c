@@ -23,10 +23,22 @@
  * m turns a voice memo into a note: the server transcribes it (Whisper) and
  * keeps it, and the next sync brings it here. `notes memo PATH` does the
  * same for the Memo app.
+ *
+ * Keys are the shared vocabulary (CLAUDE.md): r syncs (s too, as in Todo
+ * and Calendar), d deletes after asking, p or fn-p prints the note, Escape
+ * stops a sync. Every operation is also a menu item (fn-b, or a mouse).
+ *
+ * The sync at open waits for the first paint: it is a blocking request, and
+ * starting it in capp_main left the screen empty until the server answered.
+ * Each operation after that is one blocking request a tick. Turning them
+ * into http_start/http_poll would make every case of do_op a state of its
+ * own; a note is small and the server is near, so it has not been worth it.
  */
 
 #include "kernel/app/capp.h"
 #include "apps/safefile.h"
+#include "apps/toolbar.h"
+#include "apps/footer.h"
 
 static const CardApi *api;
 
@@ -40,13 +52,12 @@ static const CardApi *api;
 #define TITLE_MAX  40
 #define ROW_H      14
 #define TOP_H      16
-#define FOOT_H     11
+#define KEY_DEL    0x7F                 /* Delete on a Bluetooth keyboard */
 
 #define CLR_BG     CAPP_RGB(18, 18, 22)
 #define CLR_TEXT   CAPP_RGB(232, 232, 236)
 #define CLR_DIM    CAPP_RGB(128, 132, 146)
 #define CLR_SEL    CAPP_RGB(48, 52, 70)
-#define CLR_FOOT   CAPP_RGB(30, 32, 40)
 #define CLR_ACC    CAPP_RGB(250, 200, 90)
 #define CLR_BAD    CAPP_RGB(240, 110, 96)
 
@@ -86,12 +97,19 @@ static struct {
 
   int  picking;                 /* the memo picker is up */
   int  ask_delete;
+  int  printing;                /* a print is out; its progress is the status */
+  int  sync_soon;               /* sync on the next tick, after a paint */
+  int  memo_soon;               /* send N.memo on the next tick */
+  char memo[96];                /* the memo the picker chose */
   int  bad;
   char status[60];
   char text[TEXT_MAX];
   char line[160];
   CappEntry ent[MAX_NOTES + 8];
-  CRect content;
+  CRect full;                   /* the app's rectangle, menu bar included */
+  CRect content;                /* below the menu bar */
+  int   have_at;                /* painted at least once: damage can be marked */
+  int   fit;                    /* how many rows fit, from the last paint */
 } N;
 
 /* ---- small things -------------------------------------------------------------- */
@@ -112,9 +130,35 @@ static int ends_md(const char *s) {
   return n > 3 && s[n - 3] == '.' && s[n - 2] == 'm' && s[n - 1] == 'd';
 }
 
+/* ---- what changed -------------------------------------------------------------
+ *
+ * The list was repainted whole for every key and every tick of a sync. Each
+ * change marks what it touched and the shell clips the next paint to that
+ * (apps/files.c is the pattern). Nothing is marked before the first paint --
+ * there is nothing on screen yet, and the host tests never paint. */
+
+static void damage_all(void) { if (N.have_at) api->damage(N.content); }
+
+/* The title line, which carries the status. */
+static void damage_top(void) {
+  if (N.have_at) api->damage(rect(N.content.x, N.content.y, N.content.w, TOP_H));
+}
+
+static void damage_footer(void) {
+  if (N.have_at)
+    api->damage(rect(N.content.x, N.content.y + N.content.h - FOOT_H, N.content.w, FOOT_H));
+}
+
+static void damage_row(int i) {
+  if (!N.have_at || i < N.top || i >= N.top + N.fit) return;
+  api->damage(rect(N.content.x, N.content.y + TOP_H + (i - N.top) * ROW_H,
+                   N.content.w, ROW_H));
+}
+
 static void say(int bad, const char *s) {
   N.bad = bad;
   api->fmt(N.status, sizeof N.status, "%s", s);
+  damage_top();
 }
 
 /* FNV-1a 32 as eight hex digits: server/notes.py's fnv(). */
@@ -294,6 +338,7 @@ static void load_rows(void) {
       api->mem_cpy(N.rowfile[j - 1], tf, sizeof tf);
     }
   if (N.sel >= N.nrows) N.sel = N.nrows ? N.nrows - 1 : 0;
+  damage_all();
 }
 
 /* ---- the server ------------------------------------------------------------------- */
@@ -503,13 +548,14 @@ static int sync_tick(void) {
   if (N.op[N.at].op == OP_DEL_SRV || N.op[N.at].op == OP_DEL_LOCAL ||
       (N.op[N.at].op == OP_UP_NEW && N.op[N.at].i >= 0)) {
     save_index();
-    if (fetch_list() < 0) { N.syncing = 0; return 1; }
+    if (fetch_list() < 0) { N.syncing = 0; say(1, "sync stopped: server gone"); return 1; }
     plan();
     if (!N.nop) { N.syncing = 0; save_index(); load_rows(); say(0, "synced"); return 1; }
     return 1;
   }
   N.at++;
   api->fmt(N.status, sizeof N.status, "syncing %d/%d", N.at, N.nop);
+  damage_top();
   return 1;
 }
 
@@ -547,19 +593,39 @@ static int memo_to_note(const char *path, char *out, int n) {
 
 /* ---- the screen ------------------------------------------------------------------- */
 
-static void app_paint(void *st, CRect c) {
+static void app_paint(void *st, CRect full) {
+  CRect c;
   int y, i, rows;
   (void)st;
+
+  /* Only the dropdown moved, or only the bar: draw that and nothing else.
+   * Repainting the list first is what makes a menu flicker. */
+  if (toolbar_only_menu()) { toolbar_paint_menu(full); return; }
+  if (toolbar_only_bar()) { toolbar_paint_bar(full); return; }
+  toolbar_paint_bar(full);
+  c = toolbar_rest(full);
+  N.full = full;
   N.content = c;
+  N.have_at = 1;
+
   api->fill(rect(c.x, c.y, c.w, TOP_H), CLR_BG);
   api->text((int16_t)(c.x + 6), (int16_t)(c.y + 4), "Notes", CLR_ACC, CLR_BG);
   if (N.status[0]) {
-    int w = (int)api->str_len(N.status) * 6;
-    api->text((int16_t)(c.x + c.w - 6 - w), (int16_t)(c.y + 4), N.status,
+    /* Right of the title and cut to the room there: a long reason from the
+     * server used to run back over the title. */
+    char s[40];
+    int room = (c.w - 54) / 6, w;
+    if (room > (int)sizeof s - 1) room = (int)sizeof s - 1;
+    if (room < 1) room = 1;
+    api->fmt(s, (size_t)room + 1, "%s", N.status);
+    w = (int)api->str_len(s) * 6;
+    api->text((int16_t)(c.x + c.w - 6 - w), (int16_t)(c.y + 4), s,
               N.bad ? CLR_BAD : CLR_DIM, CLR_BG);
   }
   y = c.y + TOP_H;
   rows = (c.h - TOP_H - FOOT_H) / ROW_H;
+  if (rows < 1) rows = 1;
+  N.fit = rows;
   if (N.sel < N.top) N.top = N.sel;
   if (N.sel >= N.top + rows) N.top = N.sel - rows + 1;
   for (i = N.top; i < N.nrows && i - N.top < rows; i++, y += ROW_H) {
@@ -573,14 +639,23 @@ static void app_paint(void *st, CRect c) {
     y += ROW_H * 2;
   }
   if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
-  api->fill(rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H), CLR_FOOT);
-  api->text((int16_t)(c.x + 4), (int16_t)(c.y + c.h - FOOT_H + 2),
-            N.ask_delete ? "delete this note? y / n" :
-                           "enter edit  n new  m memo  d del  s sync",
-            N.ask_delete ? CLR_BAD : CLR_DIM, CLR_FOOT);
+
+  if (N.ask_delete && N.sel < N.nrows) {
+    /* The title cut short enough that the question still fits. */
+    char t[24], line[FOOT_CHARS + 1];
+    api->fmt(t, sizeof t, "%s", N.rows[N.sel]);
+    api->fmt(line, sizeof line, "delete %s? y / n", t);
+    footer_paint(api, c, 0);
+    api->text((int16_t)(c.x + 4), (int16_t)(c.y + c.h - FOOT_H + 2), line, CLR_BAD, FOOT_BG);
+  } else {
+    footer_paint(api, c, "enter edit  n new  d delete  r sync");
+  }
+
+  /* Last: a dropdown is drawn over the list it covers. */
+  toolbar_paint_menu(full);
 }
 
-/* ---- keys -------------------------------------------------------------------------- */
+/* ---- doing things ------------------------------------------------------------------ */
 
 static void open_note(const char *file) {
   char path[96];
@@ -588,51 +663,219 @@ static void open_note(const char *file) {
   api->run("edit", path);
 }
 
-static int app_key(void *st, uint8_t k) {
-  (void)st;
-  if (N.syncing || N.picking) return 1;
-  if (N.ask_delete) {
-    N.ask_delete = 0;
-    if ((k == 'y' || k == 'Y') && N.sel < N.nrows) {
-      char path[96];
-      path_of(N.rowfile[N.sel], path, sizeof path);
-      api->remove(path);
-      load_rows();
-      sync_begin();                     /* the server forgets it now, not later */
-    }
+/* The row it left and the row it reached; a scroll is every row. */
+static void select_row(int i) {
+  if (i < 0 || i >= N.nrows || i == N.sel) return;
+  damage_row(N.sel);
+  N.sel = i;
+  damage_row(N.sel);
+  if (N.sel < N.top || N.sel >= N.top + N.fit) damage_all();
+}
+
+/* A sync is a blocking request, so it starts on the next tick: by then the
+ * screen has been painted, saying "syncing..." rather than nothing. `tell`
+ * says so now; a sync that follows a delete or a memo leaves what that said. */
+static void request_sync(int tell) {
+  if (N.syncing) return;
+  N.sync_soon = 1;
+  if (tell) say(0, "syncing...");
+}
+
+/* Escape during a sync stops it after the operation in hand. What was done
+ * is in the index; the rest is worked out again by the next sync, which
+ * plans from the files and the server, not from where this one stopped. */
+static void stop_sync(void) {
+  N.syncing = 0;
+  save_index();
+  load_rows();
+  say(0, "sync stopped: r starts it");
+}
+
+static void cancel_delete(void) {
+  if (!N.ask_delete) return;
+  N.ask_delete = 0;
+  damage_footer();
+}
+
+static void delete_selected(void) {
+  char path[96];
+  cancel_delete();
+  if (N.sel >= N.nrows) return;
+  path_of(N.rowfile[N.sel], path, sizeof path);
+  api->remove(path);
+  load_rows();
+  request_sync(1);                      /* the server forgets it now, not later */
+}
+
+/* The note on paper, set as Edit sets it: the file is markdown-shaped
+ * already, so `# headings` and `[ ] tasks` print as they read. The job loads
+ * the fonts, so leaving Notes mid-print is fine. */
+static void print_note(void) {
+  int rc;
+  if (N.sel >= N.nrows) return;
+  if (read_file(N.rowfile[N.sel]) < 0) { say(1, "cannot read that note"); return; }
+  rc = api->print_fonts(N.text, "print24", "print24b", "print34b");
+  if (rc == 0)       { N.printing = 1; say(0, "printing..."); }
+  else if (rc == -1) say(1, "still printing the last one");
+  else if (rc == -2) say(1, "no printer: print scan");
+  else               say(1, "could not print: no memory");
+}
+
+/* ---- the action table -------------------------------------------------------------
+ *
+ * One table for the menus (fn-b, or a mouse), fn-p, and the commands below.
+ * Only print has a chord: a chord is matched before the key handler in
+ * every state, and fn-p is the same everywhere. */
+
+enum {
+  ACT_SYNC = 1, ACT_MEMO, ACT_ADD, ACT_LIST,
+  ACT_OPEN, ACT_NEW, ACT_PICK, ACT_DELETE, ACT_PRINT
+};
+
+static const CappParam P_PATH[] = { { "memo", CAPP_ARG_TEXT, "the memo's path, e.g. /home/memos/1001-1324.wav" } };
+static const CappParam P_TEXT[] = { { "text", CAPP_ARG_TEXT, "what the note says; its first words are its title" } };
+
+static const CappAction ACTIONS[] = {
+  { "open", "Open in Edit", "Note", 0, ACT_OPEN },
+  { "new", "New note", "Note", 0, ACT_NEW },
+  { "memo.pick", "Memo to note...", "Note", 0, ACT_PICK },
+  { "delete", "Delete", "Note", 0, ACT_DELETE },
+  { "print", "Print", "Note", CAPP_KEY_PRINT, ACT_PRINT },     /* fn-p */
+  { "sync", "Sync now", "Sync", 0, ACT_SYNC, "bring the notes and the server into step", 0, 0,
+    CAPP_CMD_YES | CAPP_CMD_NET },
+  { "memo", "Memo to note", 0, 0, ACT_MEMO, "transcribe a voice memo into a new note", P_PATH, 1,
+    CAPP_CMD_YES | CAPP_CMD_NET },
+  { "add", "New note", 0, 0, ACT_ADD, "a new note with this text", P_TEXT, 1, CAPP_CMD_YES },
+  { "list", "List", 0, 0, ACT_LIST, "every note's title", 0, 0, CAPP_CMD_YES },
+};
+#define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
+
+/* The one place that knows what anything does, however it was asked. */
+static int do_action(int a) {
+  cancel_delete();
+  /* Changing the notes while a sync works through its plan would pull files
+   * out from under it. Reading and printing are fine. */
+  if (N.syncing && (a == ACT_NEW || a == ACT_PICK || a == ACT_DELETE || a == ACT_SYNC)) {
+    say(0, "syncing: esc stops it");
     return 1;
   }
-  switch (k) {
-  case CAPP_KEY_UP:   if (N.sel > 0) N.sel--; return 1;
-  case CAPP_KEY_DOWN: if (N.sel + 1 < N.nrows) N.sel++; return 1;
-  case CAPP_KEY_ENTER:
+  switch (a) {
+  case ACT_OPEN:
     if (N.sel < N.nrows) open_note(N.rowfile[N.sel]);
     return 1;
-  case 'n': case 'N': {
+  case ACT_NEW: {
     char file[FILE_MAX];
     if (new_note("New note", file, sizeof file) == 0) { load_rows(); open_note(file); }
+    else say(1, "the card refused it");
     return 1;
   }
-  case 'm': case 'M': {
+  case ACT_PICK: {
     static const CappPick p = { CAPP_PICK_OPEN, "Memo to note", MEMO_DIR, "wav", 0 };
     if (api->pick(&p) == 0) N.picking = 1;
     return 1;
   }
-  case 'd': case 'D': case CAPP_KEY_BACK: if (N.nrows) N.ask_delete = 1; return 1;
-  case 's': case 'S': case 'r': case 'R': sync_begin(); return 1;
+  case ACT_DELETE:
+    if (N.nrows) { N.ask_delete = 1; damage_footer(); }
+    return 1;
+  case ACT_PRINT: print_note(); return 1;
+  case ACT_SYNC:  request_sync(1); return 1;
   default: return 0;
   }
+}
+
+/* ---- keys and the pointer ---------------------------------------------------------- */
+
+/* The bar first: while it has the keyboard it answers for every key. */
+static int menu_key(uint8_t k, int *handled) {
+  int a = toolbar_key(k);
+  *handled = 1;
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return do_action(a);
+  *handled = 0;
+  return 0;
+}
+
+static int app_key(void *st, uint8_t k) {
+  int handled, r;
+  (void)st;
+  r = menu_key(k, &handled);
+  if (handled) return r;
+  if (N.picking) return 1;
+  if (N.syncing) {
+    /* A sync in progress is a level of its own, and Escape is how you back
+     * out of a level. It used to be swallowed with everything else. */
+    if (k == CAPP_KEY_ESC) stop_sync();
+    return 1;
+  }
+  if (N.ask_delete) {
+    /* y deletes; n, Escape, Backspace -- anything else -- is a no. */
+    if (k == 'y' || k == 'Y') delete_selected();
+    else cancel_delete();
+    return 1;
+  }
+  switch (k) {
+  case CAPP_KEY_UP:    select_row(N.sel - 1); return 1;
+  case CAPP_KEY_DOWN:  select_row(N.sel + 1); return 1;
+  case CAPP_KEY_ENTER:
+  case 'e': case 'E':  return do_action(ACT_OPEN);
+  case 'n': case 'N':  return do_action(ACT_NEW);
+  case 'm': case 'M':  return do_action(ACT_PICK);
+  case 'd': case 'D':
+  case KEY_DEL:        return do_action(ACT_DELETE);
+  case 'p': case 'P':  return do_action(ACT_PRINT);
+  case 'r': case 'R':
+  case 's': case 'S':  return do_action(ACT_SYNC);
+  default: return 0;
+  }
+}
+
+static int app_click(void *st, int16_t x, int16_t y, int button) {
+  int a, row;
+  (void)st;
+  if (!N.have_at) return 1;
+  /* The first sign of a mouse brings the menu bar, which moves everything. */
+  if (toolbar_saw_mouse()) api->damage(N.full);
+  a = toolbar_click(x, y);
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return do_action(a);
+  y = (int16_t)(y - toolbar_h());
+  if (N.syncing || N.picking) return 1;
+  if (N.ask_delete) { cancel_delete(); return 1; }
+  if (y < TOP_H || y >= N.content.h - FOOT_H) return 1;
+  row = N.top + (y - TOP_H) / ROW_H;
+  if (row >= N.nrows) return 1;
+  /* A second click on the selected row opens it, as in Files. */
+  if (row == N.sel || button == CAPP_BTN_RIGHT) return do_action(ACT_OPEN);
+  select_row(row);
+  return 1;
+}
+
+static int app_mouse(void *st, int16_t x, int16_t y, int buttons, int wheel) {
+  int changed = 0;
+  (void)st; (void)buttons;
+  if (!N.have_at) return 0;
+  if (toolbar_saw_mouse()) { api->damage(N.full); changed = 1; }
+  if (toolbar_hover(x, y)) changed = 1;
+  if (wheel && N.nrows) {
+    int want = N.sel - wheel;
+    if (want < 0) want = 0;
+    if (want >= N.nrows) want = N.nrows - 1;
+    select_row(want);
+    changed = 1;
+  }
+  return changed;
 }
 
 /* G0 held on the list: the words are a new note. */
 static int app_button(void *st, int event, const char *text) {
   char file[FILE_MAX];
   (void)st;
-  if (event == CAPP_G0_ASK) return N.syncing || N.picking ? CAPP_G0_NONE : CAPP_G0_WORDS;
+  if (event == CAPP_G0_ASK)
+    return N.syncing || N.picking || N.ask_delete ? CAPP_G0_NONE : CAPP_G0_WORDS;
   if (event == CAPP_G0_HEARD && text && text[0]) {
     if (new_note(text, file, sizeof file) == 0) {
       load_rows();
-      sync_begin();
+      request_sync(1);
     }
     return 1;
   }
@@ -643,38 +886,39 @@ static int app_tick(void *st, uint32_t now) {
   int changed = 0;
   (void)st; (void)now;
   if (N.picking) {
-    char path[96];
-    int r = api->pick_poll(path, sizeof path);
+    int r = api->pick_poll(N.memo, sizeof N.memo);
     if (r != CAPP_PICK_PENDING) {
       N.picking = 0;
-      if (r == 1) {
-        say(0, "transcribing...");
-        if (memo_to_note(path, N.status, sizeof N.status) == 0) sync_begin();
-        else N.bad = 1;
-      }
+      /* The upload waits a tick, like a sync, so "transcribing" is on
+       * screen before the wait rather than after it. */
+      if (r == 1) { N.memo_soon = 1; say(0, "transcribing..."); }
       return 1;
     }
+  }
+  if (N.memo_soon) {
+    N.memo_soon = 0;
+    N.bad = memo_to_note(N.memo, N.status, sizeof N.status) != 0;
+    damage_top();
+    if (!N.bad) request_sync(0);
+    return 1;
+  }
+  if (N.sync_soon && N.have_at) {
+    N.sync_soon = 0;
+    sync_begin();
+    return 1;
+  }
+  if (N.printing) {
+    /* Its progress is the status, until it says something final. */
+    const char *ps = api->print_status();
+    if (!(ps[0] == 's' || ps[0] == 'c' || (ps[0] == 'p' && ps[1] && ps[5] == 'i')))
+      N.printing = 0;
+    if (!same(ps, N.status)) { say(0, ps); changed = 1; }
   }
   changed |= sync_tick();
   return changed;
 }
 
 /* ---- commands ----------------------------------------------------------------------- */
-
-enum { ACT_SYNC = 1, ACT_MEMO, ACT_ADD, ACT_LIST };
-
-static const CappParam P_PATH[] = { { "memo", CAPP_ARG_TEXT, "the memo's path, e.g. /home/memos/1001-1324.wav" } };
-static const CappParam P_TEXT[] = { { "text", CAPP_ARG_TEXT, "what the note says; its first words are its title" } };
-
-static const CappAction ACTIONS[] = {
-  { "sync", "Sync", 0, 0, ACT_SYNC, "bring the notes and the server into step", 0, 0,
-    CAPP_CMD_YES | CAPP_CMD_NET },
-  { "memo", "Memo to note", 0, 0, ACT_MEMO, "transcribe a voice memo into a new note", P_PATH, 1,
-    CAPP_CMD_YES | CAPP_CMD_NET },
-  { "add", "New note", 0, 0, ACT_ADD, "a new note with this text", P_TEXT, 1, CAPP_CMD_YES },
-  { "list", "List", 0, 0, ACT_LIST, "every note's title", 0, 0, CAPP_CMD_YES },
-};
-#define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
 
 static int app_command(void *st, int action, int argc, const char *const *argv,
                        char *out, size_t n) {
@@ -706,7 +950,7 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
   return -1;
 }
 
-static int app_action(void *st, int a) { (void)st; (void)a; return 0; }
+static int app_action(void *st, int a) { (void)st; return do_action(a); }
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
@@ -717,12 +961,16 @@ const CappInfo capp_info = {
     0x20, 0x08, 0x2F, 0xE8, 0x20, 0x08, 0x2F, 0xE8,
     0x20, 0x08, 0x2F, 0x88, 0x20, 0x08, 0x20, 0x08,
     0x3F, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-  "enter\topen the note in Edit\n"
+  "up down\tmove\n"
+  "enter e\topen the note in Edit\n"
   "n\ta new note\n"
   "m\ta voice memo, transcribed into a note\n"
-  "d\tdelete the note (here and on the server)\n"
-  "s\tsync with the server\n"
-  "hold G0\tsay a new note\n",
+  "d\tdelete the note, here and on the server: y yes, n or esc no\n"
+  "r s\tsync with the server\n"
+  "esc\tstop a sync\n"
+  "p\tprint the note\n"
+  "hold G0\tsay a new note\n"
+  "fn-b\tthe menus\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
 };
@@ -736,9 +984,13 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api->mem_set(&N, 0, sizeof N);
   if (api->stat(DIR, &st) != 0) api->mkdir(DIR);
   load_rows();
-  if (!api->headless()) sync_begin();
+  /* Not now: see the note at the top. The first tick after the first paint. */
+  if (!api->headless()) request_sync(1);
+  toolbar_init(api, ACTIONS, NACT, 0, 0);
   UI.paint = app_paint;
   UI.key = app_key;
+  UI.click = app_click;
+  UI.mouse = app_mouse;
   UI.tick = app_tick;
   UI.actions = ACTIONS;
   UI.nactions = NACT;
