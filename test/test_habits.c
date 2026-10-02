@@ -312,6 +312,81 @@ void test_habits_commands(void) {
 }
 
 /* `habits today` is for paper: a box per habit, ticked if done today. */
+/* p (and fn-p) prints the day on screen as boxes; what was handed to the
+ * printer is what is checked. */
+static char s_printed[512];
+static int h_print(const char *doc) { snprintf(s_printed, sizeof s_printed, "%s", doc); return 0; }
+
+void test_habits_p_prints_the_day_as_boxes(void) {
+  wipe();
+  s_synced = 2; s_y = 2026; s_m = 9; s_d = 24;
+  put(HABITS_PATH, "Read\nStretch\n");
+  put(DIR "/Read.log", "20260924\n");
+  open_app();
+  HF.print = h_print;
+  s_printed[0] = 0;
+  app_key(0, 'p');
+  CHECK(!strcmp(s_printed, "# Habits: Today\n[x] Read\n[ ] Stretch\n"));
+  CHECK(!strcmp(H.say, "printing..."));
+  wipe();
+}
+
+/* The keys every app shares: n new (a still works), e rename, d asks and
+ * only y deletes -- Enter, which used to, and n, Escape and Backspace do not. */
+void test_habits_speaks_the_shared_keys(void) {
+  wipe();
+  s_synced = 2; s_y = 2026; s_m = 9; s_d = 24;
+  put(HABITS_PATH, "Read\nStretch\n");
+  open_app();
+  app_key(0, 'n');
+  CHECK_EQ(H.view, VIEW_PROMPT);
+  CHECK_EQ(H.prompt, PROMPT_ADD);
+  app_key(0, CAPP_KEY_ESC);
+  app_key(0, 'a');
+  CHECK_EQ(H.prompt, PROMPT_ADD);
+  app_key(0, CAPP_KEY_ESC);
+  app_key(0, 'e');
+  CHECK_EQ(H.prompt, PROMPT_RENAME);
+  CHECK(!strcmp(H.draft, "Read"));
+  app_key(0, CAPP_KEY_ESC);
+  CHECK_EQ(H.view, VIEW_TODAY);
+
+  app_key(0, 'd');
+  CHECK_EQ(H.ask, ASK_DELETE);
+  app_key(0, CAPP_KEY_ENTER);                 /* not a yes */
+  CHECK_EQ(H.ask, ASK_DELETE);
+  CHECK_EQ(H.n, 2);
+  app_key(0, CAPP_KEY_BACK);                  /* a no */
+  CHECK_EQ(H.ask, ASK_NONE);
+  CHECK_EQ(H.n, 2);
+  app_key(0, 'd');
+  app_key(0, 'y');
+  CHECK_EQ(H.n, 1);
+  CHECK(!strcmp(H.habit[0].name, "Stretch"));
+  wipe();
+}
+
+/* In a habit's details, up and down go to the habit above and below (n and
+ * p did), and left and right step a day. */
+void test_habits_details_step_habits_with_up_and_down(void) {
+  wipe();
+  s_synced = 2; s_y = 2026; s_m = 9; s_d = 24;
+  put(HABITS_PATH, "Read\nStretch\nWater\n");
+  open_app();
+  app_key(0, 'i');
+  CHECK_EQ(H.view, VIEW_DETAIL);
+  CHECK_EQ(H.detail, 0);
+  app_key(0, CAPP_KEY_DOWN);
+  CHECK_EQ(H.detail, 1);
+  app_key(0, CAPP_KEY_UP);
+  CHECK_EQ(H.detail, 0);
+  app_key(0, CAPP_KEY_UP);                    /* the top stays the top */
+  CHECK_EQ(H.detail, 0);
+  app_key(0, CAPP_KEY_LEFT);
+  CHECK_EQ(H.cursor, D(2026, 9, 23));
+  wipe();
+}
+
 void test_habits_today_is_boxes_to_tick(void) {
   char out[256];
   wipe();

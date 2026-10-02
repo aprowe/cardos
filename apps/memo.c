@@ -13,8 +13,14 @@
 
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
+#include "apps/footer.h"
 
 #define DIR       CAPP_HOME "/memos"
+/* The bottom of the screen: the strip -- the status, or the meter, or the
+ * playback bar -- and under it the shared hint bar (apps/footer.h). */
+#define STRIP_H   13
+#define BOTTOM_H  (STRIP_H + FOOT_H)
+#define NOTE_DELAY_MS 30             /* a paint's worth, before a call that blocks */
 #define MAX_MEMOS 40
 #define ROW_H     11
 #define BYTES_PER_SEC 32000          /* 16 kHz * 2 bytes, mono */
@@ -53,6 +59,8 @@ static struct {
   uint32_t started_ms;
   uint32_t strip_sig;              /* what the strip last showed, to skip repaints */
   uint32_t strip_at;
+  int   note;                      /* a memo is waiting to go to Notes */
+  uint32_t note_at;
   char  status[48];
   CRect content;
 } M;
@@ -214,65 +222,80 @@ static void paint_rows(CRect c, int list_h) {
  * redraw fifteen times a second is a flicker. */
 static void paint_strip(CRect c) {
   int st = au->state();
-  CRect s = rect(c.x, c.y + c.h - 24, c.w, 24);
+  CRect s = rect(c.x, c.y + c.h - BOTTOM_H, c.w, STRIP_H);
 
   if (M.busy && st == CAPP_AUDIO_RECORDING) {
+    /* | dot | clock | meter |, every pixel of the strip painted exactly
+     * once: the lit meter, the unlit meter, and CLR_BAR around them. */
     char clock[12];
     int lvl = au->level();
-    int mw = c.w - 60;
+    int mw = c.w - 60, tw;
     int w = mw * (lvl < 0 ? 0 : lvl) / 100;
     mmss(api->ticks_ms() - M.started_ms, clock, sizeof clock);
-    api->fill(rect(s.x, s.y, c.w, 4), CLR_BAR);
-    api->fill(rect(s.x, s.y + 4, 4, 20), CLR_BAR);
-    api->fill(rect(s.x + 4, s.y + 4, 8, 8), CLR_REC);
-    api->fill(rect(s.x + 12, s.y + 4, 4, 8), CLR_BAR);
-    api->text((short)(s.x + 16), (short)(s.y + 4), clock, CLR_BAR_FG, CLR_BAR);
-    api->fill(rect(s.x + 16 + 6 * (short)api->str_len(clock), s.y + 4, 52 - 16 - 6 * (short)api->str_len(clock), 8), CLR_BAR);
-    api->fill(rect(s.x + 52, s.y + 4, mw, 1), CLR_BAR);
-    if (w > 0) api->fill(rect(s.x + 52, s.y + 5, w, 6), CLR_METER);
-    if (w < mw) api->fill(rect(s.x + 52 + w, s.y + 5, mw - w, 6), CLR_BG);
-    api->fill(rect(s.x + 52, s.y + 11, mw, 1), CLR_BAR);
-    api->fill(rect(s.x + 52 + mw, s.y + 4, c.w - 52 - mw, 8), CLR_BAR);
-    api->fill(rect(s.x + 4, s.y + 12, c.w - 4, 2), CLR_BAR);
-    api->text((short)(s.x + 4), (short)(s.y + 14), "r stops", CLR_BAR_FG, CLR_BAR);
-    api->fill(rect(s.x + 4 + 6 * 7, s.y + 14, c.w - 4 - 6 * 7, 10), CLR_BAR);
-    api->fill(rect(s.x, s.y + 22, c.w, 2), CLR_BAR);
+    tw = 6 * (int)api->str_len(clock);
+    api->fill(rect(s.x, s.y, 4, STRIP_H), CLR_BAR);
+    api->fill(rect(s.x + 4, s.y, 8, 2), CLR_BAR);
+    api->fill(rect(s.x + 4, s.y + 2, 8, 8), CLR_REC);
+    api->fill(rect(s.x + 4, s.y + 10, 8, STRIP_H - 10), CLR_BAR);
+    api->fill(rect(s.x + 12, s.y, 4, STRIP_H), CLR_BAR);
+    api->fill(rect(s.x + 16, s.y, 36, 3), CLR_BAR);
+    api->text((short)(s.x + 16), (short)(s.y + 3), clock, CLR_BAR_FG, CLR_BAR);
+    if (tw < 36) api->fill(rect(s.x + 16 + tw, s.y + 3, 36 - tw, 8), CLR_BAR);
+    api->fill(rect(s.x + 16, s.y + 11, 36, STRIP_H - 11), CLR_BAR);
+    api->fill(rect(s.x + 52, s.y, mw, 3), CLR_BAR);
+    if (w > 0) api->fill(rect(s.x + 52, s.y + 3, w, 7), CLR_METER);
+    if (w < mw) api->fill(rect(s.x + 52 + w, s.y + 3, mw - w, 7), CLR_BG);
+    api->fill(rect(s.x + 52, s.y + 10, mw, STRIP_H - 10), CLR_BAR);
+    api->fill(rect(s.x + 52 + mw, s.y, c.w - 52 - mw, STRIP_H), CLR_BAR);
     return;
   }
   if (M.busy && st == CAPP_AUDIO_PLAYING) {
+    /* | 0:12 / 1:30 | bar |, painted in place the same way. */
     char pos[12], tot[12], both[28];
     uint32_t p = au->pos_ms(), t = au->total_ms();
-    int bw = c.w - 8;
+    int tw, bx = s.x + 4 + 6 * 11 + 6, bw = c.w - (4 + 6 * 11 + 6) - 4;
     int w = t ? (int)((uint32_t)bw * p / t) : 0;
     mmss(p, pos, sizeof pos); mmss(t, tot, sizeof tot);
     api->fmt(both, sizeof both, "%s / %s", pos, tot);
-    api->fill(rect(s.x, s.y, c.w, 4), CLR_BAR);
-    api->fill(rect(s.x, s.y + 4, 4, 20), CLR_BAR);
-    if (w > 0) api->fill(rect(s.x + 4, s.y + 4, w, 5), CLR_PLAY);
-    if (w < bw) api->fill(rect(s.x + 4 + w, s.y + 4, bw - w, 5), CLR_BG);
-    api->fill(rect(s.x + 4 + bw, s.y + 4, 4, 5), CLR_BAR);
-    api->fill(rect(s.x + 4, s.y + 9, c.w - 4, 4), CLR_BAR);
-    api->text((short)(s.x + 4), (short)(s.y + 13), both, CLR_BAR_FG, CLR_BAR);
-    api->fill(rect(s.x + 4 + 6 * (short)api->str_len(both), s.y + 13, c.w - 8 - 6 * 11 - 6 * (short)api->str_len(both), 10), CLR_BAR);
-    api->text((short)(s.x + c.w - 4 - 6 * 11), (short)(s.y + 13), "enter stops", CLR_BAR_FG, CLR_BAR);
-    api->fill(rect(s.x + c.w - 4, s.y + 13, 4, 10), CLR_BAR);
-    api->fill(rect(s.x, s.y + 21, c.w, 3), CLR_BAR);
-    return;
-  }
-  api->fill(s, CLR_BAR);
-  if (M.ask == ASK_DELETE) {
-    char q[48];
-    api->fmt(q, sizeof q, "delete %s?  y/n", M.n ? M.memo[M.sel].name : "");
-    api->text((short)(s.x + 4), (short)(s.y + 8), q, CLR_REC, CLR_BAR);
+    tw = 6 * (int)api->str_len(both);
+    if (tw > 6 * 11) tw = 6 * 11;
+    api->fill(rect(s.x, s.y, 4, STRIP_H), CLR_BAR);
+    api->fill(rect(s.x + 4, s.y, 6 * 11 + 6, 3), CLR_BAR);
+    api->text((short)(s.x + 4), (short)(s.y + 3), both, CLR_BAR_FG, CLR_BAR);
+    api->fill(rect(s.x + 4 + tw, s.y + 3, 6 * 11 + 6 - tw, 8), CLR_BAR);
+    api->fill(rect(s.x + 4, s.y + 11, 6 * 11 + 6, STRIP_H - 11), CLR_BAR);
+    api->fill(rect(bx, s.y, bw, 4), CLR_BAR);
+    if (w > 0) api->fill(rect(bx, s.y + 4, w, 5), CLR_PLAY);
+    if (w < bw) api->fill(rect(bx + w, s.y + 4, bw - w, 5), CLR_BG);
+    api->fill(rect(bx, s.y + 9, bw, STRIP_H - 9), CLR_BAR);
+    api->fill(rect(bx + bw, s.y, s.x + c.w - (bx + bw), STRIP_H), CLR_BAR);
     return;
   }
   {
     char vol[16];
+    api->fill(s, CLR_BAR);
     if (au->volume()) api->fmt(vol, sizeof vol, "vol %d%%", au->volume());
     else api->fmt(vol, sizeof vol, "%s", "muted");
     api->text((short)(s.x + 4), (short)(s.y + 3), M.status, CLR_BAR_FG, CLR_BAR);
     api->text((short)(s.x + c.w - 4 - 6 * (short)api->str_len(vol)), (short)(s.y + 3), vol, CLR_BAR_FG, CLR_BAR);
-    api->text((short)(s.x + 4), (short)(s.y + 13), "r rec  enter play  n note  d del", CLR_DIM, CLR_BAR);
+  }
+}
+
+/* The hint bar: what the keys do now. Not repainted by the meter's ticks,
+ * which mark only the strip; it changes when the state does, and a state
+ * change repaints the lot. */
+static void paint_hints(CRect c) {
+  int st = au->state();
+  if (M.ask == ASK_DELETE) {
+    char q[48];
+    api->fmt(q, sizeof q, "delete %s? y/n", M.n ? M.memo[M.sel].name : "");
+    footer_paint(api, c, q);
+  } else if (M.busy && st == CAPP_AUDIO_RECORDING) {
+    footer_paint(api, c, "r stop");
+  } else if (M.busy && st == CAPP_AUDIO_PLAYING) {
+    footer_paint(api, c, "enter stop  left/right volume");
+  } else {
+    footer_paint(api, c, "r rec  enter play  n note  d del");
   }
 }
 
@@ -284,11 +307,12 @@ static void app_paint(void *st, CRect c) {
   {
     CRect r = toolbar_rest(c);
     M.content = r;
-    /* The strip owns its own 24 rows: clearing them here and again in
+    /* The strip owns its own rows: clearing them here and again in
      * paint_strip is the flicker a moving meter would show. */
-    api->fill(rect(r.x, r.y, r.w, r.h - 24), CLR_BG);
-    paint_rows(r, r.h - 24);
+    api->fill(rect(r.x, r.y, r.w, r.h - BOTTOM_H), CLR_BG);
+    paint_rows(r, r.h - BOTTOM_H);
     paint_strip(r);
+    paint_hints(r);
   }
   toolbar_paint_menu(c);
 }
@@ -416,8 +440,10 @@ static int app_key(void *st, unsigned char k) {
   if (api->key_repeat() && k != CAPP_KEY_UP && k != CAPP_KEY_DOWN) return 0;
 
   if (M.ask == ASK_DELETE) {
-    if (k == 'y' || k == 'Y' || k == CAPP_KEY_ENTER) { M.ask = ASK_NONE; delete_memo(); }
-    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC) M.ask = ASK_NONE;
+    /* y deletes; n, Escape and Backspace say no, as in every app. Enter is
+     * play here, so it is not a yes. */
+    if (k == 'y' || k == 'Y') { M.ask = ASK_NONE; delete_memo(); }
+    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) M.ask = ASK_NONE;
     return 1;
   }
   switch (k) {
@@ -436,14 +462,14 @@ static int app_key(void *st, unsigned char k) {
   case 0x7F:           return do_action(ACT_DELETE);
   case 'n': case 'N':
     /* To a note: the Notes app sends it to the server, which transcribes it
-     * and keeps it as a note (apps/notes.c, `notes memo PATH`). */
-    if (M.n) {
-      char path[80], line[100], out[64];
-      path_of(&M.memo[M.sel], path, sizeof path);
-      say("transcribing...");
-      api->fmt(line, sizeof line, "memo %s", path);
-      if (api->run_command("notes", line, out, sizeof out) == 0) say(out);
-      else { api->fmt(M.status, sizeof M.status, "%s", out[0] ? out : "not noted"); }
+     * and keeps it as a note (apps/notes.c, `notes memo PATH`). That call
+     * blocks for as long as the upload and Whisper take, and made here it
+     * froze the screen with nothing on it saying why. So the key only says
+     * "sending..." and tick makes the call once that has been painted. */
+    if (M.n && !M.note && au->state() == CAPP_AUDIO_IDLE) {
+      M.note = 1;
+      M.note_at = api->ticks_ms();
+      say("sending to Notes...");
     }
     return 1;
   case '+': case '=':
@@ -469,7 +495,7 @@ static int app_click(void *st, short x, short y, int button) {
   }
   y = (short)(y - toolbar_h());
   row = y / ROW_H;
-  if (row < 0 || M.top + row >= M.n || y >= M.content.h - 24) return 0;
+  if (row < 0 || M.top + row >= M.n || y >= M.content.h - BOTTOM_H) return 0;
   if (M.top + row == M.sel) return do_action(ACT_PLAY);
   M.sel = M.top + row;
   return 1;
@@ -497,6 +523,20 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
 static int app_tick(void *st, uint32_t now_ms) {
   int state = au->state();
   (void)st;
+  /* The note the n key asked for, now that "sending..." is on screen. */
+  if (M.note && now_ms - M.note_at >= NOTE_DELAY_MS) {
+    char path[80], line[100], out[64];
+    M.note = 0;
+    out[0] = 0;
+    if (M.sel < M.n) {
+      path_of(&M.memo[M.sel], path, sizeof path);
+      api->fmt(line, sizeof line, "memo %s", path);
+      if (api->run_command("notes", line, out, sizeof out) == 0) say(out);
+      else say(out[0] ? out : "not noted");
+    }
+    api->damage(rect(M.content.x, M.content.y + M.content.h - BOTTOM_H, M.content.w, STRIP_H));
+    return 1;
+  }
   if (M.busy) {
     if (state == CAPP_AUDIO_IDLE) {
       M.busy = 0;
@@ -532,7 +572,7 @@ static int app_tick(void *st, uint32_t now_ms) {
       M.strip_sig = sig;
       M.strip_at = now_ms;
     }
-    api->damage(rect(M.content.x, M.content.y + M.content.h - 24, M.content.w, 24));
+    api->damage(rect(M.content.x, M.content.y + M.content.h - BOTTOM_H, M.content.w, STRIP_H));
     return 1;
   }
   return 0;
@@ -549,8 +589,9 @@ const CappInfo capp_info = {
     0x07, 0xE0, 0x07, 0xE0, 0x27, 0xE4, 0x27, 0xE4,
     0x33, 0xCC, 0x1C, 0x38, 0x0F, 0xF0, 0x01, 0x80,
     0x01, 0x80, 0x01, 0x80, 0x07, 0xE0, 0x00, 0x00 },
-  "arrows\tmove\nr\trecord, and stop\nenter\tplay, and stop\nd\tdelete\n"
-  "left/right\tvolume (also + -; opt-8 / opt-7 anywhere)\nescape\tstop\n",
+  "up/down\tchoose a memo\nr\trecord, and stop\nspace enter\tplay, and stop\n"
+  "n\tsend to Notes, written out\nd del\tdelete: y yes, n esc bksp no\n"
+  "left/right\tvolume (also + -; opt-8 / opt-7 anywhere)\nesc\tstop\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
 };
