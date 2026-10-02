@@ -30,6 +30,7 @@
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
+#include "apps/footer.h"
 
 static const CardApi *api;
 
@@ -38,7 +39,6 @@ static const CardApi *api;
 
 #define MAX_LAPS      99
 #define ROW_H         17
-#define FOOT_H        11
 #define FLASH_MS      180      /* the teal after a change */
 #define SAVE_IDLE_MS  700      /* a held key saves once it has been still this long */
 #define BIG_DIGITS    6        /* clock56 fits six across 240 px */
@@ -51,8 +51,6 @@ static const CardApi *api;
 #define CLR_LAP     CAPP_RGB(255, 198, 96)
 #define CLR_ROW     CAPP_RGB(20, 23, 31)
 #define CLR_ROW_ALT CAPP_RGB(25, 29, 38)
-#define CLR_FOOT    CAPP_RGB(32, 36, 46)
-#define CLR_WARN    CAPP_RGB(236, 104, 84)
 
 typedef struct {
   uint32_t count;
@@ -336,16 +334,16 @@ static void paint_list(void) {
     api->fill(rect(C.list.x, y, C.list.w, C.list.y + C.list.h - y), CLR_BG);
 }
 
+/* The shared hint bar (apps/footer.h). The reset question goes in it too, in
+ * the bar's one colour: every app's bar looks the same now. */
 static void paint_foot(void) {
   char s[48];
-  api->fill(C.foot, CLR_FOOT);
   if (C.ask == ASK_RESET) {
-    api->fmt(s, sizeof s, "reset to 0 and clear %d lap%s?  y/n", C.nlaps,
+    api->fmt(s, sizeof s, "reset to 0 and clear %d lap%s? y/n", C.nlaps,
              C.nlaps == 1 ? "" : "s");
-    api->text((int16_t)(C.foot.x + 4), (int16_t)(C.foot.y + 2), s, CLR_WARN, CLR_FOOT);
+    footer_paint(api, C.foot, s);
   } else {
-    api->text((int16_t)(C.foot.x + 4), (int16_t)(C.foot.y + 2),
-              "spc +1  bksp -1  enter lap  del reset", CLR_DIM, CLR_FOOT);
+    footer_paint(api, C.foot, "spc +1  bksp -1  enter lap  del reset");
   }
 }
 
@@ -472,7 +470,9 @@ static int app_key(void *st, uint8_t k) {
 
   if (C.ask == ASK_RESET) {
     if (api->key_repeat()) return 1;
-    if (k == 'y' || k == 'Y' || k == CAPP_KEY_ENTER) { C.ask = ASK_NONE; reset_all(); }
+    /* y and only y: Enter is the lap key, and a lap pressed out of habit
+     * must not wipe the count. */
+    if (k == 'y' || k == 'Y') { C.ask = ASK_NONE; reset_all(); }
     else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) C.ask = ASK_NONE;
     else return 1;
     return 1;
@@ -545,7 +545,7 @@ const CappInfo capp_info = {
     0x27, 0xE4, 0x21, 0x84, 0x21, 0x84, 0x20, 0x04,
     0x20, 0x04, 0x3F, 0xFC, 0x00, 0x00, 0x00, 0x00 },
   "space\t+1, hold to count fast\nbackspace\t-1\nenter\trecord a lap\n"
-  "del\treset, asks first\nup/down\tscroll the laps\nclick\t+1\n",
+  "del\treset, asks first: y yes, n esc bksp no\nup/down\tscroll the laps\nclick\t+1\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
 };
