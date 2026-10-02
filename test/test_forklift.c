@@ -370,6 +370,23 @@ void test_forklift_progress_and_program_survive_a_restart(void) {
   CHECK(strstr(E.line[0], "# mine"));
 }
 
+/* What was typed is what is kept, whether or not it parses yet. Saving only
+ * the last program that parsed threw a half-written edit away at the next
+ * restart -- and the robots still run the one that worked. */
+void test_forklift_an_edit_that_does_not_parse_survives_a_restart(void) {
+  fresh_card();
+  boot();
+  set_program("bot = go ship  # works");
+  ed_from_text("bot = go (  # half done");
+  ed_key(' ');                                 /* typing marks it worth saving */
+  CHECK_EQ(1, G.dirty);
+  save_all();
+  boot();                                      /* the same card */
+  CHECK(strstr(E.line[0], "# half done"));
+  CHECK(strstr(E.good, "# works"));
+  CHECK_EQ(1, G.running);                      /* on the one that parsed */
+}
+
 void test_forklift_a_fresh_card_starts_with_a_program_that_works(void) {
   fresh_card();
   boot();

@@ -31,12 +31,13 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/footer.h"
 
 #define PAGE_PATH  "/cache/page.cpx"
 #define MAXW       240
 #define ROWBUF     700          /* a row is at most 240*2 plus its run bytes */
 #define SCROLL_STEP 12
-#define BAR_H      9
+#define BAR_H      FOOT_H
 #define ENTRY_H    12
 
 #define CLR_BG    CAPP_RGB(16, 18, 22)
@@ -55,6 +56,7 @@ static struct {
   int  top;                     /* first visible row */
   int  loaded;
   int  photo;                   /* render mode: 0 the 6x8 font, 1 real fonts */
+  int  view;                    /* page rows on screen, from the last paint */
   char status[56];
   char url[160];
   char proxy[96];
@@ -190,13 +192,18 @@ static int link_at(int px, int py, char *out, size_t out_size) {
 /* ---- painting ------------------------------------------------------------ */
 
 static void paint_bar(CRect c) {
-  char buf[72];
+  char buf[48];
   int pct = W.h > 1 ? (W.top * 100) / (W.h - 1) : 0;
 
-  api->fill(rect(c.x, c.y + c.h - BAR_H, c.w, BAR_H), CLR_BAR);
-  api->fmt(buf, sizeof buf, "%3d%%  %s  [u]rl [f]%s", pct, W.status,
-           W.photo ? "ont" : "oto");
-  api->text((short)(c.x + 2), (short)(c.y + c.h - BAR_H + 1), buf, CLR_FG, CLR_BAR);
+  /* The keys, and how far down the page is. What the status line says is
+   * on the blank screen when there is no page, which is the only time it
+   * says anything that matters. */
+  if (W.loaded)
+    api->fmt(buf, sizeof buf, "%3d%%  u url  f %s  r reload", pct,
+             W.photo ? "font" : "photo");
+  else
+    api->fmt(buf, sizeof buf, "u url  f %s", W.photo ? "font" : "photo");
+  footer_paint(api, c, buf);
 }
 
 /* The address bar. It is only on screen while it has the keyboard, because a
@@ -218,6 +225,10 @@ static void app_paint(void *st, CRect c) {
   int view = c.h - BAR_H;
   int y;
   (void)st;
+
+  /* Remembered for the keys: a window is not 135 rows tall, and a page
+   * step that assumed it scrolled past what was on screen. */
+  W.view = view;
 
   if (!W.loaded) {
     api->fill(c, CLR_BG);
@@ -302,6 +313,8 @@ static void fetch(const char *what) {
 
 /* ---- input --------------------------------------------------------------- */
 
+static int view_rows(void) { return W.view > 0 ? W.view : 135 - BAR_H; }
+
 static void scroll_by(int rows, int view) {
   int max = W.h - view;
   if (max < 0) max = 0;
@@ -319,6 +332,9 @@ static int key_entry(unsigned char k) {
     if (W.entry_len) fetch(W.entry);
     return 1;
   }
+  /* Escape puts the field away and leaves the page as it was: a field that
+   * swallowed it was a trap with only Enter or a long backspace out. */
+  if (k == CAPP_KEY_ESC) { W.typing = 0; return 1; }
   if (k == CAPP_KEY_BACK) {
     if (W.entry_len) W.entry[--W.entry_len] = 0;
     else W.typing = 0;              /* backspacing off the end puts it away */
@@ -329,11 +345,11 @@ static int key_entry(unsigned char k) {
     W.entry[W.entry_len] = 0;
     return 1;
   }
-  return 1;                          /* swallow everything: this is a field */
+  return 1;                          /* swallow the rest: this is a field */
 }
 
 static int app_key(void *st, unsigned char k) {
-  int view = 135 - BAR_H;
+  int view = view_rows();
   (void)st;
 
   if (W.typing) return key_entry(k);
@@ -372,7 +388,7 @@ static int app_key(void *st, unsigned char k) {
 }
 
 static int app_click(void *st, short x, short y, int button) {
-  int view = 135 - BAR_H;
+  int view = view_rows();
   char url[200];
   (void)st; (void)button;
   if (!W.loaded) return 0;
@@ -400,7 +416,7 @@ static int app_wants_text(void *st) {
  * wanted a mouse for. Three notches to a text line at the sizes the proxy
  * renders. */
 static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
-  int view = 135 - BAR_H;
+  int view = view_rows();
   (void)st; (void)x; (void)y; (void)buttons;
   if (!wheel || !W.loaded) return 0;
   scroll_by(-wheel * SCROLL_STEP * 2, view);
@@ -433,7 +449,9 @@ const CappInfo capp_info = {
     0x4A, 0x52, 0x9A, 0x59, 0xFF, 0xFF, 0x9A, 0x59,
     0x9A, 0x59, 0xFF, 0xFF, 0x4A, 0x52, 0x4A, 0x52,
     0x24, 0x24, 0x18, 0x18, 0x07, 0xE0, 0x00, 0x00 },
-  "u\ttype an address\nclick\tfollow a link\narrows\tscroll, left/right a page\nspace\tpage down\ng G\ttop, bottom\nr\treload\n",
+  "u\ttype an address; enter fetches, escape cancels\nclick\tfollow a link\n"
+  "arrows\tscroll, left/right a page\nspace\tpage down\ng G\ttop, bottom\n"
+  "r\treload\nf\tphoto or font rendering (fetches again)\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
 };

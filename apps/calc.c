@@ -23,6 +23,7 @@
 
 #include "kernel/app/capp.h"
 #include "apps/safefile.h"
+#include "apps/toolbar.h"
 
 static const CardApi *api;
 
@@ -1055,7 +1056,7 @@ static void paint_calc(CRect c) {
     static const char *const hint[] = {
       "type a sum and press Enter:", "  2^10   sqrt(2)*3   5!   a=7",
       "or an equation to graph it:", "  y=x^2-3   y=sin(x)   y=2x+1",
-      "Tab shows the graphs", "fn-p prints   fn-h for the rest",
+      "Tab shows the graphs", "fn-p prints   fn-b the menus",
     };
     for (i = 0; i < 6; i++)
       api->text((int16_t)(c.x + 4), (int16_t)(top + 4 + i * 11), hint[i],
@@ -1074,11 +1075,19 @@ static void paint_calc(CRect c) {
   paint_input(c);
 }
 
-static void app_paint(void *st, CRect c) {
+static void app_paint(void *st, CRect full) {
+  CRect c;
   (void)st;
-  T.at = c;
+  /* A dropdown whose highlight moved, or only the bar: neither needs the
+   * graph re-plotted underneath. */
+  if (toolbar_only_menu()) { toolbar_paint_menu(full); return; }
+  if (toolbar_only_bar()) { toolbar_paint_bar(full); return; }
+  toolbar_paint_bar(full);
+  c = toolbar_rest(full);
+  T.at = c;                      /* what every damage() is expressed in */
   if (T.view == V_GRAPH) paint_graph(c);
   else paint_calc(c);
+  toolbar_paint_menu(full);      /* last: it is drawn over what it covers */
 }
 
 /* ==== doing things ===================================================== */
@@ -1543,13 +1552,14 @@ static int calc_key(uint8_t k) {
   return 0;
 }
 
-static int app_key(void *st, uint8_t k) {
+/* Typing only in the calculator: in the graph ; , . / are the arrows. Not
+ * while the menu bar has the keyboard either: a key would type into a line
+ * that is not listening. */
+static int app_wants_text(void *st) {
   (void)st;
-  return T.view == V_GRAPH ? graph_key(k) : calc_key(k);
+  if (toolbar_has_keys()) return 0;
+  return T.view == V_CALC;
 }
-
-/* Typing only in the calculator: in the graph ; , . / are the arrows. */
-static int app_wants_text(void *st) { (void)st; return T.view == V_CALC; }
 
 static int app_tick(void *st, uint32_t now) {
   int dirty = 0;
@@ -1609,8 +1619,10 @@ const CappInfo capp_info = {
     0x2D, 0xB4, 0x2D, 0xB4, 0x20, 0x04, 0x3F, 0xFC },
   "Enter\twork it out\nup/down\tearlier lines\ny=...\tgraph it (y1..y4)\n"
   "a=5\tset a variable\nans\tthe last answer\nTab\tcalculator / graph\n"
-  "arrows\tpan the graph\n+ -\tzoom\nf\tfit the height\n0\tstandard zoom\n"
+  "Esc\tclear the line; in the graph, back\n"
+  "arrows\tpan the graph\n+ -\tzoom\nf\tfit the height\n0 z\tstandard zoom\n"
   "t\ttrace: arrows move\n1-4\tshow/hide a graph\ndel\tdelete traced graph\n"
+  "g\tback to the calculator\ny\ta new y= line\n"
   "fns\tsin cos tan asin acos atan\n\tsqrt abs ln log exp\n\tfloor ceil round  n!\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
@@ -1634,6 +1646,33 @@ static int app_action(void *st, int a) {
   case ACT_PRINT:  print_now(); return 1;
   }
   return 0;
+}
+
+/* The bar first, and it answers for every key while it has them (fn-b puts
+ * the keyboard in it); an item chosen there is an action, the same one its
+ * chord or a click would have run. */
+static int app_key(void *st, uint8_t k) {
+  int a = toolbar_key(k);
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return app_action(st, a);
+  return T.view == V_GRAPH ? graph_key(k) : calc_key(k);
+}
+
+/* Clicks only work the menu bar: the graph and the roll are keyboard things. */
+static int app_click(void *st, int16_t x, int16_t y, int button) {
+  int a = toolbar_click(x, y);
+  (void)button;
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return app_action(st, a);
+  return 0;
+}
+
+static int app_mouse(void *st, int16_t x, int16_t y, int buttons, int wheel) {
+  int changed;
+  (void)st; (void)buttons; (void)wheel;
+  changed = toolbar_saw_mouse();
+  if (toolbar_hover(x, y)) changed = 1;
+  return changed;
 }
 
 static int app_command(void *st, int action, int argc, const char *const *argv,
@@ -1675,8 +1714,12 @@ int capp_main(const CardApi *a, int argc, char **argv) {
     if (kind == K_GRAPH) T.view = V_GRAPH;
   }
 
+  toolbar_init(api, ACTIONS, NACT, 0, 0);
+
   UI.paint = app_paint;
   UI.key = app_key;
+  UI.click = app_click;
+  UI.mouse = app_mouse;
   UI.tick = app_tick;
   UI.wants_text = app_wants_text;
   UI.actions = ACTIONS;

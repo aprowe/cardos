@@ -26,6 +26,7 @@
 
 #include "kernel/app/capp.h"
 #include "apps/safefile.h"
+#include "apps/footer.h"
 
 static const CardApi *api;
 
@@ -38,7 +39,6 @@ static const CardApi *api;
 #define REPLY_MAX  3072               /* device-info runs to about 2.5 KB */
 #define TOP_H      18
 #define ROW_H      15
-#define FOOT_H     11
 #define TIMEOUT_MS 3000               /* the TV is on the LAN or it is not */
 
 #define CLR_BG     CAPP_RGB(16, 14, 24)
@@ -46,7 +46,6 @@ static const CardApi *api;
 #define CLR_DIM    CAPP_RGB(128, 122, 150)
 #define CLR_ROKU   CAPP_RGB(170, 110, 230)    /* Roku's purple, lifted for a dark screen */
 #define CLR_CHIP   CAPP_RGB(44, 36, 64)
-#define CLR_FOOT   CAPP_RGB(28, 24, 40)
 #define CLR_BAD    CAPP_RGB(240, 110, 96)
 
 enum { ST_IDLE = 0, ST_INFO, ST_KEY };
@@ -323,10 +322,7 @@ static void paint_top(CRect c) {
          right, G.bad ? CLR_BAD : CLR_DIM, CLR_BG);
 }
 
-static void paint_foot(CRect c, const char *keys) {
-  api->fill(rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H), CLR_FOOT);
-  api->text((int16_t)(c.x + 4), (int16_t)(c.y + c.h - FOOT_H + 2), keys, CLR_DIM, CLR_FOOT);
-}
+static void paint_foot(CRect c, const char *keys) { footer_paint(api, c, keys); }
 
 static void paint_remote(CRect c) {
   int x, y = c.y + TOP_H + 4;
@@ -344,7 +340,8 @@ static void paint_remote(CRect c) {
   y += ROW_H + 8;
   if (G.last[0])
     draw(G.f_uib, c.x + (c.w - width(G.f_uib, G.last)) / 2, y, G.last, CLR_ROKU, CLR_BG);
-  paint_foot(c, "arrows move  space play  tab type  i address");
+  paint_foot(c, G.ip[0] ? "space play  tab type  i address"
+                        : "i address");
 }
 
 static void paint_typing(CRect c) {
@@ -367,7 +364,7 @@ static void paint_address(CRect c) {
   y += ROW_H + 8;
   draw(G.f_ui, c.x + 8, y, "On the TV: Settings > Network", CLR_DIM, CLR_BG);
   draw(G.f_ui, c.x + 8, y + ROW_H, "> About shows it.", CLR_DIM, CLR_BG);
-  paint_foot(c, G.ip[0] ? "enter save  esc cancel" : "enter save");
+  paint_foot(c, "enter save  esc cancel");
 }
 
 static void app_paint(void *st, CRect c) {
@@ -388,7 +385,14 @@ static void begin_address(void) {
 }
 
 static int key_address(uint8_t k) {
-  if (k == CAPP_KEY_ESC) { if (G.ip[0]) G.mode = M_REMOTE; return 1; }
+  /* Escape always backs out, even before there is an address: the remote
+   * then says it has none and how to give it one. Keeping the user in a
+   * field they did not want was the one view in the app with no way back. */
+  if (k == CAPP_KEY_ESC) {
+    G.mode = M_REMOTE;
+    if (!G.ip[0]) { G.bad = 1; api->fmt(G.status, sizeof G.status, "no TV address: i sets it"); }
+    return 1;
+  }
   if (k == CAPP_KEY_BACK) { if (G.dlen) G.draft[--G.dlen] = 0; return 1; }
   if (k == CAPP_KEY_ENTER) {
     if (!valid_ip(G.draft)) {
@@ -554,14 +558,15 @@ const CappInfo capp_info = {
     0x11, 0x88, 0x13, 0xC8, 0x11, 0x88, 0x10, 0x08,
     0x15, 0x48, 0x10, 0x08, 0x15, 0x48, 0x10, 0x08,
     0x15, 0x48, 0x10, 0x08, 0x0F, 0xF0, 0x00, 0x00 },
-  "p\tpower\n"
-  "+ -\tvolume (hold to keep going)\n"
-  "m\tmute\n"
+  "p P\tpower\n"
+  "+ - = _\tvolume (hold to keep going)\n"
+  "m M\tmute\n"
   "1-4\tHDMI 1 to 4;  t tuner;  a AV\n"
   "arrows\tmove;  enter OK;  del back;  h home\n"
   "space\tplay/pause;  r rewind;  f fast forward;  * options\n"
   "tab\ttype into the TV's search box\n"
   "i\tthe TV's address\n"
+  "escape\tleave typing or the address\n"
   "\n"
   "A 403 means the TV refuses: Settings > System > Advanced\n"
   "system settings > Control by mobile apps.\n",

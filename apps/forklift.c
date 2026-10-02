@@ -45,7 +45,8 @@
 
 #define DIR        CAPP_HOME "/forklift"
 #define STATE_PATH DIR "/state.txt"
-#define CODE_PATH  DIR "/bot.fl"
+#define CODE_PATH  DIR "/bot.fl"         /* what was typed, parsing or not */
+#define GOOD_PATH  DIR "/bot.ok"         /* the last of it that parsed */
 #define SAVE_EVERY_MS 60000u
 
 #define C_BG       CAPP_RGB(22, 24, 30)
@@ -451,7 +452,17 @@ static void save_all(void) {
     api->fmt(line, sizeof line, "warehouse=%d\n", G.size_lv);           safe_line(&f, line);
     safe_commit(&f);
   }
+  /* The editor's text, not the last program that parsed. Saving only the
+   * good one meant an edit that did not parse yet -- half a definition, a
+   * missing bracket -- was thrown away at the next restart, along with
+   * everything typed since the last time it did. The good one goes beside
+   * it, so the robots still have something to run when the text is broken. */
+  ed_to_text(E.src);
   if (safe_begin(&f, api, CODE_PATH) == 0) {
+    safe_line(&f, E.src);
+    safe_commit(&f);
+  }
+  if (E.good[0] && safe_begin(&f, api, GOOD_PATH) == 0) {
     safe_line(&f, E.good);
     safe_commit(&f);
   }
@@ -507,6 +518,8 @@ static void load_all(void) {
   if (read_file(CODE_PATH, E.src, SRC_MAX) <= 0)
     api->fmt(E.src, SRC_MAX, "%s", DEFAULT_PROGRAM);
   ed_from_text(E.src);
+  /* What apply_program falls back to if the text above does not parse. */
+  if (read_file(GOOD_PATH, E.good, SRC_MAX) <= 0) E.good[0] = 0;
 }
 
 /* Start running what is in the editor, or say why not. */
@@ -684,7 +697,7 @@ static int ed_key(unsigned char k) {
     else return 0;
   }
   if (E.cx > str_len(E.line[E.cy])) E.cx = str_len(E.line[E.cy]);
-  if (E.changed) ed_check();
+  if (E.changed) { ed_check(); G.dirty = 1; }   /* typing is worth keeping */
   return 1;
 }
 
@@ -850,7 +863,7 @@ static void top_text(char *out) {
 static void bottom_msg(const char **msg, uint16_t *fg) {
   if (G.err[0]) { *msg = G.err; *fg = C_ERR; }
   else if (G.note[0] && (int32_t)(G.note_until - api->ticks_ms()) > 0) { *msg = G.note; *fg = C_GOOD; }
-  else { *msg = "e code s shop r help spc pause f fast"; *fg = C_DIM; }
+  else { *msg = "e code s shop r ref spc pause f fast"; *fg = C_DIM; }
 }
 
 static uint32_t order_sig(void) {
@@ -1228,6 +1241,7 @@ static int app_tick(void *st, uint32_t now) {
 }
 
 static void go_view(int v) {
+  int from = U.view;
   if (U.view == VIEW_CODE && v != VIEW_CODE) apply_program();
   U.view = v;
   U.full = 1;
@@ -1235,7 +1249,10 @@ static void go_view(int v) {
     ed_check();
     if (G.err_line > 0 && G.err_line <= E.nlines) { E.cy = G.err_line - 1; E.cx = 0; }
   }
-  if (v != VIEW_MAP && G.dirty) save_all();
+  /* Leaving the editor saves what was typed: apps are not told when they
+   * are closed, and fn-` from the warehouse straight after an edit used to
+   * leave the edit for the minute-long autosave that never came. */
+  if ((v != VIEW_MAP || from == VIEW_CODE) && G.dirty) save_all();
 }
 
 static int map_key(unsigned char k);
@@ -1299,7 +1316,8 @@ const CappInfo capp_info = {
     0x50, 0x3C, 0x5F, 0x3C, 0x51, 0x3C, 0x7F, 0x3C,
     0x7F, 0x20, 0x7F, 0x20, 0x7F, 0x3F, 0x00, 0x00,
     0x36, 0x00, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00 },
-  "e\tedit the program (esc runs it)\ns\tshop\nr\treference: every built-in\n"
+  "e, enter\tedit the program (esc runs it)\ns\tshop: enter buys, esc back\n"
+  "r, ?\treference: every built-in\n"
   "space\tpause / go on after an error\nf\tfast\n"
   "tab\t(in code) complete a name\n",
 };

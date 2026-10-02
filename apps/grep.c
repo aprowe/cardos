@@ -102,8 +102,19 @@ static void grep_file(Grep *g, const char *path) {
       if (c == 13) continue;
       if (c != 10) {
         /* A control byte means this is not text. Stop rather than matching
-         * against whatever a binary happens to contain. */
-        if (c < 32 || (unsigned char)c > 126) { api->close(fd); return; }
+         * against whatever a binary happens to contain -- and say so, since
+         * a file that ends silently looks like a file with no more matches.
+         * A tab is text (Makefiles, pasted tables), and so is a byte over
+         * 126: UTF-8, an em dash in a note. Both used to end the file. */
+        if (c == '\t') c = ' ';
+        else if ((unsigned char)c < 32 || c == 127) {
+          char msg[96];
+          api->fmt(msg, sizeof msg, "grep: %s: binary, stopped at line %d",
+                   path, lineno);
+          api->out_line(msg);
+          api->close(fd);
+          return;
+        }
         if (len < LINE_MAX - 1) line[len++] = c;
         continue;
       }

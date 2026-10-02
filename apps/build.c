@@ -67,7 +67,7 @@ static struct {
   int   in_len;
 
   char  base[96];                 /* http://host:port */
-  char  token[64];                /* from /claude.token, if there is one */
+  char  token[64];                /* from /config/claude.token, if there is one */
 
   int   job;                      /* the id being waited on, 0 for none */
   int   check_update;             /* an answer just landed: ask what is new */
@@ -85,25 +85,25 @@ static struct {
   char  reply[REPLY_MAX];
   char  status[40];
 
-  /* What the next paint has to redraw. A typed character is the input line
-   * and nothing else; without this every keystroke redrew the whole window,
-   * log and all, which on a 40x12 terminal is visible as a flicker. */
-  int   dirty_bar, dirty_log, dirty_in;
-  int   expect_paint;             /* this paint answers something we did */
-  int   full;                     /* draw everything regardless */
   CRect at;                       /* where we last painted */
   int   have_at;
 } C;
-
-static void mark_bar(void) { C.dirty_bar = 1; }
-static void mark_log(void) { C.dirty_log = 1; }
-static void mark_in(void)  { C.dirty_in = 1; }
 
 static CRect rect(int x, int y, int w, int h) {
   CRect r;
   r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
   return r;
 }
+
+/* What the next paint has to redraw, said to the shell. A typed character is
+ * the input line and nothing else; without this every keystroke redrew the
+ * whole window, log and all, which on a 40x12 terminal is visible as a
+ * flicker. These were three flags and an expect_paint guess; api->damage
+ * says it outright, as apps/claude.c does. Before the first paint there is
+ * nowhere to mark, and the shell paints everything anyway. */
+static void mark_bar(void) { if (C.have_at) api->damage(rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
+static void mark_log(void) { if (C.have_at) api->damage(rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
+static void mark_in(void)  { if (C.have_at) api->damage(rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
 
 /* ---- the log -------------------------------------------------------------- */
 
@@ -398,32 +398,17 @@ static void paint_input(CRect c) {
   api->fill(rect(c.x + 10 + (C.in_len - from) * 6, y + 2, 5, 8), CLR_FG);
 }
 
-/* A paint we did not ask for -- the window moved, the help overlay closed,
- * the launcher cleared the screen -- has to be the whole thing, because only
- * the shell knows what was drawn over us and it does not say. One that
- * answers our own key or tick redraws the regions that changed. */
+/* Painted to the clip the shell hands back: our own marks come back as the
+ * regions they named, and a paint we did not ask for -- the window moved,
+ * the help overlay closed -- comes with the whole window. */
 static void app_paint(void *st, CRect c) {
+  CRect clip = api->paint_area();
   (void)st;
-
-  if (!C.have_at || c.x != C.at.x || c.y != C.at.y || c.w != C.at.w ||
-      c.h != C.at.h)
-    C.full = 1;
   C.at = c;
   C.have_at = 1;
-  if (!C.expect_paint) C.full = 1;
-  C.expect_paint = 0;
-
-  if (C.full) {
-    C.full = 0;
-    C.dirty_bar = C.dirty_log = C.dirty_in = 0;
-    paint_bar(c);
-    paint_log(c);
-    paint_input(c);
-    return;
-  }
-  if (C.dirty_bar) { C.dirty_bar = 0; paint_bar(c); }
-  if (C.dirty_log) { C.dirty_log = 0; paint_log(c); }
-  if (C.dirty_in)  { C.dirty_in = 0;  paint_input(c); }
+  if (clip.y < c.y + BAR_H) paint_bar(c);
+  if (clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + BAR_H) paint_log(c);
+  if (clip.y + clip.h > c.y + c.h - IN_H) paint_input(c);
 }
 
 /* ---- input ----------------------------------------------------------------- */
@@ -499,7 +484,6 @@ static void submit(void) {
 
 static int app_key(void *st, unsigned char k) {
   (void)st;
-  C.expect_paint = 1;
 
   if (k == CAPP_KEY_ENTER) { submit(); return 1; }
   if (k == CAPP_KEY_BACK) {
@@ -529,18 +513,16 @@ static int app_key(void *st, unsigned char k) {
     mark_in();
     return 1;
   }
-  C.expect_paint = 0;
   return 0;
 }
 
 static int app_tick(void *st, uint32_t now) {
   (void)st;
 
-  if (C.sending) { send_now(); C.expect_paint = 1; return 1; }
-  if (C.check_update) { check_update_now(); C.expect_paint = 1; return 1; }
+  if (C.sending) { send_now(); return 1; }
+  if (C.check_update) { check_update_now(); return 1; }
   if (C.job && (int32_t)(now - C.next_poll) >= 0) {
     poll_now();
-    C.expect_paint = 1;
     return 1;
   }
   return 0;
@@ -562,7 +544,6 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
   C.scroll += wheel * 3;
   if (C.scroll < 0) C.scroll = 0;
   mark_log();
-  C.expect_paint = 1;
   return 1;
 }
 

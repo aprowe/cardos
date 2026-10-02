@@ -14,8 +14,8 @@
  * WiFi -- each of them something a keyboard could have done, and each shown
  * here as "-> what it did" as it happens.
  *
- * Type /new to forget the conversation. The key lives in /claude.key on the
- * card and is sent to Anthropic and nowhere else.
+ * Type /new to forget the conversation. The key lives in /config/claude.key
+ * on the card and is sent to Anthropic and nowhere else.
  */
 
 #include "kernel/app/capp.h"
@@ -122,7 +122,7 @@ static void rebuild(void) {
   const char *t = agent->transcript();
   C.nlines = 0;
   if (C.no_key) {
-    push_wrapped("No key. Put an Anthropic API key in /claude.key on the card and open this again.", WHO_ERR);
+    push_wrapped("No key. Put an Anthropic API key in /config/claude.key on the card and open this again.", WHO_ERR);
     return;
   }
   while (*t) {

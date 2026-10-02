@@ -21,6 +21,8 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/toolbar.h"
+#include "apps/footer.h"
 
 #define MAX_SYMS   8
 #define SYM_LEN    10
@@ -56,7 +58,9 @@ static struct {
   Quote q[MAX_SYMS];
   int   n;
   int   sel;
-  int   busy;
+  int   busy;               /* a refresh is under way */
+  int   fi;                 /* the symbol it is on */
+  int   inflight;           /* its request is out */
   uint32_t fetched_ms;
   char  note[48];
   char  buf[BUF];
@@ -213,28 +217,53 @@ static int read_closes(const char *hay, long *out, int max) {
   return n;
 }
 
-static int fetch_one(Quote *q) {
-  char url[160];
-  int n;
-
+static void quote_url(const Quote *q, char *url, size_t n) {
   /* One request for both: the meta block carries the current price and the
    * previous close, and the indicators carry the week. */
-  api->fmt(url, sizeof url,
+  api->fmt(url, n,
            "https://query1.finance.yahoo.com/v8/finance/chart/%s"
            "?interval=1d&range=7d", q->sym);
-  n = api->http_get(url, S.buf, sizeof S.buf, 15000);
-  if (n <= 0) return n;
+}
 
+/* The reply in S.buf into `q`. 1 if it carried a price. */
+static int take_reply(Quote *q) {
   q->have = field_cents(S.buf, "regularMarketPrice", &q->price) &&
             field_cents(S.buf, "chartPreviousClose", &q->prev);
   q->nhist = read_closes(S.buf, q->hist, HIST_MAX);
   return q->have ? 1 : 0;
 }
 
-static void refresh(void) {
-  int i;
+/* Blocking, for a command: the console and voice wait for the answer anyway,
+ * and a headless instance has no tick to poll from. */
+static int fetch_one(Quote *q) {
+  char url[160];
+  int n;
+  quote_url(q, url, sizeof url);
+  n = api->http_get(url, S.buf, sizeof S.buf, 15000);
+  if (n <= 0) return n;
+  return take_reply(q);
+}
 
-  S.busy = 1;
+/* The screen's refresh is the same requests one at a time off the shell's
+ * loop, started here and collected in tick. It used to be fetch_one in a
+ * loop: up to fifteen seconds a symbol with the machine frozen, and eight
+ * symbols on a slow network was two minutes of a dead keyboard. */
+static void start_next(void) {
+  char url[160];
+  if (S.fi >= S.n) {
+    S.busy = 0;
+    S.fetched_ms = api->ticks_ms();
+    S.note[0] = 0;
+    return;
+  }
+  quote_url(&S.q[S.fi], url, sizeof url);
+  api->fmt(S.note, sizeof S.note, "fetching %s (%d/%d)", S.q[S.fi].sym, S.fi + 1, S.n);
+  /* Refused means someone else's request is out: tick asks again. */
+  S.inflight = api->http_start("GET", url, 0, 0, 0, 15000) == 0;
+}
+
+static void refresh(void) {
+  if (S.busy) return;
 
   /* Up front rather than on the first request. The connect takes seconds, and
    * doing it inside a fetch means the screen says "fetching SPCX" while it is
@@ -244,23 +273,38 @@ static void refresh(void) {
     api->fmt(S.note, sizeof S.note, "%s", "connecting to wifi...");
     if (api->net_connect(20000) != 0) {
       api->fmt(S.note, sizeof S.note, "%s", api->net_status());
-      S.busy = 0;
       return;
     }
   }
-  for (i = 0; i < S.n; i++) {
-    int r;
-    api->fmt(S.note, sizeof S.note, "fetching %s (%d/%d)", S.q[i].sym, i + 1, S.n);
-    r = fetch_one(&S.q[i]);
-    if (r < 0) {
-      api->fmt(S.note, sizeof S.note, "%s: network error %d", S.q[i].sym, r);
-      S.busy = 0;
-      return;
-    }
+  S.busy = 1;
+  S.fi = 0;
+  start_next();
+}
+
+static int app_tick(void *st, uint32_t now) {
+  int n;
+  (void)st; (void)now;
+  toolbar_busy(S.busy);
+  if (!S.busy) return 0;
+  if (!S.inflight) {
+    char url[160];
+    quote_url(&S.q[S.fi], url, sizeof url);
+    S.inflight = api->http_start("GET", url, 0, 0, 0, 15000) == 0;
+    return 0;
   }
-  S.fetched_ms = api->ticks_ms();
-  api->fmt(S.note, sizeof S.note, "r refreshes   arrows change symbol");
-  S.busy = 0;
+  n = api->http_poll(S.buf, sizeof S.buf - 1);
+  if (n == CAPP_HTTP_PENDING) return 0;
+  S.inflight = 0;
+  if (n < 0) {
+    api->fmt(S.note, sizeof S.note, "%s: network error %d", S.q[S.fi].sym, n);
+    S.busy = 0;
+    return 1;
+  }
+  S.buf[n] = 0;
+  take_reply(&S.q[S.fi]);
+  S.fi++;
+  start_next();
+  return 1;
 }
 
 /* ---- painting ------------------------------------------------------------ */
@@ -348,15 +392,16 @@ static void paint_graph(CRect g, const Quote *q) {
   }
 }
 
-static void app_paint(void *st, CRect c) {
+static void paint_body(CRect c) {
   const Quote *q;
   char buf[48], buf2[32];
   long d;
   uint16_t tone;
   int i, rows, y;
-  (void)st;
 
   api->fill(c, CLR_BG);
+  /* What it is doing, or what the keys are when it is doing nothing. */
+  footer_paint(api, c, S.note[0] ? S.note : "r refresh  e edit list  arrows symbol");
   if (S.n == 0) return;
   q = &S.q[S.sel];
   d = q->price - q->prev;
@@ -410,7 +455,7 @@ static void app_paint(void *st, CRect c) {
   }
 
   /* The rest of the watchlist, compact. */
-  rows = (c.y + c.h - 10 - y) / 9;
+  rows = (c.y + c.h - FOOT_H - 1 - y) / 9;
   for (i = 0; i < S.n && i < rows; i++) {
     short ry = (short)(y + i * 9);
     int sel = (i == S.sel);
@@ -437,46 +482,31 @@ static void app_paint(void *st, CRect c) {
       api->text((short)(c.x + 160), ry, buf2, CLR_HOLD, bg);
     }
   }
-
-  api->text((short)(c.x + 3), (short)(c.y + c.h - 9), S.note, CLR_DIM, CLR_BG);
 }
 
-static int app_key(void *st, unsigned char k) {
+static void app_paint(void *st, CRect full) {
   (void)st;
-  if (S.busy) return 0;
-  switch (k) {
-  case CAPP_KEY_UP:
-  case CAPP_KEY_LEFT:  if (S.sel > 0) S.sel--; return 1;
-  case CAPP_KEY_DOWN:
-  case CAPP_KEY_RIGHT: if (S.sel + 1 < S.n) S.sel++; return 1;
-  case 'r': case 'R':
-  case CAPP_KEY_ENTER: refresh(); return 1;
-  case 'e': case 'E':
-    load_list();
-    api->fmt(S.note, sizeof S.note, "%d symbols from stocks.txt", S.n);
-    return 1;
-  default: return 0;
-  }
-}
-
-static int app_click(void *st, short x, short y, int button) {
-  (void)st; (void)x; (void)button;
-  if (S.busy) return 0;
-  if (y < 24) { refresh(); return 1; }
-  return 0;
+  /* The toolbar's two fast paths: a dropdown whose highlight moved, and the
+   * busy dots, each without redrawing the graph underneath. */
+  if (toolbar_only_menu()) { toolbar_paint_menu(full); return; }
+  if (toolbar_only_bar()) { toolbar_paint_bar(full); return; }
+  toolbar_paint_bar(full);
+  paint_body(toolbar_rest(full));
+  toolbar_paint_menu(full);
 }
 
 /* ---- actions and commands --------------------------------------------------
  *
- * Refresh is the GUI's `r`. The commands fetch as the screen does, one
- * request per symbol through fetch_one, and answer in words: a price read
- * aloud or shown to an AI wants "AAPL 187.23, up 1.2% today", not a graph. */
-enum { ACT_REFRESH = 1, ACT_QUOTE, ACT_PORTFOLIO };
+ * Refresh is the GUI's `r`. The commands fetch one request per symbol through
+ * fetch_one, and answer in words: a price read aloud or shown to an AI wants
+ * "AAPL 187.23, up 1.2% today", not a graph. */
+enum { ACT_REFRESH = 1, ACT_QUOTE, ACT_PORTFOLIO, ACT_EDIT };
 
 static const CappParam P_SYM[] = { { "symbol", CAPP_ARG_TEXT, "a ticker, like AAPL" } };
 
 static const CappAction ACTIONS[] = {
   { "refresh",   "Refresh",   "Stocks", 0x12, ACT_REFRESH },   /* ctrl-r */
+  { "edit",      "Edit list", "Stocks", 0,    ACT_EDIT },
   { "quote",     "Quote",     0,        0,    ACT_QUOTE,
     "the price of any ticker and its move today", P_SYM, 1, CAPP_CMD_YES | CAPP_CMD_NET },
   { "portfolio", "Portfolio", 0,        0,    ACT_PORTFOLIO,
@@ -493,16 +523,67 @@ const CappInfo capp_info = {
     0x40, 0x1A, 0x40, 0x30, 0x40, 0x60, 0x41, 0x80,
     0x43, 0x00, 0x4C, 0x00, 0x58, 0x00, 0x60, 0x00,
     0x40, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x00, 0x00 },
-  "arrows\tchange symbol\nr\tfetch quotes\ne\tre-read stocks.txt\n",
+  "arrows\tchange symbol\nr\tre-read stocks.txt and fetch quotes\n"
+  "enter\tfetch quotes too\ne\tedit stocks.txt in Edit\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
 };
 
-
-static int app_action(void *st, int a) {
-  (void)st;
-  if (a == ACT_REFRESH && !S.busy) { refresh(); return 1; }
+/* r re-reads the list as well as the prices: "refresh" is everything the
+ * screen shows, and an edited stocks.txt is part of that. It was `e`, which
+ * everywhere else means edit -- so now it does. */
+static int do_action(int a) {
+  switch (a) {
+  case ACT_REFRESH:
+    if (S.busy) return 0;
+    load_list();
+    if (S.sel >= S.n) S.sel = 0;
+    refresh();
+    return 1;
+  case ACT_EDIT:
+    if (api->run("edit", CAPP_CONFIG "/stocks.txt") != 0)
+      api->fmt(S.note, sizeof S.note, "%s", "could not open Edit");
+    return 1;
+  }
   return 0;
+}
+
+static int app_action(void *st, int a) { (void)st; return do_action(a); }
+
+static int app_key(void *st, unsigned char k) {
+  int a = toolbar_key(k);
+  (void)st;
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return do_action(a);
+  switch (k) {
+  /* Moving is fine during a refresh: the rows fill in as they arrive. */
+  case CAPP_KEY_UP:
+  case CAPP_KEY_LEFT:  if (S.sel > 0) S.sel--; return 1;
+  case CAPP_KEY_DOWN:
+  case CAPP_KEY_RIGHT: if (S.sel + 1 < S.n) S.sel++; return 1;
+  case 'r': case 'R':
+  case CAPP_KEY_ENTER: return do_action(ACT_REFRESH);
+  case 'e': case 'E':  return do_action(ACT_EDIT);
+  default: return 0;
+  }
+}
+
+static int app_click(void *st, short x, short y, int button) {
+  int a = toolbar_click(x, y);
+  (void)st; (void)button;
+  if (a == TB_CONSUMED) return 1;
+  if (a != TB_NONE) return do_action(a);
+  y = (short)(y - toolbar_h());
+  if (y < 24) return do_action(ACT_REFRESH);
+  return 0;
+}
+
+static int app_mouse(void *st, int16_t x, int16_t y, int buttons, int wheel) {
+  int changed;
+  (void)st; (void)buttons; (void)wheel;
+  changed = toolbar_saw_mouse();
+  if (toolbar_hover(x, y)) changed = 1;
+  return changed;
 }
 
 /* "187.23, up 1.20% today", or why not. */
@@ -570,11 +651,13 @@ int capp_main(const CardApi *a, int argc, char **argv) {
 
   api->mem_set(&S, 0, sizeof S);
   load_list();
-  api->fmt(S.note, sizeof S.note, "r fetches quotes");
+  toolbar_init(api, ACTIONS, NACT, 0, 0);
 
   UI.paint = app_paint;
   UI.key = app_key;
   UI.click = app_click;
+  UI.mouse = app_mouse;
+  UI.tick = app_tick;
   UI.actions = ACTIONS;
   UI.nactions = NACT;
   UI.action = app_action;

@@ -170,7 +170,7 @@ static struct {
   CRect    c;               /* where the shell put us, this frame */
   int      have_c;
   int      full;            /* redraw everything */
-  int      expect_paint;    /* this paint is one we asked for */
+  int      marked;          /* this tick named something to repaint */
 
   Ball     b;
   Flipper  fl, fr;
@@ -335,6 +335,36 @@ static CRect flipper_box(const Flipper *f, int pivot_x, int left) {
   return rect(x0 - 5, PIV_Y - FLIP_LEN - 5, x1 - x0 + 11, FLIP_LEN * 2 + 11);
 }
 
+/* Tell the shell a piece of the table changed, in table coordinates. The
+ * shell clips the next paint to what was marked, so paint only has to draw
+ * the same pieces -- and a tick that marks nothing asks for no paint at all,
+ * which is how the game stops costing anything once it is over. */
+static void mark(CRect r) {
+  r = clip_to(r, rect(0, 0, SCREEN_W, SCREEN_H));
+  if (r.w <= 0 || r.h <= 0) return;
+  G.marked = 1;
+  if (G.have_c) api->damage(rect(G.c.x + r.x, G.c.y + r.y, r.w, r.h));
+}
+
+static void mark_all(void) {
+  G.full = 1;
+  mark(rect(0, 0, SCREEN_W, SCREEN_H));
+}
+
+static CRect ball_sweep(void) {
+  int bx = TO_PX(G.b.x), by = TO_PX(G.b.y);
+  int x0 = (bx < G.prev_bx ? bx : G.prev_bx) - BALL_R - 1;
+  int y0 = (by < G.prev_by ? by : G.prev_by) - BALL_R - 1;
+  int x1 = (bx > G.prev_bx ? bx : G.prev_bx) + BALL_R + 1;
+  int y1 = (by > G.prev_by ? by : G.prev_by) + BALL_R + 1;
+  return rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+}
+
+static CRect bumper_box(int i) {
+  const Disc *d = &BUMPERS[i];
+  return rect(d->x - d->r - 1, d->y - d->r - 1, 2 * d->r + 3, 2 * d->r + 3);
+}
+
 /* The table, minus the ball and the flippers, clipped to one region. Called
  * for the whole screen on a full repaint and for a few square pixels the rest
  * of the time -- which is what makes it cheap enough to run at 60 Hz. */
@@ -419,7 +449,7 @@ static void new_game(void) {
   for (i = 0; i < N_TARGETS; i++) G.target_up[i] = 1;
   for (i = 0; i < N_BUMPERS; i++) { G.bumper_lit[i] = 0; G.bumper_was_lit[i] = 0; }
   ball_place_on_plunger();
-  G.full = 1;
+  mark_all();
 }
 
 /* Reflect the ball off a line segment, if it is touching one. Everything is
@@ -574,7 +604,7 @@ static void collide(uint32_t now) {
     G.target_up[i] = 0;
     G.score += 300;
     G.b.vy = -G.b.vy;
-    G.full = 1;
+    mark_all();
     {
       int all = 0, j;
       for (j = 0; j < N_TARGETS; j++) all += G.target_up[j];
@@ -634,7 +664,7 @@ static void step(uint32_t now) {
    * rather than costing a life. */
   if (G.b.in_field && !G.waiting && TO_PX(G.b.x) > LANE_L && TO_PX(G.b.y) > 100) {
     ball_place_on_plunger();
-    G.full = 1;
+    mark_all();
     return;
   }
 
@@ -643,7 +673,7 @@ static void step(uint32_t now) {
     G.balls--;
     if (G.balls <= 0) { G.over = 1; G.balls = 0; }
     else ball_place_on_plunger();
-    G.full = 1;
+    mark_all();
   }
 }
 
@@ -681,8 +711,23 @@ static int app_tick(void *st, uint32_t now) {
     if (G.bumper_lit[i] && now >= G.bumper_lit[i]) G.bumper_lit[i] = 0;
 
   if (!moved) return 0;
-  G.expect_paint = 1;
-  return 1;
+
+  /* What moved, as damage: the pieces paint below will redraw. It used to
+   * answer 1 for every step whatever happened, so a finished game -- no
+   * ball, flippers at rest -- repainted a hundred times a second until the
+   * app was closed. */
+  if (G.b.live && (TO_PX(G.b.x) != G.prev_bx || TO_PX(G.b.y) != G.prev_by))
+    mark(ball_sweep());
+  if (G.fl.angle != G.fl.prev_angle) mark(flipper_box(&G.fl, PIV_LX, 1));
+  if (G.fr.angle != G.fr.prev_angle) mark(flipper_box(&G.fr, PIV_RX, 0));
+  for (i = 0; i < N_BUMPERS; i++)
+    if ((G.bumper_lit[i] != 0) != G.bumper_was_lit[i]) mark(bumper_box(i));
+  if (G.score != G.shown_score || G.balls != G.shown_balls)
+    mark(rect(0, 0, SCREEN_W, BAR_H));
+
+  i = G.marked;
+  G.marked = 0;
+  return i;
 }
 
 static void app_paint(void *st, CRect c) {
@@ -693,12 +738,18 @@ static void app_paint(void *st, CRect c) {
   if (c.x != G.c.x || c.y != G.c.y || !G.have_c) G.full = 1;
   G.c = c;
   G.have_c = 1;
+  G.marked = 0;                 /* a key's marks are answered by this paint */
 
-  /* A paint we did not ask for is the shell telling us something covered us
-   * -- the help overlay, or the launcher clearing the screen. Only we know
-   * that the answer is to draw the whole table again. */
-  if (!G.expect_paint) G.full = 1;
-  G.expect_paint = 0;
+  /* A paint whose clip is the whole table is the shell telling us something
+   * covered us -- the help overlay, or the launcher clearing the screen --
+   * and the answer is to draw it all again. Anything smaller is our own
+   * marks coming back. (This used to be guessed with an expect_paint flag.) */
+  {
+    CRect clip = api->paint_area();
+    if (clip.x <= c.x && clip.y <= c.y && clip.x + clip.w >= c.x + SCREEN_W &&
+        clip.y + clip.h >= c.y + SCREEN_H)
+      G.full = 1;
+  }
 
   if (G.full) {
     G.full = 0;
@@ -720,11 +771,7 @@ static void app_paint(void *st, CRect c) {
    * do. */
   {
     int bx = TO_PX(G.b.x), by = TO_PX(G.b.y);
-    int x0 = (bx < G.prev_bx ? bx : G.prev_bx) - BALL_R - 1;
-    int y0 = (by < G.prev_by ? by : G.prev_by) - BALL_R - 1;
-    int x1 = (bx > G.prev_bx ? bx : G.prev_bx) + BALL_R + 1;
-    int y1 = (by > G.prev_by ? by : G.prev_by) + BALL_R + 1;
-    CRect r = rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    CRect r = ball_sweep();
     draw_table(r);
     draw_flipper(&G.fl, PIV_LX, 1, r);
     draw_flipper(&G.fr, PIV_RX, 0, r);
@@ -751,8 +798,7 @@ static void app_paint(void *st, CRect c) {
     if (lit == G.bumper_was_lit[i]) continue;
     G.bumper_was_lit[i] = lit;
     {
-      const Disc *d = &BUMPERS[i];
-      CRect r = rect(d->x - d->r - 1, d->y - d->r - 1, 2 * d->r + 3, 2 * d->r + 3);
+      CRect r = bumper_box(i);
       draw_table(r);
       draw_ball(r);
     }
@@ -763,10 +809,9 @@ static int app_key(void *st, uint8_t k) {
   uint32_t now = api->ticks_ms();
   (void)st;
 
-  /* A flick returns 0: the flipper only moves in the next tick, which asks
-   * for its own paint. Returning 1 here made the shell paint at once, and a
-   * paint we did not ask for means "redraw everything" -- the whole table,
-   * on every keypress, for nothing. */
+  /* A flick returns 0: the flipper only moves in the next tick, which marks
+   * its own damage. Returning 1 here with nothing marked made the shell
+   * paint the whole table, on every keypress, for nothing. */
   switch (k) {
   case CAPP_KEY_LEFT: case 'a': case 'A':
     G.fl.hold_until = now + FLIP_MS;
@@ -783,7 +828,7 @@ static int app_key(void *st, uint8_t k) {
       G.b.vx = -(int)(rnd() % PX(1));
       G.b.vy = -PX(5) - (int)(rnd() % PX(1));
       G.plunge = 0;
-      G.full = 1;
+      mark_all();
       return 1;
     }
     return 0;
@@ -806,7 +851,7 @@ static int app_click(void *st, int16_t x, int16_t y, int button) {
     G.waiting = 0;
     G.b.vx = -(int)(rnd() % PX(1));
     G.b.vy = -PX(5) - (int)(rnd() % PX(1));
-    G.full = 1;
+    mark_all();
     return 1;
   }
   if (button == CAPP_BTN_RIGHT || x > SCREEN_W / 2) G.fr.hold_until = now + FLIP_MS;
@@ -825,7 +870,8 @@ const CappInfo capp_info = {
     0x8F, 0x81, 0x8F, 0x81, 0x87, 0x01, 0x80, 0x01,
     0x80, 0x01, 0x80, 0x01, 0x40, 0x02, 0x60, 0x06,
     0x38, 0x1C, 0x0C, 0x30, 0x07, 0xE0, 0x00, 0x00 },
-  "click / left / a\tleft flipper\nright / l\tright flipper\nspace\tlaunch the ball\n"
+  "click / left / a\tleft flipper\nright click / right / l\tright flipper\n"
+  "space, click\tlaunch the ball\n"
   "n\tnew game\n",
 };
 

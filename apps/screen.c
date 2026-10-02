@@ -31,6 +31,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/footer.h"
 
 #define W        240
 #define H        135
@@ -40,7 +41,6 @@
 #define CLR_BG   CAPP_RGB(8, 10, 14)
 #define CLR_FG   CAPP_RGB(226, 232, 242)
 #define CLR_DIM  CAPP_RGB(130, 140, 158)
-#define CLR_BAR  CAPP_RGB(32, 48, 78)
 
 static const CardApi *api;
 
@@ -178,19 +178,20 @@ static int on_data(void *ctx, const uint8_t *d, int n) {
 /* Only ever drawn when the stream is *not* running: while it is, the rows are
  * the picture and there is nothing else to say. */
 static void app_paint(void *st, CRect c) {
+  char line[128];
   (void)st;
   api->fill(c, CLR_BG);
   api->text((short)(c.x + 8), (short)(c.y + 30), "Screen", CLR_FG, CLR_BG);
   api->text((short)(c.x + 8), (short)(c.y + 46), S.status, CLR_DIM, CLR_BG);
-  api->text((short)(c.x + 8), (short)(c.y + 62), "enter\tconnect", CLR_DIM, CLR_BG);
-  api->text((short)(c.x + 8), (short)(c.y + 74), "f\tfollow the mouse / whole screen",
-            CLR_DIM, CLR_BG);
-  api->fill(rect(c.x, c.y + c.h - 9, c.w, 9), CLR_BAR);
-  {
-    char bar[64];
-    api->fmt(bar, sizeof bar, "%s  %s", S.mode, S.base);
-    api->text((short)(c.x + 2), (short)(c.y + c.h - 8), bar, CLR_FG, CLR_BAR);
-  }
+  /* What enter would connect to, in words. The keys used to be here too,
+   * written with a tab between key and meaning -- and the text call draws a
+   * tab as a blank cell, not a column. They are the footer's job now. */
+  api->fmt(line, sizeof line, "%s",
+           S.mode[0] == 'f' && S.mode[1] == 'o' ? "follow: 1:1 around the mouse"
+                                                : "fit: the whole screen, small");
+  api->text((short)(c.x + 8), (short)(c.y + 62), line, CLR_DIM, CLR_BG);
+  api->text((short)(c.x + 8), (short)(c.y + 74), S.base, CLR_DIM, CLR_BG);
+  footer_paint(api, c, "enter connect  f follow/fit");
 }
 
 /* ---- running ---------------------------------------------------------------- */
@@ -263,7 +264,7 @@ const CappInfo capp_info = {
     0x50, 0x12, 0x57, 0xD2, 0x54, 0x52, 0x54, 0x52,
     0x57, 0xD2, 0x50, 0x12, 0x5F, 0xF2, 0x40, 0x02,
     0x7F, 0xFE, 0x07, 0xE0, 0x1F, 0xF8, 0x00, 0x00 },
-  "enter\tconnect\nf\tfollow the mouse, or the whole screen\n"
+  "enter\tconnect\nspace\tconnect\nf\tfollow the mouse, or the whole screen\n"
   "any key\tstop the stream\n",
 };
 
