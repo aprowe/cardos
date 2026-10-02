@@ -572,6 +572,24 @@ static int new_note(const char *text, char *file_out, int n) {
   return write_file(file_out, N.text);
 }
 
+/* Words said or sent as a note: a heading with when, then the words. The
+ * words alone were a one-line note, and a note's first line is its title --
+ * a sentence arrived as a title over an empty page. Same shape as the
+ * server's notes from voice memos. */
+static int words_note(const char *kind, const char *words, char *file_out, int n) {
+  static const char *const MON[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+  static char text[1200];        /* fifteen seconds of speech, or a command's words */
+  CappTime t;
+  api->now(&t);
+  if (t.synced && t.month >= 1 && t.month <= 12)
+    api->fmt(text, sizeof text, "# %s, %d %s %02d:%02d\n\n%s", kind, t.day, MON[t.month - 1],
+             t.hour, t.min, words);
+  else
+    api->fmt(text, sizeof text, "# %s\n\n%s", kind, words);
+  return new_note(text, file_out, n);
+}
+
 /* A voice memo, transcribed on the server into a note there; the sync
  * brings it here. The reply names it: id, hash, title. */
 static int memo_to_note(const char *path, char *out, int n) {
@@ -878,7 +896,7 @@ static int app_button(void *st, int event, const char *text) {
   if (event == CAPP_G0_ASK)
     return N.syncing || N.picking || N.ask_delete ? CAPP_G0_NONE : CAPP_G0_WORDS;
   if (event == CAPP_G0_HEARD && text && text[0]) {
-    if (new_note(text, file, sizeof file) == 0) {
+    if (words_note("Voice note", text, file, sizeof file) == 0) {
       load_rows();
       request_sync(1);
     }
@@ -941,7 +959,7 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
     if (memo_to_note(argv[0], out, (int)n) != 0) return -1;
     return 0;
   case ACT_ADD:
-    if (new_note(argv[0], file, sizeof file) != 0) { api->fmt(out, n, "the card refused it"); return -1; }
+    if (words_note("Note", argv[0], file, sizeof file) != 0) { api->fmt(out, n, "the card refused it"); return -1; }
     api->fmt(out, n, "new note %s (synced next time Notes opens)", file);
     return 0;
   case ACT_LIST:
