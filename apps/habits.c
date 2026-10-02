@@ -7,10 +7,14 @@
  *
  * i opens one habit: its streak large, its best, its total, how many of the
  * last 30 days were done, and eighteen weeks as a grid -- a column a week,
- * Sunday at the top -- with a cursor that can mark a day that was missed.
+ * Sunday at the top -- with a cursor that can mark a day that was missed;
+ * left and right move it a day, up and down go to the habit above or below.
  * c is the same grid for every habit at once, shaded by how many were done.
- * a adds, r renames, d deletes (after asking), < and > move a habit up and
- * down the list.
+ * n adds (a too, as it always did), e renames, d deletes (after asking: y
+ * yes, n, Esc or Backspace no), < and > (shift with the left and right
+ * arrow keys) move a habit up and down the list. p prints the day on
+ * screen as boxes to tick. The keys are the ones every app uses (CLAUDE.md,
+ * "Every app speaks the same keys").
  *
  * THE CARD, read once. The files are what they were, so nothing is lost
  * moving to this version:
@@ -45,6 +49,7 @@
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
+#include "apps/footer.h"
 
 static const CardApi *api;
 
@@ -60,7 +65,6 @@ static const CardApi *api;
 
 #define ROW_H        18
 #define HEAD_H       20
-#define FOOT_H       11
 
 #define CLR_BG       CAPP_RGB(15, 17, 23)
 #define CLR_TEXT     CAPP_RGB(232, 236, 244)
@@ -72,7 +76,6 @@ static const CardApi *api;
 #define CLR_CELL     CAPP_RGB(32, 36, 46)
 #define CLR_STREAK   CAPP_RGB(255, 176, 76)
 #define CLR_BARTRACK CAPP_RGB(34, 38, 48)
-#define CLR_FOOT     CAPP_RGB(30, 34, 44)
 #define CLR_WARN     CAPP_RGB(236, 104, 84)
 #define CLR_FIELD    CAPP_RGB(28, 32, 42)
 #define CLR_CURSOR   CAPP_RGB(240, 244, 250)
@@ -107,6 +110,7 @@ static struct {
   char    draft[NAME_MAX + 1];
   int     draft_len;
   const char *err;              /* why the draft was refused, or NULL */
+  const char *say;              /* a word in the footer until the next key */
 
   uint32_t checked_at;          /* tick: last look at the date */
   int     f_ui, f_uib, f_num;
@@ -583,10 +587,10 @@ static void paint_head(void) {
   if (H.n) api->fill(rect(h.x, h.y + h.h - 2, h.w * done / H.n, 2), CLR_DONE);
 }
 
-static void paint_foot(const char *hint, uint16_t fg) {
-  CRect f = rect(H.content.x, H.content.y + H.content.h - FOOT_H, H.content.w, FOOT_H);
-  api->fill(f, CLR_FOOT);
-  api->text((int16_t)(f.x + 4), (int16_t)(f.y + 2), hint, fg, CLR_FOOT);
+/* The shared hint bar (apps/footer.h), or the word an action left there --
+ * "printing..." -- until the next key. */
+static void paint_foot(const char *hint) {
+  footer_paint(api, H.content, H.say ? H.say : hint);
 }
 
 static void paint_today(void) {
@@ -599,18 +603,19 @@ static void paint_today(void) {
     api->text_font(H.f_uib, (int16_t)(b.x + 8), (int16_t)(b.y + 8), "No habits yet",
                    CLR_TEXT, CLR_BG);
     api->text_font(H.f_ui, (int16_t)(b.x + 8), (int16_t)(b.y + 26),
-                   "a adds one: read, stretch, water...", CLR_DIM, CLR_BG);
+                   "n adds one: read, stretch, water...", CLR_DIM, CLR_BG);
   } else {
     for (i = H.top; i < H.n && i < H.top + H.rows; i++) paint_row(i);
     y = b.y + (i - H.top) * ROW_H;
     if (y < b.y + b.h) api->fill(rect(b.x, y, b.w, b.y + b.h - y), CLR_BG);
   }
   if (H.ask == ASK_DELETE) {
+    /* "delete " + a 24-character name + "? y/n" is 36: inside the bar. */
     char q[48];
-    api->fmt(q, sizeof q, "delete %s and its log?  y/n", H.habit[H.sel].name);
-    paint_foot(q, CLR_WARN);
+    api->fmt(q, sizeof q, "delete %s? y/n", H.habit[H.sel].name);
+    footer_paint(api, H.content, q);
   } else {
-    paint_foot("spc done </> day i info c all a add", CLR_DIM);
+    paint_foot("space done  left/right day  i info");
   }
 }
 
@@ -714,7 +719,7 @@ static void paint_detail(void) {
     else api->fmt(s, sizeof s, "%s  %d/%d", label, done_on(H.cursor), H.n);
     api->text_font(H.f_ui, (int16_t)g.x, (int16_t)(g.y + g.h + 4), s, CLR_DIM, CLR_BG);
   }
-  paint_foot(one ? "arrows move  spc mark  n/p habit  esc" : "arrows move  esc back", CLR_DIM);
+  paint_foot(one ? "space mark  up/down habit  esc back" : "arrows move  esc back");
 }
 
 /* ---- the name prompt ------------------------------------------------------------------------ */
@@ -733,7 +738,7 @@ static void paint_prompt(void) {
                  CLR_TEXT, CLR_FIELD);
   y += 28;
   if (H.err) api->text_font(H.f_ui, (int16_t)(c.x + 8), (int16_t)y, H.err, CLR_WARN, CLR_BG);
-  paint_foot("enter saves  esc cancels", CLR_DIM);
+  paint_foot("enter save  esc cancel");
 }
 
 static void app_paint(void *st, CRect full) {
@@ -751,7 +756,7 @@ static void app_paint(void *st, CRect full) {
 /* ---- actions ----------------------------------------------------------------------------------- */
 
 enum { ACT_ADD = 1, ACT_DONE, ACT_LIST, ACT_RENAME, ACT_DELETE, ACT_INFO, ACT_ALL,
-       ACT_TODAY, ACT_UP, ACT_DOWN, ACT_TOMORROW };
+       ACT_TODAY, ACT_UP, ACT_DOWN, ACT_TOMORROW, ACT_PRINT };
 
 static const CappParam P_HABIT[] = { { "habit", CAPP_ARG_TEXT, "the habit, or enough of its name" } };
 static const CappParam P_NEW[]   = { { "name",  CAPP_ARG_TEXT, "what the habit is called" } };
@@ -769,6 +774,7 @@ static const CappAction ACTIONS[] = {
   { "down",   "Move down",    "Habit", 0, ACT_DOWN },
   { "info",   "Details",      "View",  0, ACT_INFO },
   { "all",    "All habits",   "View",  0, ACT_ALL },
+  { "print",  "Print",        "View",  CAPP_KEY_PRINT, ACT_PRINT },   /* fn-p */
   { "today",  "Today",        "View",  0, ACT_TODAY,
     "every habit, a box ticked if it is done today, and its streak", 0, 0, CAPP_CMD_YES },
   { "tomorrow", "Tomorrow",   0,       0, ACT_TOMORROW,
@@ -795,8 +801,33 @@ static void open_detail(int which) {
   H.view = VIEW_DETAIL;
 }
 
+/* The day on screen as boxes to tick, the same markup the `today` command
+ * answers in, so a page from here and a page from the Today app look alike.
+ * The kernel copies the document, so this need not outlive the call; it is
+ * static only because twenty habits' worth is more than the shell's 8 KB
+ * stack should be asked for. */
+static char s_page[MAX_HABITS * (NAME_MAX + 8) + 48];
+
+static void print_day(void) {
+  char label[24];
+  size_t o;
+  int i, rc;
+  if (!H.n) { H.say = "no habits to print"; return; }
+  day_label(H.day, label, sizeof label);
+  o = (size_t)api->fmt(s_page, sizeof s_page, "# Habits: %s\n", label);
+  for (i = 0; i < H.n && o + NAME_MAX + 8 < sizeof s_page; i++)
+    o += (size_t)api->fmt(s_page + o, sizeof s_page - o, "[%c] %s\n",
+                          is_done(i, H.day) ? 'x' : ' ', H.habit[i].name);
+  rc = api->print(s_page);
+  if (rc == 0)       H.say = "printing...";
+  else if (rc == -1) H.say = "still printing the last one";
+  else if (rc == -2) H.say = "no printer: print scan in the console";
+  else               H.say = "could not print: no memory";
+}
+
 static int do_action(int a) {
   switch (a) {
+  case ACT_PRINT:  print_day(); return 1;
   case ACT_ADD:    open_prompt(PROMPT_ADD); return 1;
   case ACT_RENAME: if (H.n) open_prompt(PROMPT_RENAME); return 1;
   case ACT_DELETE: if (H.n) { H.view = VIEW_TODAY; H.ask = ASK_DELETE; } return 1;
@@ -891,8 +922,11 @@ static void damage_head(void) {
 
 static int key_today(uint8_t k) {
   if (H.ask == ASK_DELETE) {
+    /* y and only y deletes: Enter used to as well, and Enter is the key a
+     * thumb is already on. n, Escape and Backspace say no; anything else
+     * leaves the question up. */
     if (api->key_repeat()) return 1;
-    if (k == 'y' || k == 'Y' || k == CAPP_KEY_ENTER) delete_habit(H.sel);
+    if (k == 'y' || k == 'Y') delete_habit(H.sel);
     else if (!(k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK)) return 1;
     H.ask = ASK_NONE;
     return 1;
@@ -920,8 +954,10 @@ static int key_today(uint8_t k) {
     if (toggle(H.sel, H.day) == 0) { damage_row(H.sel); damage_head(); }
     return 1;
   case 't': case 'T': H.day = H.today; return 1;
+  case 'n': case 'N':
   case 'a': case 'A': return do_action(ACT_ADD);
-  case 'r': case 'R': return do_action(ACT_RENAME);
+  case 'e': case 'E': return do_action(ACT_RENAME);
+  case 'p': case 'P': return do_action(ACT_PRINT);
   case 'd': case 'D': case 0x7F: return do_action(ACT_DELETE);
   case 'i': case 'I': return do_action(ACT_INFO);
   case 'c': case 'C': return do_action(ACT_ALL);
@@ -949,21 +985,27 @@ static void move_cursor(int32_t by) {
 static int key_detail(uint8_t k) {
   if (api->key_repeat() && k != CAPP_KEY_UP && k != CAPP_KEY_DOWN &&
       k != CAPP_KEY_LEFT && k != CAPP_KEY_RIGHT) return 1;
+  /* Left and right step a day, as they do on the day screen. Up and down go
+   * to the habit above or below -- the list's own direction -- where n and p
+   * used to, before n meant new and p print in every app. The grid of every
+   * habit has no habit to step to, so there they move a week. */
   switch (k) {
-  case CAPP_KEY_UP:    move_cursor(-1); break;
-  case CAPP_KEY_DOWN:  move_cursor(1); break;
-  case CAPP_KEY_LEFT:  move_cursor(-7); break;
-  case CAPP_KEY_RIGHT: move_cursor(7); break;
+  case CAPP_KEY_LEFT:  move_cursor(-1); break;
+  case CAPP_KEY_RIGHT: move_cursor(1); break;
+  case CAPP_KEY_UP:
+    if (H.detail < 0) { move_cursor(-7); break; }
+    if (H.detail > 0) { H.detail--; H.sel = H.detail; }
+    return 1;
+  case CAPP_KEY_DOWN:
+    if (H.detail < 0) { move_cursor(7); break; }
+    if (H.detail + 1 < H.n) { H.detail++; H.sel = H.detail; }
+    return 1;
   case ' ':
   case CAPP_KEY_ENTER:
     if (H.detail >= 0) toggle(H.detail, H.cursor);
     return 1;
-  case 'n': case 'N':
-    if (H.detail >= 0 && H.detail + 1 < H.n) { H.detail++; H.sel = H.detail; }
-    return 1;
   case 'p': case 'P':
-    if (H.detail > 0) { H.detail--; H.sel = H.detail; }
-    return 1;
+    return do_action(ACT_PRINT);
   case CAPP_KEY_ESC:
   case CAPP_KEY_BACK:
     H.view = VIEW_TODAY;
@@ -1012,6 +1054,12 @@ static int key_prompt(uint8_t k) {
 static int app_key(void *st, uint8_t k) {
   int a = toolbar_key(k);
   (void)st;
+  /* A word an action left in the footer lasts until the next key. Marked,
+   * because the key may repaint only a row and leave it there. */
+  if (H.say) {
+    H.say = NULL;
+    api->damage(rect(H.content.x, H.content.y + H.content.h - FOOT_H, H.content.w, FOOT_H));
+  }
   if (a == TB_CONSUMED) return 1;
   if (a != TB_NONE) return do_action(a);
   if (H.view == VIEW_PROMPT) return key_prompt(k);
@@ -1093,9 +1141,13 @@ const CappInfo capp_info = {
     0x3B, 0xB8, 0x00, 0x00, 0x3B, 0xB8, 0x3B, 0xB8,
     0x3B, 0xB8, 0x00, 0x00, 0x3B, 0xB8, 0x3B, 0xB8,
     0x3B, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-  "space\tdone / not done\nleft/right\tthe day before / after\nt\tback to today\n"
-  "i\ta habit's details and grid\nc\tevery habit's grid\na\tadd\nr\trename\n"
-  "d\tdelete, asks first\n< >\tmove up / down\nn/p\t(details) next / previous habit\n",
+  "space enter\tdone / not done\nup/down\tchoose a habit\n"
+  "left/right\tthe day before / after\nt\tback to today\n"
+  "i\ta habit's details and grid\nc\tevery habit's grid\nn (or a)\tnew habit\ne\trename\n"
+  "d del\tdelete: y yes, n esc bksp no\n< >\tmove the habit up / down (shift + left/right)\n"
+  "p\tprint the day as boxes to tick\n"
+  "details\tleft/right a day, up/down the habit above / below, space marks\n"
+  "esc\tback from details or a prompt\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
 };
