@@ -254,7 +254,77 @@ def post_logout(h, path, args):
     _json(h, {"ok": True}, headers=[dash._set_cookie("", 0)])
 
 
+# ---- Claude's login (server/claudeauth.py) ------------------------------------------
+
+@_api
+def get_claude(h, args):
+    """whether Claude answers, and with which login"""
+    from . import claudeauth
+    fresh = (args.get("fresh") or ["0"])[0] == "1"
+    v = claudeauth.status(h.chat, fresh=fresh)
+    v["signing_in"] = bool(claudeauth.SignIn.current())
+    _json(h, v)
+
+
+@_api
+def post_claude_start(h, args):
+    """start `claude setup-token`; the link to sign in at"""
+    from . import claudeauth
+    c = h.chat
+    if not c or not c.claude:
+        _json(h, {"error": "this server runs without Claude"}, 400)
+        return
+    try:
+        s = claudeauth.SignIn.begin(c.claude, c._child_env())
+    except (RuntimeError, OSError, ImportError) as e:
+        _json(h, {"error": str(e)}, 502)
+        return
+    _json(h, {"ok": True, "url": s.url})
+
+
+@_api
+def post_claude_code(h, args):
+    """the code claude.com showed: typed into the waiting sign-in"""
+    from . import claudeauth
+    s = claudeauth.SignIn.current()
+    if not s:
+        _json(h, {"error": "No sign-in is waiting; start again."}, 400)
+        return
+    try:
+        s.finish(_body_json(h).get("code") or "")
+    except (ValueError, RuntimeError, OSError) as e:
+        _json(h, {"error": str(e)}, 400)
+        return
+    sys.stderr.write("dash: claude signed in\n")
+    _json(h, {"ok": True, "status": claudeauth.status(h.chat, fresh=True)})
+
+
+@_api
+def post_claude_token(h, args):
+    """a token made elsewhere (claude setup-token), kept"""
+    from . import claudeauth
+    try:
+        claudeauth.save_token(_body_json(h).get("token") or "", "pasted on the dashboard")
+    except ValueError as e:
+        _json(h, {"error": str(e)}, 400)
+        return
+    _json(h, {"ok": True, "status": claudeauth.status(h.chat, fresh=True)})
+
+
+@_api
+def post_claude_forget(h, args):
+    """forget the dashboard's token; the environment's is used again"""
+    from . import claudeauth
+    claudeauth.forget()
+    _json(h, {"ok": True})
+
+
 ROUTES = [
+    ("GET", "/dash/api/claude", get_claude, "open"),
+    ("POST", "/dash/api/claude/start", post_claude_start, "open"),
+    ("POST", "/dash/api/claude/code", post_claude_code, "open"),
+    ("POST", "/dash/api/claude/token", post_claude_token, "open"),
+    ("POST", "/dash/api/claude/forget", post_claude_forget, "open"),
     ("GET", "/dash/api/state", get_state, "open"),
     ("POST", "/dash/api/google/forget", post_google_forget, "open"),
     ("POST", "/dash/api/toggl/token", post_toggl_token, "open"),

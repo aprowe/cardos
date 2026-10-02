@@ -433,7 +433,9 @@ class ChatService:
             if k.startswith("CLAUDE_CODE_") or k in ("CLAUDECODE", "CLAUDE_PID",
                                                      "CLAUDE_PROJECT_DIR"):
                 env.pop(k, None)
-        return env
+        # A token signed in on the dashboard wins over the environment's.
+        from . import claudeauth
+        return claudeauth.apply(env)
 
     def _claude(self, text, on_status=None, on_log=None):
         """One turn of the agent in the conversation's session: its answer.

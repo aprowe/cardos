@@ -258,6 +258,7 @@ section.block{margin-top:0}
 .logo{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;font-weight:800;font-size:18px;flex:none}
 .logo.g{background:var(--panel2);box-shadow:inset 0 0 0 1px var(--line)}
 .logo.t{background:#e57cd8;color:#2c1029}
+.logo.c{background:#d97757;color:#fff}
 .acct-top h3{margin:0;font-size:16px}
 .acct-top .sub{font-size:13px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis}
 .acct-top .pill{margin-left:auto}
@@ -486,6 +487,9 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
         <div class="two">
           <div class="panel acct" id="google"></div>
           <div class="panel acct" id="toggl"></div>
+        </div>
+        <div class="two">
+          <div class="panel acct" id="claude"></div>
         </div>
       </section>
 
@@ -1259,6 +1263,72 @@ async function setTarget(project,kind,hours,since){
   loadTargets();
 }
 
+/* Claude's login on the server (server/claudeauth.py). Sign in runs
+ * `claude setup-token` there; this page shows its link and hands back the
+ * code claude.com gives you. Checked only when this view opens: a check is a
+ * real call to Claude. */
+const CL={v:null,err:'',step:'idle',url:'',paste:false,busy:false};
+async function claudeLoad(fresh){
+  CL.busy=true; renderClaude();
+  try{ CL.v=await api('GET','/dash/api/claude'+(fresh?'?fresh=1':'')); CL.err=''; }
+  catch(e){ CL.err=e.message; }
+  CL.busy=false; renderClaude();
+}
+function renderClaude(){
+  const el=$('#claude'); if(!el) return;
+  const v=CL.v;
+  const pill=CL.busy&&!v?'<span class="pill"><span class="spin"></span>Checking</span>'
+    :!v?'':v.ok?'<span class="pill ok">Working</span>':v.ok===false?'<span class="pill bad">Not working</span>':'<span class="pill">Not checked</span>';
+  let h=`<div class="acct-top"><div class="logo c">✳</div><div style="min-width:0"><h3>Claude</h3><div class="sub">Chat, Build, voice commands, Today’s focus</div></div>${pill}</div>`;
+  if(CL.err) h+=`<div class="note warn"><b>Couldn’t check.</b> ${esc(CL.err)}</div>`;
+  if(v&&v.ok===false&&v.why) h+=`<div class="note bad"><b>Claude refused.</b> ${esc(v.why)}</div>`;
+  if(v) h+=`<dl class="facts"><dt>Login</dt><dd>${v.source==='saved'?'Signed in here'+(v.since?', '+esc(fmtEpoch(v.since)):''):v.source==='env'?'From the server’s settings (/etc/cardos/env)':'None'}</dd>${v.checked?`<dt>Checked</dt><dd>${esc(fmtEpoch(v.checked))}</dd>`:''}</dl>`;
+  if(CL.step==='starting') h+='<p class="dim" style="margin:0"><span class="spin"></span>Starting the sign-in on the server…</p>';
+  else if(CL.step==='link'||CL.step==='sending') h+=`
+    <div class="field"><label>1. Sign in to Claude</label>
+      <div class="acts" style="margin:0"><a class="btn primary" href="${esc(CL.url)}" target="_blank" rel="noopener">Open claude.com sign-in</a></div>
+      <span class="hint">It ends on a page with a code. Copy it.</span></div>
+    <form class="field" id="cl-code-form" autocomplete="off">
+      <label for="cl-code">2. Paste the code</label>
+      <div class="inp-row"><input class="inp" id="cl-code" placeholder="the code from claude.com" spellcheck="false" ${CL.step==='sending'?'disabled':''}>
+        <button class="btn primary" type="submit" ${CL.step==='sending'?'disabled':''}>${CL.step==='sending'?'<span class="spin"></span>Finishing…':'Finish'}</button></div>
+      <div class="ferr" id="cl-err" role="alert"></div>
+      <div class="acts"><button type="button" class="btn ghost sm" data-act="cl-cancel">Cancel</button></div>
+    </form>`;
+  else {
+    if(CL.paste) h+=`<form class="field" id="cl-token-form" autocomplete="off">
+      <label for="cl-token">Token from <code>claude setup-token</code></label>
+      <div class="inp-row"><input class="inp" id="cl-token" type="password" placeholder="sk-ant-oat…" spellcheck="false">
+        <button class="btn primary" type="submit">Save</button></div>
+      <div class="ferr" id="cl-err" role="alert"></div></form>`;
+    h+=`<div class="acts"><button class="btn primary" data-act="cl-start">${v&&v.ok?'Sign in again':'Sign in with Claude'}</button>
+      <button class="btn ghost" data-act="cl-check" ${CL.busy?'disabled':''}>${CL.busy?'<span class="spin"></span>Checking…':'Check again'}</button>
+      <button class="btn ghost" data-act="cl-paste">${CL.paste?'Hide':'Paste a token'}</button>
+      ${v&&v.source==='saved'?'<button class="btn ghost" data-act="cl-forget">Forget</button>':''}</div>`;
+  }
+  el.innerHTML=h;
+}
+async function claudeStart(){
+  CL.step='starting'; renderClaude();
+  try{ const j=await api('POST','/dash/api/claude/start',{}); CL.url=j.url; CL.step='link'; renderClaude(); window.open(j.url,'_blank','noopener'); }
+  catch(e){ CL.step='idle'; renderClaude(); toast(e.message,'err'); }
+}
+async function claudeCode(){
+  const code=$('#cl-code').value.trim();
+  if(!code){ $('#cl-err').textContent='Paste the code first.'; return; }
+  CL.step='sending'; renderClaude(); $('#cl-code').value=code;
+  try{ const j=await api('POST','/dash/api/claude/code',{code}); CL.v=j.status; CL.step='idle'; renderClaude();
+    toast(j.status&&j.status.ok?'Claude is signed in.':'Saved, but Claude didn’t answer yet.',j.status&&j.status.ok?'ok':'err'); }
+  catch(e){ CL.step='link'; renderClaude(); $('#cl-code').value=code; $('#cl-err').textContent=e.message; }
+}
+async function claudeToken(){
+  const token=$('#cl-token').value.trim();
+  if(!token){ $('#cl-err').textContent='Paste a token first.'; return; }
+  try{ const j=await api('POST','/dash/api/claude/token',{token}); CL.v=j.status; CL.paste=false; renderClaude();
+    toast(j.status&&j.status.ok?'Claude is signed in.':'Saved, but Claude didn’t answer.',j.status&&j.status.ok?'ok':'err'); }
+  catch(e){ $('#cl-err').textContent=e.message; }
+}
+
 async function tConnect(){
   const v=$('#t-token').value.trim();
   if(!v){ $('#t-err').textContent='Paste a token first.'; $('#t-token').focus(); return; }
@@ -1332,7 +1402,7 @@ async function logout(){
 }
 
 /* ---------- render everything ---------- */
-function renderAll(){ renderScreen(); renderGlance(); renderCard(); renderXfers(); renderGoogle(); renderToggl(); renderServer(); renderUpdates(); renderSession(); }
+function renderAll(){ renderScreen(); renderGlance(); renderCard(); renderXfers(); renderGoogle(); renderToggl(); renderClaude(); renderServer(); renderUpdates(); renderSession(); }
 function tick(){
   $$('.js-heard').forEach(e=>e.textContent=heardText());
   $$('.js-stat').forEach(e=>e.textContent=fmtAgo(now()-S.stAt));
@@ -1457,6 +1527,7 @@ function route(){
   if(v==='files') renderCard();
   if(v==='term'){ renderTerm(); setTimeout(()=>$('#term-line').focus(),0); }
   if(v==='notes') notesLoad();
+  if(v==='accounts'&&!CL.v&&!CL.busy) claudeLoad(false);
 }
 window.addEventListener('hashchange',route);
 
@@ -1493,6 +1564,11 @@ document.addEventListener('click',e=>{
     case 'g-signin': gSignIn(); break;
     case 'g-signout': gSignOut(); break;
     case 't-disconnect': tDisconnect(); break;
+    case 'cl-start': claudeStart(); break;
+    case 'cl-check': claudeLoad(true); break;
+    case 'cl-paste': CL.paste=!CL.paste; renderClaude(); break;
+    case 'cl-cancel': CL.step='idle'; renderClaude(); break;
+    case 'cl-forget': api('POST','/dash/api/claude/forget',{}).then(()=>{ toast('Forgot the dashboard’s token.','info'); claudeLoad(true); },e=>toast(e.message,'err')); break;
     case 'tg-del': setTarget(b.dataset.p,b.dataset.k,0); break;
     case 't-show': { const i=$('#t-token'); i.type=i.type==='password'?'text':'password'; b.textContent=i.type==='password'?'Show':'Hide'; break; }
     case 'state-refresh': e.preventDefault(); loadState(false); break;
@@ -1513,6 +1589,8 @@ document.addEventListener('click',e=>{
 function fallbackCopy(v,done){ const t=document.createElement('textarea'); t.value=v; document.body.appendChild(t); t.select(); let ok=false; try{ ok=document.execCommand('copy'); }catch(e){} t.remove(); if(ok) done(); else toast(`Couldn’t reach the clipboard. The hash is ${v}.`,'err'); }
 document.addEventListener('submit',e=>{
   if(e.target.id==='t-form'){ e.preventDefault(); tConnect(); }
+  if(e.target.id==='cl-code-form'){ e.preventDefault(); claudeCode(); }
+  if(e.target.id==='cl-token-form'){ e.preventDefault(); claudeToken(); }
   if(e.target.id==='tg-form'){ e.preventDefault(); const h=parseFloat($('#tg-h').value); if(!(h>0)){ $('#tg-h').focus(); return; }
     const k=$('#tg-k').value; setTarget($('#tg-p').value,k,h,k==='total'?$('#tg-s').value:undefined); }
 });
