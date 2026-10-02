@@ -9,8 +9,11 @@
  * The list is what to start from: a new entry, then every project, then the
  * descriptions and projects of the last two weeks, newest first, each once.
  * Enter starts the highlighted one (whatever was running stops) -- a project
- * starts with no description, which d adds while it runs. s stops, n types a
- * new one, r asks again.
+ * starts with no description, which e adds while it runs. Space stops the
+ * running one, or with nothing running starts the highlighted one, as space
+ * is start/stop in every app; n types a new one, r asks again. (d described
+ * and s stopped, until the keys were made the same everywhere: d is delete
+ * and s is sync.)
  *
  * Targets: hours a project should get, weekly or in total since a date --
  * set on the dashboard or with `target`. g shows them as bars filling up in
@@ -28,6 +31,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/footer.h"
 
 static const CardApi *api;
 
@@ -38,14 +42,12 @@ static const CardApi *api;
 #define ROW_H      15
 #define TOP_H      18
 #define TIMER_H    34
-#define FOOT_H     11
 
 #define CLR_BG     CAPP_RGB(16, 18, 24)
 #define CLR_TEXT   CAPP_RGB(230, 234, 242)
 #define CLR_DIM    CAPP_RGB(126, 136, 152)
 #define CLR_RUN    CAPP_RGB(232, 120, 210)      /* Toggl's pink, near enough */
 #define CLR_SEL    CAPP_RGB(42, 48, 64)
-#define CLR_FOOT   CAPP_RGB(28, 32, 42)
 #define CLR_BAD    CAPP_RGB(240, 110, 96)
 
 enum { ST_IDLE = 0, ST_STATUS, ST_START, ST_STOP, ST_DESCRIBE, ST_TARGETS };
@@ -284,7 +286,13 @@ static void say_failure(int n) {
 
 static int ask(const char *method, const char *rel, const char *body, int stage) {
   char url[96];
-  if (G.stage != ST_IDLE) return -1;
+  /* One request at a time. A key pressed while one is out used to do
+   * nothing at all, which reads as a key that did not register; it says so. */
+  if (G.stage != ST_IDLE) {
+    G.bad = 1;
+    api->fmt(G.status, sizeof G.status, "busy: waiting on Toggl");
+    return -1;
+  }
   api->fmt(url, sizeof url, "%s%s", api->proxy(), rel);
   if (api->http_start(method, url, body, body ? "text/plain" : 0, "", 15000) != 0) {
     G.bad = 1;
@@ -441,10 +449,9 @@ static void paint_top(void) {
   }
 }
 
+/* The shared hint bar, apps/footer.h. */
 static void paint_foot(const char *keys) {
-  CRect c = G.content;
-  api->fill(rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H), CLR_FOOT);
-  api->text((int16_t)(c.x + 4), (int16_t)(c.y + c.h - FOOT_H + 2), keys, CLR_DIM, CLR_FOOT);
+  footer_paint(api, G.content, keys);
 }
 
 /* The timer, alone: project, time, description. */
@@ -463,7 +470,7 @@ static void paint_running(void) {
   else api->fmt(line, sizeof line, "%s", G.desc[0] ? G.desc : "no description");
   draw(G.f_ui, c.x + (c.w - width(G.f_ui, line)) / 2, y, line,
        G.typing == 2 || G.desc[0] ? CLR_TEXT : CLR_DIM, CLR_BG);
-  paint_foot(G.typing == 2 ? "enter save  esc cancel" : "d desc  s stop  l list  g targets");
+  paint_foot(G.typing == 2 ? "enter save  esc cancel" : "space stop  e desc  l list  g targets");
 }
 
 static void paint_list(void) {
@@ -478,7 +485,7 @@ static void paint_list(void) {
   for (i = top; i <= G.nrec && i - top < rows; i++, y += ROW_H) paint_row(i, y);
   if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
   paint_foot(G.typing == 1 ? "enter start  esc cancel" :
-             G.running ? "enter start  l timer  s stop  g targets" :
+             G.running ? "enter start  space stop  l timer" :
                          "enter start  n new  g targets");
 }
 
@@ -501,7 +508,7 @@ static void paint_goals(void) {
     api->fill(rect(c.x + 8, y + 18, bw, 8), CLR_SEL);
     if (fill > 0) api->fill(rect(c.x + 9, y + 19, fill, 6), col);
   }
-  paint_foot("g back  r again");
+  paint_foot("esc back  r refresh");
 }
 
 static void app_paint(void *st, CRect c) {
@@ -544,7 +551,7 @@ static int app_key(void *st, uint8_t k) {
   (void)st;
   if (G.typing) return key_typing(k);
   if (G.goals) {
-    if (k == 'g' || k == 'G' || k == CAPP_KEY_ESC) { G.goals = 0; return 1; }
+    if (k == 'g' || k == 'G' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) { G.goals = 0; return 1; }
     if (k == 'r' || k == 'R') { ask_targets(); return 1; }
     return 1;
   }
@@ -552,13 +559,16 @@ static int app_key(void *st, uint8_t k) {
   if (timer_screen()) {
     switch (k) {
     case 'l': case 'L': case CAPP_KEY_DOWN: G.list = 1; return 1;
-    case 'd': case 'D': case 's': case 'S': case ' ': case 'n': case 'N': case 'r': case 'R':
+    case 'e': case 'E': case ' ': case 'n': case 'N': case 'r': case 'R':
       break;                                 /* as on the list, below */
     default: return 0;
     }
   }
   switch (k) {
   case 'l': case 'L': if (G.running) { G.list = 0; return 1; } return 0;
+  /* The list over a running timer is a level down from it: Escape goes back
+   * up. With nothing running the list is the top, and declines it. */
+  case CAPP_KEY_ESC:  if (G.running) { G.list = 0; return 1; } return 0;
   case CAPP_KEY_UP:   if (G.sel > 0) G.sel--; return 1;
   case CAPP_KEY_DOWN: if (G.sel < G.nrec) G.sel++; return 1;
   case CAPP_KEY_ENTER:
@@ -566,13 +576,18 @@ static int app_key(void *st, uint8_t k) {
     else start_entry(G.rec[G.sel - 1].desc, G.rec[G.sel - 1].proj_id);
     return 1;
   case 'n': case 'N': begin_typing(); return 1;
-  case 'd': case 'D':
+  case 'e': case 'E':
     if (!G.running) { api->fmt(G.status, sizeof G.status, "nothing is running"); return 1; }
     G.typing = 2;
     api->fmt(G.draft, sizeof G.draft, "%s", G.desc);   /* to change, not retype */
     G.dlen = (int)api->str_len(G.draft);
     return 1;
-  case 's': case 'S': case ' ': stop_entry(); return 1;
+  case ' ':
+    /* Start/stop: stop what runs; with nothing running, what Enter would. */
+    if (G.running) stop_entry();
+    else if (G.sel == 0) begin_typing();
+    else start_entry(G.rec[G.sel - 1].desc, G.rec[G.sel - 1].proj_id);
+    return 1;
   case 'r': case 'R': refresh(); return 1;
   default: return 0;
   }
@@ -585,8 +600,9 @@ static int app_tick(void *st, uint32_t now_ms) {
   (void)st; (void)now_ms;
   changed = poll();
   /* The timer is the only thing that moves: a second's change repaints
-   * just its strip. */
-  if (!changed && G.running && elapsed() != G.shown_sec) {
+   * just its strip. Not under the targets, which draw no timer: there
+   * shown_sec never caught up, so every tick asked for a repaint. */
+  if (!changed && G.running && !G.goals && elapsed() != G.shown_sec) {
     api->damage(timer_rect());
     return 1;
   }
@@ -844,13 +860,14 @@ const CappInfo capp_info = {
     0x81, 0xF1, 0x80, 0x01, 0x40, 0x02, 0x40, 0x02,
     0x20, 0x04, 0x18, 0x18, 0x07, 0xE0, 0x00, 0x00 },
   "enter\tstart the highlighted project or entry\n"
-  "s\tstop the running timer\n"
+  "space\tstop the running timer; with none, start the highlighted one\n"
   "n\ta new entry: type its description\n"
-  "d\tdescribe the running entry\n"
+  "e\tdescribe the running entry\n"
   "l\tthe list, and back to the timer\n"
   "g\ttargets: hours against each project's target\n"
   "r\task Toggl again\n"
   "up/down\tchoose\n"
+  "esc\tback: from the targets, or the list to the timer\n"
   "\n"
   "connect Toggl on the dashboard (/dash) first.\n",
   ACTIONS,
