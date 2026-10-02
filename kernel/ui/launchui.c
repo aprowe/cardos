@@ -322,11 +322,13 @@ static const char *shell_keys(void) {
 
 static void flush(void) {
   if (s_help) {
-    const Icon *ic = icon_at(s_sel);
     if (picker_active())
       help_paint("Files", picker_help(), "fn-`\tcancel and leave the app\nfn-h\tclose this\n");
     else
-      help_paint(s_app ? s_app->name : (ic ? ic->name : "CardOS"),
+      /* With no app open these are the launcher's keys, whatever icon is
+       * highlighted: titled with that icon's name, the panel read as the
+       * app's own keys -- and listed none. */
+      help_paint(s_app ? s_app->name : "Launcher",
                  s_app ? s_app->help : NULL, shell_keys());
     return;
   }

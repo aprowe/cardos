@@ -463,7 +463,7 @@ static void paint_running(void) {
   else api->fmt(line, sizeof line, "%s", G.desc[0] ? G.desc : "no description");
   draw(G.f_ui, c.x + (c.w - width(G.f_ui, line)) / 2, y, line,
        G.typing == 2 || G.desc[0] ? CLR_TEXT : CLR_DIM, CLR_BG);
-  paint_foot(G.typing == 2 ? "enter save  esc cancel" : "d describe  s stop  l list  n new");
+  paint_foot(G.typing == 2 ? "enter save  esc cancel" : "d desc  s stop  l list  g targets");
 }
 
 static void paint_list(void) {
@@ -478,8 +478,8 @@ static void paint_list(void) {
   for (i = top; i <= G.nrec && i - top < rows; i++, y += ROW_H) paint_row(i, y);
   if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
   paint_foot(G.typing == 1 ? "enter start  esc cancel" :
-             G.running ? "enter start  l timer  s stop  n new" :
-                         "enter start  n new  r refresh");
+             G.running ? "enter start  l timer  s stop  g targets" :
+                         "enter start  n new  g targets");
 }
 
 /* Each target: its project in its colour, the hours, and a bar filling up. */

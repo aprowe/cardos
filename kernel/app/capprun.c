@@ -79,10 +79,12 @@ struct Run {
   /* Copied from the entry, which a reload can take away while this runs. */
   char      name[16];
   uint16_t  flags;
-  /* Written from the action table, or copied from capp_info.help, when the
+  /* capp_info.help and then the action table's chords, put together when the
    * app installs its interface -- the one moment the image and the table
-   * are both certainly there. Only a running app has a help panel to show. */
-  char      help[160];
+   * are both certainly there. Only a running app has a help panel to show.
+   * On the heap, its own size: written help runs to 400 bytes, and ten runs
+   * of that held for nothing is 4 KB. */
+  char     *help;
 
   /* A release asked for while one of this run's own handlers was on the
    * stack -- Files calling run("edit") from its click handler, and the
@@ -338,38 +340,49 @@ void capprun_install_ui(const CappUi *ui) {
   s->def.pref_h     = ui->pref_h;
   s->def.wants_text = ui->wants_text ? tr_wants_text : NULL;
   s->def.button     = ui->button ? tr_button : NULL;
-  /* The help panel, written from the action table rather than by hand.
+  /* The help panel: what the app wrote, then every chord in its action
+   * table that the writing does not already mention.
    *
-   * capp_info.help is a string an app maintains separately from its key
-   * switch, which is exactly the kind of pair that drifts -- Edit's said
-   * "ctrl-p markdown preview" while the desktop was quietly taking ctrl-P.
-   * With a table there is one description, and this renders it. An app with
-   * no table keeps its written help. */
-  s->help[0] = 0;
-  if (!(ui->actions && ui->nactions) && s->la.info && s->la.info->help)
-    snprintf(s->help, sizeof s->help, "%s", s->la.info->help);
-  if (ui->actions && ui->nactions) {
+   * It used to be one or the other -- the table if there was one, since a
+   * written string drifts from the key switch (Edit's said "ctrl-p markdown
+   * preview" while the desktop was quietly taking ctrl-P). But since API 30
+   * almost every app has a table, for its commands, and most of those
+   * actions have no chord: Toggl's panel listed nothing at all, and its
+   * plain-letter keys, which only the writing describes, were never shown. */
+  {
+    static char buf[1024];
     size_t n = 0;
     int i;
-    for (i = 0; i < (int)ui->nactions && n < sizeof s->help - 1; i++) {
+    buf[0] = 0;
+    if (s->la.info && s->la.info->help)
+      n = (size_t)snprintf(buf, sizeof buf, "%s", s->la.info->help);
+    if (n >= sizeof buf) n = sizeof buf - 1;
+    while (n > 1 && buf[n - 1] == '\n' && buf[n - 2] == '\n') buf[--n] = 0;
+    for (i = 0; ui->actions && i < (int)ui->nactions && n < sizeof buf - 1; i++) {
       const CappAction *a = &ui->actions[i];
+      char chord[12], line[16];
       int w;
       if (a->key >= 1 && a->key <= 26)
-        w = snprintf(s->help + n, sizeof s->help - n, "ctrl-%c\t%s\n",
-                     'a' + a->key - 1, a->label);
+        snprintf(chord, sizeof chord, "ctrl-%c", 'a' + a->key - 1);
       else if (a->key >= 0xE0 && a->key <= 0xF9)         /* fn-p: print */
-        w = snprintf(s->help + n, sizeof s->help - n, "fn-%c\t%s\n",
-                     'a' + a->key - 0xE0, a->label);
+        snprintf(chord, sizeof chord, "fn-%c", 'a' + a->key - 0xE0);
       else continue;                                          /* menu-only */
+      snprintf(line, sizeof line, "%s\t", chord);
+      if (!strncmp(buf, line, strlen(line))) continue;       /* written already */
+      snprintf(line, sizeof line, "\n%s\t", chord);
+      if (strstr(buf, line)) continue;
       /* snprintf says how long the line would have been, not how much it
        * wrote; a label that did not fit is dropped whole rather than
-       * counted, so n never runs past the buffer into the icon. */
-      if (w < 0 || (size_t)w >= sizeof s->help - n) { s->help[n] = 0; break; }
+       * counted, so n never runs past the buffer. */
+      w = snprintf(buf + n, sizeof buf - n, "%s\t%s\n", chord, a->label);
+      if (w < 0 || (size_t)w >= sizeof buf - n) { buf[n] = 0; break; }
       n += (size_t)w;
     }
-    s->help[n] = 0;
+    free(s->help);
+    s->help = n ? malloc(n + 1) : NULL;
+    if (s->help) memcpy(s->help, buf, n + 1);
   }
-  s->def.help       = s->help[0] ? s->help : NULL;
+  s->def.help       = s->help;
   s->def.set_args   = NULL;      /* argv was the arguments */
 }
 
@@ -675,6 +688,9 @@ static void release_image(Run *s) {
  * that existed only for this run goes too. */
 static void release_run(Run *s) {
   release_image(s);
+  free(s->help);
+  s->help = NULL;
+  s->def.help = NULL;
   s->release_pending = 0;
   if (s->entry) {
     s->entry->run = NULL;
