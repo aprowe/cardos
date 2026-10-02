@@ -17,6 +17,8 @@
 
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
+#include "apps/footer.h"
+#include "apps/safefile.h"
 
 #define MAXLINES  96
 #define MAXCOL    64
@@ -33,8 +35,6 @@
 #define CLR_TEXT    CAPP_RGB(214, 220, 232)
 #define CLR_CUR_BG  CAPP_RGB(38, 42, 52)
 #define CLR_CARET   CAPP_RGB(120, 200, 255)
-#define CLR_BAR     CAPP_RGB(48, 82, 128)
-#define CLR_BAR_FG  CAPP_RGB(232, 238, 248)
 #define CLR_DIRTY   CAPP_RGB(255, 190, 90)
 #define CLR_SEL     CAPP_RGB(52, 80, 116)
 #define CLR_DIM     CAPP_RGB(130, 140, 158)
@@ -66,11 +66,18 @@ static struct {
   /* buffer */
   char line[MAXLINES][MAXCOL + 1];
   short len[MAXLINES];
+  /* The line goes on in the next one: no newline between them in the file.
+   * A paragraph longer than MAXCOL is held as a run of these, so a note
+   * written on the dashboard as one long line opens whole and saves back as
+   * one line. Before, everything past the 64th character was dropped at
+   * load -- words cut off mid-sentence, and gone for good at the next save. */
+  char  cont[MAXLINES];
   int   nlines;
   int   cx, cy;
   int   top, leftcol;
   int   dirty;
   int   truncated;
+  int   wrap;                 /* long lines fold onto the next row (ctrl-w) */
   char  path[96];
   char  status[40];
 
@@ -98,20 +105,79 @@ static void say(const char *m) { api->fmt(E.status, sizeof E.status, "%s", m); }
 static void blank(void) {
   api->mem_set(E.line, 0, sizeof E.line);
   api->mem_set(E.len, 0, sizeof E.len);
+  api->mem_set(E.cont, 0, sizeof E.cont);
   E.nlines = 1;
   E.cx = E.cy = E.top = E.leftcol = 0;
   E.dirty = 0;
   E.truncated = 0;
 }
 
+/* Make room for a line at y, moving the rest down. 0 when the buffer is full. */
+static int open_line(int y) {
+  int i;
+  if (E.nlines >= MAXLINES) return 0;
+  for (i = E.nlines; i > y; i--) {
+    api->mem_cpy(E.line[i], E.line[i - 1], MAXCOL + 1);
+    E.len[i] = E.len[i - 1];
+    E.cont[i] = E.cont[i - 1];
+  }
+  api->mem_set(E.line[y], 0, MAXCOL + 1);
+  E.len[y] = 0;
+  E.cont[y] = 0;
+  E.nlines++;
+  return 1;
+}
+
+static void close_line(int y) {
+  int i;
+  for (i = y; i + 1 < E.nlines; i++) {
+    api->mem_cpy(E.line[i], E.line[i + 1], MAXCOL + 1);
+    E.len[i] = E.len[i + 1];
+    E.cont[i] = E.cont[i + 1];
+  }
+  E.nlines--;
+}
+
+/* Line y is full: carry what follows its last space (or, with no space, its
+ * last character) onto a new continuation line, so a word is not split
+ * across two lines when it need not be. Where the cut fell, or -1 when there
+ * is no room for another line. */
+static int soft_split(int y) {
+  int at = MAXCOL - 1, s, tail;
+  for (s = E.len[y] - 2; s >= 1; s--)
+    if (E.line[y][s] == ' ') { at = s + 1; break; }
+  if (!open_line(y + 1)) return -1;
+  tail = E.len[y] - at;
+  api->mem_cpy(E.line[y + 1], E.line[y] + at, (size_t)tail);
+  E.len[y + 1] = (short)tail;
+  E.len[y] = (short)at;
+  E.cont[y + 1] = E.cont[y];
+  E.cont[y] = 1;
+  return at;
+}
+
+/* One character into the last line, as the file is read. 0 when the buffer
+ * has no more lines to give. */
+static int load_put(char c) {
+  int y = E.nlines - 1, at;
+  if (E.len[y] >= MAXCOL) {
+    if ((at = soft_split(y)) < 0) return 0;
+    y++;
+  }
+  E.line[y][E.len[y]++] = c;
+  return 1;
+}
+
 static void load(const char *path) {
   char buf[512];
-  int fd, n, i, col = 0;
+  int fd, n, i;
 
   blank();
   api->fmt(E.path, sizeof E.path, "%s", path);
 
-  fd = api->open(path, CAPP_O_READ);
+  /* Through safefile: a save cut off by a power cut leaves only NAME.tmp,
+   * and this is where it is put back. */
+  fd = safe_open_read(api, path);
   if (fd < 0) { say("new file"); return; }
 
   while ((n = api->read(fd, buf, sizeof buf)) > 0) {
@@ -119,25 +185,20 @@ static void load(const char *path) {
       char c = buf[i];
       if (c == 13) continue;
       if (c == 10) {
-        E.len[E.nlines - 1] = (short)col;
-        col = 0;
         if (E.nlines >= MAXLINES) { E.truncated = 1; goto out; }
         E.nlines++;
         continue;
       }
       if (c == 9) {                     /* tabs become two spaces */
-        int t;
-        for (t = 0; t < 2 && col < MAXCOL; t++) E.line[E.nlines - 1][col++] = ' ';
+        if (!load_put(' ') || !load_put(' ')) { E.truncated = 1; goto out; }
         continue;
       }
       /* A control byte means this is not text. Say so rather than drawing
        * 14 KB of ELF as characters. */
       if (c < 32 || (unsigned char)c > 126) { E.truncated = 2; goto out; }
-      if (col < MAXCOL) E.line[E.nlines - 1][col++] = c;
-      else E.truncated = 1;
+      if (!load_put(c)) { E.truncated = 1; goto out; }
     }
   }
-  E.len[E.nlines - 1] = (short)col;
 out:
   api->close(fd);
   if (E.truncated == 2) {
@@ -200,13 +261,29 @@ static void save(void) {
    * new file, and the first thing typed should be the name rather than the
    * end of a name you have to delete first. */
   if (!E.path[0]) { ask_save(); return; }
-  fd = api->open(E.path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
-  if (fd < 0) { say("cannot write"); return; }
-  for (i = 0; i < E.nlines; i++) {
-    if (E.len[i]) api->write(fd, E.line[i], (size_t)E.len[i]);
-    if (i + 1 < E.nlines) api->write(fd, &nl, 1);
+
+  /* NAME.tmp, then remove and rename (apps/safefile.h): writing the file in
+   * place has a moment where the old text is gone and the new is not all
+   * there, and a device pulled from a pocket mid-save lost the file in it.
+   * safefile holds paths of SF_PATH_MAX; a longer one is rare enough here
+   * that it is written in place as before rather than not at all. */
+  if (api->str_len(E.path) < SF_PATH_MAX) {
+    SafeFile f;
+    if (safe_begin(&f, api, E.path) != 0) { say("cannot write"); return; }
+    for (i = 0; i < E.nlines; i++) {
+      if (E.len[i]) safe_write(&f, E.line[i], (size_t)E.len[i]);
+      if (i + 1 < E.nlines && !E.cont[i]) safe_write(&f, &nl, 1);
+    }
+    if (safe_commit(&f) != 0) { say("not saved: card full?"); return; }
+  } else {
+    fd = api->open(E.path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
+    if (fd < 0) { say("cannot write"); return; }
+    for (i = 0; i < E.nlines; i++) {
+      if (E.len[i]) api->write(fd, E.line[i], (size_t)E.len[i]);
+      if (i + 1 < E.nlines && !E.cont[i]) api->write(fd, &nl, 1);
+    }
+    api->close(fd);
   }
-  api->close(fd);
   E.dirty = 0;
   say("saved");
 }
@@ -225,7 +302,14 @@ static void scroll_to_cursor(int rows, int cols) {
 
 static void insert_char(char c) {
   int i, n = E.len[E.cy];
-  if (n >= MAXCOL) return;
+  /* A full line carries on into a continuation line rather than refusing the
+   * key: the file still has one line there, however long it gets. */
+  if (n >= MAXCOL) {
+    int at = soft_split(E.cy);
+    if (at < 0) { say("too many lines"); return; }
+    if (E.cx > at) { E.cy++; E.cx -= at; }
+    n = E.len[E.cy];
+  }
   for (i = n; i > E.cx; i--) E.line[E.cy][i] = E.line[E.cy][i - 1];
   E.line[E.cy][E.cx] = c;
   E.len[E.cy] = (short)(n + 1);
@@ -235,16 +319,15 @@ static void insert_char(char c) {
 
 static void split_line(void) {
   int i, tail;
-  if (E.nlines >= MAXLINES) { say("too many lines"); return; }
-  for (i = E.nlines; i > E.cy + 1; i--) {
-    api->mem_cpy(E.line[i], E.line[i - 1], MAXCOL + 1);
-    E.len[i] = E.len[i - 1];
-  }
-  E.nlines++;
+  if (!open_line(E.cy + 1)) { say("too many lines"); return; }
   tail = E.len[E.cy] - E.cx;
   api->mem_cpy(E.line[E.cy + 1], E.line[E.cy] + E.cx, (size_t)tail);
   E.len[E.cy + 1] = (short)tail;
   E.len[E.cy] = (short)E.cx;
+  /* A real newline now ends this line; whatever it ran on into, the new
+   * one runs on into instead. */
+  E.cont[E.cy + 1] = E.cont[E.cy];
+  E.cont[E.cy] = 0;
 
   /* Keep the new line's indent. An editor that drops back to column zero on
    * every return is an editor you fight. */
@@ -266,17 +349,22 @@ static void split_line(void) {
 }
 
 static void join_prev(void) {
-  int i, prev;
+  int prev;
   if (E.cy == 0) return;
+  /* Between a line and its continuation there is no newline to delete, so
+   * Backspace takes the character before the cursor, which is the previous
+   * line's last -- then the two are joined if they now fit. */
+  if (E.cont[E.cy - 1] && E.len[E.cy - 1] > 0) {
+    E.len[E.cy - 1]--;
+    E.dirty = 1;
+    if (E.len[E.cy - 1] + E.len[E.cy] > MAXCOL) return;
+  }
   prev = E.len[E.cy - 1];
   if (prev + E.len[E.cy] > MAXCOL) { say("line would be too long"); return; }
   api->mem_cpy(E.line[E.cy - 1] + prev, E.line[E.cy], (size_t)E.len[E.cy]);
   E.len[E.cy - 1] = (short)(prev + E.len[E.cy]);
-  for (i = E.cy; i + 1 < E.nlines; i++) {
-    api->mem_cpy(E.line[i], E.line[i + 1], MAXCOL + 1);
-    E.len[i] = E.len[i + 1];
-  }
-  E.nlines--;
+  E.cont[E.cy - 1] = E.cont[E.cy];
+  close_line(E.cy);
   E.cy--;
   E.cx = prev;
   E.dirty = 1;
@@ -323,6 +411,10 @@ static void backspace(void) {
 #define PG_LEFT   4          /* the page margin */
 #define PG_CODE_H 10         /* a row of 6x8 code */
 
+/* The longest line the preview lays out: a paragraph is the run of lines
+ * E.cont joins, up to this. Sixteen full lines -- well past a paragraph. */
+#define PARA_MAX  1024
+
 typedef enum {
   MD_TEXT = 0, MD_H1, MD_H2, MD_H3, MD_BULLET, MD_NUMBER,
   MD_QUOTE, MD_CODE, MD_RULE, MD_BLANK
@@ -335,8 +427,8 @@ static struct {
   int     loaded;
   int     body, bold;           /* font handles; -1 is the 6x8 font */
   int     line_h;               /* a row of prose */
-  char    ch[MAXCOL + 1];       /* the line being laid out, markers removed */
-  uint8_t st[MAXCOL + 1];
+  char    ch[PARA_MAX + 1];     /* the line being laid out, markers removed */
+  uint8_t st[PARA_MAX + 1];
   int     n;
 } M;
 
@@ -390,7 +482,7 @@ static MdKind md_kind(const char *in, const char **body, int *indent) {
 }
 
 static void md_put(char c, int st) {
-  if (M.n >= MAXCOL) return;
+  if (M.n >= PARA_MAX) return;
   M.ch[M.n] = c;
   M.st[M.n] = (uint8_t)st;
   M.n++;
@@ -451,15 +543,20 @@ static int md_font(int st, int heading) {
   return M.body;
 }
 
-/* How wide M.ch[a..b) is, run by run, each run in its own font. */
+/* How wide M.ch[a..b) is, run by run, each run in its own font. Measured
+ * where it lies, by ending the string at the run for a moment, so a long
+ * paragraph costs no copy on the shell's stack. */
 static int md_width(int a, int b, int heading) {
-  char run[MAXCOL + 1];
   int w = 0;
   while (a < b) {
-    int st = M.st[a], n = 0, f = md_font(st, heading);
-    while (a < b && md_font(M.st[a], heading) == f) run[n++] = M.ch[a++];
-    run[n] = 0;
-    w += api->text_width(f, run);
+    int f = md_font(M.st[a], heading), e = a;
+    char keep;
+    while (e < b && md_font(M.st[e], heading) == f) e++;
+    keep = M.ch[e];
+    M.ch[e] = 0;
+    w += api->text_width(f, M.ch + a);
+    M.ch[e] = keep;
+    a = e;
   }
   return w;
 }
@@ -485,18 +582,21 @@ static int md_break(int from, int avail, int heading) {
 /* Draw M.ch[a..b) at x, y in a row `h` tall, run by run. */
 static void md_draw_run(int x, int y, int h, int a, int b, int heading,
                         uint16_t fg, uint16_t bg) {
-  char run[MAXCOL + 1];
   while (a < b) {
-    int st = M.st[a], n = 0, f = md_font(st, heading), fh;
+    int st = M.st[a], e = a, f = md_font(st, heading), fh;
     uint16_t rf = fg, rb = bg;
-    while (a < b && M.st[a] == st) run[n++] = M.ch[a++];
-    run[n] = 0;
+    char keep;
+    while (e < b && M.st[e] == st) e++;
     if (st == ST_C) { rf = CLR_PG_H; rb = CLR_PG_CODE; }
     else if (st == ST_L) rf = CLR_PG_LINK;
     else if (st == ST_E) rf = CLR_PG_H;
+    keep = M.ch[e];
+    M.ch[e] = 0;
     fh = api->font_height(f);
-    api->text_font(f, (int16_t)x, (int16_t)(y + (h - fh) / 2), run, rf, rb);
-    x += api->text_width(f, run);
+    api->text_font(f, (int16_t)x, (int16_t)(y + (h - fh) / 2), M.ch + a, rf, rb);
+    x += api->text_width(f, M.ch + a);
+    M.ch[e] = keep;
+    a = e;
   }
 }
 
@@ -517,23 +617,33 @@ static int md_render(CRect c, int from) {
   E.pmore = 0;
 
   for (i = 0; i < E.nlines; i++) {
-    const char *body = E.line[i];
-    int indent = 0, heading, h, x0, xtext, avail, pos, first = 1;
+    static char para[PARA_MAX + 1];
+    const char *body = para;
+    int indent = 0, heading, h, x0, xtext, avail, pos, first = 1, n = 0;
+    int line0 = i;
     MdKind k;
     uint16_t fg = CLR_PG_TX, bg = CLR_PG;
 
-    /* Editing keeps E.len and leaves old bytes past it; the preview reads
-     * lines as strings, so it terminates each one first, or a line that was
-     * backspaced or split showed its old tail. */
-    E.line[i][E.len[i]] = 0;
+    /* The paragraph: this line and the continuations E.cont joins to it,
+     * copied by length -- editing leaves old bytes past E.len, and reading
+     * the lines as strings showed a backspaced line's old tail. */
+    for (;;) {
+      int len = E.len[i];
+      if (n + len > PARA_MAX) len = PARA_MAX - n;
+      api->mem_cpy(para + n, E.line[i], (size_t)len);
+      n += len;
+      if (!E.cont[i] || i + 1 >= E.nlines) break;
+      i++;
+    }
+    para[n] = 0;
 
     /* A fenced block is verbatim: no headings, no bullets, no emphasis. */
-    if (E.line[i][0] == '`' && E.line[i][1] == '`' && E.line[i][2] == '`') {
+    if (para[0] == '`' && para[1] == '`' && para[2] == '`') {
       fenced = !fenced;
       continue;
     }
-    k = fenced ? MD_CODE : md_kind(E.line[i], &body, &indent);
-    if (fenced) body = E.line[i];
+    k = fenced ? MD_CODE : md_kind(para, &body, &indent);
+    if (fenced) body = para;
 
     heading = (k == MD_H1 || k == MD_H2);
     h = (k == MD_CODE) ? PG_CODE_H : M.line_h;
@@ -562,7 +672,7 @@ static int md_render(CRect c, int from) {
     pos = 0;
     do {
       int end = M.n == 0 ? 0 : md_break(pos, avail, heading);
-      if (md_row_hook) md_row_hook(i, pos, end);
+      if (md_row_hook) md_row_hook(line0, pos, end);
       if (row++ >= from) {
         if (y + h > bottom) E.pmore = 1;
         else {
@@ -589,86 +699,152 @@ static int md_render(CRect c, int from) {
 }
 
 static void paint_preview(CRect c) {
-  char bar[48];
-
   if (E.ptop < 0) E.ptop = 0;
-  api->fill(rect(c.x, c.y, c.w, c.h - ROWH), CLR_PG);
-  E.prows = md_render(rect(c.x, c.y + 2, c.w, c.h - ROWH - 2), E.ptop);
+  api->fill(rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_PG);
+  E.prows = md_render(rect(c.x, c.y + 2, c.w, c.h - FOOT_H - 2), E.ptop);
 
   /* Clamp here rather than in the key handler: the length is only known once
    * it has been laid out, and laying it out is what this just did. A scroll
    * past the end draws nothing, so it steps back and draws again. */
   if (E.ptop >= E.prows && E.prows > 0) {
     E.ptop = E.prows - 1;
-    api->fill(rect(c.x, c.y, c.w, c.h - ROWH), CLR_PG);
-    E.prows = md_render(rect(c.x, c.y + 2, c.w, c.h - ROWH - 2), E.ptop);
+    api->fill(rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_PG);
+    E.prows = md_render(rect(c.x, c.y + 2, c.w, c.h - FOOT_H - 2), E.ptop);
   }
 
-  api->fill(rect(c.x, c.y + c.h - ROWH, c.w, ROWH), CLR_BAR);
-  api->fmt(bar, sizeof bar, "preview  %s  ctrl-p edits",
-           E.path[0] ? E.path : "(unsaved)");
-  api->text((short)(c.x + 2), (short)(c.y + c.h - ROWH + 1), bar,
-            CLR_BAR_FG, CLR_BAR);
+  footer_paint(api, c, "esc edit  arrows scroll  p print");
+}
+
+/* ---------------------------------------------------------- word wrap --- */
+
+/* With wrap on, a line wider than the screen folds onto the rows under it
+ * instead of scrolling sideways. A row breaks after the last space that
+ * fits, or at the width when one word fills it. The last row of a line is
+ * kept under `cols` characters so the caret at its end is still on screen;
+ * a line that exactly fills its rows gets an empty one for the caret. */
+static int wrap_end(int i, int p, int cols) {
+  int s;
+  if (E.len[i] - p < cols) return E.len[i];
+  for (s = p + cols - 1; s > p; s--)
+    if (E.line[i][s] == ' ') return s + 1;
+  return p + cols;
+}
+
+static int wrap_last(int i, int p, int e, int cols) {
+  return e >= E.len[i] && e - p < cols;
+}
+
+/* How many rows line i takes; or, with cx >= 0, which of them has column cx. */
+static int wrap_rows(int i, int cols, int cx) {
+  int p = 0, n = 0, e;
+  for (;;) {
+    e = wrap_end(i, p, cols);
+    if (cx >= 0 && (cx < e || wrap_last(i, p, e, cols))) return n;
+    n++;
+    if (wrap_last(i, p, e, cols)) return n;
+    p = e;
+  }
+}
+
+/* The row `k` rows below the top of the screen: its line and columns. 0 when
+ * it is past the end of the buffer. */
+static int wrap_row(int k, int cols, int *line, int *from, int *to) {
+  int i = E.top, p = 0, e;
+  while (i < E.nlines) {
+    e = wrap_end(i, p, cols);
+    if (k-- == 0) { *line = i; *from = p; *to = e; return 1; }
+    if (wrap_last(i, p, e, cols)) { i++; p = 0; }
+    else p = e;
+  }
+  return 0;
+}
+
+/* The width the last paint folded at, for a click to find the same rows. */
+static int shown_cols = (240 - GUTTER) / CHARW;
+
+static void scroll_wrapped(int rows, int cols) {
+  int i, below;
+  E.leftcol = 0;
+  if (E.cy < E.top) E.top = E.cy;
+  for (;;) {
+    below = wrap_rows(E.cy, cols, E.cx);
+    for (i = E.top; i < E.cy; i++) below += wrap_rows(i, cols, -1);
+    if (below < rows || E.top >= E.cy) break;
+    E.top++;
+  }
 }
 
 static void paint_edit(CRect c) {
-  int rows = (c.h - ROWH) / ROWH;
+  int rows = (c.h - FOOT_H) / ROWH;
   int cols = (c.w - GUTTER) / CHARW;
   char buf[MAXCOL + 8];
   int r;
 
   if (rows < 1) rows = 1;
   if (cols < 1) cols = 1;
-  scroll_to_cursor(rows, cols);
+  shown_cols = cols;
+  if (E.wrap) scroll_wrapped(rows, cols);
+  else scroll_to_cursor(rows, cols);
 
   /* No full-screen clear. Each row paints its own background as it goes, so a
    * keystroke redraws rows rather than wiping 240x135 to one colour and
    * drawing over it -- which at 40MHz is 12ms of flat background on every
    * character typed, and reads as a flash. */
   for (r = 0; r < rows; r++) {
-    int i = E.top + r;
+    int i = E.top + r, from = E.leftcol, to = 0, last = 1;
     short y = (short)(c.y + r * ROWH);
-    int on_cursor = (i == E.cy);
-    uint16_t bg = on_cursor ? CLR_CUR_BG : CLR_BG;
+    int on_cursor;
+    uint16_t bg;
     int n;
 
+    /* Wrapped, a screen row is a piece of a line rather than a line. */
+    if (E.wrap && !wrap_row(r, cols, &i, &from, &to)) i = E.nlines;
+    else if (E.wrap) last = wrap_last(i, from, to, cols);
+    else to = E.len[i < E.nlines ? i : 0];
+
+    on_cursor = (i == E.cy);
+    bg = on_cursor ? CLR_CUR_BG : CLR_BG;
     api->fill(rect(c.x, y, GUTTER, ROWH), CLR_GUTTER);
     api->fill(rect(c.x + GUTTER, y, c.w - GUTTER, ROWH), bg);
 
     if (i >= E.nlines) continue;      /* cleared, so deleted lines disappear */
 
-    api->fmt(buf, sizeof buf, "%3d", i + 1);
-    api->text((short)(c.x + 1), y, buf,
-              on_cursor ? CLR_TEXT : CLR_LINENO, CLR_GUTTER);
+    /* The number on a line's first row only, so a folded line reads as one. */
+    if (from == 0 || !E.wrap) {
+      api->fmt(buf, sizeof buf, "%3d", i + 1);
+      api->text((short)(c.x + 1), y, buf,
+                on_cursor ? CLR_TEXT : CLR_LINENO, CLR_GUTTER);
+    }
 
-    n = E.len[i] - E.leftcol;
+    n = to - from;
     if (n > cols) n = cols;
     if (n > 0) {
-      api->mem_cpy(buf, E.line[i] + E.leftcol, (size_t)n);
+      api->mem_cpy(buf, E.line[i] + from, (size_t)n);
       buf[n] = 0;
       api->text((short)(c.x + GUTTER), y, buf, CLR_TEXT, bg);
     }
 
-    if (on_cursor) {
-      short cxp = (short)(c.x + GUTTER + (E.cx - E.leftcol) * CHARW);
+    if (on_cursor && E.cx >= from && (!E.wrap || E.cx < to || last)) {
+      short cxp = (short)(c.x + GUTTER + (E.cx - from) * CHARW);
       api->fill(rect(cxp, y, 1, 8), CLR_CARET);
     }
   }
 
   /* Status bar: the two things you look down for are which file and whether it
    * is saved. The dot is the unsaved marker, coloured rather than lettered so
-   * it reads without being parsed. */
-  api->fill(rect(c.x, c.y + c.h - ROWH, c.w, ROWH), CLR_BAR);
-  if (E.dirty) api->fill(rect(c.x + 2, c.y + c.h - ROWH + 3, 3, 3), CLR_DIRTY);
+   * it reads without being parsed. It is the shared footer's strip, holding a
+   * status rather than keys: the keys are in the help. */
+  footer_paint(api, c, NULL);
+  if (E.dirty) api->fill(rect(c.x + 2, c.y + c.h - FOOT_H + 4, 3, 3), CLR_DIRTY);
   api->fmt(buf, sizeof buf, "%s  %d:%d  %s", E.path, E.cy + 1, E.cx + 1, E.status);
-  api->text((short)(c.x + 7), (short)(c.y + c.h - ROWH + 1), buf,
-            CLR_BAR_FG, CLR_BAR);
+  api->text((short)(c.x + 7), (short)(c.y + c.h - FOOT_H + 2), buf,
+            FOOT_FG, FOOT_BG);
 }
 
 /* What this editor can be asked to do. Keys map onto these and so do menu
  * items; see apps/toolbar.h for why a menu item is never a keystroke. */
 enum { ACT_NEW = 1, ACT_SAVE, ACT_SAVEAS, ACT_OPEN, ACT_PREVIEW, ACT_PRINT,
-       ACT_NOTE, ACT_NOTES };
+       ACT_NOTE, ACT_NOTES, ACT_WRAP };
 
 /* Commands (CAPP_CMD_YES): a note straight to the card, dated, without the
  * buffer -- the one thing people ask a notes app for by voice. They used to
@@ -686,6 +862,7 @@ static const CappAction EDIT_ACTIONS[] = {
   { "saveas",  "Save as", "File", 0x12, ACT_SAVEAS },   /* ctrl-r */
   { "open",    "Open...", "File", 0x0F, ACT_OPEN },     /* ctrl-o */
   { "preview", "Preview", "View", 0x10, ACT_PREVIEW },  /* ctrl-p */
+  { "wrap",    "Wrap lines", "View", 0x17, ACT_WRAP },  /* ctrl-w */
   { "print",   "Print",   "File", CAPP_KEY_PRINT, ACT_PRINT },  /* fn-p */
 };
 static const TbIcon EDIT_ICONS[] = { { "S", ACT_SAVE } };
@@ -706,7 +883,7 @@ static void print_buffer(void) {
     if (at + n + 1 >= (int)sizeof E.page) break;
     api->mem_cpy(E.page + at, E.line[i], (size_t)n);
     at += n;
-    E.page[at++] = 10;
+    if (!E.cont[i]) E.page[at++] = 10;   /* a continuation is the same line */
   }
   E.page[at] = 0;
   rc = api->print_fonts(E.page, "print24", "print24b", "print34b");
@@ -729,8 +906,20 @@ static int do_action(int a) {
   case ACT_SAVE:    save(); return 1;
   case ACT_SAVEAS:  ask_save(); return 1;
   case ACT_OPEN:    ask_open(); return 1;
-  case ACT_PREVIEW: E.view = VIEW_PREVIEW; E.ptop = 0; return 1;
+  /* The table's chords reach here before the key handler, in either view,
+   * so ctrl-p is a toggle here: in the preview it goes back to editing. */
+  case ACT_PREVIEW:
+    if (E.view == VIEW_PREVIEW) E.view = VIEW_EDIT;
+    else { E.view = VIEW_PREVIEW; E.ptop = 0; }
+    return 1;
   case ACT_PRINT:   print_buffer(); return 1;
+  /* The editor's wrap, so asked for from the preview it goes back to the
+   * editor to show what it did. */
+  case ACT_WRAP:
+    E.wrap = !E.wrap;
+    E.view = VIEW_EDIT;
+    say(E.wrap ? "wrap on" : "wrap off");
+    return 1;
   default: return 0;
   }
 }
@@ -772,16 +961,16 @@ static int app_tick(void *st, uint32_t now_ms) {
 
 static void app_paint(void *st, CRect c) {
   (void)st;
-  /* The bar belongs to the editor. The browser and the name prompt are
-   * whole screens of their own and have nothing to put on it. */
-  if (E.view == VIEW_PREVIEW) { paint_preview(c); return; }
+  /* The bar over both views. The preview used to skip it, and fn-b there
+   * put the keyboard into a menu nobody could see: every key went to it. */
   {
     CRect full = c;
     /* Only the dropdown moved: draw it and nothing else, or the content
      * under the menu is repainted on every mouse move and flickers. */
     if (toolbar_only_menu()) { toolbar_paint_menu(full); return; }
     toolbar_paint_bar(full);
-    paint_edit(toolbar_rest(full));
+    if (E.view == VIEW_PREVIEW) paint_preview(toolbar_rest(full));
+    else paint_edit(toolbar_rest(full));
     toolbar_paint_menu(full);
   }
 }
@@ -818,14 +1007,16 @@ static int key_edit(unsigned char k) {
   }
 }
 
-/* The preview reads; it does not edit. Anything that would change the text
- * puts you back in the editor first, rather than being quietly ignored. */
+/* The preview reads; it does not edit. Escape is back a level, to the
+ * editor, and so is Enter. ctrl-p, ctrl-s and ctrl-o are the action table's
+ * and never reach here: do_action answers them in either view. */
 static int key_preview(unsigned char k) {
   switch (k) {
-  case 0x10:                                      /* ctrl-p toggles back */
+  case CAPP_KEY_ESC:
   case CAPP_KEY_ENTER:
     E.view = VIEW_EDIT;
     return 1;
+  case 'p':            print_buffer(); return 1;
   /* Down only while there is more below: the rows are not all one height,
    * so "the last screenful" is whatever the last paint found. */
   case CAPP_KEY_UP:    E.ptop -= 1; return 1;
@@ -834,8 +1025,6 @@ static int key_preview(unsigned char k) {
   case CAPP_KEY_RIGHT:
   case ' ':            if (E.pmore) E.ptop += 6; return 1;
   case 'g':            E.ptop = 0; return 1;
-  case 0x0F: ask_open(); return 1;                /* ctrl-o, the file list */
-  case 0x13: save(); return 1;                    /* ctrl-s still saves */
   default: return 0;
   }
 }
@@ -855,28 +1044,35 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
   char path[64];
   CappTime t;
   size_t o = 0;
-  int fd, i, j, cnt;
+  int i, j, cnt;
   (void)st;
   (void)argc;
 
   api->mkdir(NOTES_DIR);
   switch (action) {
-  case ACT_NOTE:
+  /* .md, because the Notes app lists only NAME.md in /home/notes and syncs
+   * those to the server: a .txt note was saved and then never seen again.
+   * Notes titles a note by its first line, which here is what was said. */
+  case ACT_NOTE: {
+    SafeFile f;
     api->now(&t);
     if (t.synced)
-      api->fmt(path, sizeof path, "%s/%02u%02u-%02u%02u%02u.txt", NOTES_DIR,
+      api->fmt(path, sizeof path, "%s/%02u%02u-%02u%02u%02u.md", NOTES_DIR,
                t.month, t.day, t.hour, t.min, t.sec);
     else {
       cnt = api->list_ex(NOTES_DIR, ent, 40);
-      api->fmt(path, sizeof path, "%s/note%03d.txt", NOTES_DIR, cnt > 0 ? cnt + 1 : 1);
+      api->fmt(path, sizeof path, "%s/note%03d.md", NOTES_DIR, cnt > 0 ? cnt + 1 : 1);
     }
-    fd = api->open(path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
-    if (fd < 0) { api->fmt(out, n, "cannot write %s", path); return -1; }
-    api->write(fd, argv[0], api->str_len(argv[0]));
-    api->write(fd, "\n", 1);
-    api->close(fd);
+    if (safe_begin(&f, api, path) != 0) {
+      api->fmt(out, n, "cannot write %s", path);
+      return -1;
+    }
+    safe_line(&f, argv[0]);
+    safe_write(&f, "\n", 1);
+    if (safe_commit(&f) != 0) { api->fmt(out, n, "cannot write %s", path); return -1; }
     api->fmt(out, n, "saved %s", path);
     return 0;
+  }
 
   case ACT_NOTES:
     cnt = api->list_ex(NOTES_DIR, ent, 40);
@@ -932,16 +1128,25 @@ static int app_click(void *st, short x, short y, int button) {
     if (a != TB_NONE) return do_action(a);
   }
 
+  /* The preview has no caret to put anywhere. */
+  if (E.view != VIEW_EDIT) return 0;
+
   {
-    int r, i;
+    int r, i, from = E.leftcol, to;
     y = (short)(y - toolbar_h());
     r = y / ROWH;
-    i = E.top + r;
-    if (i < 0 || i >= E.nlines) return 0;
+    if (y < 0) return 0;
+    if (E.wrap) {
+      if (!wrap_row(r, shown_cols, &i, &from, &to)) return 0;
+    } else {
+      i = E.top + r;
+      if (i < 0 || i >= E.nlines) return 0;
+      to = E.len[i];
+    }
     E.cy = i;
-    E.cx = E.leftcol + (x - GUTTER) / CHARW;
-    if (E.cx < 0) E.cx = 0;
-    if (E.cx > E.len[i]) E.cx = E.len[i];
+    E.cx = from + (x - GUTTER) / CHARW;
+    if (E.cx < from) E.cx = from;
+    if (E.cx > to) E.cx = to;
     return 1;
   }
 }
@@ -1006,7 +1211,7 @@ const CappInfo capp_info = {
     0x10, 0x12, 0x10, 0x1F, 0x13, 0xC1, 0x10, 0x01,
     0x13, 0xE1, 0x10, 0x01, 0x13, 0xC1, 0x10, 0x01,
     0x11, 0xE1, 0x10, 0x01, 0x1F, 0xFF, 0x00, 0x00 },
-  "arrows\tmove\nenter\tsplit the line\nbackspace\tdelete\nctrl-n\tnew file\nctrl-s\tsave\nctrl-r\tsave as\nctrl-o\topen a file\nctrl-p\tmarkdown preview\nfn-p\tprint\nctrl-a\tstart of line\nctrl-e\tend of line\n",
+  "arrows\tmove\nenter\tsplit the line\nbksp\tdelete\nctrl-a\tstart of line\nctrl-e\tend of line\nctrl-w\twrap long lines, or not\nctrl-p\tpreview, and back\nctrl-s\tsave\nctrl-r\tsave as\nctrl-o\topen a file\nctrl-n\tnew file\nfn-p\tprint\nIn the preview\narrows\tscroll\nspace\ta screen down\ng\tthe top\np\tprint\nesc\tback to editing\nenter\tback to editing\n",
   EDIT_ACTIONS,
   sizeof EDIT_ACTIONS / sizeof EDIT_ACTIONS[0],
 };
