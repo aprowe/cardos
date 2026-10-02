@@ -162,6 +162,24 @@ void test_build_shows_what_the_server_is_doing(void) {
   poll_now();
   CHECK(C.job == 0);
   CHECK(C.progress[0] == 0);
+
+  /* A poll that brings nothing new asks for no repaint: every poll used to,
+   * and each repaint redrew the bar. With a message queued the bar shows no
+   * dots, so a repeated "pending" with the same step changes nothing. */
+  C.job = 7;
+  C.nqueued = 1;
+  C.check_update = 0;                         /* no update_check here */
+  HTTP_REPLY = "pending\nstep 1/2: reading";
+  NOW = C.next_poll = 5000;
+  CHECK(INST.tick(INST.state, NOW));          /* the step is new */
+  HAVE_PENDING = 0;
+  NOW = C.next_poll;
+  CHECK(!INST.tick(INST.state, NOW));         /* the same step again */
+  CHECK(!HAVE_PENDING);
+  HTTP_REPLY = "pending\nstep 2/2: writing";
+  NOW = C.next_poll;
+  CHECK(INST.tick(INST.state, NOW));          /* the bar's words changed */
+  C.nqueued = 0;
 }
 
 static void type_and_enter(const char *s) {
