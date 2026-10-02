@@ -168,6 +168,8 @@ server {
     server_name $DASH_HOST;
     location = /dash { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-proxy.conf; }
     location /dash/  { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-proxy.conf; }
+    location = /dash/photos/upload { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-upload.conf; }
+    location = /dash/files/put { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-upload.conf; }
     location = /google/creds { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-proxy.conf; }
     location = / { return 302 /dash; }
     location / { return 404; }
@@ -178,6 +180,15 @@ proxy_set_header Host \$host;
 proxy_set_header X-Real-IP \$remote_addr;
 proxy_set_header X-Forwarded-Proto \$scheme;
 client_max_body_size 16k;
+EOF
+    # The two routes that take a file: a photo, and a file for the card.
+    # Everything else stays at 16 KB -- the 16 KB that refused every photo
+    # dragged onto the dashboard with a 413 (2026-10-02).
+    cat > /etc/nginx/cardos-dash-upload.conf <<'EOF'
+proxy_set_header Host \$host;
+proxy_set_header X-Real-IP \$remote_addr;
+proxy_set_header X-Forwarded-Proto \$scheme;
+client_max_body_size 24m;
 EOF
     ln -sf /etc/nginx/sites-available/cardos-dash /etc/nginx/sites-enabled/cardos-dash
     nginx -t -q && systemctl reload nginx
