@@ -15,7 +15,7 @@
  * without this file changing. Answers written as `[ ] task` print as boxes to
  * tick with a pen; Todo's `show` and Habits' `today` answer that way for this.
  *
- * r gathers again, fn-p prints (in the print fonts: fonts/fonts.txt), e
+ * r gathers again, p or fn-p prints (in the print fonts: fonts/fonts.txt), e
  * opens the sections in Edit -- with a comment line naming the todo lists,
  * so choosing one is typing its name into the To do line. The page gathers
  * again by itself when the file changes. `do today print` is
@@ -39,6 +39,7 @@
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
+#include "apps/footer.h"
 
 static const CardApi *api;
 
@@ -50,7 +51,6 @@ static const CardApi *api;
 #define PAGE_MAX    4096
 #define ROW_H       16
 #define HEAD_H      20
-#define FOOT_H      11
 
 #define CLR_BG      CAPP_RGB(14, 16, 22)
 #define CLR_TEXT    CAPP_RGB(232, 236, 244)
@@ -58,7 +58,6 @@ static const CardApi *api;
 #define CLR_ACCENT  CAPP_RGB(255, 176, 76)
 #define CLR_BOX     CAPP_RGB(150, 160, 180)
 #define CLR_DONE    CAPP_RGB(76, 196, 128)
-#define CLR_FOOT    CAPP_RGB(30, 34, 44)
 #define CLR_WARN    CAPP_RGB(236, 104, 84)
 
 typedef struct {
@@ -220,24 +219,27 @@ static int with_lists_line(const char *file, const char *line, char *out, int n)
 }
 
 /* Before Edit opens: the file, with the lists as they are now. The page
- * buffer is borrowed -- the page is gathered again once the file changes. */
-static void refresh_lists_in_file(void) {
+ * buffer is borrowed, so 1 says the page is gone and the caller gathers it
+ * again. */
+static int refresh_lists_in_file(void) {
   char line[200];
   int fd, n, len = 0;
   SafeFile f;
-  if (lists_line(line, sizeof line) != 0) return;
+  if (lists_line(line, sizeof line) != 0) return 0;
   fd = safe_open_read(api, CONFIG);
-  if (fd < 0) return;
+  if (fd < 0) return 0;
   while (len < PAGE_MAX / 2 - 1 && (n = api->read(fd, D.page + len, (size_t)(PAGE_MAX / 2 - 1 - len))) > 0)
     len += n;
   api->close(fd);
   D.page[len] = 0;
-  if (with_lists_line(D.page, line, D.page + PAGE_MAX / 2, PAGE_MAX / 2) < 0) return;
-  if (safe_begin(&f, api, CONFIG) != 0) return;
-  safe_line(&f, D.page + PAGE_MAX / 2);
-  safe_commit(&f);
   D.len = 0;
+  if (with_lists_line(D.page, line, D.page + PAGE_MAX / 2, PAGE_MAX / 2) >= 0 &&
+      safe_begin(&f, api, CONFIG) == 0) {
+    safe_line(&f, D.page + PAGE_MAX / 2);
+    safe_commit(&f);
+  }
   D.page[0] = 0;
+  return 1;
 }
 
 static int32_t config_size(void) {
@@ -428,10 +430,9 @@ static void paint_line(const char *s, int len, int y, int x, int w) {
   }
 }
 
-static void paint_foot(const char *s, uint16_t fg) {
-  CRect f = rect(D.content.x, D.content.y + D.content.h - FOOT_H, D.content.w, FOOT_H);
-  api->fill(f, CLR_FOOT);
-  api->text((int16_t)(f.x + 4), (int16_t)(f.y + 2), s, fg, CLR_FOOT);
+/* The shared hint bar, apps/footer.h. */
+static void paint_foot(const char *s) {
+  footer_paint(api, D.content, s);
 }
 
 static void paint_page(void) {
@@ -471,8 +472,8 @@ static void paint_page(void) {
     p = *e ? e + 1 : e;
   }
   if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
-  paint_foot(D.ahead ? "fn-p print  t today  e edit sections"
-                      : "fn-p print  t tomorrow  e edit sections", CLR_DIM);
+  paint_foot(D.ahead ? "p print  t today  e edit sections"
+                     : "p print  t tomorrow  e edit sections");
 }
 
 static void app_paint(void *st, CRect full) {
@@ -546,11 +547,20 @@ static int do_action(int a) {
     return 1;
   case ACT_AGAIN: regather(); return 1;
   case ACT_DAY:   D.ahead = !D.ahead; regather(); return 1;
-  case ACT_EDIT:
-    refresh_lists_in_file();
+  case ACT_EDIT: {
+    /* The lists line borrows the page's buffer. It used to be left blank on
+     * the promise that the page would be gathered again when the file
+     * changed -- and coming back from Edit without saving, nothing changed
+     * and the page stayed empty. So a borrowed page is gathered again at
+     * once, on screen as any other gathering is. In the launcher Today is
+     * closed while Edit has the screen and this is moot; on the desktop
+     * the two are side by side. */
+    int lost = refresh_lists_in_file();
     D.cfg_size = config_size();
     api->run("edit", CONFIG);
+    if (lost) regather();
     return 1;
+  }
   default:        return 0;
   }
 }
@@ -665,8 +675,7 @@ const CappInfo capp_info = {
     0x37, 0xEC, 0x07, 0xE0, 0x7F, 0xFE, 0x40, 0x02,
     0x5E, 0x02, 0x40, 0x02, 0x5F, 0xE2, 0x40, 0x02,
     0x5C, 0x02, 0x40, 0x02, 0x7F, 0xFE, 0x00, 0x00 },
-  "fn-p\tprint the page\nt\ttomorrow's page, and back\nr\tgather again\n"
-
+  "p\tprint the page\nt\ttomorrow's page, and back\nr\tgather again\n"
   "e\tedit the sections; the todo lists are named in it\nup/down\tscroll\n",
   ACTIONS,
   sizeof ACTIONS / sizeof ACTIONS[0],
