@@ -6,10 +6,11 @@
  * file has no use for.
  *
  * What is here instead is the other half of the loop. ctrl-b assembles the
- * buffer and interprets it; ctrl-l compiles it to real Xtensa and jumps to
- * it; ctrl-x does both and compares, which is the only place the compiler
- * can actually be checked, because the host that runs the test suite is x86
- * and cannot execute what the compiler emits.
+ * buffer and interprets it. Compiling to real Xtensa and jumping to it, and
+ * running both and comparing -- the only place the compiler can actually be
+ * checked, because the host that runs the test suite is x86 -- are here
+ * too, but switched off until the emitter speaks the app's ABI (see
+ * NATIVE_RUN_ENABLED); their chords come back with them.
  *
  * Errors put the cursor on the offending line. An assembler that reports
  * "syntax error" without saying where is worse than no assembler at all.
@@ -20,6 +21,8 @@
  */
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
+#include "apps/footer.h"
+#include "apps/safefile.h"
 #include "apps/asmvm.h"
 
 
@@ -43,7 +46,6 @@
 #define CLR_TEXT    CAPP_RGB(214, 220, 232)
 #define CLR_CUR_BG  CAPP_RGB(38, 42, 52)
 #define CLR_CARET   CAPP_RGB(120, 200, 255)
-#define CLR_BAR     CAPP_RGB(48, 82, 128)
 #define CLR_BAR_FG  CAPP_RGB(232, 238, 248)
 #define CLR_DIRTY   CAPP_RGB(255, 190, 90)
 #define CLR_SEL     CAPP_RGB(52, 80, 116)
@@ -66,7 +68,7 @@ typedef enum { VIEW_BROWSE = 0, VIEW_EDIT, VIEW_NAME } View;
 /* What the filename prompt is for. One view serves both, because "what shall
  * it be called" is the same question either way -- only what happens after the
  * answer differs. */
-typedef enum { NAME_NEW = 0, NAME_SAVE_AS } NameFor;
+typedef enum { NAME_NEW = 0, NAME_SAVE_AS, NAME_RENAME } NameFor;
 
 static const CardApi *api;
 
@@ -78,6 +80,7 @@ static struct {
   char names[DIRMAX][NAMELEN];
   int  ndir;
   int  bsel;
+  int  confirm;                 /* d was pressed: y deletes the selection */
 
   /* buffer */
   char line[MAXLINES][MAXCOL + 1];
@@ -93,6 +96,7 @@ static struct {
 
   /* the filename prompt */
   NameFor name_for;
+  View    name_back;            /* the screen it was asked for from */
   char    name[40];
   int     name_len;
 } E;
@@ -123,7 +127,9 @@ static void load(const char *path) {
   blank();
   api->fmt(E.path, sizeof E.path, "%s", path);
 
-  fd = api->open(path, CAPP_O_READ);
+  /* Through safefile: a save cut off by a power cut leaves only NAME.tmp,
+   * and this is where it is put back. */
+  fd = safe_open_read(api, path);
   if (fd < 0) { say("new file"); return; }
 
   while ((n = api->read(fd, buf, sizeof buf)) > 0) {
@@ -163,6 +169,8 @@ out:
 }
 
 static void begin_name(NameFor why, const char *initial) {
+  E.name_back = E.view;           /* where Escape returns to */
+  E.confirm = 0;
   E.name_for = why;
   api->fmt(E.name, sizeof E.name, "%s", initial ? initial : "");
   E.name_len = (int)api->str_len(E.name);
@@ -177,15 +185,49 @@ static void save(void) {
    * new file, and the first thing typed should be the name rather than the
    * end of a name you have to delete first. */
   if (!E.path[0]) { begin_name(NAME_SAVE_AS, ""); return; }
-  fd = api->open(E.path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
-  if (fd < 0) { say("cannot write"); return; }
-  for (i = 0; i < E.nlines; i++) {
-    if (E.len[i]) api->write(fd, E.line[i], (size_t)E.len[i]);
-    if (i + 1 < E.nlines) api->write(fd, &nl, 1);
+
+  /* NAME.tmp, then remove and rename (apps/safefile.h): writing the file in
+   * place has a moment where the old program is gone and the new one is not
+   * all there, and a device pulled from a pocket mid-save lost it there.
+   * safefile holds paths of SF_PATH_MAX; a longer one is rare enough here
+   * that it is written in place as before rather than not at all. */
+  if (api->str_len(E.path) < SF_PATH_MAX) {
+    SafeFile f;
+    if (safe_begin(&f, api, E.path) != 0) { say("cannot write"); return; }
+    for (i = 0; i < E.nlines; i++) {
+      if (E.len[i]) safe_write(&f, E.line[i], (size_t)E.len[i]);
+      if (i + 1 < E.nlines) safe_write(&f, &nl, 1);
+    }
+    if (safe_commit(&f) != 0) { say("not saved: card full?"); return; }
+  } else {
+    fd = api->open(E.path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
+    if (fd < 0) { say("cannot write"); return; }
+    for (i = 0; i < E.nlines; i++) {
+      if (E.len[i]) api->write(fd, E.line[i], (size_t)E.len[i]);
+      if (i + 1 < E.nlines) api->write(fd, &nl, 1);
+    }
+    api->close(fd);
   }
-  api->close(fd);
   E.dirty = 0;
   say("saved");
+}
+
+/* The folder part of a path into E.dir, so a name typed next lands beside
+ * the file. Nothing changes for a bare name. */
+static void dir_of(const char *path) {
+  int i, cut = -1;
+  for (i = 0; path[i]; i++) if (path[i] == '/') cut = i;
+  if (cut < 0) return;
+  if (cut == 0) { api->fmt(E.dir, sizeof E.dir, "/"); return; }
+  if (cut >= (int)sizeof E.dir) return;
+  api->mem_cpy(E.dir, path, (size_t)cut);
+  E.dir[cut] = 0;
+}
+
+static const char *base_of(const char *path) {
+  const char *p, *b = path;
+  for (p = path; *p; p++) if (*p == '/') b = p + 1;
+  return b;
 }
 
 /* ------------------------------------------------------------ browser ---- */
@@ -196,6 +238,7 @@ static void rescan(void) {
 
   E.ndir = 0;
   E.bsel = 0;
+  E.confirm = 0;
   n = api->list(E.dir, &raw[0][0], DIRMAX, NAMELEN);
   if (n < 0) { say("cannot read folder"); return; }
   for (i = 0; i < n && E.ndir < DIRMAX; i++) {
@@ -212,14 +255,33 @@ static void go_up(void) {
   rescan();
 }
 
+/* A name in the folder being browsed, as a path. */
+static void in_dir(const char *name, char *path, size_t n) {
+  api->fmt(path, n, "%s%s%s", E.dir, E.dir[0] && E.dir[1] == 0 ? "" : "/", name);
+}
+
+/* d, then y: the selection goes. A folder with anything in it is refused by
+ * the card, and that is said rather than pretended. */
+static void delete_selected(void) {
+  char path[96];
+  int keep = E.bsel;
+  E.confirm = 0;
+  if (E.bsel < 0 || E.bsel >= E.ndir) return;
+  in_dir(E.names[E.bsel], path, sizeof path);
+  if (api->remove(path) != 0) { say("cannot delete that"); return; }
+  rescan();
+  E.bsel = keep < E.ndir ? keep : E.ndir - 1;
+  if (E.bsel < 0) E.bsel = 0;
+  say("deleted");
+}
+
 static void open_selected(void) {
   char path[96];
   int fd;
 
   if (E.bsel < 0 || E.bsel >= E.ndir) return;
 
-  api->fmt(path, sizeof path, "%s%s%s", E.dir,
-           E.dir[1] == 0 ? "" : "/", E.names[E.bsel]);
+  in_dir(E.names[E.bsel], path, sizeof path);
 
   /* A folder cannot be opened for reading, which is how this tells the two
    * apart -- there is no is_dir in the API an app is given. */
@@ -317,11 +379,35 @@ static void backspace(void) {
 
 /* The name is joined to the folder being browsed, so "notes.txt" lands where
  * you were looking rather than at the root. */
+static int same(const char *a, const char *b) {
+  while (*a && *a == *b) { a++; b++; }
+  return *a == *b;
+}
+
+/* Where Escape, or Backspace on an empty name, goes back to: the screen the
+ * prompt was asked for from. */
+static void leave_name(void) {
+  E.view = E.name_back == VIEW_NAME ? VIEW_EDIT : E.name_back;
+}
+
 static void finish_name(void) {
   char path[96];
 
-  if (E.name_len == 0) { E.view = VIEW_EDIT; return; }
-  api->fmt(path, sizeof path, "%s%s%s", E.dir, E.dir[1] == 0 ? "" : "/", E.name);
+  if (E.name_len == 0) { leave_name(); return; }
+  in_dir(E.name, path, sizeof path);
+
+  if (E.name_for == NAME_RENAME) {
+    char old[96];
+    in_dir(E.names[E.bsel], old, sizeof old);
+    E.view = VIEW_BROWSE;
+    if (api->rename(old, path) != 0) { say("cannot rename: name taken?"); return; }
+    /* The open buffer follows its file, or the next save recreates it. */
+    if (E.path[0] && same(E.path, old))
+      api->fmt(E.path, sizeof E.path, "%s", path);
+    rescan();
+    say("renamed");
+    return;
+  }
 
   if (E.name_for == NAME_NEW) {
     blank();
@@ -338,48 +424,44 @@ static void finish_name(void) {
 
 /* ------------------------------------------------------------ painting --- */
 
+/* The browser: what was said (the folder, or the last thing done) on a row
+ * at the top, the names under it, and the keys along the bottom -- or, with
+ * a delete pending, the question. */
+static int browse_rows = 1;     /* from the last paint, for a click */
+
 static void paint_browse(CRect c) {
-  int rows = (c.h - ROWH) / ROWH;
+  int rows = (c.h - ROWH - FOOT_H) / ROWH;
   int top = 0, i;
+  short y0 = (short)(c.y + ROWH);
 
   api->fill(c, CLR_BG);
+  api->fill(rect(c.x, c.y, c.w, ROWH), CLR_GUTTER);
+  api->text((short)(c.x + 3), c.y, E.status, CLR_DIM, CLR_GUTTER);
+  if (rows < 1) rows = 1;
+  browse_rows = rows;
   if (E.bsel >= rows) top = E.bsel - rows + 1;
 
   for (i = 0; i < rows && top + i < E.ndir; i++) {
     int idx = top + i;
-    short y = (short)(c.y + i * ROWH);
+    short y = (short)(y0 + i * ROWH);
     int sel = (idx == E.bsel);
     api->fill(rect(c.x, y, c.w, ROWH), sel ? CLR_SEL : CLR_BG);
     api->text((short)(c.x + 3), y, E.names[idx],
               sel ? CLR_BAR_FG : CLR_TEXT, sel ? CLR_SEL : CLR_BG);
   }
   if (E.ndir == 0)
-    api->text((short)(c.x + 3), c.y, "empty", CLR_DIM, CLR_BG);
+    api->text((short)(c.x + 3), y0, "empty", CLR_DIM, CLR_BG);
 
-  api->fill(rect(c.x, c.y + c.h - ROWH, c.w, ROWH), CLR_BAR);
-  api->text((short)(c.x + 2), (short)(c.y + c.h - ROWH + 1), E.status,
-            CLR_BAR_FG, CLR_BAR);
+  if (E.confirm) {
+    /* The name cut to fit, so the keys at the end are never what is lost. */
+    char q[FOOT_CHARS + 1], nm[17];
+    api->fmt(nm, sizeof nm, "%s", E.bsel < E.ndir ? E.names[E.bsel] : "");
+    api->fmt(q, sizeof q, "delete %s?  y yes  n no", nm);
+    footer_paint(api, c, q);
+  } else {
+    footer_paint(api, c, "enter open  n new  e rename  d delete");
+  }
 }
-
-/* ------------------------------------------------------- markdown ---- */
-
-/* A preview, not a parser.
- *
- * Markdown is a large specification and almost none of it earns its place on
- * a 240-pixel screen. What is here is what people actually write in notes:
- * headings, lists, quotes, code, rules, and bold or `code` inside a line.
- * Anything unrecognised is drawn as the text it is, which is markdown's whole
- * premise and a good fallback.
- *
- * It renders from the edit buffer rather than the file, so a preview shows
- * what you have typed and not what you last saved.
- *
- * There is no font but the 6x8 one and no way to scale it -- the API draws
- * text one way. Weight is therefore faked by drawing a glyph twice, one pixel
- * apart, which at this size reads convincingly as bold; headings get that
- * plus colour plus a rule under the big ones. Italics have no honest
- * equivalent, so emphasis is shown in colour instead of being invented.
- */
 
 /* ------------------------------------------------------- running it ---- */
 
@@ -587,7 +669,8 @@ static void build_and_run(int native) {
  * real assembler produces, but they cannot execute the result -- the machine
  * that runs them is x86. This is the only place the compiler is actually
  * tested against the interpreter, so it lives in the app rather than in the
- * suite. */
+ * suite. Built only with native runs, like its action. */
+#if NATIVE_RUN_ENABLED
 static void verify_both(void) {
   AsmState want;
   uint32_t ms = 0;
@@ -623,12 +706,13 @@ static void verify_both(void) {
   }
   api->fmt(E.status, sizeof E.status, "%s", G.out[G.nout - 1]);
 }
+#endif
 
 static void paint_console(CRect c) {
   int h = console_h(), i;
   short y0;
   if (!h) return;
-  y0 = (short)(c.y + c.h - ROWH - h);
+  y0 = (short)(c.y + c.h - FOOT_H - h);
   api->fill(rect(c.x, y0, c.w, h), CLR_GUTTER);
   api->fill(rect(c.x, y0, c.w, 1), CLR_SEL);
   for (i = 0; i < G.nout && i < CON_LINES; i++)
@@ -637,7 +721,7 @@ static void paint_console(CRect c) {
 }
 
 static void paint_edit(CRect c) {
-  int rows = (c.h - ROWH - console_h()) / ROWH;
+  int rows = (c.h - FOOT_H - console_h()) / ROWH;
   int cols = (c.w - GUTTER) / CHARW;
   char buf[MAXCOL + 8];
   int r;
@@ -682,13 +766,14 @@ static void paint_edit(CRect c) {
 
   /* Status bar: the two things you look down for are which file and whether it
    * is saved. The dot is the unsaved marker, coloured rather than lettered so
-   * it reads without being parsed. */
+   * it reads without being parsed. It is the shared footer's strip, holding
+   * a status rather than keys: the keys are in the help. */
   paint_console(c);
-  api->fill(rect(c.x, c.y + c.h - ROWH, c.w, ROWH), CLR_BAR);
-  if (E.dirty) api->fill(rect(c.x + 2, c.y + c.h - ROWH + 3, 3, 3), CLR_DIRTY);
+  footer_paint(api, c, NULL);
+  if (E.dirty) api->fill(rect(c.x + 2, c.y + c.h - FOOT_H + 4, 3, 3), CLR_DIRTY);
   api->fmt(buf, sizeof buf, "%s  %d:%d  %s", E.path, E.cy + 1, E.cx + 1, E.status);
-  api->text((short)(c.x + 7), (short)(c.y + c.h - ROWH + 1), buf,
-            CLR_BAR_FG, CLR_BAR);
+  api->text((short)(c.x + 7), (short)(c.y + c.h - FOOT_H + 2), buf,
+            FOOT_FG, FOOT_BG);
 }
 
 static void paint_name(CRect c) {
@@ -697,7 +782,8 @@ static void paint_name(CRect c) {
 
   api->fill(c, CLR_BG);
   api->text((short)(c.x + 8), y,
-            E.name_for == NAME_NEW ? "New file" : "Save as", CLR_BAR_FG, CLR_BG);
+            E.name_for == NAME_NEW ? "New file" :
+            E.name_for == NAME_RENAME ? "Rename" : "Save as", CLR_BAR_FG, CLR_BG);
   api->text((short)(c.x + 8), (short)(y + 11), E.dir, CLR_DIM, CLR_BG);
 
   api->fill(rect(c.x + 6, y + 24, c.w - 12, 13), CLR_CUR_BG);
@@ -707,9 +793,7 @@ static void paint_name(CRect c) {
   shown[E.name_len + 1] = 0;
   api->text((short)(c.x + 9), (short)(y + 27), shown, CLR_TEXT, CLR_CUR_BG);
 
-  api->fill(rect(c.x, c.y + c.h - ROWH, c.w, ROWH), CLR_BAR);
-  api->text((short)(c.x + 3), (short)(c.y + c.h - ROWH + 1),
-            "enter confirms   backspace cancels when empty", CLR_BAR_FG, CLR_BAR);
+  footer_paint(api, c, "enter ok  esc cancel");
 }
 
 /* What this editor can be asked to do. Keys map onto these and so do menu
@@ -723,24 +807,45 @@ static const CappAction EDIT_ACTIONS[] = {
   { "saveas",  "Save as",     "File", 0x12, ACT_SAVEAS },  /* ctrl-r */
   { "close",   "Close",       "File", 0x0F, ACT_OPEN },    /* ctrl-o */
   { "run.vm",  "On the VM",   "Run",  0x02, ACT_VM },      /* ctrl-b */
+  /* Only when they do something: a menu item and a help line for a run
+   * that answers "native run is off" is an advert for nothing. */
+#if NATIVE_RUN_ENABLED
   { "run.native", "Compile+run", "Run", 0x0C, ACT_NATIVE },/* ctrl-l */
   { "verify",  "Verify both", "Run",  0x18, ACT_VERIFY },  /* ctrl-x */
+#endif
   { "console", "Console",     "View", 0x10, ACT_CONSOLE }, /* ctrl-p */
 };
 static const TbIcon EDIT_ICONS[] = { { "R", ACT_VM } };
 
 #define NEDIT ((int)(sizeof EDIT_ACTIONS / sizeof EDIT_ACTIONS[0]))
 
+/* The table's chords reach here before the key handler, in every view, so
+ * each action says what it means in the browser and the name prompt too.
+ * Save, Save as, running and the console are about the buffer: from the
+ * browser they go back to it, and from a prompt they wait. */
 static int do_action(int a) {
+  if (E.view == VIEW_NAME) return 1;         /* typing a name: finish it first */
   switch (a) {
   case ACT_NEW:     begin_name(NAME_NEW, ""); return 1;
-  case ACT_SAVE:    save(); return 1;
-  case ACT_SAVEAS:  begin_name(NAME_SAVE_AS, E.path[0] ? E.path : "untitled.s"); return 1;
-  case ACT_OPEN:    E.view = VIEW_BROWSE; rescan(); return 1;
-  case ACT_VM:      build_and_run(0); return 1;
-  case ACT_NATIVE:  build_and_run(1); return 1;
-  case ACT_VERIFY:  verify_both(); return 1;
-  case ACT_CONSOLE: G.console = !G.console; return 1;
+  case ACT_SAVE:    E.view = VIEW_EDIT; save(); return 1;
+  case ACT_SAVEAS:
+    /* The name alone, in the file's own folder: the prompt joins the two,
+     * and handing it the whole path saved to /home/asm//home/asm/x.s. */
+    if (E.path[0]) dir_of(E.path);
+    E.view = VIEW_EDIT;
+    begin_name(NAME_SAVE_AS, E.path[0] ? base_of(E.path) : "untitled.s");
+    return 1;
+  case ACT_OPEN:
+    if (E.view == VIEW_BROWSE) { E.view = VIEW_EDIT; return 1; }   /* a toggle */
+    E.view = VIEW_BROWSE;
+    rescan();
+    return 1;
+  case ACT_VM:      E.view = VIEW_EDIT; build_and_run(0); return 1;
+#if NATIVE_RUN_ENABLED
+  case ACT_NATIVE:  E.view = VIEW_EDIT; build_and_run(1); return 1;
+  case ACT_VERIFY:  E.view = VIEW_EDIT; verify_both(); return 1;
+#endif
+  case ACT_CONSOLE: E.view = VIEW_EDIT; G.console = !G.console; return 1;
   default: return 0;
   }
 }
@@ -765,7 +870,17 @@ static void app_paint(void *st, CRect c) {
 
 /* --------------------------------------------------------------- input --- */
 
+/* The OS's key vocabulary: Enter opens, n new, e rename, d or Del delete
+ * (asked first), r re-reads, Escape back to the editor when there is one
+ * behind the list. Backspace and left go up a folder. */
 static int key_browse(unsigned char k) {
+  /* A delete waits for its answer, and nothing else happens meanwhile. */
+  if (E.confirm) {
+    if (k == 'y' || k == 'Y') delete_selected();
+    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK)
+      E.confirm = 0;
+    return 1;
+  }
   switch (k) {
   case CAPP_KEY_UP:   if (E.bsel > 0) E.bsel--; return 1;
   case CAPP_KEY_DOWN: if (E.bsel + 1 < E.ndir) E.bsel++; return 1;
@@ -776,7 +891,19 @@ static int key_browse(unsigned char k) {
   case 'n': case 'N':
     begin_name(NAME_NEW, "");
     return 1;
+  case 'e': case 'E':
+    if (E.bsel < E.ndir) begin_name(NAME_RENAME, E.names[E.bsel]);
+    return 1;
+  case 'd': case 'D': case 0x7F:
+    if (E.bsel < E.ndir) E.confirm = 1;
+    return 1;
   case 'r': case 'R': rescan(); return 1;
+  case CAPP_KEY_ESC:
+    /* Back to the buffer the list was opened over. Opened straight into the
+     * list there is nothing behind it, and the top level keeps Escape. */
+    if (!E.path[0] && !E.dirty) return 0;
+    E.view = VIEW_EDIT;
+    return 1;
   default: return 0;
   }
 }
@@ -812,9 +939,10 @@ static int key_edit(unsigned char k) {
 
 static int key_name(unsigned char k) {
   if (k == CAPP_KEY_ENTER) { finish_name(); return 1; }
+  if (k == CAPP_KEY_ESC) { leave_name(); return 1; }
   if (k == CAPP_KEY_BACK) {
     if (E.name_len > 0) E.name[--E.name_len] = 0;
-    else E.view = (E.name_for == NAME_NEW) ? VIEW_BROWSE : VIEW_EDIT;
+    else leave_name();
     return 1;
   }
   /* No slashes: this names a file in the folder being browsed, and a path
@@ -849,19 +977,30 @@ static int menu_key(unsigned char k, int *handled) {
 static int app_key(void *st, unsigned char k) {
   int handled, r;
   (void)st;
+  /* The bar is drawn over the editor only; the browser and the prompt are
+   * screens of their own. fn-b there used to put the keyboard in a menu
+   * that was not on screen, and every key after it vanished into it. */
+  if (E.view != VIEW_EDIT) {
+    if (toolbar_has_keys()) toolbar_unfocus();
+    if (E.view == VIEW_BROWSE) return key_browse(k);
+    return key_name(k);
+  }
   r = menu_key(k, &handled);
   if (handled) return r;
-  if (E.view == VIEW_BROWSE) return key_browse(k);
-  if (E.view == VIEW_NAME) return key_name(k);
   return key_edit(k);
 }
 
 static int app_click(void *st, short x, short y, int button) {
   (void)st; (void)button;
 
+  if (E.view == VIEW_NAME) return 0;
   if (E.view == VIEW_BROWSE) {
-    int i = y / ROWH;
-    if (i < 0 || i >= E.ndir) return 0;
+    /* Under the status row, and scrolled the way paint_browse scrolls. */
+    int rows = browse_rows, top = 0, i;
+    if (E.confirm) return 0;
+    if (E.bsel >= rows) top = E.bsel - rows + 1;
+    i = (y - ROWH) / ROWH + top;
+    if (y < ROWH || i < 0 || i >= E.ndir) return 0;
     if (i == E.bsel) open_selected();
     else E.bsel = i;
     return 1;
@@ -916,8 +1055,9 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
  * machine whose arrow keys are ; . , / needs those back. */
 static int app_wants_text(void *st) {
   (void)st;
+  if (E.view == VIEW_NAME) return 1;     /* the bar is not on this screen */
   if (toolbar_has_keys()) return 0;
-  return E.view == VIEW_EDIT || E.view == VIEW_NAME;
+  return E.view == VIEW_EDIT;
 }
 
 static void app_open(void *st) {
@@ -930,6 +1070,10 @@ static void app_open(void *st) {
 static void app_set_args(void *st, const char *path) {
   (void)st;
   load(path);
+  /* The list and a new name start beside the file, not wherever E.dir
+   * happened to be -- empty, before, which put a new file at "name". */
+  if (!E.dir[0]) api->fmt(E.dir, sizeof E.dir, "%s", ASM_HOME);
+  dir_of(path);
   E.view = VIEW_EDIT;
 }
 
@@ -942,7 +1086,7 @@ const CappInfo capp_info = {
     0x48, 0x02, 0x44, 0x02, 0x42, 0x02, 0x44, 0x02,
     0x48, 0x02, 0x40, 0x02, 0x43, 0x82, 0x40, 0x02,
     0x40, 0x02, 0x7F, 0xFE, 0x00, 0x00, 0x00, 0x00 },
-  "ctrl-b\trun on the VM\nctrl-l\tcompile to Xtensa and run\nctrl-x\trun both and compare\nctrl-p\tshow or hide the console\nctrl-s\tsave\nctrl-n\tnew file\nctrl-r\tsave as\nctrl-o\tback to the file list\nctrl-a\tstart of line\nctrl-e\tend of line\n",
+  "ctrl-b\trun on the VM\nctrl-p\tshow or hide the console\nctrl-s\tsave\nctrl-r\tsave as\nctrl-n\tnew file\nctrl-o\tthe file list, and back\nctrl-a\tstart of line\nctrl-e\tend of line\nIn the file list\nenter\topen\nbksp\tup a folder\nn\tnew file\ne\trename\nd, del\tdelete (y to confirm)\nr\tread the folder again\nesc\tback to the editor\n",
 };
 
 /* Static, not a local: the shell keeps calling into this long after
