@@ -747,6 +747,33 @@ hardware-specific. What it cost to learn:
   lands in it rather than at the top level, which is where every app Build
   made used to end up.
 
+- **Every app speaks the same keys** (2026-10-02). A letter means one
+  thing everywhere, so a key learned in one app works in the next:
+
+  | Key | Means |
+  |---|---|
+  | Enter | open, or the view's main action |
+  | Space | toggle: done, play/pause, start/stop |
+  | Esc | back one level -- out of every prompt, form, confirm and subview; never leaves the app (fn-` does, and is the OS's) |
+  | n | new (`a` stays as an alias where it was add: Todo, Calendar, Habits) |
+  | e | edit, rename, describe |
+  | d / Del | delete, always confirmed: y yes, n / Esc / Bksp no |
+  | r | refresh, sync, re-read (`s` stays an alias for sync in Todo, Calendar, Notes) |
+  | p / fn-p | print; never anything else |
+  | o | open in another app (Files: in the editor) |
+  | v | paste |
+  | arrows | move; left/right also step a day or page where there is one |
+
+  Exceptions, on purpose: Roku is a remote and keeps the remote's
+  buttons; Memo's `r` records; Clock's `a` is alarms; games keep their
+  own controls. The bottom hint bar is `apps/footer.h` -- 11 px, one fill,
+  "key word" pairs, at most 38 characters; the rest goes in the app's
+  help, which fn-h shows with the action table's chords appended. App help
+  does not mention fn-` or fn-h: they are the OS's, the same in every app.
+  An action-table chord is matched before the app's key handler in every
+  view, so an action that only makes sense in one view must check the
+  view in its handler.
+
 - **An app's own files are saved through `apps/safefile.h`**: write
   `NAME.tmp`, remove `NAME`, rename (the card's rename will not replace a
   file), and `safe_open_read` puts back a `.tmp` a power cut stranded. A

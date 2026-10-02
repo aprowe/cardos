@@ -226,10 +226,11 @@ typedef struct {
 #define CAPP_KEY_ENTER 0x0D
 #define CAPP_KEY_BACK  0x08
 
-/* The key labelled ESC. An app now receives this before the shell acts on
- * it: return 1 to use it as "back a level", return 0 and the shell leaves
- * the app. A top-level view should decline it. fn-` leaves regardless and
- * never reaches here, so an app cannot trap the user by keeping it. */
+/* The key labelled ESC: back one level -- out of a prompt, a form, a
+ * subview, a confirm. It never leaves the app; a top-level view that
+ * declines it simply keeps it (since 2026-09-20). fn-` leaves, and never
+ * reaches an app, so an app cannot trap the user. Every view that is not
+ * the top one must take Escape: a prompt that swallows it is a trap. */
 #define CAPP_KEY_ESC   0x1B
 
 /* fn-b: show the menu bar and put the keyboard in it, or hide it again.
