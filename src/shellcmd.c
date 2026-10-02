@@ -796,8 +796,9 @@ static void print_show_status(void) {
  * markdown-shaped, so a note prints as written. 6 KB is a long receipt. */
 /* The whole file, up to PRINT_FILE_MAX. It was 6 KB, which cut a photo off
  * after a few rows: one dithered for the paper (server/photos.py) is about
- * 20 KB of `%%` lines. printq copies the document, and this copy goes as
- * soon as it has, so the peak is two copies for a moment. */
+ * 20-30 KB of `%%` lines. And handed over, not copied: two copies of a
+ * photo's 32 KB did not fit beside Photos, and the print said "no memory"
+ * before it started. */
 #define PRINT_FILE_MAX (48 * 1024)
 
 static void print_file(const char *path) {
@@ -821,8 +822,7 @@ static void print_file(const char *path) {
   fs_close(fd);
   if (got < 0) got = 0;
   text[got] = 0;
-  rc = printq_print_doc(text);
-  free(text);
+  rc = printq_print_doc_owned(text);     /* the job keeps this copy, not one more */
   if (rc == 0) con_printf("printing %s (%d bytes)\n", full, got);
   else if (rc == -1) con_write("print: a job is already printing\n");
   else if (rc == -2) con_write("print: no printer set: print scan, then print use N\n");

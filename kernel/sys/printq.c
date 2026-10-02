@@ -229,16 +229,18 @@ static void doc_done(void *ctx) {
   free(d);
 }
 
-int printq_print_doc_fonts(const char *doc, const char *body, const char *bold,
-                           const char *head) {
+/* The document is `owned` when the caller hands over its own heap copy
+ * rather than having it copied. */
+static int print_doc(char *owned, const char *doc, const char *body, const char *bold,
+                     const char *head) {
   const char *name[3];
   DocJob *d;
   int rc, i;
-  if (!doc) return -3;
-  if (s_busy) return -1;
+  if (!doc) { free(owned); return -3; }
+  if (s_busy) { free(owned); return -1; }
   d = (DocJob *)calloc(1, sizeof *d);
-  if (!d) return -3;
-  d->text = strdup(doc);
+  if (!d) { free(owned); return -3; }
+  d->text = owned ? owned : strdup(doc);
   if (!d->text) { free(d); return -3; }
   /* Only the names now. The job loads its own copies once the radio is up
    * (doc_prepare), owned by the job: the app may close before the paper is
@@ -254,8 +256,17 @@ int printq_print_doc_fonts(const char *doc, const char *body, const char *bold,
   return rc;
 }
 
+int printq_print_doc_fonts(const char *doc, const char *body, const char *bold,
+                           const char *head) {
+  return print_doc(NULL, doc, body, bold, head);
+}
+
 int printq_print_doc(const char *doc) {
-  return printq_print_doc_fonts(doc, NULL, NULL, NULL);
+  return print_doc(NULL, doc, NULL, NULL, NULL);
+}
+
+int printq_print_doc_owned(char *doc) {
+  return print_doc(doc, doc, NULL, NULL, NULL);
 }
 
 int printq_busy(void) { return s_busy; }

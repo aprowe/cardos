@@ -24,6 +24,12 @@
  * printq_status(). */
 int printq_print_doc(const char *doc);
 
+/* The same for a document already on the heap: the job takes it, and frees
+ * it when the paper is out -- or at once, if the job does not start. Not
+ * copied, because a photo's document is 30 KB and two of those did not fit
+ * beside an open app (2026-10-02). */
+int printq_print_doc_owned(char *doc);
+
 /* The same, set in fonts from /fonts (names as fontres_load takes them, any
  * NULL). The job loads its own copies and frees them when the paper is out,
  * so the app that asked can close meanwhile. A font that will not load is
