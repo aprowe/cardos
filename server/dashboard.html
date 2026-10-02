@@ -50,6 +50,14 @@ a{color:inherit}
 .notes-ed textarea{flex:1;min-height:min(56vh,500px);border:0;resize:vertical;background:transparent;color:var(--ink);font:14px/1.55 var(--mono);padding:14px;outline:none}
 .notes-bar{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--line)}
 .notes-bar .grow{flex:1}
+.drop{border:2px dashed var(--line2);border-radius:12px;padding:22px;text-align:center;color:var(--ink2);margin-bottom:14px;transition:background .15s,border-color .15s}
+.drop.over{background:var(--accent-soft);border-color:var(--accent)}
+.drop b{color:var(--ink)}
+.photo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.ph{position:relative;border-radius:10px;overflow:hidden;background:var(--panel2);box-shadow:inset 0 0 0 1px var(--line)}
+.ph img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#000}
+.ph .cap{display:flex;align-items:center;gap:6px;padding:6px 8px;font-size:13px}
+.ph .cap span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .term{padding:0;overflow:hidden}
 .term-out{background:var(--screen);color:var(--screen-ink);font:13px/1.45 var(--mono);padding:12px 14px;height:min(58vh,520px);overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere}
 .term-out .cmd{color:var(--screen-hi)}
@@ -408,6 +416,7 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
       <a href="#/files" data-view="files"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M10 3v4M13 3v4"/></svg>SD card<span class="end"><span class="badge js-xbadge hidden"></span><span class="dot js-nd-files"></span></span></a>
       <a href="#/term" data-view="term"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Terminal<span class="end"><span class="dot js-nd-files"></span></span></a>
       <a href="#/notes" data-view="notes"><svg class="i" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>Notes</a>
+      <a href="#/photos" data-view="photos"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg>Photos</a>
     <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts &amp; keys<span class="end"><span class="dot js-nd-accounts"></span></span></a>
       <a href="#/server" data-view="server"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>Server<span class="end"><span class="dot js-nd-server"></span></span></a>
       <a href="#/updates" data-view="updates"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
@@ -459,6 +468,16 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
           <div class="term-sug" id="term-sug"></div>
         </div>
         <p class="faint term-note">Commands run on the device's console, one at a time, and answer when they finish &mdash; an <span class="mono">update</span> can take minutes. Lines that would take over its screen (<span class="mono">launch</span>, <span class="mono">desk</span>, <span class="mono">run</span>) are refused.</p>
+      </section>
+
+      <section class="view block" id="v-photos">
+        <div class="sec-head">
+          <div><span class="lab">on the server, synced to the device</span><h2>Photos</h2></div>
+          <div class="side-info"><span id="ph-state" class="faint"></span><button class="btn sm primary" data-act="ph-add">Add photos</button></div>
+        </div>
+        <div class="drop" id="ph-drop"><b>Drop pictures here</b> &mdash; JPG, PNG, GIF, WebP. The device gets a screen copy and a print copy the next time Photos opens.</div>
+        <div class="photo-grid" id="ph-grid"></div>
+        <input type="file" id="ph-file" accept="image/*" multiple hidden>
       </section>
 
       <section class="view block" id="v-notes">
@@ -532,6 +551,7 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
     <a href="#/files" data-view="files"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M10 3v4M13 3v4"/></svg>Card<span class="badge js-xbadge hidden"></span><span class="dot js-nd-files"></span></a>
     <a href="#/term" data-view="term"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Term</a>
     <a href="#/notes" data-view="notes"><svg class="i" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>Notes</a>
+      <a href="#/photos" data-view="photos"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg>Photos</a>
     <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts<span class="dot js-nd-accounts"></span></a>
     <a href="#/server" data-view="server"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/></svg>Server<span class="dot js-nd-server"></span></a>
     <a href="#/updates" data-view="updates"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
@@ -1458,6 +1478,56 @@ $('#term-line').addEventListener('keydown',e=>{
   else if(e.key==='ArrowDown'){ if(T.hi<T.hist.length){ T.hi++; e.target.value=T.hist[T.hi]||''; } e.preventDefault(); }
 });
 
+/* ---------- photos ----------
+ * Kept on the server (server/photos.py) with a screen copy and a print copy;
+ * the device's Photos app syncs them. */
+const PH={list:[],busy:0};
+async function photosLoad(){
+  try{ const r=await fetch('/dash/photos',{credentials:'same-origin'}); if(r.status===403){ signedOut(); return; } PH.list=await r.json(); }
+  catch(e){ toast('Couldn’t load the photos.','err'); }
+  renderPhotos();
+}
+function renderPhotos(){
+  const g=$('#ph-grid'); if(!g) return;
+  $('#ph-state').textContent=PH.busy?`adding ${PH.busy}…`:PH.list.length?`${PH.list.length} photo${PH.list.length===1?'':'s'}`:'';
+  g.innerHTML=PH.list.length?PH.list.map(p=>`<div class="ph"><img loading="lazy" alt="" src="/dash/photos/thumb?id=${esc(p.id)}"><div class="cap"><span title="${esc(p.name)}">${esc(p.name)}</span><button class="icon-btn" data-act="ph-del" data-id="${esc(p.id)}" title="Delete" aria-label="Delete ${esc(p.name)}">${ic('trash')}</button></div></div>`).join('')
+    :'<p class="dim" style="grid-column:1/-1;margin:0">No photos yet.</p>';
+}
+async function photosAdd(files){
+  const pics=[...files].filter(f=>/^image\//.test(f.type)||/\.(jpe?g|png|gif|webp|bmp)$/i.test(f.name));
+  if(!pics.length){ toast('Those aren’t pictures.','err'); return; }
+  for(const f of pics){
+    PH.busy++; renderPhotos();
+    try{
+      const r=await fetch('/dash/photos/upload?name='+encodeURIComponent(f.name),{method:'POST',credentials:'same-origin',body:f});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(j.error||('the server said '+r.status));
+    }catch(e){ toast(`${f.name}: ${e.message}`,'err'); }
+    PH.busy--;
+  }
+  await photosLoad();
+  toast(pics.length===1?'Added. The device gets it when Photos opens.':`Added ${pics.length}. The device gets them when Photos opens.`);
+}
+async function photosDelete(id){
+  const p=PH.list.find(x=>x.id===id);
+  const r=await modal({title:'Delete this photo?',html:`<p>${esc(p?p.name:'')} goes from here, and from the device the next time it syncs.</p>`,actions:[{label:'Cancel'},{label:'Delete',value:1,kind:'danger'}]});
+  if(!r) return;
+  const res=await fetch('/dash/photos/photo?id='+encodeURIComponent(id),{method:'DELETE',credentials:'same-origin'});
+  if(!res.ok){ toast('Couldn’t delete it.','err'); return; }
+  await photosLoad();
+}
+(function(){
+  const d=$('#ph-drop');
+  ['dragenter','dragover'].forEach(ev=>d.addEventListener(ev,e=>{ e.preventDefault(); d.classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev=>d.addEventListener(ev,e=>{ e.preventDefault(); d.classList.remove('over'); }));
+  d.addEventListener('drop',e=>{ if(e.dataTransfer&&e.dataTransfer.files.length) photosAdd(e.dataTransfer.files); });
+  /* Dropped anywhere on the Photos page, not only on the box. */
+  const v=$('#v-photos');
+  v.addEventListener('dragover',e=>e.preventDefault());
+  v.addEventListener('drop',e=>{ e.preventDefault(); d.classList.remove('over'); if(e.target!==d&&e.dataTransfer&&e.dataTransfer.files.length) photosAdd(e.dataTransfer.files); });
+  $('#ph-file').onchange=e=>{ photosAdd(e.target.files); e.target.value=''; };
+})();
+
 /* ---------- notes ----------
  * Kept on the server (server/notes.py); the device syncs its own copies. */
 const N={list:[],id:null,clean:'',busy:false};
@@ -1515,7 +1585,7 @@ $('#note-text').addEventListener('keydown',e=>{ if((e.ctrlKey||e.metaKey)&&e.key
 window.addEventListener('beforeunload',e=>{ if(N.id!==undefined&&noteDirty()){ e.preventDefault(); e.returnValue=''; } });
 
 /* ---------- routing ---------- */
-const VIEWS={home:'Overview',files:'SD card',term:'Terminal',notes:'Notes',accounts:'Accounts & keys',server:'Server',updates:'Updates',settings:'Settings'};
+const VIEWS={home:'Overview',files:'SD card',term:'Terminal',notes:'Notes',photos:'Photos',accounts:'Accounts & keys',server:'Server',updates:'Updates',settings:'Settings'};
 function currentView(){ const v=(location.hash.match(/^#\/(\w+)/)||[])[1]; return VIEWS[v]?v:'home'; }
 function route(){
   const v=currentView();
@@ -1527,6 +1597,7 @@ function route(){
   if(v==='files') renderCard();
   if(v==='term'){ renderTerm(); setTimeout(()=>$('#term-line').focus(),0); }
   if(v==='notes') notesLoad();
+  if(v==='photos') photosLoad();
   if(v==='accounts'&&!CL.v&&!CL.busy) claudeLoad(false);
 }
 window.addEventListener('hashchange',route);
@@ -1564,6 +1635,8 @@ document.addEventListener('click',e=>{
     case 'g-signin': gSignIn(); break;
     case 'g-signout': gSignOut(); break;
     case 't-disconnect': tDisconnect(); break;
+    case 'ph-add': $('#ph-file').click(); break;
+    case 'ph-del': photosDelete(b.dataset.id); break;
     case 'cl-start': claudeStart(); break;
     case 'cl-check': claudeLoad(true); break;
     case 'cl-paste': CL.paste=!CL.paste; renderClaude(); break;

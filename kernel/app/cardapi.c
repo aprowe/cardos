@@ -180,8 +180,12 @@ static const char *api_net_status(void) {
   if (h && strcmp(h, "no error") != 0 && wifi_is_connected()) return h;
   return wifi_status();
 }
+/* With the device's token when the file is on its own server, as http and
+ * http_upload send it: Photos' pictures are behind it, and without one the
+ * server answered 403 into the file. */
+static const char *own_bearer(const char *url, const char *bearer);
 static int api_http_download(const char *url, const char *path, int t) {
-  return http_download(url, path, t);
+  return http_download_ex(url, path, own_bearer(url, NULL), NULL, NULL, t);
 }
 static int api_net_connect(int timeout_ms) {
   if (wifi_is_connected()) return 0;

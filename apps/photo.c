@@ -1,35 +1,60 @@
-/* A picture viewer, as a loadable CardOS app.
+/* Photos: the pictures dragged onto the dashboard, and any picture in /pics.
  *
- * Runs fullscreen: the render loop hands it the whole panel and paints nothing
- * else, so there is no chrome to leave room for.
+ * The server keeps each photo with a screen copy and a print copy, made
+ * there at upload (server/photos.py) -- the device has no JPEG or PNG
+ * decoder and should not grow one. Opening this syncs: the list from the
+ * server, then each picture it does not have yet, one a tick so the screen
+ * says how far it has got; a photo deleted on the dashboard goes from here
+ * too. Synced ones are /pics/<id>.img, their names in /pics/.photos. Any
+ * other .img or .565 in /pics is shown as well, and left alone.
  *
  * Images are raw RGB565, already byte-swapped for the panel, optionally behind
  * an 8-byte header:
  *
  *     'C' 'I' 'M' 'G'  u16 width  u16 height
  *
- * A headerless file is assumed to be 240x135, which is the whole screen -- the
- * one size worth special-casing on a device with exactly one screen.
+ * A headerless file is assumed to be 240x135, which is the whole screen.
+ * Rows are streamed one at a time: a full screen is 65 KB, a row 480 bytes.
  *
- * Rows are streamed one at a time. A full screen is 65KB, a fifth of the heap;
- * a row is 480 bytes.
+ * Printing fetches the print copy -- the picture dithered to the paper's
+ * 384 dots as printdoc `%%` lines -- into /cache and hands it to the
+ * console's `print FILE`, which can hold a document this app's memory
+ * should not.
  */
-
 #include "kernel/app/capp.h"
+#include "apps/safefile.h"
 
 #define SCR_W 240
 #define SCR_H 135
-#define MAXPICS 24
-#define NAMELEN 32
+#define MAXPICS 48
+#define NAMELEN 28
+#define DIR "/pics"
+#define INDEX DIR "/.photos"
+#define PRINT_PATH "/cache/photo-print.txt"
+#define SHOW_MS 5000                /* a slide */
+#define CAPTION_MS 2500             /* the caption after a change */
 
 static const CardApi *api;
 
+enum { SYNC_IDLE, SYNC_LIST, SYNC_GET };
+enum { ACT_PRINT = 1, ACT_SYNC, ACT_SHOW, ACT_DELETE };
+
 static struct {
   char  dir[48];
-  char  names[MAXPICS][NAMELEN];
-  int   count;
-  int   cur;
+  char  files[MAXPICS][NAMELEN];   /* in DIR */
+  int   count, cur;
+  /* The synced ones: server id and name, from INDEX. */
+  char  id[MAXPICS][12];
+  char  name[MAXPICS][NAMELEN];
+  int   nsynced;
+  /* The sync under way: which ids still to fetch. */
+  int   sync, want[MAXPICS], nwant, got;
+  char  reply[MAXPICS * 64];
   char  status[48];
+  int   bad;
+  int   show;                      /* slideshow running */
+  uint32_t next_slide, caption_until;
+  int   ask_delete;
   uint16_t row[SCR_W];
 } P;
 
@@ -51,26 +76,215 @@ static int ends_with(const char *s, const char *suffix) {
   return 1;
 }
 
-static void rescan(void) {
-  static char raw[MAXPICS][NAMELEN];
-  int n, i;
-  P.count = 0;
-  n = api->list(P.dir, &raw[0][0], MAXPICS, NAMELEN);
-  if (n < 0) { api->fmt(P.status, sizeof P.status, "no %s", P.dir); return; }
-  for (i = 0; i < n && P.count < MAXPICS; i++) {
-    if (!ends_with(raw[i], ".img") && !ends_with(raw[i], ".565")) continue;
-    api->fmt(P.names[P.count], NAMELEN, "%s", raw[i]);
-    P.count++;
-  }
-  if (P.cur >= P.count) P.cur = 0;
-  if (!P.count) api->fmt(P.status, sizeof P.status, "no pictures in %s", P.dir);
+static int same(const char *a, const char *b) {
+  while (*a && *a == *b) { a++; b++; }
+  return *a == *b;
 }
 
-static void app_open(void *st) {
-  (void)st;
-  if (!P.dir[0]) api->fmt(P.dir, sizeof P.dir, "%s", "/pics");
-  rescan();
+static void say(int bad, const char *s) {
+  api->fmt(P.status, sizeof P.status, "%s", s);
+  P.bad = bad;
+  P.caption_until = api->ticks_ms() + CAPTION_MS * 2;
 }
+
+/* ---- the index of synced photos --------------------------------------------------- */
+
+static void index_load(void) {
+  static char buf[MAXPICS * 44];
+  int fd = safe_open_read(api, INDEX), n, i = 0;
+  P.nsynced = 0;
+  if (fd < 0) return;
+  n = api->read(fd, buf, sizeof buf - 1);
+  api->close(fd);
+  if (n <= 0) return;
+  buf[n] = 0;
+  while (buf[i] && P.nsynced < MAXPICS) {
+    int k = 0;
+    while (buf[i] && buf[i] != '\t' && buf[i] != '\n' && k < 11) P.id[P.nsynced][k++] = buf[i++];
+    P.id[P.nsynced][k] = 0;
+    while (buf[i] && buf[i] != '\t' && buf[i] != '\n') i++;
+    k = 0;
+    if (buf[i] == '\t') {
+      i++;
+      while (buf[i] && buf[i] != '\n' && k < NAMELEN - 1) P.name[P.nsynced][k++] = buf[i++];
+    }
+    P.name[P.nsynced][k] = 0;
+    while (buf[i] && buf[i] != '\n') i++;
+    if (buf[i]) i++;
+    if (P.id[P.nsynced][0]) P.nsynced++;
+  }
+}
+
+static void index_save(void) {
+  SafeFile f;
+  int i;
+  if (safe_begin(&f, api, INDEX) != 0) return;
+  for (i = 0; i < P.nsynced; i++) {
+    char line[48];
+    int n = api->fmt(line, sizeof line, "%s\t%s\n", P.id[i], P.name[i]);
+    safe_write(&f, line, (size_t)n);
+  }
+  safe_commit(&f);
+}
+
+/* The synced photo a file is, or -1. */
+static int synced_at(const char *file) {
+  int i;
+  for (i = 0; i < P.nsynced; i++) {
+    char want[24];
+    api->fmt(want, sizeof want, "%s.img", P.id[i]);
+    if (same(file, want)) return i;
+  }
+  return -1;
+}
+
+static const char *title_of(int at) {
+  int s = synced_at(P.files[at]);
+  return s >= 0 ? P.name[s] : P.files[at];
+}
+
+static void rescan(void) {
+  static char raw[MAXPICS][NAMELEN];
+  char keep[NAMELEN];
+  int n, i;
+  keep[0] = 0;
+  if (P.count) api->fmt(keep, sizeof keep, "%s", P.files[P.cur]);
+  P.count = 0;
+  n = api->list(P.dir, &raw[0][0], MAXPICS, NAMELEN);
+  if (n < 0) { api->mkdir(P.dir); n = 0; }
+  for (i = 0; i < n && P.count < MAXPICS; i++) {
+    if (!ends_with(raw[i], ".img") && !ends_with(raw[i], ".565")) continue;
+    api->fmt(P.files[P.count], NAMELEN, "%s", raw[i]);
+    P.count++;
+  }
+  P.cur = 0;
+  for (i = 0; i < P.count; i++) if (same(P.files[i], keep)) P.cur = i;
+}
+
+/* ---- sync ------------------------------------------------------------------------- */
+
+static void sync_begin(void) {
+  if (P.sync != SYNC_IDLE) return;
+  if (!api->net_ready() && api->net_connect(15000) != 0) { say(0, "offline: showing what is here"); return; }
+  P.sync = SYNC_LIST;
+  say(0, "syncing...");
+}
+
+/* Each id in the reply, in order, with its name. */
+static void sync_list(void) {
+  char url[160], path[64];
+  int r, i, n = 0, j;
+  static char ids[MAXPICS][12], names[MAXPICS][NAMELEN];
+  api->fmt(url, sizeof url, "%s/photos", api->proxy());
+  r = api->http("GET", url, 0, 0, "", P.reply, sizeof P.reply, 15000);
+  if (r < 0 || (P.reply[0] == 'e' && P.reply[1] == 'r')) {
+    api->fmt(P.status, sizeof P.status, "the server did not answer (%d)", r);
+    P.bad = 1;
+    P.sync = SYNC_IDLE;
+    return;
+  }
+  for (i = 0; P.reply[i] && n < MAXPICS; ) {
+    int k = 0;
+    while (P.reply[i] && P.reply[i] != '\t' && P.reply[i] != '\n' && k < 11) ids[n][k++] = P.reply[i++];
+    ids[n][k] = 0;
+    while (P.reply[i] && P.reply[i] != '\t' && P.reply[i] != '\n') i++;
+    k = 0;
+    if (P.reply[i] == '\t') {
+      i++;
+      while (P.reply[i] && P.reply[i] != '\t' && P.reply[i] != '\n' && k < NAMELEN - 1) names[n][k++] = P.reply[i++];
+    }
+    names[n][k] = 0;
+    while (P.reply[i] && P.reply[i] != '\n') i++;
+    if (P.reply[i]) i++;
+    if (ids[n][0]) n++;
+  }
+  /* Gone from the server: gone from here. */
+  for (i = 0; i < P.nsynced; i++) {
+    for (j = 0; j < n; j++) if (same(P.id[i], ids[j])) break;
+    if (j == n) {
+      api->fmt(path, sizeof path, DIR "/%s.img", P.id[i]);
+      api->remove(path);
+    }
+  }
+  /* The new list, and what of it is not here yet. */
+  P.nsynced = n;
+  P.nwant = 0;
+  for (i = 0; i < n; i++) {
+    CappStat st;
+    api->mem_cpy(P.id[i], ids[i], sizeof P.id[i]);
+    api->mem_cpy(P.name[i], names[i], sizeof P.name[i]);
+    api->fmt(path, sizeof path, DIR "/%s.img", ids[i]);
+    if (api->stat(path, &st) != 0) P.want[P.nwant++] = i;
+  }
+  index_save();
+  P.got = 0;
+  P.sync = P.nwant ? SYNC_GET : SYNC_IDLE;
+  if (!P.nwant) { rescan(); say(0, n ? "up to date" : "no photos: add some on the dashboard"); }
+}
+
+static void sync_get(void) {
+  char url[160], path[64];
+  int i = P.want[P.got];
+  api->fmt(P.status, sizeof P.status, "getting %d of %d", P.got + 1, P.nwant);
+  api->fmt(url, sizeof url, "%s/photos/img?id=%s", api->proxy(), P.id[i]);
+  api->fmt(path, sizeof path, DIR "/%s.img", P.id[i]);
+  if (api->http_download(url, path, 30000) < 0) {
+    api->remove(path);                       /* not half a picture */
+    say(1, "a download failed: r to try again");
+    P.sync = SYNC_IDLE;
+    rescan();
+    return;
+  }
+  if (++P.got >= P.nwant) {
+    P.sync = SYNC_IDLE;
+    rescan();
+    api->fmt(P.status, sizeof P.status, "%d new", P.nwant);
+    P.caption_until = api->ticks_ms() + CAPTION_MS;
+  }
+}
+
+/* ---- print and delete ------------------------------------------------------------- */
+
+static void print_current(void) {
+  char url[160], out[96];
+  int s;
+  if (!P.count) return;
+  s = synced_at(P.files[P.cur]);
+  if (s < 0) { say(1, "only photos from the dashboard print"); return; }
+  if (!api->net_ready() && api->net_connect(15000) != 0) { say(1, "offline: printing needs the server"); return; }
+  api->fmt(url, sizeof url, "%s/photos/print?id=%s", api->proxy(), P.id[s]);
+  if (api->http_download(url, PRINT_PATH, 30000) < 0) { say(1, "could not fetch the print copy"); return; }
+  out[0] = 0;
+  api->shell("print " PRINT_PATH, out, sizeof out);
+  /* "printing /cache/photo-print.txt (19 KB)" says nothing a person wants;
+   * anything else is the console saying what went wrong. */
+  if (out[0] == 'p' && out[1] == 'r' && out[2] == 'i' && out[3] == 'n' && out[4] == 't' &&
+      out[5] == 'i')
+    say(0, "printing");
+  else {
+    int i;
+    for (i = 0; out[i]; i++) if (out[i] == '\n') out[i] = 0;
+    say(1, out[0] ? out : "the printer did not answer");
+  }
+}
+
+static void delete_current(void) {
+  char url[160], path[64], reply[48];
+  int s = synced_at(P.files[P.cur]);
+  if (s >= 0) {
+    api->fmt(url, sizeof url, "%s/photos/photo?id=%s", api->proxy(), P.id[s]);
+    if (!api->net_ready() || api->http("DELETE", url, 0, 0, "", reply, sizeof reply, 15000) < 0) {
+      say(1, "offline: delete it on the dashboard");
+      return;
+    }
+  }
+  api->fmt(path, sizeof path, "%s/%s", P.dir, P.files[P.cur]);
+  api->remove(path);
+  rescan();
+  say(0, "deleted");
+}
+
+/* ---- the screen ------------------------------------------------------------------- */
 
 /* Draws the current picture centred, leaving whatever it does not cover black.
  * Returns 0 if the file could not be shown. */
@@ -79,10 +293,9 @@ static int show(CRect c) {
   unsigned char hdr[8];
   int fd, w, h, ox, oy, y;
 
-  api->fmt(path, sizeof path, "%s/%s", P.dir, P.names[P.cur]);
+  api->fmt(path, sizeof path, "%s/%s", P.dir, P.files[P.cur]);
   fd = api->open(path, CAPP_O_READ);
-  if (fd < 0) { api->fmt(P.status, sizeof P.status, "cannot open %s", P.names[P.cur]); return 0; }
-
+  if (fd < 0) return 0;
   if (api->read(fd, hdr, 8) != 8) { api->close(fd); return 0; }
   if (hdr[0] == 'C' && hdr[1] == 'I' && hdr[2] == 'M' && hdr[3] == 'G') {
     w = hdr[4] | (hdr[5] << 8);
@@ -92,88 +305,139 @@ static int show(CRect c) {
     h = SCR_H;
     api->seek(fd, 0, 0);         /* headerless: rewind, those were pixels */
   }
-
-  if (w <= 0 || h <= 0 || w > SCR_W || h > SCR_H) {
-    api->fmt(P.status, sizeof P.status, "bad size %dx%d", w, h);
-    api->close(fd);
-    return 0;
-  }
+  if (w <= 0 || h <= 0 || w > SCR_W || h > SCR_H) { api->close(fd); return 0; }
 
   ox = c.x + (c.w - w) / 2;
   oy = c.y + (c.h - h) / 2;
   if (w < c.w || h < c.h) api->fill(c, CAPP_BLACK);
-
   for (y = 0; y < h; y++) {
     if (api->read(fd, P.row, (size_t)w * 2) != w * 2) break;
     api->pixels(rect(ox, oy + y, w, 1), P.row);
   }
   api->close(fd);
-  api->fmt(P.status, sizeof P.status, "%d/%d %s", P.cur + 1, P.count, P.names[P.cur]);
   return 1;
 }
 
 static void app_paint(void *st, CRect c) {
+  char line[64];
+  int showing_caption = (int32_t)(api->ticks_ms() - P.caption_until) < 0;
   (void)st;
   if (!P.count) {
     api->fill(c, CAPP_BLACK);
-    api->text((short)(c.x + 4), (short)(c.y + 4), P.status, CAPP_WHITE, CAPP_BLACK);
-    api->text((short)(c.x + 4), (short)(c.y + 16),
-              "raw RGB565, .img or .565", CAPP_GREY, CAPP_BLACK);
+    api->text((short)(c.x + 6), (short)(c.y + 6), "Photos", CAPP_WHITE, CAPP_BLACK);
+    api->text((short)(c.x + 6), (short)(c.y + 22),
+              P.sync ? P.status : P.status[0] ? P.status : "no photos yet",
+              P.bad ? CAPP_RED : CAPP_GREY, CAPP_BLACK);
+    api->text((short)(c.x + 6), (short)(c.y + 40), "drag pictures onto the", CAPP_GREY, CAPP_BLACK);
+    api->text((short)(c.x + 6), (short)(c.y + 50), "dashboard's Photos page", CAPP_GREY, CAPP_BLACK);
+    api->text((short)(c.x + 6), (short)(c.y + 66), "r syncs", CAPP_GREY, CAPP_BLACK);
     return;
   }
   if (!show(c)) {
     api->fill(c, CAPP_BLACK);
-    api->text((short)(c.x + 4), (short)(c.y + 4), P.status, CAPP_RED, CAPP_BLACK);
-    return;
+    api->fmt(line, sizeof line, "cannot show %s", P.files[P.cur]);
+    api->text((short)(c.x + 4), (short)(c.y + 4), line, CAPP_RED, CAPP_BLACK);
   }
-  /* Caption over the bottom of the picture, where it is least missed. */
-  api->text((short)(c.x + 2), (short)(c.y + c.h - 9), P.status, CAPP_WHITE, CAPP_BLACK);
+  /* A caption over the bottom, for a moment after a change -- not over
+   * the picture all the time -- and always while asking or syncing. */
+  if (P.ask_delete) {
+    api->fmt(line, sizeof line, "delete %s? y yes  n no", title_of(P.cur));
+    api->text((short)(c.x + 2), (short)(c.y + c.h - 9), line, CAPP_WHITE, CAPP_RED);
+  } else if (P.sync || showing_caption) {
+    if (P.sync || P.status[0])
+      api->fmt(line, sizeof line, "%s", P.status);
+    else
+      api->fmt(line, sizeof line, "%d/%d %s%s", P.cur + 1, P.count, title_of(P.cur),
+               P.show ? "  (slideshow)" : "");
+    api->text((short)(c.x + 2), (short)(c.y + c.h - 9), line,
+              P.bad ? CAPP_RED : CAPP_WHITE, CAPP_BLACK);
+  }
+}
+
+static void moved(int by) {
+  if (!P.count) return;
+  P.cur = (P.cur + by + P.count) % P.count;
+  P.status[0] = 0;
+  P.bad = 0;
+  P.caption_until = api->ticks_ms() + CAPTION_MS;
+  if (P.show) P.next_slide = api->ticks_ms() + SHOW_MS;
+}
+
+static void slideshow(int on) {
+  P.show = on && P.count > 1;
+  api->keep_awake(P.show);         /* a slideshow nobody touches must not go dark */
+  P.next_slide = api->ticks_ms() + SHOW_MS;
+  say(0, P.show ? "slideshow: space stops" : "slideshow stopped");
+}
+
+static int do_action(int a) {
+  switch (a) {
+  case ACT_PRINT:  print_current(); return 1;
+  case ACT_SYNC:   sync_begin(); return 1;
+  case ACT_SHOW:   slideshow(!P.show); return 1;
+  case ACT_DELETE: if (P.count) P.ask_delete = 1; return 1;
+  }
+  return 0;
 }
 
 static int app_key(void *st, unsigned char k) {
   (void)st;
-  if (!P.count) {
-    if (k == 'r' || k == 'R') { rescan(); return 1; }
-    return 0;
+  if (P.ask_delete) {
+    P.ask_delete = 0;
+    if (k == 'y' || k == 'Y') delete_current();
+    return 1;
   }
   switch (k) {
   case CAPP_KEY_LEFT:
-  case CAPP_KEY_UP:
-    P.cur = (P.cur + P.count - 1) % P.count;
-    return 1;
+  case CAPP_KEY_UP:     moved(-1); return 1;
   case CAPP_KEY_RIGHT:
   case CAPP_KEY_DOWN:
-  case ' ':
-  case CAPP_KEY_ENTER:
-    P.cur = (P.cur + 1) % P.count;
-    return 1;
-  case 'r': case 'R': rescan(); return 1;
-  default: return 0;
+  case CAPP_KEY_ENTER:  moved(1); return 1;
+  case ' ':             return do_action(ACT_SHOW);
+  case 'p': case 'P':   return do_action(ACT_PRINT);
+  case 'r': case 'R':   return do_action(ACT_SYNC);
+  case 'd': case 'D':
+  case 0x7F:           return do_action(ACT_DELETE);   /* Delete, on a Bluetooth keyboard */
+  case CAPP_KEY_ESC:
+    if (P.show) { slideshow(0); return 1; }
+    return 0;
   }
+  return 0;
+}
+
+static int app_action(void *st, int a) { (void)st; return do_action(a); }
+
+static int app_tick(void *st, uint32_t now) {
+  (void)st;
+  if (P.sync == SYNC_LIST) { sync_list(); return 1; }
+  if (P.sync == SYNC_GET) { sync_get(); return 1; }
+  if (P.show && P.count > 1 && (int32_t)(now - P.next_slide) >= 0) {
+    P.cur = (P.cur + 1) % P.count;
+    P.next_slide = now + SHOW_MS;
+    return 1;
+  }
+  /* The caption goes when its time is up: one repaint, then nothing. */
+  if (P.caption_until && (int32_t)(now - P.caption_until) >= 0) {
+    P.caption_until = 0;
+    if (!P.sync) P.status[0] = 0;
+    return 1;
+  }
+  return 0;
 }
 
 /* A click on the right half advances, the left half goes back. */
 static int app_click(void *st, short x, short y, int button) {
   (void)st; (void)y; (void)button;
-  if (!P.count) return 0;
-  if (x < SCR_W / 2) P.cur = (P.cur + P.count - 1) % P.count;
-  else P.cur = (P.cur + 1) % P.count;
+  moved(x < SCR_W / 2 ? -1 : 1);
   return 1;
 }
 
-static void app_set_args(void *st, const char *path) {
-  size_t i, cut = 0;
-  (void)st;
-  for (i = 0; path[i]; i++) if (path[i] == '/') cut = i;
-  if (cut == 0) cut = 1;
-  if (cut >= sizeof P.dir) cut = sizeof P.dir - 1;
-  api->mem_cpy(P.dir, path, cut);
-  P.dir[cut] = 0;
-  rescan();
-  for (i = 0; i < (size_t)P.count; i++) {
-    if (ends_with(path, P.names[i])) { P.cur = (int)i; break; }
-  }
-}
+static const CappAction ACTIONS[] = {
+  { "print", "Print", 0, CAPP_KEY_PRINT, ACT_PRINT, 0, 0, 0, 0 },
+  { "sync", "Sync", 0, 0, ACT_SYNC, 0, 0, 0, 0 },
+  { "slideshow", "Slideshow", 0, 0, ACT_SHOW, 0, 0, 0, 0 },
+  { "delete", "Delete", 0, 0, ACT_DELETE, 0, 0, 0, 0 },
+};
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
@@ -184,7 +448,11 @@ const CappInfo capp_info = {
     0x43, 0xC2, 0x41, 0x82, 0x40, 0x02, 0x40, 0x02,
     0x40, 0x82, 0x41, 0xC2, 0x43, 0xE2, 0x47, 0xF2,
     0x4F, 0xFA, 0x5F, 0xFE, 0x7F, 0xFE, 0x00, 0x00 },
-  "arrows\tprevious and next\nspace, enter\tnext\nclick\tleft back, right forward\nr\trescan the folder\n",
+  "arrows\tprevious and next\nenter\tnext\nspace\tslideshow on and off\np\tprint this one\n"
+  "r\tsync with the dashboard\nd, del\tdelete (asks; from the dashboard too)\n"
+  "esc\tstop the slideshow\n"
+  "\n"
+  "pictures come from the dashboard's Photos page.\n",
 };
 
 /* Static, not a local: the shell keeps calling into this long after
@@ -193,12 +461,23 @@ static CappUi UI;
 
 int capp_main(const CardApi *a, int argc, char **argv) {
   api = a;
-  /* An argument names a folder, or a picture in one. */
-  if (argc > 1) app_set_args(0, argv[1]);
-  else app_open(0);
+  api->fmt(P.dir, sizeof P.dir, "%s", DIR);
+  index_load();
+  rescan();
+  /* An argument names a picture in /pics to start on. */
+  if (argc > 1) {
+    int i;
+    for (i = 0; i < P.count; i++) if (ends_with(argv[1], P.files[i])) P.cur = i;
+  }
+  P.sync = SYNC_IDLE;
+  sync_begin();
   UI.paint = app_paint;
   UI.key = app_key;
   UI.click = app_click;
+  UI.tick = app_tick;
+  UI.actions = ACTIONS;
+  UI.nactions = sizeof ACTIONS / sizeof ACTIONS[0];
+  UI.action = app_action;
   api->ui(&UI);
   return 0;
 }

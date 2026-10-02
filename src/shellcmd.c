@@ -794,16 +794,30 @@ static void print_show_status(void) {
 
 /* One text file, as the document it is: the markup is line-oriented and
  * markdown-shaped, so a note prints as written. 6 KB is a long receipt. */
+/* The whole file, up to PRINT_FILE_MAX. It was 6 KB, which cut a photo off
+ * after a few rows: one dithered for the paper (server/photos.py) is about
+ * 20 KB of `%%` lines. printq copies the document, and this copy goes as
+ * soon as it has, so the peak is two copies for a moment. */
+#define PRINT_FILE_MAX (48 * 1024)
+
 static void print_file(const char *path) {
   char full[FS_PATH_MAX];
   char *text;
   int fd, got, rc;
+  FsStat st;
+  size_t cap;
   if (resolve(path, full) != 0) return;
+  if (fs_stat(full, &st) != 0 || st.is_dir) { con_printf("print: no such file %s\n", full); return; }
+  if (st.size > PRINT_FILE_MAX) {
+    con_printf("print: %s is %lu bytes, more than %d\n", full, (unsigned long)st.size, PRINT_FILE_MAX);
+    return;
+  }
+  cap = st.size + 1;
   fd = fs_open(full, FS_O_READ);
   if (fd < 0) { con_printf("print: no such file %s\n", full); return; }
-  text = malloc(6 * 1024);
+  text = malloc(cap);
   if (!text) { fs_close(fd); con_write("print: no memory\n"); return; }
-  got = fs_read(fd, text, 6 * 1024 - 1);
+  got = fs_read(fd, text, cap - 1);
   fs_close(fd);
   if (got < 0) got = 0;
   text[got] = 0;
