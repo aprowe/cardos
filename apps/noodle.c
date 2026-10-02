@@ -697,8 +697,9 @@ const CappInfo capp_info = {
     0x21, 0x84, 0x13, 0xC8, 0x0F, 0xF0, 0x03, 0xC0,
     0x03, 0xC0, 0x07, 0xC0, 0x07, 0x80, 0x07, 0x80,
     0x03, 0xC0, 0x1F, 0xF8, 0x1F, 0xF8, 0x1F, 0xF8 },
-  "blow\tinto the mic: fill him with air\nspace\ta puff, for no mic\n"
-  "c\tanother colour\nfn-`\tleave\n",
+  "blow\tinto the mic: fill him with air\n"
+  "space, enter, b\ta puff, for no mic (hold to keep blowing)\n"
+  "c\tanother colour\n",
 };
 
 static CappUi UI;

@@ -49,6 +49,35 @@ static int fake_fmt(char *buf, size_t n, const char *fmt, ...) {
 
 static void fake_ui(const CappUi *ui) { INST = *ui; }
 
+/* The shell's damage channel: marks union into the next paint's clip, and a
+ * paint with nothing marked is clipped to the whole app. */
+static CRect PENDING;
+static int   HAVE_PENDING;
+
+static void fake_damage(CRect r) {
+  if (!HAVE_PENDING) { PENDING = r; HAVE_PENDING = 1; return; }
+  {
+    int x0 = r.x < PENDING.x ? r.x : PENDING.x;
+    int y0 = r.y < PENDING.y ? r.y : PENDING.y;
+    int x1 = r.x + r.w > PENDING.x + PENDING.w ? r.x + r.w : PENDING.x + PENDING.w;
+    int y1 = r.y + r.h > PENDING.y + PENDING.h ? r.y + r.h : PENDING.y + PENDING.h;
+    PENDING.x = (int16_t)x0; PENDING.y = (int16_t)y0;
+    PENDING.w = (int16_t)(x1 - x0); PENDING.h = (int16_t)(y1 - y0);
+  }
+}
+
+static CRect fake_paint_area(void) {
+  CRect all;
+  all.x = 0; all.y = 0; all.w = SCREEN_W; all.h = SCREEN_H;
+  return HAVE_PENDING ? PENDING : all;
+}
+
+/* What the shell does when it paints: hand over the clip, then forget it. */
+static void paint_now(CRect c) {
+  INST.paint(INST.state, c);
+  HAVE_PENDING = 0;
+}
+
 static CardApi API;
 
 static void boot(void) {
@@ -65,6 +94,9 @@ static void boot(void) {
   API.fmt = fake_fmt;
   API.ticks_ms = fake_ticks;
   API.ui = fake_ui;
+  API.damage = fake_damage;
+  API.paint_area = fake_paint_area;
+  HAVE_PENDING = 0;
 
   NOW = 1000;
   OUT_OF_BOUNDS = 0;
@@ -88,7 +120,7 @@ static int run(uint32_t ms, int flip_every_ms) {
       INST.key(INST.state, CAPP_KEY_RIGHT);
     }
     if (INST.tick(INST.state, NOW)) {
-      INST.paint(INST.state, c);
+      paint_now(c);
       painted++;
     }
   }
@@ -195,14 +227,32 @@ void test_pinball_a_flick_does_not_repaint_the_whole_table(void) {
 
   FILLS = 0;
   G.full = 1;
-  INST.paint(INST.state, c);
+  paint_now(c);
   full_paint = FILLS;                           /* what a whole table costs */
   run(50, 0);
 
   FILLS = 0;
-  if (INST.key(INST.state, CAPP_KEY_LEFT)) INST.paint(INST.state, c);
+  if (INST.key(INST.state, CAPP_KEY_LEFT)) paint_now(c);
   flick_paint = FILLS;
   CHECK(flick_paint < full_paint / 4);
+}
+
+/* Game over is the end of the work: no ball, flippers at rest, and nothing
+ * for tick to ask a paint for. It used to answer "repaint" every step until
+ * the app was closed. A flick still moves a flipper, and stops again. */
+void test_pinball_a_finished_game_stops_painting(void) {
+  int i;
+  boot();
+  for (i = 0; i < 600 && !G.over; i++) {
+    if (G.waiting) INST.key(INST.state, ' ');
+    run(100, 0);
+  }
+  CHECK(G.over);
+  run(1000, 0);                                 /* let the flippers settle */
+  CHECK_EQ(run(2000, 0), 0);
+  INST.key(INST.state, CAPP_KEY_LEFT);
+  CHECK(run(500, 0) > 0);
+  CHECK_EQ(run(2000, 0), 0);
 }
 
 void test_pinball_new_game_resets_everything(void) {

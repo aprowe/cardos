@@ -47,6 +47,30 @@ static int fake_fmt(char *buf, size_t n, const char *fmt, ...) {
 static CardApi API;
 static CRect   WIN;
 
+/* The shell's damage channel: marks union into the next paint's clip, and a
+ * paint with nothing marked is the whole window -- which is how an app tells
+ * its own repaint from one it did not ask for. */
+static CRect PENDING;
+static int   HAVE_PENDING;
+
+static void fake_damage(CRect r) {
+  int x0, y0, x1, y1;
+  if (!HAVE_PENDING) { PENDING = r; HAVE_PENDING = 1; return; }
+  x0 = r.x < PENDING.x ? r.x : PENDING.x;
+  y0 = r.y < PENDING.y ? r.y : PENDING.y;
+  x1 = r.x + r.w > PENDING.x + PENDING.w ? r.x + r.w : PENDING.x + PENDING.w;
+  y1 = r.y + r.h > PENDING.y + PENDING.h ? r.y + r.h : PENDING.y + PENDING.h;
+  PENDING.x = (int16_t)x0; PENDING.y = (int16_t)y0;
+  PENDING.w = (int16_t)(x1 - x0); PENDING.h = (int16_t)(y1 - y0);
+}
+
+static CRect fake_paint_area(void) { return HAVE_PENDING ? PENDING : WIN; }
+
+static void paint_now(void) {
+  INST.paint(INST.state, WIN);
+  HAVE_PENDING = 0;
+}
+
 static void boot(void) {
   char arg0[] = "claude";
   char *argv[1];
@@ -64,19 +88,22 @@ static void boot(void) {
   API.open = fake_open;
   API.ui = fake_ui;
   API.proxy = fake_proxy;
+  API.damage = fake_damage;
+  API.paint_area = fake_paint_area;
+  HAVE_PENDING = 0;
 
   NOW = 1000;
   FILLS = TEXTS = 0;
   memset(&INST, 0, sizeof INST);
   WIN.x = 0; WIN.y = 0; WIN.w = 240; WIN.h = 135;
   capp_main(&API, 1, argv);
-  INST.paint(INST.state, WIN);            /* the shell's first paint */
+  paint_now();                            /* the shell's first paint */
 }
 
 /* One keypress, painted the way the shell does it: only if key() asks. */
 static int press(unsigned char k) {
   FILLS = TEXTS = 0;
-  if (INST.key(INST.state, k)) INST.paint(INST.state, WIN);
+  if (INST.key(INST.state, k)) paint_now();
   return FILLS + TEXTS;
 }
 
@@ -189,7 +216,7 @@ void test_build_typing_repaints_only_the_input_line(void) {
   int full, typed;
   boot();
   FILLS = TEXTS = 0;
-  INST.paint(INST.state, WIN);            /* unrequested: the whole window */
+  paint_now();                            /* unrequested: the whole window */
   full = FILLS + TEXTS;
 
   typed = press('h');
@@ -204,7 +231,7 @@ void test_build_backspace_repaints_only_the_input_line(void) {
   boot();
   press('h');
   FILLS = TEXTS = 0;
-  INST.paint(INST.state, WIN);
+  paint_now();
   full = FILLS + TEXTS;
   n = press(CAPP_KEY_BACK);
   CHECK(n > 0);
@@ -218,11 +245,11 @@ void test_build_an_unrequested_paint_draws_everything(void) {
   int first, again;
   boot();
   FILLS = TEXTS = 0;
-  INST.paint(INST.state, WIN);
+  paint_now();
   first = FILLS + TEXTS;
   press('h');
   FILLS = TEXTS = 0;
-  INST.paint(INST.state, WIN);
+  paint_now();
   again = FILLS + TEXTS;
   CHECK_EQ(again, first);
 }
@@ -242,7 +269,7 @@ void test_build_scrolling_repaints_the_log(void) {
   int i, n;
   boot();
   for (i = 0; i < 30; i++) note("a line of scrollback to move through");
-  INST.paint(INST.state, WIN);
+  paint_now();
   n = press(CAPP_KEY_UP);
   CHECK(C.scroll > 0);
   CHECK(n > 5);                           /* many log lines, not one input line */

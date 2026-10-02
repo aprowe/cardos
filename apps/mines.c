@@ -27,6 +27,7 @@
 #define CLR_BLACK  CAPP_RGB(0, 0, 0)
 #define CLR_RED    CAPP_RGB(255, 0, 0)
 #define CLR_YELLOW CAPP_RGB(255, 255, 0)
+#define CLR_DESK   CAPP_RGB(0, 128, 128)      /* the desktop it sat on */
 
 static const uint16_t NUM_COLOUR[9] = {
   0,
@@ -46,7 +47,6 @@ static struct {
   unsigned char mine[H][W];
   unsigned char shown[H][W];
   unsigned char flag[H][W];
-  unsigned char dirty[H][W];  /* cells whose picture has changed */
   int cx, cy;
   int dead, won, started;
   int flags;
@@ -54,13 +54,12 @@ static struct {
   unsigned int seed;
 
   /* Repainting all 81 cells for one click is 81 bevels and a full board blit
-   * for a square that turned over. These say what actually changed. */
-  int full;                   /* the whole window, once */
-  int expect_paint;           /* this paint answers something we did */
-  int head_dirty;
-  int shown_time, shown_flags;
+   * for a square that turned over, so a move marks what it changed with
+   * api->damage and paint draws what the clip covers. These are where. */
+  int shown_time;             /* the second the timer last showed */
   CRect at;                   /* where the shell last put us */
   int have_at;
+  int offx, offy;             /* the board inside that, centred */
 } S;
 
 static CRect rect(int x, int y, int w, int h) {
@@ -76,9 +75,11 @@ static unsigned int rnd(void) {
   return S.seed;
 }
 
+static void mark_all(void);
+
 static void app_open(void *st) {
   (void)st;
-  S.full = 1;
+  mark_all();
   api->mem_set(S.mine, 0, sizeof S.mine);
   api->mem_set(S.shown, 0, sizeof S.shown);
   api->mem_set(S.flag, 0, sizeof S.flag);
@@ -115,11 +116,21 @@ static void lay(int sx, int sy) {
   S.start_ms = api->ticks_ms();
 }
 
-static void mark(int x, int y) {
-  if (x >= 0 && y >= 0 && x < W && y < H) S.dirty[y][x] = 1;
+/* Where things are on screen, from the last paint. Before the first paint
+ * nothing is marked and the shell repaints everything, which is right. */
+static CRect cell_rect(int x, int y) {
+  return rect(S.at.x + S.offx + x * CELL, S.at.y + S.offy + HEAD + y * CELL, CELL, CELL);
 }
 
-static void mark_all(void) { S.full = 1; }
+static void mark(int x, int y) {
+  if (S.have_at && x >= 0 && y >= 0 && x < W && y < H) api->damage(cell_rect(x, y));
+}
+
+static void mark_head(void) {
+  if (S.have_at) api->damage(rect(S.at.x + S.offx, S.at.y + S.offy, BOARD_W, HEAD));
+}
+
+static void mark_all(void) { if (S.have_at) api->damage(S.at); }
 
 static void reveal(int x, int y) {
   if (x < 0 || y < 0 || x >= W || y >= H) return;
@@ -161,7 +172,7 @@ static void toggle_flag(int x, int y) {
   S.flag[y][x] ^= 1;
   S.flags += S.flag[y][x] ? 1 : -1;
   mark(x, y);
-  S.head_dirty = 1;           /* the mine counter went with it */
+  mark_head();                /* the mine counter went with it */
 }
 
 /* ------------------------------------------------------------ drawing ---- */
@@ -267,8 +278,6 @@ static void paint_head(CRect c) {
   draw_counter(rect(c.x + BOARD_W - 26, c.y + 3, 24, 10), elapsed());
   draw_face(face_box(c.x, c.y));
   S.shown_time = elapsed();
-  S.shown_flags = S.flags;
-  S.head_dirty = 0;
 }
 
 static void paint_cell(CRect c, int x, int y) {
@@ -313,40 +322,47 @@ static void paint_cell(CRect c, int x, int y) {
         api->frame(cell, CLR_BLACK);
     }
   }
-  S.dirty[y][x] = 0;
 }
 
-/* Everything, or only what changed.
+static int overlaps(CRect a, CRect b) {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/* Whatever the clip covers, and nothing else.
  *
- * A paint we did not ask for -- the help overlay closing, a window moving,
- * the launcher clearing the screen -- has to be the whole thing, because only
- * the shell knows what was scribbled over and it does not say. A paint that
- * answers our own key or click redraws the two or three squares that actually
- * turned over, which is why a click no longer flashes the board. */
+ * A paint we did not ask for -- the help overlay closing, a window moving --
+ * comes with the whole rectangle as its clip and gets the whole thing. One
+ * that answers our own key or click comes with the squares that move marked,
+ * which is why a click does not flash the board. This used to be guessed at
+ * with an expect_paint flag; the clip says it outright.
+ *
+ * Fullscreen the board sits in the middle of a desktop-teal field. Before,
+ * nothing painted outside the board, and the launcher's icons stayed there
+ * around it. */
 static void app_paint(void *st, CRect c) {
+  CRect clip = api->paint_area(), b;
   int x, y;
   (void)st;
 
-  if (!S.have_at || c.x != S.at.x || c.y != S.at.y) S.full = 1;
   S.at = c;
   S.have_at = 1;
-  if (!S.expect_paint) S.full = 1;
-  S.expect_paint = 0;
+  S.offx = c.w > BOARD_W ? (c.w - BOARD_W) / 2 : 0;
+  S.offy = c.h > HEAD + BOARD_H ? (c.h - HEAD - BOARD_H) / 2 : 0;
+  b = rect(c.x + S.offx, c.y + S.offy, BOARD_W, HEAD + BOARD_H);
 
-  if (S.full) {
-    S.full = 0;
-    paint_head(c);
-    for (y = 0; y < H; y++)
-      for (x = 0; x < W; x++) paint_cell(c, x, y);
-    return;
+  if (S.offx || S.offy) {
+    /* Four bands around the board, rather than the whole field and then the
+     * board over it: that would be a flash of teal on every full repaint. */
+    api->fill(rect(c.x, c.y, c.w, S.offy), CLR_DESK);
+    api->fill(rect(c.x, b.y + b.h, c.w, c.y + c.h - b.y - b.h), CLR_DESK);
+    api->fill(rect(c.x, b.y, S.offx, b.h), CLR_DESK);
+    api->fill(rect(b.x + b.w, b.y, c.x + c.w - b.x - b.w, b.h), CLR_DESK);
   }
 
-  if (S.head_dirty || elapsed() != S.shown_time || S.flags != S.shown_flags)
-    paint_head(c);
-
+  if (overlaps(clip, rect(b.x, b.y, BOARD_W, HEAD))) paint_head(b);
   for (y = 0; y < H; y++)
     for (x = 0; x < W; x++)
-      if (S.dirty[y][x]) paint_cell(c, x, y);
+      if (overlaps(clip, cell_rect(x, y))) paint_cell(b, x, y);
 }
 
 /* Moving the cursor repaints two cells: the one it left and the one it
@@ -361,7 +377,6 @@ static void move_cursor(int nx, int ny) {
 
 static int app_key(void *st, unsigned char k) {
   (void)st;
-  S.expect_paint = 1;
   switch (k) {
   case CAPP_KEY_LEFT:  move_cursor(S.cx - 1, S.cy); return 1;
   case CAPP_KEY_RIGHT: move_cursor(S.cx + 1, S.cy); return 1;
@@ -371,7 +386,7 @@ static int app_key(void *st, unsigned char k) {
   case CAPP_KEY_ENTER: dig(S.cx, S.cy); return 1;
   case 'f': case 'F':  toggle_flag(S.cx, S.cy); return 1;
   case 'n': case 'N':  app_open(0); return 1;
-  default: S.expect_paint = 0; return 0;
+  default: return 0;
   }
 }
 
@@ -382,8 +397,7 @@ static int app_tick(void *st, uint32_t now) {
   (void)st; (void)now;
   if (!S.started || S.dead || S.won) return 0;
   if (elapsed() == S.shown_time) return 0;
-  S.head_dirty = 1;
-  S.expect_paint = 1;
+  mark_head();
   return 1;
 }
 
@@ -391,18 +405,19 @@ static int app_click(void *st, short x, short y, int button) {
   CRect f = face_box(0, 0);
   int cx, cy;
   (void)st;
-  S.expect_paint = 1;
+  x = (short)(x - S.offx);    /* clicks are content-relative; the board is */
+  y = (short)(y - S.offy);    /* centred in the content */
 
   /* The face restarts, exactly as it does in the original. */
   if (y >= f.y && y < f.y + f.h && x >= f.x && x < f.x + f.w) {
     app_open(0);
     return 1;
   }
-  if (y < HEAD) { S.expect_paint = 0; return 0; }
+  if (y < HEAD) return 0;
 
   cx = x / CELL;
   cy = (y - HEAD) / CELL;
-  if (cx < 0 || cy < 0 || cx >= W || cy >= H) { S.expect_paint = 0; return 0; }
+  if (x < 0 || cx < 0 || cy < 0 || cx >= W || cy >= H) return 0;
   move_cursor(cx, cy);
   if (button == CAPP_BTN_RIGHT) toggle_flag(cx, cy);
   else dig(cx, cy);
@@ -418,7 +433,7 @@ const CappInfo capp_info = {
     0x03, 0xE0, 0x07, 0xC0, 0x1F, 0xF0, 0x3F, 0xF8,
     0x7F, 0xFC, 0x7F, 0xFC, 0x7F, 0xFC, 0x3F, 0xF8,
     0x1F, 0xF0, 0x07, 0xC0, 0x00, 0x00, 0x00, 0x00 },
-  "arrows\tmove the cursor\nspace\tdig\nf\tflag a cell\nright click\tflag a cell\nn\tnew game\nthe face\tnew game\n",
+  "arrows\tmove the cursor\nspace, enter\tdig\nf\tflag a cell\nright click\tflag a cell\nn\tnew game\nthe face\tnew game\n",
 };
 
 /* Static, not a local: the shell keeps calling into this long after
