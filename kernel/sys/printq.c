@@ -6,9 +6,12 @@
 #include "kernel/ui/fontres.h"
 #include "kernel/drv/bthid.h"
 #include "kernel/net/httpq.h"
+#include "kernel/net/wifi.h"
 #include "kernel/sys/bg.h"
 
 #include <stdarg.h>
+
+#include "esp_system.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,6 +65,8 @@ static void set_status(const char *fmt, ...) {
   s_status[sizeof s_status - 1] = 0;
 }
 
+#define PRINT_ROOM (104 * 1024)   /* the radio's 80 KB and the print's own */
+
 static void job_task(void *param) {
   Job *j = (Job *)param;
   uint8_t addr[6], type;
@@ -72,6 +77,17 @@ static void job_task(void *param) {
 
   if (printq_printer(addr, &type, NULL, 0) != 0) { why = "no printer set"; goto out; }
 
+  /* Bluetooth starts on 80 KB, but a print needs more than the radio: the
+   * fonts and the row buffers come after it, about 20 KB. From Today with
+   * WiFi up the radio found 84 KB, started, and the heap's low water went to
+   * 1508 bytes (2026-10-02). Below this, WiFi -- 50 KB nobody needs while
+   * paper comes out -- goes first; the next thing that wants the network
+   * builds it again. */
+  if (!bthid_radio_on() && !httpq_active() && esp_get_free_heap_size() < PRINT_ROOM) {
+    set_status("making room");
+    wifi_release();
+  }
+
   set_status("connecting");
   if (btprint_connect(addr, type, CONNECT_MS) != 0) {
     /* The radio needs about 80 KB free to start, and an HTTPS request in
@@ -80,15 +96,27 @@ static void job_task(void *param) {
      * request to finish and try once more, rather than fail a print that
      * would fit a moment later. */
     int waited = 0;
-    if (bthid_radio_on() || !httpq_active()) { why = btprint_error(); goto out; }
-    set_status("waiting for the network");
-    while (httpq_active() && waited < 30000) {
-      vTaskDelay(pdMS_TO_TICKS(100));
-      waited += 100;
+    if (bthid_radio_on()) { why = btprint_error(); goto out; }
+    if (httpq_active()) {
+      set_status("waiting for the network");
+      while (httpq_active() && waited < 30000) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        waited += 100;
+      }
+      set_status("connecting");
+      if (btprint_connect(addr, type, CONNECT_MS) == 0) goto connected;
     }
+    /* Still no room. An app open beside WiFi is enough to do it: Today
+     * holds 28 KB, leaving 80 KB against Bluetooth's 80 (measured
+     * 2026-10-02). WiFi is 50 KB nobody needs while paper comes out; let it
+     * go, and the next thing that wants the network builds it again. */
+    if (httpq_active()) { why = btprint_error(); goto out; }
+    set_status("making room");
+    wifi_release();
     set_status("connecting");
     if (btprint_connect(addr, type, CONNECT_MS) != 0) { why = btprint_error(); goto out; }
   }
+connected:
 
   /* After the radio, not before: Bluetooth takes 67 KB, and three print
    * fonts loaded first were 12 KB of the difference between starting and

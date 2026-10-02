@@ -38,6 +38,8 @@ static char      s_ip[16] = "0.0.0.0";
 static char      s_ssid[WIFI_SSID_MAX];
 static uint32_t  s_heap_cost;
 static EventGroupHandle_t s_events;
+static esp_netif_t *s_netif;
+static esp_event_handler_instance_t s_on_wifi, s_on_ip;
 
 /* Retries are bounded and counted here rather than left to the driver: an
  * unbounded retry loop makes a wrong password indistinguishable from a weak
@@ -91,8 +93,14 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
  * handshake afterwards -- which meant a device with 79 KB free refused to
  * bring WiFi up at all rather than bringing it up and letting the caller find
  * out whether there was room to talk securely. Two questions, two answers:
- * http.c checks the TLS headroom separately, and says so in those words. */
-#define WIFI_MIN_HEAP (56 * 1024)
+ * http.c checks the TLS headroom separately, and says so in those words.
+ *
+ * But "a little" has to be enough for everything else running. 56 KB against
+ * a 52 KB driver let WiFi build itself again in the middle of a print --
+ * Bluetooth up, the print fonts loaded -- and the heap's low water went to
+ * 1964 bytes (2026-10-02). 72 KB leaves 20 for the rest of the machine;
+ * below it the radio waits for the print to end. */
+#define WIFI_MIN_HEAP (72 * 1024)
 
 int wifi_start(void) {
   size_t heap_before;
@@ -131,14 +139,16 @@ int wifi_start(void) {
     }
   }
 
-  s_events = xEventGroupCreate();
+  /* Each of these survives wifi_release, so a second build must not make a
+   * second one. */
+  if (!s_events) s_events = xEventGroupCreate();
   if (!s_events) return -1;
 
   if (esp_netif_init() != ESP_OK) return -1;
   /* Already created if something else brought the loop up first, which is not
    * an error. */
   esp_event_loop_create_default();
-  esp_netif_create_default_wifi_sta();
+  s_netif = esp_netif_create_default_wifi_sta();
 
   {
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -149,8 +159,8 @@ int wifi_start(void) {
     }
   }
 
-  esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi, NULL, NULL);
-  esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi, NULL, NULL);
+  esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi, NULL, &s_on_wifi);
+  esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi, NULL, &s_on_ip);
 
   /* FLASH, not RAM. The driver then keeps its own copy of the last successful
    * join, which is what connect_driver_config falls back to -- and on a board
@@ -171,6 +181,24 @@ int wifi_start(void) {
   s_heap_cost = (uint32_t)(heap_before - esp_get_free_heap_size());
   ESP_LOGI(TAG, "radio up, %u bytes of heap", (unsigned)s_heap_cost);
   return 0;
+}
+
+/* The whole driver, not just the radio: wifi_stop gives back 3 KB of the
+ * 50 the driver holds (measured 2026-10-02), and that was the difference
+ * between Bluetooth starting and not with Today open. Everything wifi_start
+ * built goes, so the next start builds it again from nothing. */
+void wifi_release(void) {
+  if (!s_inited) return;
+  wifi_stop();
+  if (s_on_wifi) esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_on_wifi);
+  if (s_on_ip) esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, s_on_ip);
+  s_on_wifi = s_on_ip = NULL;
+  esp_wifi_deinit();
+  if (s_netif) esp_netif_destroy_default_wifi(s_netif);
+  s_netif = NULL;
+  s_inited = 0;
+  snprintf(s_detail, sizeof s_detail, "off, to make room");
+  ESP_LOGI(TAG, "released, %u bytes of heap free", (unsigned)esp_get_free_heap_size());
 }
 
 void wifi_stop(void) {

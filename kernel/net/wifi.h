@@ -36,6 +36,10 @@ typedef struct {
 /* Bring the radio up if it is not already. Costs heap; see wifi_heap_cost. */
 int wifi_start(void);
 void wifi_stop(void);
+/* Stop and tear the driver down, giving back the ~50 KB it holds; the next
+ * wifi_start (any connect) builds it again. For Bluetooth, which will not
+ * start beside it when an app is open. */
+void wifi_release(void);
 
 /* Blocking, up to `timeout_ms`. Saves the credentials on success. */
 int wifi_connect(const char *ssid, const char *pass, int timeout_ms);
