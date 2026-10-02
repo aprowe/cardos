@@ -48,6 +48,27 @@ INK = {
 }
 
 ICONS = {
+    # The board from above: cells in grooves, a wall laid across, a pawn
+    # each side. The wall is the game.
+    "Quoridor": [
+        "................",
+        ".KKKKKKKKKKKKKK.",
+        ".KGGDGGDrrDGGDK.",
+        ".KGGDGGDrrDGGDK.",
+        ".KDDDDDDDDDDDDK.",
+        ".KGGDGGDGGDGGDK.",
+        ".KGGDGGDGGDGGDK.",
+        ".KDDyyyyyDDDDDK.",
+        ".KGGDGGDGGDGGDK.",
+        ".KGGDGGDGGDGGDK.",
+        ".KDDDDDDDDDDDDK.",
+        ".KGGDbbDGGDGGDK.",
+        ".KGGDbbDGGDGGDK.",
+        ".KDDDDDDDDDDDDK.",
+        ".KKKKKKKKKKKKKK.",
+        "................",
+    ],
+
     # A monitor on a stand, with something on it. The screen being lit is the
     # difference between this and a picture of a switched-off monitor.
     "Screen": [

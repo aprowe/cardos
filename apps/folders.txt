@@ -31,6 +31,7 @@ noodle    Games
 notes     Plan
 photo     Make
 pinball   Games
+quoridor  Games
 roku      Net
 screen    Net
 share     Net
