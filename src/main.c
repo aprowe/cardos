@@ -140,6 +140,51 @@ static void prompt(void) {
   con_set_color(COLOR_GREEN);
 }
 
+/* `mem map`: the executable heap block by block, for finding what splits
+ * it. An app's image has to fit in one piece of it, and "plenty free but
+ * the largest piece is small" says only that something sits in the middle,
+ * not what. Collected under the walk and printed after it: the walk holds
+ * the heap's lock, and printing may allocate. */
+#define MAP_MAX 96
+static struct { uintptr_t at; uint32_t size; uint8_t used; } s_map[MAP_MAX];
+static int s_map_n, s_map_more;
+
+/* Kind: 0 a run of small used blocks (summed), 1 a big used block, 2 a
+ * free gap. Small ones are summed as the walk goes, so the list holds the
+ * shape of the heap rather than its first hundred blocks. */
+static uint32_t s_small, s_small_n;
+
+static void map_add(uintptr_t at, uint32_t size, uint8_t kind) {
+  if (s_map_n >= MAP_MAX) { s_map_more++; return; }
+  s_map[s_map_n].at = at;
+  s_map[s_map_n].size = size;
+  s_map[s_map_n].used = kind;
+  s_map_n++;
+}
+
+static bool map_block(walker_heap_into_t heap, walker_block_info_t b, void *ctx) {
+  (void)heap; (void)ctx;
+  if (b.used && b.size < 2048) { s_small += (uint32_t)b.size; s_small_n++; return true; }
+  if (!b.used && b.size < 1024) return true;
+  if (s_small_n) { map_add(0, s_small, 0); s_small = s_small_n = 0; }
+  map_add((uintptr_t)b.ptr, (uint32_t)b.size, b.used ? 1 : 2);
+  return true;
+}
+
+static void cmd_mem_map(void) {
+  int i;
+  s_map_n = s_map_more = 0;
+  s_small = s_small_n = 0;
+  heap_caps_walk(MALLOC_CAP_EXEC, map_block, NULL);
+  if (s_small_n) map_add(0, s_small, 0);
+  for (i = 0; i < s_map_n; i++) {
+    if (s_map[i].used == 0) con_printf("           small used %6u\n", (unsigned)s_map[i].size);
+    else con_printf("  %08x %s %6u\n", (unsigned)s_map[i].at,
+                    s_map[i].used == 1 ? "used" : "FREE", (unsigned)s_map[i].size);
+  }
+  if (s_map_more) con_printf("  (%d more)\n", s_map_more);
+}
+
 static void cmd_mem(void) {
   con_printf("heap free        %6u B  (largest block %u)\n",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
@@ -299,7 +344,7 @@ static int do_command(const char *rest) {
 static void run_builtin(const char *line, char *arg) {
   if (!strcmp(line, "help"))        cmd_help();
   else if (!strcmp(line, "log"))    cmd_log(arg);
-  else if (!strcmp(line, "mem"))    cmd_mem();
+  else if (!strcmp(line, "mem"))    { if (arg && !strcmp(arg, "map")) cmd_mem_map(); else cmd_mem(); }
   /* The verbs the running app offers, and a way to run one.
    *
    * This is the point of the `id` field in CappAction: the same table that

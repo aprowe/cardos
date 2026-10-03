@@ -14,6 +14,8 @@
 #include "kernel/fs/fs.h"
 #include "kernel/ui/fontres.h"
 #include "kernel/sys/power.h"
+#include "kernel/sys/printq.h"
+#include "kernel/drv/bthid.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +23,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -662,14 +665,34 @@ static char s_start_error[64];
 
 const char *capprun_start_error(void) { return s_start_error; }
 
+/* Room for an app that would not load: let go of what can come back.
+ *
+ * An app's image is one block, and Notes needs most of 60 KB. After a few
+ * hours the heap had 107 KB free with nothing open -- the same as at boot,
+ * nothing leaked -- but its largest piece was 39 KB, not 70: the radios
+ * come up and down round prints and syncs (WiFi 52 KB, Bluetooth 67), and
+ * each time they come back somewhere else and split what is free. Notes
+ * then would not open at all (2026-10-02). Taking them down joins the
+ * pieces up again; WiFi is built again by the next thing that wants the
+ * network -- meet_needs, straight after this load, for an app that does --
+ * and it lands round the app instead of under it. Nothing is taken that is
+ * in use: not WiFi under a request or the share, not Bluetooth under a print
+ * or a mouse (bt_radio_down keeps a claimed link). */
+static void make_room(void) {
+  size_t before = heap_caps_get_largest_free_block(MALLOC_CAP_EXEC);
+  if (s_hold_owner == NULL) capp_hold_code(0);
+  if (!printq_busy()) bt_radio_down();
+  if (!httpq_active() && !share_running()) wifi_release();
+  ESP_LOGW(TAG, "made room: largest block %u -> %u", (unsigned)before,
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_EXEC));
+}
+
 static int ensure_loaded(Run *s) {
   CappResult r;
   if (s->loaded) return 0;
   r = capp_load(s->entry->path, &s->la);
-  if (r == CAPP_ERR_NO_MEMORY && s_hold_owner == NULL) {
-    /* The block kept between another app's commands is heap nothing else
-     * can use until it is let go; let go of it and try once more. */
-    capp_hold_code(0);
+  if (r == CAPP_ERR_NO_MEMORY) {
+    make_room();
     r = capp_load(s->entry->path, &s->la);
   }
   if (r != CAPP_OK) {

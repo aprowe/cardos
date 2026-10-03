@@ -682,6 +682,21 @@ outgrew the 2304 KB OTA slots: `update os` downloaded it and refused it as
 "not a bootable image". The rest arrive with `update apps`. Run
 `python tools/mapsize.py` before deciding anything about size.
 
+**An app's data is one block, and the heap breaks up** (2026-10-02). After
+a few hours the heap had as much free as at boot -- nothing leaked -- but
+the largest piece was 39 KB, not 69: the radios come down and up round
+prints and syncs and land somewhere new, and small long-lived allocations
+(network bookkeeping) settle into the big free region while it is empty.
+An app that needs one bigger block then will not load. `mem map` shows the
+executable heap piece by piece. Two answers: a load that fails for memory
+lets go of what can come back -- the held code block, Bluetooth (unless a
+mouse or keyboard holds it), WiFi (unless a request or the share needs
+it) -- and tries again (`make_room` in capprun.c); and no app should need
+a block near 40 KB. Notes' data was 39.7 KB, 16 of it one buffer for a
+note's text; it is 8 KB now (Notes 31.6 KB), and a note fetched cut short
+is caught by its hash and left on the server. Check an app's sizes with
+`xtensa-esp32s3-elf-size -A build/apps/NAME.capp` (.code and .data).
+
 **Measured memory, with both radios up: 120 KB of heap free**, low water 95 KB.
 It was 79 KB until the memory manager's arena came down from 48 KB to 16 —
 grep says nothing outside `kernel/mem` ever allocated from it, and holding a

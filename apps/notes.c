@@ -47,7 +47,11 @@ static const CardApi *api;
 #define MEMO_DIR   "/home/memos"
 #define MAX_NOTES  48
 #define MAX_OPS    (MAX_NOTES * 2)
-#define TEXT_MAX   16384                /* a note longer than this is not synced */
+/* A note longer than this is not synced. It was 16 KB, and Notes' data --
+ * this buffer most of it -- was one 40 KB block, which the heap had stopped
+ * having in one piece after a few hours of the radios coming and going:
+ * Notes would not open at all (2026-10-02). 8 KB of text is a long note. */
+#define TEXT_MAX   8192
 #define FILE_MAX   48
 #define TITLE_MAX  40
 #define ROW_H      14
@@ -349,6 +353,18 @@ static int ask(const char *method, const char *rel, const char *body, char *out,
   return api->http(method, url, body, body ? "text/plain" : 0, "", out, (size_t)n, 20000);
 }
 
+/* Did the note just fetched come whole? Its hash against the server's: a
+ * note longer than TEXT_MAX arrives cut off, and written to the card, then
+ * edited and sent back, the cut copy would have replaced the whole one. */
+static int whole(const Srv *s) {
+  char h[9];
+  fnv_hex(N.text, (int)api->str_len(N.text), h);
+  if (same(h, s->hash)) return 1;
+  api->fmt(N.status, sizeof N.status, "%.24s: too long for here", s->title);
+  N.bad = 1;
+  return 0;
+}
+
 static int fetch_list(void) {
   const char *p;
   int r = ask("GET", "/notes", 0, N.text, TEXT_MAX);
@@ -431,6 +447,7 @@ static int do_op(Op *o) {
   case OP_DOWN_NEW:
     api->fmt(rel, sizeof rel, "/notes/note?id=%s", s->id);
     if ((r = ask("GET", rel, 0, N.text, TEXT_MAX)) < 0) return r;
+    if (!whole(s)) return 0;               /* too long for here: left on the server */
     if (o->op == OP_DOWN_NEW) name_for(s->title, "", file, sizeof file);
     else api->fmt(file, sizeof file, "%s", x->file);
     if (write_file(file, N.text) != 0) return -2;
@@ -488,6 +505,7 @@ static int do_op(Op *o) {
     /* ...and the server's takes the name. */
     api->fmt(rel, sizeof rel, "/notes/note?id=%s", s->id);
     if ((r = ask("GET", rel, 0, N.text, TEXT_MAX)) < 0) return r;
+    if (!whole(s)) return 0;
     if (write_file(x->file, N.text) != 0) return -2;
     fnv_hex(N.text, (int)api->str_len(N.text), h);
     api->fmt(x->hash, sizeof x->hash, "%s", h);
