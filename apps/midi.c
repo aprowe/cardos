@@ -6,7 +6,11 @@
  * changes and ramps, pitch bends, a tempo, a loop. `n` asks Claude for one
  * ("write the first section of Fur Elise") through the server
  * (server/midi.py), which checks it before it comes back; `e` opens one in
- * Edit, and leaving Edit comes back here.
+ * Edit, and leaving Edit comes back to that song.
+ *
+ * Enter opens a song like a project: its piano roll, still, and every action
+ * from there -- hear it, play it out, tempo, loop, ask Claude to change it,
+ * undo, edit. Esc stops what plays, then goes back to the list.
  *
  * Playing is the kernel's (api->midi, API 38): the whole song goes over as
  * time-stamped messages and a task sends them on time, so a repaint here
@@ -42,6 +46,7 @@ static const CappAudio *au;
 #define FADE        48             /* samples of fade at a note's ends: no clicks */
 #define VOICES      8
 #define UNDO        "/cache/midi-undo.song"
+#define REOPEN      "/cache/midi-open.txt"   /* the song to open after Edit */
 
 /* Each MIDI note's phase step a sample at 16 kHz, 2^32 a cycle: 440 Hz times
  * 2^((n-69)/12), worked out on the PC -- an app has no pow. */
@@ -93,7 +98,8 @@ static const uint16_t CHAN[8] = {
   CAPP_RGB(210, 140, 250), CAPP_RGB(100, 220, 220), CAPP_RGB(255, 120, 180), CAPP_RGB(200, 200, 200),
 };
 
-enum { V_LIST, V_PLAY, V_ASK };
+enum { V_LIST, V_SONG, V_ASK };
+enum { P_NONE, P_MIDI, P_SPEAKER };
 
 static struct {
   char     file[MAXS][NAMEL];
@@ -110,12 +116,13 @@ static struct {
   char     draft[120];
   char     job[16];
   uint32_t next_poll, asked_at;
-  /* the song playing */
+  int      ask_back;               /* the view a prompt returns to */
+  /* the song open */
   MsSong   S;
   uint32_t len_ms;
   int      lo, hi;                 /* pitch range on the roll */
   int      head_x;                 /* the playhead as drawn */
-  int      preview;                /* playing on the speaker, not to MIDI */
+  int      playing;                /* P_NONE, P_MIDI or P_SPEAKER */
   char     change[NAMEL];          /* the song Claude is changing; "" for a new one */
   char     undo[NAMEL];            /* the song UNDO holds the last version of */
   CRect    c;
@@ -215,44 +222,72 @@ static int to_kernel(void) {
   return M.S.nev;
 }
 
-static void play_sel(void) {
+static int looping(void) { return M.loop_on < 0 ? M.S.loop : M.loop_on; }
+
+/* What the song view says when nothing is playing. */
+static void idle_status(void) {
+  api->fmt(M.status, sizeof M.status, "%d bpm%s  G%d", M.S.tempo, looping() ? "  loop" : "", M.pin);
+  M.bad = 0;
+}
+
+/* The selected song read and parsed afresh, at the chosen tempo, with its
+ * pitch range and length for the roll. Every play starts here, because
+ * to_kernel() writes over the parsed events. */
+static int load_song(void) {
   char path[64];
-  int loop, n, i, rc;
-  if (!M.n || !mi) return;
+  int i;
+  if (!M.n) return -1;
   api->fmt(path, sizeof path, DIR "/%s", M.file[M.sel]);
-  if (read_text(path) < 0) { say(1, "cannot read it"); return; }
+  if (read_text(path) < 0) { say(1, "cannot read it"); return -1; }
   if (ms_parse(&M.S, M.text) != 0) {
     api->fmt(M.status, sizeof M.status, "line %d: %s", M.S.err_line, M.S.err);
     M.bad = 1;
-    return;
+    M.S.nnotes = 0;
+    return -1;
   }
   M.S.tempo += M.tempo_add;
   if (M.S.tempo < 20) M.S.tempo = 20;
-  loop = M.loop_on < 0 ? M.S.loop : M.loop_on;
-  if (loop && !M.S.loop_ticks) M.S.loop_ticks = (M.S.end_ticks + 4 * MS_PPQ - 1) / (4 * MS_PPQ) * (4 * MS_PPQ);
-  M.len_ms = ms_ms(&M.S, loop ? M.S.loop_ticks : M.S.end_ticks);
+  if (looping() && !M.S.loop_ticks) M.S.loop_ticks = (M.S.end_ticks + 4 * MS_PPQ - 1) / (4 * MS_PPQ) * (4 * MS_PPQ);
+  M.len_ms = ms_ms(&M.S, looping() ? M.S.loop_ticks : M.S.end_ticks);
   M.lo = 127; M.hi = 0;
   for (i = 0; i < M.S.nnotes; i++) {
     if (M.S.note[i].pitch < M.lo) M.lo = M.S.note[i].pitch;
     if (M.S.note[i].pitch > M.hi) M.hi = M.S.note[i].pitch;
   }
   if (M.lo > M.hi) { M.lo = 48; M.hi = 72; }
-  if (mi->open(M.pin == 1 ? 1 : 2) != 0) { say(1, "the Grove port would not open"); return; }
-  n = to_kernel();
-  rc = mi->play((const CappMidiEvent *)(void *)M.S.ev, n, loop ? M.len_ms : 0);
-  if (rc != 0) { say(1, rc == -2 ? "not enough memory to play it" : "MIDI is not open"); return; }
-  M.view = V_PLAY;
   M.head_x = -1;
-  api->fmt(M.status, sizeof M.status, "%d bpm%s  G%d", M.S.tempo, loop ? "  loop" : "", M.pin);
-  M.bad = 0;
+  return 0;
 }
 
 static void stop(void) {
-  if (M.preview) { if (au) au->stop(); }
-  else if (mi) mi->stop();
-  M.preview = 0;
-  M.view = V_LIST;
-  say(0, "");
+  if (M.playing == P_SPEAKER) { if (au) au->stop(); }
+  else if (M.playing == P_MIDI) { if (mi) mi->stop(); }
+  M.playing = P_NONE;
+  M.head_x = -1;
+  if (M.view == V_SONG) idle_status();
+}
+
+/* The selected song, opened: the roll, still, and every action from there. */
+static void open_sel(void) {
+  if (!M.n) return;
+  M.tempo_add = 0;
+  M.loop_on = -1;
+  M.view = V_SONG;
+  if (load_song() == 0) idle_status();
+}
+
+static void play_midi(void) {
+  int n, rc;
+  if (!mi) return;
+  stop();
+  if (load_song() != 0) return;
+  if (mi->open(M.pin == 1 ? 1 : 2) != 0) { say(1, "the Grove port would not open"); return; }
+  n = to_kernel();
+  rc = mi->play((const CappMidiEvent *)(void *)M.S.ev, n, looping() ? M.len_ms : 0);
+  if (rc != 0) { say(1, rc == -2 ? "not enough memory to play it" : "MIDI is not open"); return; }
+  M.playing = P_MIDI;
+  api->fmt(M.status, sizeof M.status, "to MIDI  %d bpm%s  G%d", M.S.tempo, looping() ? "  loop" : "", M.pin);
+  M.bad = 0;
 }
 
 /* ---- the preview -------------------------------------------------------------------------- */
@@ -363,41 +398,30 @@ static int render_preview(void) {
   return 0;
 }
 
-static void preview_sel(void) {
-  char path[64];
+static void play_speaker(void) {
   int i;
-  if (!M.n || !au) return;
-  api->fmt(path, sizeof path, DIR "/%s", M.file[M.sel]);
-  if (read_text(path) < 0) { say(1, "cannot read it"); return; }
-  if (ms_parse(&M.S, M.text) != 0) {
-    api->fmt(M.status, sizeof M.status, "line %d: %s", M.S.err_line, M.S.err);
-    M.bad = 1;
-    return;
-  }
-  M.S.tempo += M.tempo_add;
-  if (M.S.tempo < 20) M.S.tempo = 20;
+  if (!au) return;
+  stop();
+  if (load_song() != 0) return;
   if (!M.S.nnotes) { say(1, "no notes to hear"); return; }
-  if (mi) mi->stop();
   if (au->state() != CAPP_AUDIO_IDLE) au->stop();
-  say(0, "making the preview...");
-  if (M.have_c) { api->damage(M.c); }
   if (render_preview() != 0) { say(1, "cannot write the preview to the card"); return; }
   for (i = 0; i < 40 && au->state() != CAPP_AUDIO_IDLE; i++) {
     uint32_t t0 = api->ticks_ms() + 10;
     while ((int32_t)(api->ticks_ms() - t0) < 0) ;
   }
   if (au->play(PREVIEW) != 0) { say(1, "the speaker would not play it"); return; }
-  M.len_ms = ms_ms(&M.S, M.S.end_ticks);
-  M.lo = 127; M.hi = 0;
-  for (i = 0; i < M.S.nnotes; i++) {
-    if (M.S.note[i].pitch < M.lo) M.lo = M.S.note[i].pitch;
-    if (M.S.note[i].pitch > M.hi) M.hi = M.S.note[i].pitch;
-  }
-  M.preview = 1;
-  M.view = V_PLAY;
-  M.head_x = -1;
-  api->fmt(M.status, sizeof M.status, "%d bpm  on the speaker", M.S.tempo);
+  M.len_ms = ms_ms(&M.S, M.S.end_ticks);   /* the preview does not loop */
+  M.playing = P_SPEAKER;
+  api->fmt(M.status, sizeof M.status, "speaker  %d bpm", M.S.tempo);
   M.bad = 0;
+}
+
+/* + - and l while something plays: start it again as it was. */
+static void replay(int what) {
+  if (what == P_MIDI) play_midi();
+  else if (what == P_SPEAKER) play_speaker();
+  else if (load_song() == 0) idle_status();
 }
 
 /* A C-major arpeggio, now: to hear whether the converter is on this pin. */
@@ -430,8 +454,8 @@ static void ask_send(void) {
   char url[128], reply[24];
   const char *body = M.draft;
   int r, i;
-  if (!M.draft[0]) { M.view = V_LIST; return; }
-  if (!api->net_ready() && api->net_connect(15000) != 0) { say(1, "offline: Claude needs the server"); M.view = V_LIST; return; }
+  if (!M.draft[0]) { M.view = M.ask_back; return; }
+  if (!api->net_ready() && api->net_connect(15000) != 0) { say(1, "offline: Claude needs the server"); M.view = M.ask_back; return; }
   /* A change: what to change, the server's mark, and the song as it is --
    * which is kept, so u can put it back. */
   if (M.change[0]) {
@@ -451,7 +475,7 @@ static void ask_send(void) {
   }
   api->fmt(url, sizeof url, "%s/midi/compose", api->proxy());
   r = api->http("POST", url, body, "text/plain", "", reply, sizeof reply, 15000);
-  if (r < 0 || reply[0] == 'e') { say(1, "the server did not take it"); M.view = V_LIST; M.change[0] = 0; return; }
+  if (r < 0 || reply[0] == 'e') { say(1, "the server did not take it"); M.view = M.ask_back; M.change[0] = 0; return; }
   for (i = 0; reply[i] && reply[i] != '\n' && i < (int)sizeof M.job - 1; i++) M.job[i] = reply[i];
   M.job[i] = 0;
   M.asked_at = api->ticks_ms();
@@ -501,6 +525,7 @@ static void ask_poll(void) {
     M.change[0] = 0;
     if (save_as(path, M.text + 3) != 0) { say(1, "cannot write to the card"); return; }
     rescan();
+    if (M.view != V_LIST && M.playing == P_NONE) load_song();
     say(0, "changed: space hears it, u undoes");
     mark_all();
     return;
@@ -531,7 +556,11 @@ static void ask_poll(void) {
       for (k = 0; file[k] && file[k] == M.file[i][k]; k++) ;
       if (!file[k]) M.sel = i;
     }
-    say(0, "written: enter plays, e edits");
+    /* The new song opens, whatever was on screen: it is what was asked for. */
+    stop();
+    if (M.view == V_ASK) { M.draft[0] = 0; M.change[0] = 0; }
+    open_sel();
+    say(0, "written: space hears it");
   }
   mark_all();
 }
@@ -547,16 +576,24 @@ static void delete_sel(void) {
 
 /* ---- the screen ----------------------------------------------------------------------------- */
 
+static int in_song(void) { return M.view == V_SONG || (M.view == V_ASK && M.ask_back == V_SONG); }
+
 static void paint_top(void) {
   CRect r = rect(M.c.x, M.c.y, M.c.w, TOP_H);
-  int w = (int)api->str_len(M.status) * 6;
-  api->text((int16_t)(r.x + 6), (int16_t)(r.y + 3), M.view == V_PLAY ? M.S.title[0] ? M.S.title : "MIDI" : "MIDI",
-            CLR_ACC, CLR_BG);
+  int w = (int)api->str_len(M.status) * 6, room, tw;
+  char title[NAMEL];
+  /* The song's title, cut to leave a space before the status. */
+  room = (r.w - 24 - w) / 6;
+  if (room < 0) room = 0;
+  if (room > NAMEL - 1) room = NAMEL - 1;
+  api->fmt(title, sizeof title, "%s", in_song() && M.n ? M.title[M.sel] : "MIDI");
+  title[room] = 0;
+  tw = (int)api->str_len(title) * 6;
+  api->text((int16_t)(r.x + 6), (int16_t)(r.y + 3), title, CLR_ACC, CLR_BG);
   api->fill(rect(r.x, r.y, r.w, 3), CLR_BG);
   api->fill(rect(r.x, r.y + 11, r.w, 3), CLR_BG);
   api->fill(rect(r.x, r.y + 3, 6, 8), CLR_BG);
-  api->fill(rect(r.x + 6 + 6 * (M.view == V_PLAY && M.S.title[0] ? (int)api->str_len(M.S.title) : 4), r.y + 3,
-                 r.w - 12 - w - 6 * (M.view == V_PLAY && M.S.title[0] ? (int)api->str_len(M.S.title) : 4), 8), CLR_BG);
+  api->fill(rect(r.x + 6 + tw, r.y + 3, r.w - 12 - w - tw, 8), CLR_BG);
   api->text((int16_t)(r.x + r.w - 6 - w), (int16_t)(r.y + 3), M.status, M.bad ? CLR_BAD : CLR_DIM, CLR_BG);
   api->fill(rect(r.x + r.w - 6, r.y + 3, 6, 8), CLR_BG);
 }
@@ -613,40 +650,126 @@ static void app_paint(void *st, CRect c) {
   M.c = c;
   M.have_c = 1;
   /* The playhead moving: its two columns and nothing else. */
-  if (M.view == V_PLAY && a.w <= 4 && a.y >= roll_rect().y) { paint_roll(); return; }
+  if (M.view == V_SONG && a.w <= 4 && a.y >= roll_rect().y) { paint_roll(); return; }
   paint_top();
-  if (M.view == V_PLAY) {
+  if (in_song()) {
     api->fill(rect(c.x, c.y + TOP_H, c.w, 2), CLR_BG);
     api->fill(rect(c.x, c.y + TOP_H + 2, 4, roll_rect().h), CLR_BG);
     api->fill(rect(c.x + c.w - 4, c.y + TOP_H + 2, 4, roll_rect().h), CLR_BG);
     api->fill(rect(c.x, c.y + c.h - FOOT_H - 2, c.w, 2), CLR_BG);
     paint_roll();
-    footer_paint(api, c, M.preview ? "space stop  + - tempo" : "enter stop  + - tempo  l loop");
-  } else {
-    paint_list();
-    if (M.view == V_ASK) {
-      char line[48];
-      int n = (int)api->str_len(M.draft);
-      api->fmt(line, sizeof line, "%s %s_%-38s", M.change[0] ? "change:" : "write:",
-               n > 29 ? M.draft + n - 29 : M.draft, "");
-      line[38] = 0;
-      footer_paint(api, c, line);
-    } else if (M.ask_delete) {
-      char line[48];
-      api->fmt(line, sizeof line, "delete %.22s? y yes  n no", M.title[M.sel]);
-      footer_paint(api, c, line);
-    } else footer_paint(api, c, "enter midi  space hear  n new");
-  }
+  } else paint_list();
+  if (M.view == V_ASK) {
+    char line[48];
+    int n = (int)api->str_len(M.draft);
+    api->fmt(line, sizeof line, "%s %s_%-38s", M.change[0] ? "change:" : "write:",
+             n > 29 ? M.draft + n - 29 : M.draft, "");
+    line[38] = 0;
+    footer_paint(api, c, line);
+  } else if (M.ask_delete) {
+    char line[48];
+    api->fmt(line, sizeof line, "delete %.22s? y yes  n no", M.title[M.sel]);
+    footer_paint(api, c, line);
+  } else if (M.view == V_LIST) footer_paint(api, c, "enter open  space hear  n new");
+  else if (M.playing == P_SPEAKER) footer_paint(api, c, "space stop  + - tempo");
+  else if (M.playing == P_MIDI) footer_paint(api, c, "enter stop  + - tempo  l loop");
+  else footer_paint(api, c, "space hear  enter midi  c ask  e edit");
 }
 
 /* ---- keys and time ------------------------------------------------------------------------- */
 
 static int key_ask(uint8_t k) {
   int n = (int)api->str_len(M.draft);
-  if (k == CAPP_KEY_ESC) { M.view = V_LIST; M.change[0] = 0; return 1; }
-  if (k == CAPP_KEY_ENTER) { M.view = V_LIST; ask_send(); return 1; }
+  if (k == CAPP_KEY_ESC) { M.view = M.ask_back; M.change[0] = 0; return 1; }
+  if (k == CAPP_KEY_ENTER) { M.view = M.ask_back; ask_send(); return 1; }
   if (k == CAPP_KEY_BACK) { if (n) M.draft[n - 1] = 0; return 1; }
   if (k >= 32 && k < 127 && n < (int)sizeof M.draft - 1) { M.draft[n] = (char)k; M.draft[n + 1] = 0; }
+  return 1;
+}
+
+static void ask(int change) {
+  if (M.job[0]) { say(0, "Claude is still writing the last one"); return; }
+  M.draft[0] = 0;
+  M.change[0] = 0;
+  if (change) api->fmt(M.change, sizeof M.change, "%s", M.file[M.sel]);
+  M.ask_back = M.view;
+  M.view = V_ASK;
+}
+
+/* Edit, and back to this song after: the launcher reopens this app fresh,
+ * so the song to open is left on the card. */
+static void edit_sel(void) {
+  char path[64];
+  if (!M.n) return;
+  stop();
+  save_as(REOPEN, M.file[M.sel]);
+  api->fmt(path, sizeof path, DIR "/%s", M.file[M.sel]);
+  api->run("edit", path);
+}
+
+static void reopen(void) {
+  int i;
+  if (read_text(REOPEN) <= 0) return;
+  api->remove(REOPEN);
+  for (i = 0; i < M.n; i++) {
+    int k;
+    for (k = 0; M.text[k] && M.text[k] == M.file[i][k]; k++) ;
+    if (!M.file[i][k] && (!M.text[k] || M.text[k] == '\n')) { M.sel = i; open_sel(); return; }
+  }
+}
+
+/* Keys that mean the same in the list and in a song. */
+static int key_common(uint8_t k) {
+  switch (k) {
+  case 'n': case 'N':  ask(0); break;
+  case 'd': case 'D': case 0x7F: if (M.n) M.ask_delete = 1; break;
+  case 'g': case 'G':  M.pin = M.pin == 1 ? 2 : 1; pin_save(); if (mi) mi->close();
+                       api->fmt(M.status, sizeof M.status, "MIDI out on G%d", M.pin); M.bad = 0; break;
+  case 't': case 'T':  test_tone(); break;
+  default: return 0;
+  }
+  return 1;
+}
+
+static int key_song(uint8_t k) {
+  switch (k) {
+  case ' ':            if (M.playing == P_SPEAKER) stop(); else play_speaker(); break;
+  case CAPP_KEY_ENTER: if (M.playing == P_MIDI) stop(); else play_midi(); break;
+  case CAPP_KEY_ESC:   if (M.playing) stop(); else { M.view = V_LIST; say(0, ""); } break;
+  case '+': case '=':  M.tempo_add += 4; replay(M.playing); break;
+  case '-': case '_':  M.tempo_add -= 4; replay(M.playing); break;
+  case 'l': case 'L':  M.loop_on = looping() ? 0 : 1; replay(M.playing); break;
+  case 'c': case 'C':  ask(1); break;
+  case 'u': case 'U':
+    if (M.undo[0] && read_text(UNDO) > 0) {
+      char path[64];
+      api->fmt(path, sizeof path, DIR "/%s", M.undo);
+      if (save_as(path, M.text) == 0) {
+        M.undo[0] = 0;
+        rescan();
+        stop();
+        load_song();
+        say(0, "put back as it was");
+      } else say(1, "cannot write to the card");
+    } else say(0, "nothing to undo");
+    break;
+  case 'e': case 'E':  edit_sel(); break;
+  case 'r': case 'R':  stop(); if (load_song() == 0) idle_status(); break;
+  default:             return key_common(k);
+  }
+  return 1;
+}
+
+static int key_list(uint8_t k) {
+  switch (k) {
+  case CAPP_KEY_UP:    if (M.sel > 0) M.sel--; break;
+  case CAPP_KEY_DOWN:  if (M.sel < M.n - 1) M.sel++; break;
+  case CAPP_KEY_ENTER: open_sel(); break;
+  case ' ':            open_sel(); if (M.view == V_SONG && !M.bad) play_speaker(); break;
+  case 'e': case 'E':  edit_sel(); break;
+  case 'r': case 'R':  rescan(); say(0, ""); break;
+  default:             return key_common(k);
+  }
   return 1;
 }
 
@@ -655,55 +778,11 @@ static int app_key(void *st, uint8_t k) {
   if (M.view == V_ASK) { key_ask(k); mark_all(); return 1; }
   if (M.ask_delete) {
     M.ask_delete = 0;
-    if (k == 'y' || k == 'Y') delete_sel();
+    if (k == 'y' || k == 'Y') { stop(); delete_sel(); M.view = V_LIST; }
     mark_all();
     return 1;
   }
-  if (M.view == V_PLAY) {
-    switch (k) {
-    case CAPP_KEY_ENTER: case ' ': case CAPP_KEY_ESC: stop(); break;
-    case '+': case '=': M.tempo_add += 4; if (M.preview) preview_sel(); else play_sel(); break;
-    case '-': case '_': M.tempo_add -= 4; if (M.preview) preview_sel(); else play_sel(); break;
-    case 'l': case 'L': if (M.preview) break;
-                        M.loop_on = M.S.loop_ticks && (M.loop_on < 0 ? M.S.loop : M.loop_on) ? 0 : 1; play_sel(); break;
-    default: return 0;
-    }
-    mark_all();
-    return 1;
-  }
-  switch (k) {
-  case CAPP_KEY_UP:    if (M.sel > 0) M.sel--; M.tempo_add = 0; M.loop_on = -1; break;
-  case CAPP_KEY_DOWN:  if (M.sel < M.n - 1) M.sel++; M.tempo_add = 0; M.loop_on = -1; break;
-  case CAPP_KEY_ENTER: play_sel(); break;
-  case ' ':            preview_sel(); break;
-  case 'n': case 'N':  if (M.job[0]) { say(0, "Claude is still writing the last one"); break; }
-                       M.draft[0] = 0; M.change[0] = 0; M.view = V_ASK; break;
-  case 'c': case 'C':  if (!M.n) break;
-                       if (M.job[0]) { say(0, "Claude is still writing the last one"); break; }
-                       M.draft[0] = 0; api->fmt(M.change, sizeof M.change, "%s", M.file[M.sel]);
-                       M.view = V_ASK; break;
-  case 'u': case 'U':
-    if (M.undo[0] && read_text(UNDO) > 0) {
-      char path[64];
-      api->fmt(path, sizeof path, DIR "/%s", M.undo);
-      if (save_as(path, M.text) == 0) { say(0, "put back as it was"); M.undo[0] = 0; rescan(); }
-      else say(1, "cannot write to the card");
-    } else say(0, "nothing to undo");
-    break;
-  case 'e': case 'E':
-    if (M.n) {
-      char path[64];
-      api->fmt(path, sizeof path, DIR "/%s", M.file[M.sel]);
-      api->run("edit", path);
-    }
-    break;
-  case 'd': case 'D': case 0x7F: if (M.n) M.ask_delete = 1; break;
-  case 'g': case 'G':  M.pin = M.pin == 1 ? 2 : 1; pin_save(); if (mi) mi->close();
-                       api->fmt(M.status, sizeof M.status, "MIDI out on G%d", M.pin); M.bad = 0; break;
-  case 't': case 'T':  test_tone(); break;
-  case 'r': case 'R':  rescan(); say(0, ""); break;
-  default: return 0;
-  }
+  if (!(M.view == V_SONG ? key_song(k) : key_list(k))) return 0;
   mark_all();
   return 1;
 }
@@ -713,13 +792,19 @@ static int app_wants_text(void *st) { (void)st; return M.view == V_ASK; }
 static int app_tick(void *st, uint32_t now) {
   (void)st;
   if (M.job[0] && (int32_t)(now - M.next_poll) >= 0) { ask_poll(); return 1; }
-  if (M.view == V_PLAY && (M.preview ? au != 0 : mi != 0)) {
+  if (M.playing && (M.playing == P_SPEAKER ? au != 0 : mi != 0)) {
     int x;
-    int on = M.preview ? au->state() == CAPP_AUDIO_PLAYING : mi->playing();
-    uint32_t pos = M.preview ? au->pos_ms() : mi->pos_ms();
-    if (!on) { M.preview = 0; M.view = V_LIST; say(0, ""); mark_all(); return 1; }
+    int on = M.playing == P_SPEAKER ? au->state() == CAPP_AUDIO_PLAYING || au->paused() : mi->playing();
+    uint32_t pos = M.playing == P_SPEAKER ? au->pos_ms() : mi->pos_ms();
+    if (!on) {
+      M.playing = P_NONE;
+      M.head_x = -1;
+      if (M.view == V_SONG) idle_status();
+      mark_all();
+      return 1;
+    }
     x = roll_x(pos % (M.len_ms ? M.len_ms : 1));
-    if (x != M.head_x && M.have_c) {
+    if (x != M.head_x && M.have_c && M.view == V_SONG) {
       CRect r = roll_rect();
       if (M.head_x >= r.x) api->damage(rect(M.head_x, r.y, 1, r.h));
       M.head_x = x;
@@ -739,12 +824,14 @@ const CappInfo capp_info = {
     0x92, 0x49, 0x92, 0x49, 0x92, 0x49, 0xB6, 0xDB,
     0xB6, 0xDB, 0xB6, 0xDB, 0x92, 0x49, 0x92, 0x49,
     0x92, 0x49, 0x92, 0x49, 0xFF, 0xFF, 0x00, 0x00 },
-  "up/down\tchoose a song\nenter\tplay it to MIDI; again to stop\n"
-  "space\thear it on the speaker, up to eight notes at once\nn\task Claude to write one\n"
-  "c\task Claude to change this one\nu\tput back the version before the last change\n"
-  "e\tedit it (in Edit)\nd, del\tdelete it (asks)\n+ -\ttempo, while it plays\nl\tloop on and off, while it plays\n"
-  "g\tMIDI out on G1 or G2 (whichever your converter uses)\nt\ta test arpeggio\nr\tread the folder again\n"
-  "\nsongs are text in /songs; see apps/midiseq.h.\n",
+  "In the list\nup/down\tchoose a song\nenter\topen it\nspace\topen it and hear it\n"
+  "n\task Claude to write one\nr\tread the folder again\n"
+  "\nIn a song\nspace\thear it on the speaker, up to eight notes at once; again to stop\n"
+  "enter\tplay it to MIDI; again to stop\n+ -\ttempo\nl\tloop on and off\n"
+  "c\task Claude to change it\nu\tput back the version before the last change\n"
+  "e\tedit it in Edit, and come back to it\nr\tread it again\nesc\tstop, then back to the list\n"
+  "\nAnywhere\nd, del\tdelete (asks)\ng\tMIDI out on G1 or G2 (whichever your converter uses)\n"
+  "t\ta test arpeggio\n\nsongs are text in /songs; see apps/midiseq.h.\n",
 };
 
 static CappUi UI;
@@ -758,6 +845,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   pin_load();
   api->mkdir(DIR);
   rescan();
+  reopen();
   UI.paint = app_paint;
   UI.key = app_key;
   UI.tick = app_tick;
