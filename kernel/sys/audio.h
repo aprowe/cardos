@@ -25,6 +25,11 @@ int  audio_record(const char *path, int max_ms);
 int  audio_play(const char *path);
 
 void audio_stop(void);
+/* While playing: hold the place (1) or go on (0); the state stays
+ * AUDIO_PLAYING. Seek to a time in the file. Nothing while idle. */
+void audio_pause(int on);
+int  audio_paused(void);
+void audio_seek_ms(uint32_t ms);
 int  audio_state(void);          /* AUDIO_* */
 
 /* While recording: the last block's loudness, 0..100. Otherwise -1. */

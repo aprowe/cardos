@@ -386,6 +386,7 @@ static const CappAudio AUDIO = {
   audio_record, audio_play, audio_stop, audio_state, audio_level,
   audio_pos_ms, audio_total_ms, audio_last_bytes, audio_error,
   speaker_set_volume, speaker_volume,
+  audio_pause, audio_paused, audio_seek_ms,
 };
 static const CappAudio *api_audio(void) { return &AUDIO; }
 

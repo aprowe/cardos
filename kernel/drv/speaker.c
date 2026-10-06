@@ -164,7 +164,14 @@ static void close_tx(void) {
 
 int speaker_play_wav(const char *path, int (*stop)(void),
                      void (*progress)(uint32_t bytes)) {
+  return speaker_play_wav_ex(path, stop, progress, NULL, NULL);
+}
+
+int speaker_play_wav_ex(const char *path, int (*stop)(void),
+                        void (*progress)(uint32_t bytes),
+                        int (*paused)(void), int32_t (*seek)(void)) {
   static int16_t block[BLOCK_SAMPLES];
+  static const int16_t hush[BLOCK_SAMPLES];
   WavInfo w;
   const char *why = "";
   int fd, n;
@@ -181,6 +188,26 @@ int speaker_play_wav(const char *path, int (*stop)(void),
   while (left > 0) {
     size_t want = left < sizeof block ? (size_t)left : sizeof block, wrote = 0;
     int i;
+    int32_t to;
+    /* Paused: silence, at the rate the DMA takes it, so the loop is paced
+     * and the place is held. A stop still stops. */
+    if (paused && paused()) {
+      if (i2s_channel_write(s_tx, hush, sizeof hush, &wrote, 500) != ESP_OK) { fail("I2S write failed"); break; }
+      if (stop && stop()) break;
+      continue;
+    }
+    /* Somewhere else: whole frames, inside the audio. */
+    if (seek && (to = seek()) >= 0) {
+      uint32_t frame = (uint32_t)w.channels * 2;
+      uint32_t at = (uint32_t)to > w.data_bytes ? w.data_bytes : (uint32_t)to;
+      at -= at % frame;
+      if (fs_seek(fd, (int32_t)(w.data_offset + at), FS_SEEK_SET) < 0) { fail("cannot seek"); break; }
+      played = at;
+      left = w.data_bytes - at;
+      if (progress) progress(played);
+      if (!left) break;
+      want = left < sizeof block ? (size_t)left : sizeof block;
+    }
     int gain = speaker_volume() * 256 / 100;   /* 8.8; read per block so a
                                                   change lands mid-playback */
     n = fs_read(fd, block, want);

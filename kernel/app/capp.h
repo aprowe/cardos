@@ -395,6 +395,11 @@ typedef struct {
   const char *(*error)(void);       /* why the last start or job failed */
   void     (*set_volume)(int pct);  /* 0..100 */
   int      (*volume)(void);
+  /* API 37: while playing, hold the place (1) or go on (0) -- the state stays
+   * PLAYING -- and go to a time in the file. */
+  void     (*pause)(int on);
+  int      (*paused)(void);
+  void     (*seek_ms)(uint32_t ms);
 } CappAudio;
 
 /* What the Claude terminal needs of the agent. See kernel/sys/agent.h for

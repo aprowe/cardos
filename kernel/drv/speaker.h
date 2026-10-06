@@ -29,6 +29,14 @@ int speaker_wav_info(const char *path, WavInfo *out, const char **why);
  * in speaker_error(). */
 int  speaker_play_wav(const char *path, int (*stop)(void),
                       void (*progress)(uint32_t bytes));
+
+/* The same, with two more questions asked between blocks: `paused()` holds
+ * the place and sends silence -- the channel stays up, so resuming does not
+ * click -- and `seek()` returns a byte offset into the audio to go to, or -1
+ * for none. Either may be NULL. */
+int  speaker_play_wav_ex(const char *path, int (*stop)(void),
+                         void (*progress)(uint32_t bytes),
+                         int (*paused)(void), int32_t (*seek)(void));
 const char *speaker_error(void);
 
 /* Volume, 0..100, remembered across reboots. 60 by default; the NS4168 is

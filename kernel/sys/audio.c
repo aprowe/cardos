@@ -19,6 +19,8 @@ static const char *TAG = "audio";
 
 static volatile int      s_state;
 static volatile int      s_stop;
+static volatile int      s_paused;
+static volatile int32_t  s_seek = -1;      /* a byte offset asked for, or -1 */
 static volatile int      s_level = -1;
 static volatile uint32_t s_pos_bytes;
 static uint32_t          s_total_bytes;
@@ -29,6 +31,8 @@ static int               s_max_ms;
 static char              s_error[48];
 
 static int  stop_cb(void) { return s_stop; }
+static int  paused_cb(void) { return s_paused; }
+static int32_t seek_cb(void) { int32_t s = s_seek; s_seek = -1; return s; }
 static void level_cb(int pct) { s_level = pct; }
 static void progress_cb(uint32_t bytes) { s_pos_bytes = bytes; }
 
@@ -46,16 +50,19 @@ static void record_task(void *param) {
 
 static void play_task(void *param) {
   (void)param;
-  if (speaker_play_wav(s_path, stop_cb, progress_cb) != 0)
+  if (speaker_play_wav_ex(s_path, stop_cb, progress_cb, paused_cb, seek_cb) != 0)
     snprintf(s_error, sizeof s_error, "%s", speaker_error());
   ESP_LOGI(TAG, "played %u of %u bytes of %s", (unsigned)s_pos_bytes,
            (unsigned)s_total_bytes, s_path);
+  s_paused = 0;
   s_state = AUDIO_IDLE;
   vTaskDelete(NULL);
 }
 
 static int start(void (*task)(void *), int state, const char *name) {
   s_stop = 0;
+  s_paused = 0;
+  s_seek = -1;
   s_error[0] = 0;
   s_state = state;
   if (xTaskCreatePinnedToCore(task, name, A_STACK, NULL, A_PRIORITY, NULL, 0) != pdPASS) {
@@ -92,6 +99,14 @@ int audio_play(const char *path) {
 }
 
 void audio_stop(void) { s_stop = 1; }
+
+void audio_pause(int on) { if (s_state == AUDIO_PLAYING) s_paused = on ? 1 : 0; }
+int  audio_paused(void) { return s_state == AUDIO_PLAYING && s_paused; }
+
+void audio_seek_ms(uint32_t ms) {
+  if (s_state != AUDIO_PLAYING || !s_byte_rate) return;
+  s_seek = (int32_t)((uint64_t)ms * s_byte_rate / 1000);
+}
 int  audio_state(void) { return s_state; }
 int  audio_level(void) { return s_state == AUDIO_RECORDING ? s_level : -1; }
 

@@ -8,11 +8,11 @@
  * server goes from /music. Synced tracks are /music/<id>.wav, their titles
  * in /music/.tracks.
  *
- * Playing is the kernel's audio task (api->audio): enter plays, space stops,
- * left and right are the tracks either side, and when one ends the next
- * starts -- in order, or at random with shuffle. Leaving the app lets the
- * track that is playing finish; nothing follows it. There is no pause: the
- * player takes a file from its start.
+ * Playing is the kernel's audio task (api->audio): enter plays, space
+ * pauses and goes on, [ and ] (or shift with the arrows) go back and on ten
+ * seconds, left and right are the tracks either side, esc stops, and when
+ * one ends the next starts -- in order, or at random with shuffle. Leaving
+ * the app lets the track that is playing finish; nothing follows it.
  */
 #include "kernel/app/capp.h"
 #include "apps/footer.h"
@@ -195,6 +195,7 @@ static void paint_now(void) {
   char line[64], a[12], b[12];
   int barw = r.w - 12, fill = 0, w;
   uint32_t pos = 0, tot = 0;
+  int paused = M.playing >= 0 && au && au->paused && au->paused();
   if (M.playing >= 0 && au && au->state() == CAPP_AUDIO_PLAYING) {
     pos = au->pos_ms();
     tot = au->total_ms();
@@ -209,8 +210,8 @@ static void paint_now(void) {
   api->text((int16_t)(r.x + 6), (int16_t)(r.y + 3), line, M.ask_delete ? CLR_BAD : CLR_TEXT, CLR_NOW);
   mmss(pos, a, sizeof a);
   mmss(tot ? tot : (M.playing >= 0 ? M.ms[M.playing] : 0), b, sizeof b);
-  api->fmt(line, sizeof line, "%s / %s%s  vol %d", a, b, M.shuffle ? "  shuffle" : "",
-           au ? au->volume() : 0);
+  api->fmt(line, sizeof line, "%s / %s%s%s  vol %d", a, b, paused ? "  paused" : "",
+           M.shuffle ? "  shuffle" : "", au ? au->volume() : 0);
   w = (int)api->str_len(line) * 6;
   api->text((int16_t)(r.x + 6), (int16_t)(r.y + 13), line, CLR_DIM, CLR_NOW);
   api->fill(rect(r.x + 6 + w, r.y + 13, r.w - 6 - w, 8), CLR_NOW);
@@ -230,7 +231,7 @@ static void app_paint(void *st, CRect c) {
   paint_top();
   paint_list();
   paint_now();
-  footer_paint(api, c, "enter play  space stop  s shuffle");
+  footer_paint(api, c, "space pause  enter play  [ ] seek");
 }
 
 static void mark_all(void) { if (M.have_c) api->damage(M.c); }
@@ -411,8 +412,20 @@ static int app_key(void *st, uint8_t k) {
   case CAPP_KEY_DOWN:  if (M.sel < M.n - 1) M.sel++; break;
   case CAPP_KEY_ENTER: play(M.sel); break;
   case ' ':
-    if (M.playing >= 0 && au->state() == CAPP_AUDIO_PLAYING) { M.stopped = 1; au->stop(); }
+    if (M.playing >= 0 && au->state() == CAPP_AUDIO_PLAYING) au->pause(!au->paused());
     else play(M.sel);
+    break;
+  /* Ten seconds back or on: [ ], or shift with the arrows (< and ?). */
+  case '[': case '<': case ']': case '?':
+    if (M.playing >= 0 && au->state() == CAPP_AUDIO_PLAYING) {
+      uint32_t at = au->pos_ms(), tot = au->total_ms();
+      if (k == '[' || k == '<') at = at > 10000 ? at - 10000 : 0;
+      else at = at + 10000 < tot ? at + 10000 : tot;
+      au->seek_ms(at);
+    }
+    break;
+  case 'x': case 'X':
+    if (M.playing >= 0) { M.stopped = 1; au->stop(); }
     break;
   case CAPP_KEY_LEFT:  if (M.n) play(pick_next(-1)); break;
   case CAPP_KEY_RIGHT: if (M.n) play(pick_next(1)); break;
@@ -467,9 +480,10 @@ const CappInfo capp_info = {
     0x03, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
     0x02, 0x02, 0x02, 0x1E, 0x1E, 0x3E, 0x3E, 0x3E,
     0x3E, 0x1C, 0x1C, 0x00, 0x00, 0x00, 0x00, 0x00 },
-  "up/down\tchoose a track\nenter\tplay it\nspace\tstop, or play\nleft/right\tthe track before or after\n"
+  "up/down\tchoose a track\nenter\tplay it from the start\nspace\tpause, go on (or play)\n"
+  "[ ]\tten seconds back, on (or shift+left/right)\nleft/right\tthe track before or after\n"
   "s\tshuffle on and off\n+ -\tvolume\nr\tsync with the dashboard\nd, del\tdelete (asks; from the dashboard too)\n"
-  "esc\tstop\n\ntracks come from the dashboard's Music page.\n",
+  "esc, x\tstop\n\ntracks come from the dashboard's Music page.\n",
 };
 
 static CappUi UI;

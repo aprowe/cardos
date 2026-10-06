@@ -287,9 +287,12 @@ converts in the browser -- decodeAudioData, an OfflineAudioContext at
 (about 2.6 MB a minute); `server/music.py` checks it is one and keeps it.
 `apps/music.c` (Make) syncs on open: the list, then each missing track
 streamed to /music/ID.part with a bar, renamed when whole; a key stops it.
-Enter plays, space stops, left/right step, s shuffles, + - volume; the next
-track starts when one ends. No pause: the audio API plays a file from its
-start. Leaving the app lets the current track finish. `api->http_stream`
+Enter plays, space pauses and goes on, [ ] (or shift+left/right) seek ten
+seconds, left/right step, esc stops, s shuffles, + - volume; the next track
+starts when one ends. Pause holds the place by sending silence between
+blocks (the channel stays up, so no click) and seek moves the read inside
+the data -- `audio_pause`/`audio_seek_ms`, in CappAudio as pause/paused/
+seek_ms. Leaving the app lets the current track finish. `api->http_stream`
 now carries the device's token to its own server.
 
 **The launcher's order is chosen, not the card's** (2026-10-01).
