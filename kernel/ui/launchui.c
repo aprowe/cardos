@@ -358,15 +358,15 @@ static void paint_carousel_body(void) {
   paint_pips(n);
 }
 
-/* Rows y0..y1 of the carousel, composed off the panel a strip at a time.
- * Without the memory for a strip it draws straight to the panel, as it
- * always used to. */
-static void paint_carousel_rows(int y0, int y1) {
+/* Rows y0..y1, composed off the panel a strip at a time by `body` -- which
+ * draws everything and is clipped to each strip in turn. Without the memory
+ * for a strip it draws straight to the panel, as it always used to. */
+static void paint_offscreen(int y0, int y1, void (*body)(void)) {
   uint16_t *strip = (uint16_t *)malloc((size_t)DISPLAY_W * STRIP_H * 2);
   int y;
   if (!strip) {
     draw_set_clip(R(0, y0, DISPLAY_W, y1 - y0));
-    paint_carousel_body();
+    body();
     draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
     return;
   }
@@ -374,7 +374,7 @@ static void paint_carousel_rows(int y0, int y1) {
     int h = y1 - y < STRIP_H ? y1 - y : STRIP_H;
     display_target(strip, 0, y, DISPLAY_W, h);
     draw_set_clip(R(0, y, DISPLAY_W, h));
-    paint_carousel_body();
+    body();
     display_target(NULL, 0, 0, 0, 0);
     display_blit(0, y, DISPLAY_W, h, strip);
   }
@@ -382,6 +382,7 @@ static void paint_carousel_rows(int y0, int y1) {
   free(strip);
 }
 
+static void paint_carousel_rows(int y0, int y1) { paint_offscreen(y0, y1, paint_carousel_body); }
 static void paint_carousel(void) { paint_carousel_rows(BAR_H, DISPLAY_H); }
 
 /* One step of the slide; 1 while there is more to go. Ease-out: fast away,
@@ -748,10 +749,14 @@ static void search_open(void) {
   flush();
 }
 
-static void paint_search(void) {
+/* Off the panel like the carousel: it cleared the screen and redrew every
+ * row on each arrow, and the clear showed. */
+static void paint_search_body(void);
+static void paint_search(void) { paint_offscreen(BAR_H, DISPLAY_H, paint_search_body); }
+
+static void paint_search_body(void) {
   int i, y = BAR_H + 26;
   char line[32];
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_rect(R(0, BAR_H, DISPLAY_W, DISPLAY_H - BAR_H), C_DESKTOP);
   draw_rect(R(8, BAR_H + 5, DISPLAY_W - 16, 16), C_TITLE);
   snprintf(line, sizeof line, "> %s_", s_q);

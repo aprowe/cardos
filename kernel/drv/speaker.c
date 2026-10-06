@@ -157,6 +157,20 @@ static int open_tx(uint32_t rate, int channels) {
   return 0;
 }
 
+/* The DMA holds 6 x 240 frames -- 90 ms at 16 kHz -- that are queued but
+ * not yet played when a write returns. Closing then threw them away: a
+ * 10 ms key click was never heard at all, and every WAV lost its last
+ * ~50 ms. So, before a close, that much silence and a little more behind
+ * it, which pushes the real sound out of the buffer and through the DAC. */
+#define DMA_FRAMES (6 * 240)
+static void drain(void) {
+  static const int16_t hush[256];
+  size_t wrote;
+  int i;
+  for (i = 0; i < (DMA_FRAMES * 2 + 256) / 256 + 1; i++)   /* x2: a stereo frame is two samples */
+    i2s_channel_write(s_tx, hush, sizeof hush, &wrote, 200);
+}
+
 static void close_tx(void) {
   if (!s_tx) return;
   i2s_channel_disable(s_tx);
@@ -191,15 +205,13 @@ int speaker_play_wav_ex(const char *path, int (*stop)(void),
 }
 
 int speaker_play_pcm(const int16_t *pcm, int n, uint32_t rate) {
-  static const int16_t tail[256];
   size_t wrote;
   need_lock();
   if (!pcm || n <= 0) return -1;
   if (xSemaphoreTake(s_lock, 0) != pdTRUE) return -1;
   if (open_tx(rate, 1) != 0) { xSemaphoreGive(s_lock); return -1; }
   i2s_channel_write(s_tx, pcm, (size_t)n * 2, &wrote, 500);
-  /* The DMA still holds the end of it: silence behind, or the close cuts it. */
-  i2s_channel_write(s_tx, tail, sizeof tail, &wrote, 200);
+  drain();
   close_tx();
   xSemaphoreGive(s_lock);
   return 0;
@@ -258,12 +270,7 @@ static int play_wav_locked(const char *path, int (*stop)(void),
     if (progress) progress(played);
     if (stop && stop()) break;
   }
-  /* Let the last block drain before the channel goes, or it is clipped. */
-  {
-    static const int16_t silence[BLOCK_SAMPLES];
-    size_t wrote;
-    i2s_channel_write(s_tx, silence, sizeof silence, &wrote, 200);
-  }
+  drain();                 /* the last of it is still in the DMA */
   fs_close(fd);
   close_tx();
   return s_error[0] ? -1 : 0;
