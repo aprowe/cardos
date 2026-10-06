@@ -71,4 +71,7 @@ void        wifi_forget(void);        /* every one */
 
 uint32_t wifi_heap_cost(void);
 
+/* Power save off (1) for a transfer, back on (0) after; counted. */
+void wifi_fast(int on);
+
 #endif /* CARDOS_WIFI_H */

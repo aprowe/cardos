@@ -6,6 +6,7 @@
 #include "kernel/fs/fs.h"
 
 #include <string.h>
+#include <stdlib.h>
 
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
@@ -360,6 +361,42 @@ int http_exchange_files(const char *url, const char *body_path,
   return got;
 }
 
+/* ---- big transfers ----
+ *
+ * A download used to come off the socket 1 KB at a time and go to the card
+ * 1 KB at a time: two sectors a write, each one a single-block SD command,
+ * with the radio dozing between beacons. Now the radio stays awake for the
+ * transfer (wifi_fast), and the reads fill an 8 KB buffer before anything
+ * is written, so the card sees multi-block writes. 8 KB is borrowed for the
+ * transfer only; without it, the old 1 KB scratch buffer still works. */
+#define BIG_CHUNK 8192
+
+static uint8_t *big_begin(int *cap) {
+  uint8_t *b = (uint8_t *)malloc(BIG_CHUNK);
+  wifi_fast(1);
+  if (b) { *cap = BIG_CHUNK; return b; }
+  *cap = (int)sizeof s_chunk;
+  return s_chunk;
+}
+
+static void big_end(uint8_t *b) {
+  if (b != s_chunk) free(b);
+  wifi_fast(0);
+}
+
+/* As much as `cap` holds, or what is left: 0 at the end, <0 on an error
+ * with nothing read. */
+static int read_full(esp_http_client_handle_t cli, uint8_t *b, int cap) {
+  int got = 0;
+  while (got < cap) {
+    int n = esp_http_client_read(cli, (char *)b + got, cap - got);
+    if (n < 0) return got ? got : n;
+    if (n == 0) break;
+    got += n;
+  }
+  return got;
+}
+
 int http_stream(const char *url, HttpSink on_data, void *ctx, int timeout_ms) {
   return http_stream_ex(url, NULL, on_data, ctx, timeout_ms);
 }
@@ -401,11 +438,16 @@ int http_stream_ex(const char *url, const char *bearer, HttpSink on_data, void *
   /* Until the caller says stop, the server stops, or the socket does. The
    * shared scratch buffer is fine here for the same reason it is fine
    * elsewhere: these are all blocking calls on one task. */
-  for (;;) {
-    int n = esp_http_client_read(cli, (char *)s_chunk, sizeof s_chunk);
-    if (n <= 0) break;
-    total += n;
-    if (on_data(ctx, s_chunk, n)) break;
+  {
+    int cap;
+    uint8_t *b = big_begin(&cap);
+    for (;;) {
+      int n = read_full(cli, b, cap);
+      if (n <= 0) break;
+      total += n;
+      if (on_data(ctx, b, n)) break;
+    }
+    big_end(b);
   }
 
   esp_http_client_close(cli);
@@ -425,8 +467,9 @@ static int http_download_ex_do(const char *url, const char *path, const char *be
                      HttpProgress progress, void *ctx, int timeout_ms) {
   esp_http_client_config_t cfg;
   esp_http_client_handle_t cli;
-  int status, fd, total = 0, rc = -3;
+  int status, fd, total = 0, rc = -3, cap = 0;
   int64_t expected;
+  uint8_t *big = NULL;
 
   if (!url || !path) return -2;
   if (!wifi_is_connected() && wifi_connect_saved(20000) != 0) return -1;
@@ -460,8 +503,9 @@ static int http_download_ex_do(const char *url, const char *path, const char *be
   fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
   if (fd < 0) { rc = -2; goto done; }
 
+  big = big_begin(&cap);
   for (;;) {
-    int n = esp_http_client_read(cli, (char *)s_chunk, sizeof s_chunk);
+    int n = read_full(cli, big, cap);
     int put = 0;
     if (n < 0) { fs_close(fd); rc = -3; goto done; }
     if (n == 0) break;
@@ -469,7 +513,7 @@ static int http_download_ex_do(const char *url, const char *path, const char *be
      * leaves the partial bytes behind, which is how a truncated file gets
      * written and believed. */
     while (put < n) {
-      int w = fs_write(fd, s_chunk + put, (size_t)(n - put));
+      int w = fs_write(fd, big + put, (size_t)(n - put));
       if (w <= 0) { fs_close(fd); rc = -3; goto done; }
       put += w;
     }
@@ -489,6 +533,7 @@ static int http_download_ex_do(const char *url, const char *path, const char *be
   rc = total;
 
 done:
+  if (big) big_end(big);
   esp_http_client_close(cli);
   esp_http_client_cleanup(cli);
   return rc;

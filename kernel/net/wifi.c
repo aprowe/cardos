@@ -547,3 +547,13 @@ void wifi_forget(void) {
     }
   }
 }
+
+/* Power save off while something big comes down. The default modem sleep
+ * dozes between beacons, and a download then trickles at the beacon rate;
+ * on the rest of the time, since an idle radio awake costs battery. Counted,
+ * so overlapping callers do not switch it back under each other. */
+static int s_fast;
+void wifi_fast(int on) {
+  if (on) { if (s_fast++ == 0) esp_wifi_set_ps(WIFI_PS_NONE); }
+  else if (s_fast > 0 && --s_fast == 0) esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+}

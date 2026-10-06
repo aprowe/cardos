@@ -32,6 +32,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "kernel/drv/bthid.h"
 #include "kernel/drv/btprint.h"
 #include "kernel/sys/printq.h"
@@ -430,11 +431,40 @@ void cmd_wifi(const char *arg) {
   con_printf("%s\n", wifi_status());
 }
 
+/* `get -s URL [FILE]`: how fast a download is, to nowhere or to the card --
+ * which of the network and the card is the slow one. */
+static int s_speed_fd = -1, s_speed_err;
+static int speed_sink(void *ctx, const uint8_t *d, int n) {
+  (void)ctx;
+  if (s_speed_fd >= 0 && fs_write(s_speed_fd, d, (size_t)n) != n) { s_speed_err = 1; return 1; }
+  return 0;
+}
+
+static void get_speed(const char *arg) {
+  char url[160], file[96] = "";
+  const char *base = update_base(), *tok = update_token();
+  int64_t t0;
+  int n, ms;
+  if (sscanf(arg, "%159s %95s", url, file) < 1) { con_write("usage: get -s URL [FILE]\n"); return; }
+  s_speed_err = 0;
+  s_speed_fd = file[0] ? fs_open(file, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC) : -1;
+  if (file[0] && s_speed_fd < 0) { con_printf("cannot write %s\n", file); return; }
+  t0 = esp_timer_get_time();
+  n = http_stream_ex(url, (*tok && !strncmp(url, base, strlen(base))) ? tok : NULL,
+                     speed_sink, NULL, 60000);
+  ms = (int)((esp_timer_get_time() - t0) / 1000);
+  if (s_speed_fd >= 0) { fs_close(s_speed_fd); s_speed_fd = -1; }
+  if (n < 0) { con_printf("failed (%d)\n", n); return; }
+  con_printf("%d bytes in %d ms: %d KB/s%s%s\n", n, ms, ms ? (int)((int64_t)n * 1000 / 1024 / ms) : 0,
+             file[0] ? " to " : "", s_speed_err ? " (card write failed)" : file);
+}
+
 void cmd_get(const char *arg) {
   static char buf[1600];
   int n;
 
-  if (!arg || !*arg) { con_write("usage: get URL\n"); return; }
+  if (arg && arg[0] == '-' && arg[1] == 's' && arg[2] == ' ') { get_speed(arg + 3); return; }
+  if (!arg || !*arg) { con_write("usage: get URL, or get -s URL [FILE] to time it\n"); return; }
   if (!wifi_is_connected()) {
     con_write("no network, joining saved...\n");
     wifi_connect_saved(20000);
