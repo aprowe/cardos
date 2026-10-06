@@ -48,6 +48,26 @@ INK = {
 }
 
 ICONS = {
+    # Piano keys: white keys with the black ones over them, a violet edge.
+    "MIDI": [
+        "................",
+        "pppppppppppppppp",
+        "pWWKKWKKWWKKWKKp",
+        "pWWKKWKKWWKKWKKp",
+        "pWWKKWKKWWKKWKKp",
+        "pWWKKWKKWWKKWKKp",
+        "pWWKKWKKWWKKWKKp",
+        "pWWKKWKKWWKKWKKp",
+        "pWWWKWWKWWWKWWKp",
+        "pWWWKWWKWWWKWWKp",
+        "pWWWKWWKWWWKWWKp",
+        "pWWWKWWKWWWKWWKp",
+        "pWWWKWWKWWWKWWKp",
+        "pWWWKWWKWWWKWWKp",
+        "pppppppppppppppp",
+        "................",
+    ],
+
     # Two quavers on a beam, amber: the player's accent colour.
     "Music": [
         "................",

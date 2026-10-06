@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 37
+#define CAPP_API_VERSION 38
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -170,6 +170,25 @@ typedef struct {
 #define CAPP_CMD_ARGS_MAX 4
 
 #define CAPP_NAME_MAX 63
+
+/* One MIDI message at a time from the start of the song; see CappMidi. */
+typedef struct {
+  uint32_t at_ms;
+  uint8_t  n;          /* 1..3 bytes */
+  uint8_t  b[3];
+} CappMidiEvent;
+
+typedef struct {
+  int      (*open)(int tx_pin);                       /* 0, or -1 */
+  void     (*close)(void);
+  int      (*send)(const uint8_t *b, int n);          /* now */
+  /* Sorted by time; copied. loop_ms 0 plays once, else it starts again
+   * there. 0; -1 not open; -2 no memory. */
+  int      (*play)(const CappMidiEvent *ev, int n, uint32_t loop_ms);
+  void     (*stop)(void);                             /* and every note off */
+  int      (*playing)(void);
+  uint32_t (*pos_ms)(void);                           /* this time round */
+} CappMidi;
 
 /* One reading of the motion sensor; see CardApi.motion. */
 typedef struct {
@@ -797,6 +816,14 @@ typedef struct {
    * Cardputer, and an app should say so in its own words. Started the first
    * time it is asked for. kernel/drv/imu.h. */
   int (*motion)(CappMotion *out);
+
+  /* ---- MIDI out of the Grove port (API 38) ----
+   *
+   * kernel/sys/midi.h behind a table: 31250 baud on G1 or G2, whichever the
+   * converter listens on; send now, or hand over a whole song of
+   * time-stamped messages for a task that keeps time and loops. Closed, its
+   * notes stopped, when the app that opened it closes. */
+  const CappMidi *(*midi)(void);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

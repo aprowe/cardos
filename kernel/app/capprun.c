@@ -14,6 +14,7 @@
 #include "kernel/fs/fs.h"
 #include "kernel/ui/fontres.h"
 #include "kernel/sys/power.h"
+#include "kernel/sys/midi.h"
 #include "kernel/sys/printq.h"
 #include "kernel/drv/bthid.h"
 
@@ -715,6 +716,7 @@ static void release_image(Run *s) {
   httpq_abandon(s);
   if (s == s_hold_owner) hold_end();
   fontres_release_owner(s);          /* and the fonts it asked for */
+  midi_release_owner(s);             /* and the MIDI port, its notes stopped */
   power_release_owner(s);            /* and the screen, if it held it on */
   if (s->loaded) capp_unload(&s->la);
   s->loaded = 0;

@@ -11,6 +11,7 @@
 #include "kernel/fs/fs.h"
 #include "kernel/net/http.h"
 #include "kernel/drv/imu.h"
+#include "kernel/sys/midi.h"
 #include "kernel/net/httpq.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/gauth.h"
@@ -450,6 +451,15 @@ static int api_motion(CappMotion *out) {
   return 0;
 }
 
+/* MidiEvent and CappMidiEvent are the same shape; the table passes it on. */
+static int api_midi_play(const CappMidiEvent *ev, int n, uint32_t loop_ms) {
+  return midi_play((const MidiEvent *)ev, n, loop_ms);
+}
+static const CappMidi MIDI = {
+  midi_open, midi_close, midi_send, api_midi_play, midi_stop, midi_playing, midi_pos_ms,
+};
+static const CappMidi *api_midi(void) { return &MIDI; }
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -484,6 +494,7 @@ static const CardApi API = {
   api_shell,
   api_http_upload,
   api_motion,
+  api_midi,
 };
 
 const CardApi *cardos_api(void) { return &API; }

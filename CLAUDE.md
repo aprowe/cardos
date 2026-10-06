@@ -295,6 +295,20 @@ the data -- `audio_pause`/`audio_seek_ms`, in CappAudio as pause/paused/
 seek_ms. Leaving the app lets the current track finish. `api->http_stream`
 now carries the device's token to its own server.
 
+**MIDI: a sequencer out of the Grove port, its songs written by Claude**
+(2026-10-06). `kernel/sys/midi.c` is UART1 at 31250 baud on G1 or G2 --
+which one depends on the converter, so the app asks (`g` swaps, kept in
+/config/midi.txt; `t` plays an arpeggio to find out) -- and a task that
+plays a whole song of time-stamped messages on time and loops, because the
+shell's loop stalls when it paints. Stopping ends every sounding note and
+sends all-notes-off; the port closes with the app that opened it.
+`api->midi` (API 38). Songs are text in /songs (`apps/midiseq.h`, host-
+tested): `n BEAT NOTE LEN [VEL]`, chords, `cc`, `ramp`, `bend`, `prog`,
+`ch`, `tempo`, `loop`, beats as decimals or fractions, integer ticks inside.
+`n` in the app asks Claude (`server/midi.py`, POST then poll); the reply is
+checked against the format and a mistake goes back to Claude once. The
+app's song buffers are sized to keep its data under 28 KB.
+
 **The launcher's order is chosen, not the card's** (2026-10-01).
 `/config/favorites.txt` (written with a default at first boot, hand-
 editable) lists apps or folders, in order: those come first, and a
