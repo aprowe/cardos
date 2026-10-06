@@ -271,7 +271,11 @@ static int ms_parse(MsSong *s, const char *text) {
         if (!ms_word(&q, a, sizeof a) || (v = ms_int(a)) < 1 || v > 16) { ms_fail(s, line, "ch: 1..16", 0); break; }
         ch = (int)v - 1;
       } else if (cmd[0] == 't' && cmd[1] == 'e' && cmd[2] == 'm' && cmd[3] == 'p' && cmd[4] == 'o' && !cmd[5]) {
-        if (!ms_word(&q, a, sizeof a) || (v = ms_int(a)) < 20 || v > 400) { ms_fail(s, line, "tempo: 20..400 beats a minute", 0); break; }
+        /* A decimal is rounded: Claude has written 42.5 when asked to halve 85. */
+        if (!ms_word(&q, a, sizeof a) || (v = ms_ticks(a)) < 0 || (v = (v + MS_PPQ / 2) / MS_PPQ) < 20 || v > 400) {
+          ms_fail(s, line, "tempo: 20..400 beats a minute", 0);
+          break;
+        }
         if (!s->tempo) s->tempo = (int)v;
       } else if (cmd[0] == 'l' && cmd[1] == 'o' && cmd[2] == 'o' && cmd[3] == 'p' && !cmd[4]) {
         s->loop = 1;

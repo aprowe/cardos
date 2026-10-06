@@ -32,6 +32,8 @@ class Check(unittest.TestCase):
         self.assertEqual(midi.check("tempo 90\nn 0 C4\n"), (2, "n needs BEAT NOTE LEN"))
         self.assertEqual(midi.check("tempo 90\nrepeat 4\nn 0 C4 1\n")[0], 2)
         self.assertEqual(midi.check("tempo 90\n")[1], "no notes at all")
+        self.assertEqual(midi.check("tempo 42.5\nn 0 C4 1\n")[0], 1)
+        self.assertEqual(midi.check("ch 17\nn 0 C4 1\n")[0], 1)
 
     def test_the_song_comes_out_of_its_fence(self):
         self.assertEqual(midi.extract("Here:\n```song\nn 0 C4 1\n```\nenjoy"), "n 0 C4 1\n")

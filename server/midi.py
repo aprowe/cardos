@@ -29,7 +29,7 @@ exact text format, inside one ```song fenced block, and nothing else.
 
 Format, one command a line:
   # Title                      first line: a short title
-  tempo 72                     beats per minute (20..400), once
+  tempo 72                     beats per minute, a whole number 20..400, once
   ch 1                         channel 1..16 for the lines that follow (drums: 10)
   prog 0                       General MIDI program 0..127 on the current channel (optional: prog 0 at BEAT)
   n BEAT NOTE LEN [VEL]        a note: BEAT and LEN in beats (decimals like 0.25, or fractions like 1/3), NOTE
@@ -92,6 +92,10 @@ def check(song):
                     return i, "what note is %r" % p
         elif cmd in ("cc", "ramp", "bend", "prog", "tempo", "ch") and len(w) < 2:
             return i, "%s needs values" % cmd
+        elif cmd == "tempo" and not (w[1].isdigit() and 20 <= int(w[1]) <= 400):
+            return i, "tempo is a whole number of beats a minute, 20..400"
+        elif cmd == "ch" and not (w[1].isdigit() and 1 <= int(w[1]) <= 16):
+            return i, "ch is 1..16"
     if "\nn " not in "\n" + song:
         return 1, "no notes at all"
     return None

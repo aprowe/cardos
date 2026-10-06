@@ -77,6 +77,12 @@ void test_midiseq_channels_cc_ramps_bends_and_loops(void) {
   CHECK_EQ(S.loop_ticks, 4u * 480);                   /* the bar after the last thing */
 }
 
+void test_midiseq_a_decimal_tempo_is_rounded(void) {
+  CHECK_EQ(ms_parse(&S, "tempo 42.5\nn 0 C4 1\n"), 0);
+  CHECK_EQ(S.tempo, 43);
+  CHECK_EQ(ms_parse(&S, "tempo 19.4\nn 0 C4 1\n"), -1);
+}
+
 void test_midiseq_errors_say_which_line(void) {
   CHECK_EQ(ms_parse(&S, "tempo 90\nn 0 H4 1\n"), -1);
   CHECK_EQ(S.err_line, 2);

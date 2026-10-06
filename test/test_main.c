@@ -459,6 +459,7 @@ void test_midiseq_notes_names_and_numbers(void);
 void test_midiseq_beats_are_decimals_or_fractions(void);
 void test_midiseq_a_short_song_becomes_timed_messages(void);
 void test_midiseq_channels_cc_ramps_bends_and_loops(void);
+void test_midiseq_a_decimal_tempo_is_rounded(void);
 void test_midiseq_errors_say_which_line(void);
 void test_decode_a_three_byte_report(void);
 void test_decode_a_four_byte_report_with_wheel(void);
@@ -1268,6 +1269,7 @@ int main(void) {
   RUN(test_midiseq_beats_are_decimals_or_fractions);
   RUN(test_midiseq_a_short_song_becomes_timed_messages);
   RUN(test_midiseq_channels_cc_ramps_bends_and_loops);
+  RUN(test_midiseq_a_decimal_tempo_is_rounded);
   RUN(test_midiseq_errors_say_which_line);
   printf("-- mouse --\n");
   RUN(test_decode_a_three_byte_report);
