@@ -31,3 +31,6 @@ counter_test*
 habits_test*
 clock_test*
 today_test*
+
+# ESP-IDF component manager downloads (pinned by dependencies.lock)
+managed_components/

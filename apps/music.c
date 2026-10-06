@@ -25,6 +25,7 @@ static const CappAudio *au;
 #define INDEX     DIR "/.tracks"
 #define MAXT      64
 #define TITLE     40
+#define IDL       40
 #define TOP_H     14
 #define ROW_H     12
 #define NOW_H     24
@@ -42,7 +43,8 @@ static const CappAudio *au;
 enum { ACT_SYNC = 1, ACT_SHUFFLE, ACT_DELETE };
 
 static struct {
-  char     id[MAXT][12];
+  char     id[MAXT][IDL];          /* the server's id, or a local file's name */
+  uint8_t  local[MAXT];            /* put on the card by hand: not the server's */
   char     title[MAXT][TITLE];
   uint32_t ms[MAXT];
   int      n, sel, top;
@@ -111,14 +113,57 @@ static void index_load(void) {
   if (n <= 0) return;
   M.reply[n] = 0;
   for (p = M.reply; *p && M.n < MAXT; p = next_line(p)) {
-    char ms[12], path[40];
+    char ms[12], path[64];
     CappStat st;
     field(p, 0, M.id[M.n], sizeof M.id[M.n]);
     field(p, 1, M.title[M.n], TITLE);
     field(p, 2, ms, sizeof ms);
     M.ms[M.n] = (uint32_t)to_num(ms);
     path_of(M.n, path, sizeof path);
+    M.local[M.n] = 0;
     if (M.id[M.n][0] && api->stat(path, &st) == 0) M.n++;   /* only what is here */
+  }
+}
+
+/* WAVs put in /music by hand -- over USB disk mode, say -- that the server
+ * does not know: listed by their names, never removed by a sync, and
+ * deleted from the card only. Their length is worked out from the header. */
+static uint32_t wav_ms(const char *path, uint32_t size) {
+  uint8_t h[44];
+  uint32_t rate, sec, rem;
+  int fd = api->open(path, CAPP_O_READ), n;
+  if (fd < 0) return 0;
+  n = api->read(fd, h, sizeof h);
+  api->close(fd);
+  if (n < 44) return 0;
+  rate = (uint32_t)h[28] | (uint32_t)h[29] << 8 | (uint32_t)h[30] << 16 | (uint32_t)h[31] << 24;
+  if (!rate || size < 44) return 0;
+  size -= 44;
+  sec = size / rate;
+  rem = size % rate;
+  return sec * 1000 + rem * 1000 / rate;  /* rem < rate < 400000: no overflow */
+}
+
+static void add_local(void) {
+  static char names[MAXT][IDL + 8];
+  int n = api->list(DIR, &names[0][0], MAXT, IDL + 8), i, j;
+  for (i = 0; i < n && M.n < MAXT; i++) {
+    char path[64];
+    CappStat st;
+    int len = (int)api->str_len(names[i]);
+    if (len < 5 || len - 4 >= IDL || names[i][0] == '.') continue;
+    if (!same(names[i] + len - 4, ".wav") && !same(names[i] + len - 4, ".WAV")) continue;
+    names[i][len - 4] = 0;
+    for (j = 0; j < M.n; j++) if (same(M.id[j], names[i])) break;
+    if (j < M.n) continue;
+    /* FAT ignores case, so NAME.WAV opens as NAME.wav too. */
+    api->fmt(path, sizeof path, DIR "/%s.wav", names[i]);
+    if (api->stat(path, &st) != 0) continue;
+    api->fmt(M.id[M.n], sizeof M.id[0], "%s", names[i]);
+    api->fmt(M.title[M.n], TITLE, "%s", names[i]);
+    M.ms[M.n] = wav_ms(path, (uint32_t)st.size);
+    M.local[M.n] = 1;
+    M.n++;
   }
 }
 
@@ -127,7 +172,8 @@ static void index_save(void) {
   int i;
   if (safe_begin(&f, api, INDEX) != 0) return;
   for (i = 0; i < M.n; i++) {
-    char line[72];
+    char line[96];
+    if (M.local[i]) continue;
     int k = api->fmt(line, sizeof line, "%s\t%s\t%lu\n", M.id[i], M.title[i], (unsigned long)M.ms[i]);
     safe_write(&f, line, (size_t)k);
   }
@@ -297,7 +343,7 @@ static int on_data(void *ctx, const uint8_t *d, int n) {
 static void sync_run(void) {
   static char ids[MAXT][12], titles[MAXT][TITLE];
   static uint32_t ms[MAXT], bytes[MAXT];
-  char url[160], path[48], part[48];
+  char url[160], path[64], part[64];
   const char *p;
   int r, n = 0, i, j, fetched = 0, missing = 0;
 
@@ -316,7 +362,7 @@ static void sync_run(void) {
   /* Gone from the server: gone from here (not the one playing). */
   for (i = 0; i < M.n; i++) {
     for (j = 0; j < n; j++) if (same(M.id[i], ids[j])) break;
-    if (j == n && i != M.playing) { path_of(i, path, sizeof path); api->remove(path); }
+    if (j == n && i != M.playing && !M.local[i]) { path_of(i, path, sizeof path); api->remove(path); }
   }
   api->mkdir(DIR);
   /* The rest, each streamed to NAME.part and renamed only when whole. */
@@ -350,12 +396,14 @@ static void sync_run(void) {
     CappStat st;
     api->fmt(path, sizeof path, DIR "/%s.wav", ids[j]);
     if (api->stat(path, &st) != 0) continue;
-    api->mem_cpy(M.id[M.n], ids[j], sizeof M.id[0]);
+    api->fmt(M.id[M.n], sizeof M.id[0], "%s", ids[j]);
+    M.local[M.n] = 0;
     api->mem_cpy(M.title[M.n], titles[j], sizeof M.title[0]);
     M.ms[M.n] = ms[j];
     M.n++;
   }
   index_save();
+  add_local();
   if (M.sel >= M.n) M.sel = M.n ? M.n - 1 : 0;
   if (M.playing >= M.n) M.playing = -1;
   if (M.cancelled) say(0, "sync stopped: r to go on");
@@ -366,10 +414,11 @@ static void sync_run(void) {
 }
 
 static void delete_sel(void) {
-  char url[160], reply[32], path[48];
+  char url[160], reply[32], path[64];
   if (!M.n) return;
   api->fmt(url, sizeof url, "%s/music/track?id=%s", api->proxy(), M.id[M.sel]);
-  if (!api->net_ready() || api->http("DELETE", url, 0, 0, "", reply, sizeof reply, 15000) < 0) {
+  if (!M.local[M.sel] &&
+      (!api->net_ready() || api->http("DELETE", url, 0, 0, "", reply, sizeof reply, 15000) < 0)) {
     say(1, "offline: delete it on the dashboard");
     return;
   }
@@ -380,6 +429,7 @@ static void delete_sel(void) {
     api->mem_cpy(M.id[M.sel], M.id[M.sel + 1], sizeof M.id[0]);
     api->mem_cpy(M.title[M.sel], M.title[M.sel + 1], sizeof M.title[0]);
     M.ms[M.sel] = M.ms[M.sel + 1];
+    M.local[M.sel] = M.local[M.sel + 1];
     if (M.playing == M.sel + 1) M.playing = M.sel;
   }
   M.n--;
@@ -496,6 +546,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   M.seed = api->ticks_ms();
   api->mkdir(DIR);
   index_load();
+  add_local();
   M.sync_soon = 1;                  /* after the first paint: the list shows first */
   if (au && au->state() == CAPP_AUDIO_PLAYING) say(0, "something is playing");
   UI.paint = app_paint;

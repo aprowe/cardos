@@ -120,6 +120,41 @@ int fs_mount(void) {
 
 int  fs_mounted(void) { return s_mounted; }
 
+/* The card with no filesystem on top: for USB disk mode, where the PC
+ * owns the FAT and two writers to one FAT is a corrupted card. Never with
+ * fs_mount -- one or the other, until a restart. */
+void *fs_raw_card(void) {
+  static sdmmc_card_t card;
+  sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+  sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
+  sdspi_dev_handle_t dev;
+  spi_bus_config_t bus = {
+    .mosi_io_num = PIN_SD_MOSI,
+    .miso_io_num = PIN_SD_MISO,
+    .sclk_io_num = PIN_SD_SCK,
+    .quadwp_io_num = -1,
+    .quadhd_io_num = -1,
+    .max_transfer_sz = 4096,
+  };
+  esp_err_t err;
+
+  if (s_mounted) return NULL;
+  err = spi_bus_initialize(SD_HOST, &bus, SPI_DMA_CH_AUTO);
+  if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return NULL;
+  if (sdspi_host_init() != ESP_OK) return NULL;
+  slot.gpio_cs = PIN_SD_CS;
+  slot.host_id = SD_HOST;
+  if (sdspi_host_init_device(&slot, &dev) != ESP_OK) return NULL;
+  host.slot = dev;
+  host.max_freq_khz = SD_FREQ_KHZ;
+  err = sdmmc_card_init(&host, &card);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "raw card: %s", esp_err_to_name(err));
+    return NULL;
+  }
+  return &card;
+}
+
 void fs_unmount(void) {
   if (!s_mounted) return;
   esp_vfs_fat_sdcard_unmount(MOUNT_POINT, s_card);

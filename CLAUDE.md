@@ -321,6 +321,19 @@ between (`leave_app_ex(0)`, and `enter()` does not fill the screen when
 already in the launcher). A MIDI song opens like a project: Enter on the
 list shows the roll, and play, hear, tempo, loop, ask, edit happen there.
 
+**USB disk mode, and downloads ten times faster** (2026-10-06). Hold `d`
+at power-on, or type `usbdisk`, and the SD card is a USB drive on the PC
+(`kernel/drv/usbdisk.c`, TinyUSB MSC over the raw card from
+`fs_raw_card()`; CardOS does not mount it meanwhile). Measured: 67 MB in
+111 s, ~600 KB/s. The serial console is gone until a key restarts it, so
+flashing needs that restart first. Music lists any WAV put in /music by
+hand (`M.local`: never removed by a sync, deleted from the card only);
+named by a server track's id it counts as that track. Over WiFi a download
+went from 17 KB/s to 180 (170 to the card): power save off during a
+transfer (`wifi_fast`), TCP window 17280, 8 KB reads. `get -s URL [FILE]`
+measures it. The server converts any uploaded audio with ffmpeg
+(`server/music.py`); the dashboard sends files as they are.
+
 **The launcher's order is chosen, not the card's** (2026-10-01).
 `/config/favorites.txt` (written with a default at first boot, hand-
 editable) lists apps or folders, in order: those come first, and a

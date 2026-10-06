@@ -25,6 +25,7 @@
 #include "kernel/drv/display.h"
 #include "kernel/drv/keyboard.h"
 #include "kernel/drv/board.h"
+#include "kernel/drv/usbdisk.h"
 #include "kernel/drv/imu.h"
 #include "kernel/mem/mem.h"
 #include "kernel/task/sched.h"
@@ -253,6 +254,7 @@ static void cmd_help(void) {
   con_write("         you do; every app reads it\n");
   con_write("radios   wifi [scan|SSID PASS|saved|forget|off]\n");
   con_write("         mouse, get URL, share [off|log] (card as a drive)\n");
+  con_write("         usbdisk (card as a USB drive; or hold d at power-on)\n");
   con_write("         print [scan|use N|test|FILE] (bluetooth thermal printer)\n");
   con_write("screens  launch (carousel), desk (windows), escape returns\n");
   con_write("boot     apps, boot NAME, boot! NAME, bootinfo\n");
@@ -415,6 +417,13 @@ static void run_builtin(const char *line, char *arg) {
   }
   else if (!strcmp(line, "wifi")) cmd_wifi(arg);
   else if (!strcmp(line, "get"))  cmd_get(arg);
+  /* The same as d held at power-on, from here: the card is unmounted under
+   * everything, so it ends in a restart. */
+  else if (!strcmp(line, "usbdisk")) {
+    if (con_capturing()) { con_write("usbdisk takes the USB port; not from the dashboard\n"); return; }
+    fs_unmount();
+    usbdisk_run();
+  }
   else if (!strcmp(line, "update")) cmd_update(arg);
   else if (!strcmp(line, "shot")) {
     if (shot_take(arg, con_repaint) == 0)
@@ -524,7 +533,7 @@ static const char *const COMMANDS[] = {
   "battery", "defaults", "listen", "mouse", "ps", "pwd", "reboot", "rm",
   "run", "time",
   "safe",
-  "print", "share", "shot", "taskcost", "update", "volume", "wifi",
+  "print", "share", "shot", "taskcost", "update", "usbdisk", "volume", "wifi",
 };
 #define NCOMMANDS ((int)(sizeof COMMANDS / sizeof COMMANDS[0]))
 
@@ -1332,6 +1341,10 @@ void app_main(void) {
   /* 60 ms, not the 400 it was: a key held through power-on is down on the
    * first scan, so the rest was only ever spent waiting on every boot. Four
    * scans (0, 20, 40, 60 ms) leave room for one that misreads. */
+  /* d held through power-on: the card as a USB drive instead of CardOS.
+   * Before the card is mounted -- the PC owns its filesystem from here. */
+  if (keyboard_held('d', 60)) usbdisk_run();
+
   s_safe_mode = keyboard_held(KEY_ESC, 60);
   if (s_safe_mode) {
     display_set_brightness_now(100);

@@ -103,3 +103,12 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_LWIP_TCP_WND_DEFAULT=17280
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=16
 CONFIG_ESP_WIFI_RX_BA_WIN=12
+
+# USB disk mode (d held at power-on, kernel/drv/usbdisk.c): TinyUSB as a
+# mass storage device in front of the SD card. Only that mode starts it;
+# otherwise the port stays the serial console.
+CONFIG_TINYUSB_MSC_ENABLED=y
+CONFIG_TINYUSB_MSC_BUFSIZE=4096
+CONFIG_TINYUSB_DESC_MANUFACTURER_STRING="CardOS"
+CONFIG_TINYUSB_DESC_PRODUCT_STRING="CardOS SD card"
+CONFIG_TINYUSB_DESC_MSC_STRING="CardOS SD card"

@@ -1,0 +1,4 @@
+## USB mass storage: `d` held at power-on shows the SD card to a PC as a
+## drive (kernel/drv/usbdisk.c).
+dependencies:
+  espressif/esp_tinyusb: "*"

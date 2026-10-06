@@ -48,6 +48,10 @@ int  fs_mount(void);
 int  fs_mounted(void);
 void fs_unmount(void);
 
+/* The card, initialised but not mounted: an sdmmc_card_t *, or NULL. For
+ * USB disk mode only (kernel/drv/usbdisk.c); never alongside fs_mount. */
+void *fs_raw_card(void);
+
 /* Total and free bytes on the card. Zero if not mounted. */
 void fs_space(uint64_t *total, uint64_t *freebytes);
 

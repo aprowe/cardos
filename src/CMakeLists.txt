@@ -6,6 +6,7 @@ idf_component_register(
     "../kernel/drv/board.c"
     "../kernel/drv/es8311.c"
     "../kernel/drv/imu.c"
+    "../kernel/drv/usbdisk.c"
     "../kernel/sys/midi.c"
     "../kernel/drv/keyboard.c"
     "../kernel/drv/bthid.c"
@@ -106,4 +107,5 @@ idf_component_register(
     esp_http_client
     esp-tls
     mbedtls
+    espressif__esp_tinyusb
 )
