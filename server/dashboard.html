@@ -1546,11 +1546,18 @@ async function musicAdd(files){
   let added=0;
   for(const f of tracks){
     try{
-      MU.busy=`converting ${f.name}…`; renderMusic();
-      const wav=await toDeviceWav(f);
-      MU.busy=`uploading ${f.name} (${(wav.size/1048576).toFixed(1)} MB)…`; renderMusic();
-      const r=await fetch('/dash/music/upload?title='+encodeURIComponent(f.name),{method:'POST',credentials:'same-origin',body:wav});
-      const j=await r.json().catch(()=>({}));
+      // The file as it is: the server converts it. Only a server without
+      // ffmpeg says so, and then the browser converts and sends a WAV.
+      MU.busy=`uploading and converting ${f.name} (${(f.size/1048576).toFixed(1)} MB)…`; renderMusic();
+      let r=await fetch('/dash/music/upload?title='+encodeURIComponent(f.name),{method:'POST',credentials:'same-origin',body:f});
+      let j=await r.json().catch(()=>({}));
+      if(!r.ok && /ffmpeg/.test(j.error||'')){
+        MU.busy=`converting ${f.name}…`; renderMusic();
+        const wav=await toDeviceWav(f);
+        MU.busy=`uploading ${f.name} (${(wav.size/1048576).toFixed(1)} MB)…`; renderMusic();
+        r=await fetch('/dash/music/upload?title='+encodeURIComponent(f.name),{method:'POST',credentials:'same-origin',body:wav});
+        j=await r.json().catch(()=>({}));
+      }
       if(!r.ok) throw new Error(j.error||('the server said '+r.status));
       added++;
     }catch(e){ toast(`${f.name}: ${e.message||'this browser could not read it'}`,'err'); }

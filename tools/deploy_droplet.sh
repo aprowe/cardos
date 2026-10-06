@@ -56,6 +56,9 @@ setup() {
     git checkout -q -B remote origin/master
     git log --oneline -1"
 
+  echo "== 3b. ffmpeg, which turns uploaded music into the WAV the device plays"
+  ssh "$HOST" "command -v ffmpeg >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -q ffmpeg >/dev/null"
+
   echo "== 4. PlatformIO in the service's venv"
   as_cardos "$VENV/bin/pip install -q --upgrade platformio && $VENV/bin/python -m platformio --version"
 

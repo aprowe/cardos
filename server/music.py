@@ -1,17 +1,20 @@
 """Music: tracks dragged onto the dashboard, kept here, synced to the device.
 
 The device plays PCM WAV and nothing else -- no MP3 decoder, and flash is
-what it is short of -- so the dashboard converts in the browser before it
-uploads: the browser already decodes MP3, AAC, Ogg and FLAC, and resamples
-to 22050 Hz mono 16-bit, which is what a one-watt speaker can use and about
-2.6 MB a minute on the card. This file checks what arrives is that kind of
-WAV and keeps it; the device's Music app downloads what it does not have.
+what it is short of -- so what arrives here is converted: ffmpeg turns MP3,
+AAC, Ogg, FLAC or anything else it reads into 22050 Hz mono 16-bit, loudness
+evened out, which is what a one-watt speaker can use and about 2.6 MB a
+minute on the card. A WAV the device can already play is kept as it is.
+Without ffmpeg only such a WAV is taken, and the dashboard falls back to
+converting in the browser. The device's Music app downloads what it does
+not have.
 
     GET    /music                  -> id <tab> title <tab> ms <tab> bytes, newest first
     GET    /music/track?id=        -> the WAV
     DELETE /music/track?id=        -> ok
+    POST   /music/upload?title=    body: any audio -> id <tab> title <tab> ms  (bearer)
     GET    /dash/music             -> JSON, for the dashboard
-    POST   /dash/music/upload?title=TITLE   body: a 16-bit PCM WAV -> JSON
+    POST   /dash/music/upload?title=TITLE   body: any audio -> JSON
     GET    /dash/music/track?id=   -> the WAV, to listen to on the page
     DELETE /dash/music/track?id=   -> ok
 """
@@ -20,12 +23,15 @@ import os
 import secrets
 import shutil
 import struct
+import subprocess
 import sys
+import tempfile
 import time
 
 from . import dash, notes
 
-MAX_IN = 60 << 20                  # half an hour at 22050 mono
+MAX_IN = 60 << 20                  # half an hour at 22050 mono, or a long MP3
+RATE = 22050
 _route_err = "error %s\n"
 
 
@@ -83,7 +89,43 @@ def all_tracks():
     return out
 
 
+def ffmpeg():
+    return shutil.which("ffmpeg")
+
+
+def convert(data):
+    """Any audio ffmpeg reads, as the WAV the device wants: 22050 Hz mono
+    16-bit, loudness-normalised so tracks from different places play at
+    one volume. ValueError if it cannot be read."""
+    exe = ffmpeg()
+    if not exe:
+        raise ValueError("this server has no ffmpeg; upload a 16-bit WAV")
+    with tempfile.TemporaryDirectory() as d:
+        src, out = os.path.join(d, "in"), os.path.join(d, "out.wav")
+        with open(src, "wb") as f:
+            f.write(data)
+        r = subprocess.run([exe, "-v", "error", "-y", "-i", src, "-vn", "-ac", "1",
+                            "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", str(RATE),
+                            "-c:a", "pcm_s16le", "-map_metadata", "-1", "-fflags", "+bitexact", out],
+                           capture_output=True, timeout=600)
+        if r.returncode != 0 or not os.path.exists(out):
+            why = r.stderr.decode("utf-8", "replace").strip().splitlines()
+            raise ValueError("could not read it as audio" + (": " + why[-1][:80] if why else ""))
+        with open(out, "rb") as f:
+            return f.read()
+
+
+def playable(data):
+    """The WAV to keep: as it came if the device plays it, else converted."""
+    try:
+        wav_info(data)
+        return data
+    except ValueError:
+        return convert(data)
+
+
 def add(data, title):
+    data = playable(data)
     rate, ch, ms = wav_info(data)
     tid = secrets.token_hex(5)
     d = _dir(tid)
@@ -160,6 +202,18 @@ def delete_track(h, args):
     h.text("ok\n")
 
 
+def post_music_upload(h, path, args):
+    """a track in any format, converted and kept (the device's token)"""
+    if not notes._allowed(h):
+        return
+    try:
+        meta = add(h.body(MAX_IN), (args.get("title") or ["track"])[0])
+    except ValueError as e:
+        h.text(_route_err % e, 400)
+        return
+    h.text("%s\t%s\t%d\n" % (meta["id"], meta["title"], meta["ms"]))
+
+
 def get_dash_list(h, path, args):
     """every track, as JSON"""
     if not dash.logged_in(h):
@@ -169,7 +223,7 @@ def get_dash_list(h, path, args):
 
 
 def post_upload(h, path, args):
-    """a track the page converted, kept"""
+    """a track, converted here if it needs it, kept"""
     if not dash.logged_in(h):
         h._send(403, "application/json", '{"error": "signed out"}', ())
         return
@@ -185,6 +239,7 @@ ROUTES = [
     ("GET", "/music", get_list, "open"),
     ("GET", "/music/track", get_track, "open"),
     ("DELETE", "/music/track", delete_track, "open"),
+    ("POST", "/music/upload", post_music_upload, "open"),
     ("GET", "/dash/music", get_dash_list, "open"),
     ("POST", "/dash/music/upload", post_upload, "open"),
     ("GET", "/dash/music/track", get_track, "open"),

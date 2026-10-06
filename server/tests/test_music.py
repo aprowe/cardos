@@ -88,11 +88,38 @@ class Routes(unittest.TestCase):
         self.cookie = True
         s, body = self.req("POST", "/dash/music/upload?title=x", b"ID3 not a wav", bearer=None)
         self.assertEqual(s, 400)
-        self.assertIn("WAV", json.loads(body)["error"])
+        self.assertRegex(json.loads(body)["error"], "WAV|audio")
         self.cookie = False
         self.assertEqual(self.req("POST", "/dash/music/upload?title=x", wav(), bearer=None)[0], 403)
         self.assertEqual(self.req("GET", "/music", bearer=None)[0], 403)
         self.assertEqual(self.req("GET", "/music/track?id=../x")[0], 400)
+
+
+@unittest.skipUnless(music.ffmpeg(), "no ffmpeg here")
+class Convert(unittest.TestCase):
+    """What the device cannot play is made into what it can."""
+
+    def test_an_8_bit_wav_comes_out_22050_mono_16_bit(self):
+        out = music.playable(wav(1.0, 44100, 2, bits=8))
+        rate, ch, ms = music.wav_info(out)
+        self.assertEqual((rate, ch), (22050, 1))
+        self.assertAlmostEqual(ms, 1000, delta=30)
+
+    def test_an_mp3(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            mp3 = os.path.join(d, "t.mp3")
+            subprocess.run([music.ffmpeg(), "-v", "error", "-f", "lavfi", "-i", "sine=440:duration=2",
+                            "-c:a", "libmp3lame", mp3], check=True)
+            with open(mp3, "rb") as f:
+                out = music.playable(f.read())
+        rate, ch, ms = music.wav_info(out)
+        self.assertEqual((rate, ch), (22050, 1))
+        self.assertAlmostEqual(ms, 2000, delta=100)
+
+    def test_a_playable_wav_is_kept_as_it_came(self):
+        w = wav(1.0)
+        self.assertIs(music.playable(w), w)
 
 
 if __name__ == "__main__":
