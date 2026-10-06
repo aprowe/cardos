@@ -26,6 +26,7 @@
 #include "kernel/drv/keyboard.h"
 #include "kernel/drv/board.h"
 #include "kernel/drv/usbdisk.h"
+#include "kernel/sys/blip.h"
 #include "kernel/drv/imu.h"
 #include "kernel/mem/mem.h"
 #include "kernel/task/sched.h"
@@ -1429,6 +1430,7 @@ void app_main(void) {
   agent_init();
   clock_init();
   bg_init();
+  blip_init();
   /* A command that opens its app (CAPP_CMD_OPEN) opens it the way `run`
    * does: through the launcher. */
   capprun_set_opener(launchui_run);
@@ -1471,6 +1473,7 @@ void app_main(void) {
   case UI_NONE:     prompt();       s_mode = MODE_CONSOLE; break;
   default:          launchui_init(); s_mode = MODE_LAUNCHER; break;
   }
+  if (!s_safe_mode) blip(BLIP_BOOT);
 
   for (;;) {
     uint8_t k = keyboard_poll();
@@ -1500,6 +1503,10 @@ void app_main(void) {
         if (bthid_poll_key(&k)) repeat = bthid_last_repeat();
       }
       input_set_repeat(k ? repeat : 0);
+      /* A click per key from either keyboard, not per repeat. A key that
+       * also does something audible (the launcher's move) is heard as that
+       * instead: blip.c keeps only the newest of a burst. */
+      if (k && !repeat) blip(BLIP_KEY);
     }
 
     int from_serial = 0;

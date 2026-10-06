@@ -48,6 +48,11 @@ int  display_orient(void);
 /* Push a rectangle of RGB565 pixels. Blocking. */
 void display_blit(int x, int y, int w, int h, const uint16_t *pixels);
 
+/* Blits go into `buf` (w*h pixels, the screen rectangle x,y,w,h) instead of
+ * the panel until it is set to NULL. For composing a strip off screen and
+ * sending it whole: see display.c. */
+void display_target(uint16_t *buf, int x, int y, int w, int h);
+
 /* A copy of every blit, for a screenshot. There is no framebuffer to read
  * and the panel is write-only, so the only way to know what is on the screen
  * is to watch it being sent: set a tap, repaint everything, clear the tap.

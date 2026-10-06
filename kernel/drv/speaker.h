@@ -39,6 +39,11 @@ int  speaker_play_wav_ex(const char *path, int (*stop)(void),
                          int (*paused)(void), int32_t (*seek)(void));
 const char *speaker_error(void);
 
+/* n mono samples from memory, already at the volume wanted; blocks until
+ * played. -1 at once if the channel is in use -- for blip.c, whose sounds
+ * are worth nothing late. */
+int speaker_play_pcm(const int16_t *pcm, int n, uint32_t rate);
+
 /* Volume, 0..100, remembered across reboots. 60 by default; the NS4168 is
  * loud. Takes effect on the next block, so mid-playback too. */
 void speaker_set_volume(int pct);

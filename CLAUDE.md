@@ -334,6 +334,19 @@ transfer (`wifi_fast`), TCP window 17280, 8 KB reads. `get -s URL [FILE]`
 measures it. The server converts any uploaded audio with ffmpeg
 (`server/music.py`); the dashboard sends files as they are.
 
+**The launcher slides, and the OS makes sounds** (2026-10-06). The
+carousel is drawn off the panel a 20-row strip at a time
+(`display_target` sends blits into a buffer; every draw call works
+unchanged) and each strip is sent whole -- it used to fill teal and draw
+over it, which was its flicker. A move eases the row one slot over 170 ms;
+icons resize continuously (`draw_image_fit`), the name travels with its
+icon, Enter grows the icon before the app loads. `kernel/sys/blip.c` is a
+library of synthesised sounds (BLIP_KEY, MOVE, SOFT, OPEN, BACK, ERROR,
+DONE, NOTIFY, BOOT) played by a low-priority task, never over music or the
+mic, sharing a lock with the WAV player (`speaker_play_pcm`); Settings >
+Sound turns UI sounds and key clicks off (`ui_snd`, `key_snd` prefs).
+Apps cannot ask for one yet (no API).
+
 **The launcher's order is chosen, not the card's** (2026-10-01).
 `/config/favorites.txt` (written with a default at first boot, hand-
 editable) lists apps or folders, in order: those come first, and a

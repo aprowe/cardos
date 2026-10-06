@@ -19,6 +19,7 @@
 #include "kernel/drv/keyboard.h"
 #include "kernel/drv/display.h"
 #include "kernel/drv/speaker.h"
+#include "kernel/sys/blip.h"
 #include "kernel/app/capprun.h"
 #include "kernel/app/capp.h"
 #include "kernel/fs/fs.h"
@@ -264,6 +265,21 @@ static void act_menubar(SettingsState *st) {
   snprintf(st->note, sizeof st->note, menubar_always()
            ? "on: every app opens with its menus" : "off: menus with a mouse, or fn-b");
 }
+/* The OS's own sounds (kernel/sys/blip.h), and the key clicks among them. */
+static void v_uisnd(char *b, size_t n) { snprintf(b, n, "%s", blip_ui_on() ? "on" : "off"); }
+static void act_uisnd(SettingsState *st) {
+  blip_set_ui(!blip_ui_on());
+  if (blip_ui_on()) blip(BLIP_OPEN);
+  snprintf(st->note, sizeof st->note, blip_ui_on() ? "on: ticks, opens, errors" : "off: no UI sounds");
+}
+static void v_keysnd(char *b, size_t n) {
+  snprintf(b, n, "%s", !blip_ui_on() ? "off (UI sounds)" : blip_keys_on() ? "on" : "off");
+}
+static void act_keysnd(SettingsState *st) {
+  blip_set_keys(!blip_keys_on());
+  snprintf(st->note, sizeof st->note, blip_keys_on() ? "a click for every key" : "keys are quiet");
+}
+
 static void v_volume(char *b, size_t n) {
   if (!speaker_volume()) snprintf(b, n, "%s", "muted");
   else snprintf(b, n, "%d%%", speaker_volume());
@@ -298,6 +314,8 @@ static const Row ROWS[] = {
   { NULL,        "Menu bar",     v_menubar, act_menubar,   1 },
 
   { "Sound",     "Volume",       v_volume, act_volume,     0 },
+  { NULL,        "UI sounds",    v_uisnd,  act_uisnd,      1 },
+  { NULL,        "Key clicks",   v_keysnd, act_keysnd,     1 },
 
   { "System",    "Memory",       v_ram,    NULL,           0 },
   { NULL,        "Forget all",   NULL,     act_forget,     0 },

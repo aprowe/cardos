@@ -12,6 +12,8 @@
 #include "kernel/drv/es8311.h"
 #include "esp_log.h"
 #include "nvs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "speaker";
 
@@ -167,9 +169,45 @@ int speaker_play_wav(const char *path, int (*stop)(void),
   return speaker_play_wav_ex(path, stop, progress, NULL, NULL);
 }
 
+/* One user of the channel at a time: the audio task's WAV and blip.c's
+ * sounds. A WAV waits for a blip to finish (milliseconds); a blip that finds
+ * the channel taken is not made. */
+static SemaphoreHandle_t s_lock;
+static void need_lock(void) { if (!s_lock) s_lock = xSemaphoreCreateMutex(); }
+
+static int play_wav_locked(const char *path, int (*stop)(void),
+                           void (*progress)(uint32_t bytes),
+                           int (*paused)(void), int32_t (*seek)(void));
+
 int speaker_play_wav_ex(const char *path, int (*stop)(void),
                         void (*progress)(uint32_t bytes),
                         int (*paused)(void), int32_t (*seek)(void)) {
+  int r;
+  need_lock();
+  xSemaphoreTake(s_lock, portMAX_DELAY);
+  r = play_wav_locked(path, stop, progress, paused, seek);
+  xSemaphoreGive(s_lock);
+  return r;
+}
+
+int speaker_play_pcm(const int16_t *pcm, int n, uint32_t rate) {
+  static const int16_t tail[256];
+  size_t wrote;
+  need_lock();
+  if (!pcm || n <= 0) return -1;
+  if (xSemaphoreTake(s_lock, 0) != pdTRUE) return -1;
+  if (open_tx(rate, 1) != 0) { xSemaphoreGive(s_lock); return -1; }
+  i2s_channel_write(s_tx, pcm, (size_t)n * 2, &wrote, 500);
+  /* The DMA still holds the end of it: silence behind, or the close cuts it. */
+  i2s_channel_write(s_tx, tail, sizeof tail, &wrote, 200);
+  close_tx();
+  xSemaphoreGive(s_lock);
+  return 0;
+}
+
+static int play_wav_locked(const char *path, int (*stop)(void),
+                           void (*progress)(uint32_t bytes),
+                           int (*paused)(void), int32_t (*seek)(void)) {
   static int16_t block[BLOCK_SAMPLES];
   static const int16_t hush[BLOCK_SAMPLES];
   WavInfo w;

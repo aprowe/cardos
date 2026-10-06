@@ -314,6 +314,55 @@ void draw_image_scaled(int16_t x, int16_t y, int16_t w, int16_t h,
   }
 }
 
+/* Any size, nearest neighbour: for an icon on its way between the
+ * carousel's 32 and 64, where a whole-number scale would jump. */
+void draw_image_fit(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *px,
+                    int16_t dw, int16_t dh, uint16_t transparent) {
+  Rect box, v;
+  int16_t py, run_start, sx;
+
+  if (!px || w <= 0 || h <= 0 || dw <= 0 || dh <= 0) return;
+  box.x = x; box.y = y; box.w = dw; box.h = dh;
+  v = rect_intersect(box, s_clip);
+  if (rect_is_empty(v)) return;
+  for (py = v.y; py < v.y + v.h; py++) {
+    const uint16_t *row = px + (size_t)((py - y) * h / dh) * (size_t)w;
+    run_start = -1;
+    for (sx = v.x; sx <= v.x + v.w; sx++) {
+      int last = (sx == v.x + v.w);
+      uint16_t c = last ? transparent : row[(sx - x) * w / dw];
+      if (!last && c != transparent) {
+        if (run_start < 0) run_start = sx;
+        s_row[sx - run_start] = c;
+      } else if (run_start >= 0) {
+        display_blit(run_start, py, sx - run_start, 1, s_row);
+        run_start = -1;
+      }
+    }
+  }
+}
+
+void draw_bitmap1_fit(int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *bits,
+                      int16_t dw, int16_t dh, uint16_t fg, uint16_t bg) {
+  Rect box, v;
+  int16_t px, py;
+  int stride;
+
+  if (!bits || w <= 0 || h <= 0 || dw <= 0 || dh <= 0) return;
+  stride = (w + 7) / 8;
+  box.x = x; box.y = y; box.w = dw; box.h = dh;
+  v = rect_intersect(box, s_clip);
+  if (rect_is_empty(v)) return;
+  for (py = v.y; py < v.y + v.h; py++) {
+    const uint8_t *row = bits + (size_t)((py - y) * h / dh) * (size_t)stride;
+    for (px = v.x; px < v.x + v.w; px++) {
+      int col = (px - x) * w / dw;
+      s_row[px - v.x] = ((row[col >> 3] >> (7 - (col & 7))) & 1) ? fg : bg;
+    }
+    display_blit(v.x, py, v.w, 1, s_row);
+  }
+}
+
 /* ------------------------------------------------------------ cursor ---- */
 
 /* Bit 0 is the leftmost pixel. The classic arrow: a filled wedge with a tail.

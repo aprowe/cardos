@@ -35,6 +35,12 @@
 #include "kernel/sys/hotkeys.h"
 #include "kernel/sys/clock.h"
 #include "kernel/drv/battery.h"
+#include "kernel/drv/display.h"
+#include "kernel/sys/blip.h"
+
+#include <stdlib.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -214,11 +220,53 @@ static void paint_pips(int n) {
               i == s_sel ? C_TITLE_FG : C_SHADOW);
 }
 
-static void paint_carousel(void) {
-  int n = icons_in_count(s_folder);
+/* ---- the carousel, and how it moves ----
+ *
+ * Every entry has a place relative to the selection: 0 in the middle, -1 and
+ * 1 beside it. A move changes the selection at once and sets s_anim to the
+ * distance the row still has to travel, in 1/256 of a slot, which eases to
+ * nothing over ANIM_MS: so an entry is drawn at its slot plus that offset,
+ * its size and its x following from where that puts it. 64 px in the middle,
+ * 32 one slot out, and further out it runs off the edge.
+ *
+ * Drawn off the panel, a strip at a time (display_target), and each strip
+ * sent whole. The old way filled the area teal and then drew over it, and
+ * the teal showed: that was the launcher's flicker. */
+#define ANIM_MS   170
+#define SLOT_X    (BIG / 2 + SIDE_GAP + SMALL / 2)    /* 60: centre to neighbour */
+#define STRIP_H   20
+
+static int      s_anim;           /* slots still to travel, x256; 0 at rest */
+static int      s_anim_from;
+static uint32_t s_anim_at;
+
+/* Where an entry `t256` slots from the middle sits, and how big it is. */
+static void slot_place(int t256, int16_t *cx, int16_t *size) {
+  int a = t256 < 0 ? -t256 : t256;
+  if (a <= 256) {
+    *size = (int16_t)(BIG - (BIG - SMALL) * a / 256);
+    *cx = (int16_t)(DISPLAY_W / 2 + SLOT_X * t256 / 256);
+  } else {
+    int out = SLOT_X + (a - 256) * 90 / 256;           /* faster off the edge */
+    *size = SMALL;
+    *cx = (int16_t)(DISPLAY_W / 2 + (t256 < 0 ? -out : out));
+  }
+}
+
+static void paint_icon_at(int idx, int16_t cx, int16_t size, uint16_t fg) {
+  const uint16_t *px = icon_colour(idx);
+  int16_t x = (int16_t)(cx - size / 2), y = (int16_t)(ICON_TOP + BIG / 2 - size / 2);
+  const uint8_t *bits;
+  if (px) { draw_image_fit(x, y, CAPP_ICON_W, CAPP_ICON_H, px, size, size, 0x0000); return; }
+  bits = icon_bitmap(idx);
+  if (bits) draw_bitmap1_fit(x, y, CAPP_ICON_W, CAPP_ICON_H, bits, size, size, fg, C_DESKTOP);
+}
+
+/* Everything below the bar, at the current offset, to whatever the clip is. */
+static void paint_carousel_body(void) {
+  int n = icons_in_count(s_folder), k, near = 0, best = 1 << 30;
   const Icon *ic;
 
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_rect(R(0, BAR_H, DISPLAY_W, DISPLAY_H - BAR_H), C_DESKTOP);
 
   if (n == 0) {
@@ -233,43 +281,122 @@ static void paint_carousel(void) {
     return;
   }
 
-  /* Neighbours are dimmed as well as smaller: at 32x32 a full-contrast icon
-   * still competes with the one in focus. */
-  if (n > 1) {
-    int16_t sy = (int16_t)(ICON_TOP + (BIG - SMALL) / 2);
-    paint_icon(icon_index(at(wrap(s_sel - 1))), (int16_t)(BIG_X - SIDE_GAP - SMALL), sy, 2, C_SHADOW);
-    paint_icon(icon_index(at(wrap(s_sel + 1))), (int16_t)(BIG_X + BIG + SIDE_GAP), sy, 2, C_SHADOW);
+  /* Outside in, so the middle one is drawn last and on top. One entry is
+   * never drawn twice: with two or three apps the row wraps onto itself. */
+  for (k = 3; k >= 0; k--) {
+    int side;
+    for (side = (k ? -1 : 1); side <= 1; side += 2) {
+      int slot = k * side, t256 = slot * 256 + s_anim;
+      int16_t cx, size;
+      if (n == 1 && slot) continue;
+      if (n == 2 && slot && slot != (s_anim > 0 ? -1 : 1)) continue;
+      if (n > 2 && (slot < -(n - 1) / 2 || slot > n / 2)) continue;   /* each entry once */
+      slot_place(t256, &cx, &size);
+      if (cx + size / 2 < 0 || cx - size / 2 >= DISPLAY_W) continue;
+      paint_icon_at(icon_index(at(wrap(s_sel + slot))), cx, size, slot ? C_SHADOW : C_TITLE_FG);
+      if ((t256 < 0 ? -t256 : t256) < best) { best = t256 < 0 ? -t256 : t256; near = slot; }
+    }
   }
-  paint_icon(icon_index(at(s_sel)), BIG_X, ICON_TOP, 4, C_TITLE_FG);
 
-  ic = at(s_sel);
+  /* The name of whichever entry is nearest the middle, travelling with it. */
+  ic = at(wrap(s_sel + near));
   if (ic) {
-    /* Centred on the glyph width rather than a guess, so a long name and a
-     * short one both sit under the icon. */
+    int16_t shift = (int16_t)(SLOT_X * (near * 256 + s_anim) / 256);
     int16_t w = (int16_t)(draw_text_width(ic->name) * 2);
     int16_t nx = (int16_t)((DISPLAY_W - w) / 2);
     char where[48];
-    const char *k;
+    const char *kind;
     int16_t kx;
 
     /* Inside a folder the level is always on screen: "Games / app" rather
      * than a bare "app" that looks the same at the top. */
-    if (s_note[0]) k = s_note;
+    if (s_note[0] && !s_anim) kind = s_note;
     else if (s_folder >= 0) {
       const Icon *f = icon_at(s_folder);
       snprintf(where, sizeof where, "%s / %s", f ? f->name : "?", kind_word(ic));
-      k = where;
-    } else k = kind_word(ic);
-    kx = (int16_t)((DISPLAY_W - draw_text_width(k)) / 2);
+      kind = where;
+    } else kind = kind_word(ic);
+    kx = (int16_t)((DISPLAY_W - draw_text_width(kind)) / 2);
 
     if (nx < 2) nx = 2;
     if (kx < 2) kx = 2;
-    draw_text_scaled(nx, NAME_Y, ic->name, 2, C_TITLE_FG, C_DESKTOP);
-    draw_text_ellipsis(kx, KIND_Y, (int16_t)(DISPLAY_W - 4), k,
+    draw_text_scaled((int16_t)(nx + shift), NAME_Y, ic->name, 2, C_TITLE_FG, C_DESKTOP);
+    draw_text_ellipsis((int16_t)(kx + shift), KIND_Y, (int16_t)(DISPLAY_W - 4), kind,
                        C_DESK_DIM, C_DESKTOP);
   }
 
   paint_pips(n);
+}
+
+/* Rows y0..y1 of the carousel, composed off the panel a strip at a time.
+ * Without the memory for a strip it draws straight to the panel, as it
+ * always used to. */
+static void paint_carousel_rows(int y0, int y1) {
+  uint16_t *strip = (uint16_t *)malloc((size_t)DISPLAY_W * STRIP_H * 2);
+  int y;
+  if (!strip) {
+    draw_set_clip(R(0, y0, DISPLAY_W, y1 - y0));
+    paint_carousel_body();
+    draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+    return;
+  }
+  for (y = y0; y < y1; y += STRIP_H) {
+    int h = y1 - y < STRIP_H ? y1 - y : STRIP_H;
+    display_target(strip, 0, y, DISPLAY_W, h);
+    draw_set_clip(R(0, y, DISPLAY_W, h));
+    paint_carousel_body();
+    display_target(NULL, 0, 0, 0, 0);
+    display_blit(0, y, DISPLAY_W, h, strip);
+  }
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  free(strip);
+}
+
+static void paint_carousel(void) { paint_carousel_rows(BAR_H, DISPLAY_H); }
+
+/* One step of the slide; 1 while there is more to go. Ease-out: fast away,
+ * slow to settle, which is what reads as smooth rather than mechanical. */
+static int anim_step(uint32_t now) {
+  uint32_t dt = now - s_anim_at;
+  int left;
+  if (!s_anim) return 0;
+  if (dt >= ANIM_MS) s_anim = 0;
+  else {
+    left = (int)(ANIM_MS - dt);                         /* ANIM_MS..1 */
+    /* (left/ANIM_MS)^3, in integers */
+    s_anim = (int)((int64_t)s_anim_from * left * left / ANIM_MS * left / ANIM_MS / ANIM_MS);
+  }
+  /* The icons and the two lines under them; the pips are already right. */
+  paint_carousel_rows(ICON_TOP, KIND_Y + 8);
+  return s_anim != 0;
+}
+
+/* The middle icon grows into the screen before an app takes it: 90 ms,
+ * drawn straight through, since the app's load blocks the loop anyway. */
+static void open_zoom(void) {
+  const Icon *ic = at(s_sel);
+  int i, idx;
+  if (!ic) return;
+  idx = icon_index(ic);
+  for (i = 1; i <= 4; i++) {
+    int16_t size = (int16_t)(BIG + 16 * i);
+    uint16_t *strip = (uint16_t *)malloc((size_t)DISPLAY_W * STRIP_H * 2);
+    int y, top = ICON_TOP + BIG / 2 - size / 2, bot = top + size;
+    if (!strip) return;
+    if (top < BAR_H) top = BAR_H;
+    for (y = top; y < bot; y += STRIP_H) {
+      int h = bot - y < STRIP_H ? bot - y : STRIP_H;
+      display_target(strip, 0, y, DISPLAY_W, h);
+      draw_set_clip(R(0, y, DISPLAY_W, h));
+      draw_rect(R(0, y, DISPLAY_W, h), C_DESKTOP);
+      paint_icon_at(idx, DISPLAY_W / 2, size, C_TITLE_FG);
+      display_target(NULL, 0, 0, 0, 0);
+      display_blit(0, y, DISPLAY_W, h, strip);
+    }
+    free(strip);
+    draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
 }
 
 /* Where an app sits. One that asked for a size smaller than the panel gets
@@ -454,6 +581,7 @@ static int run_now(const char *name, const char *args);
  * did, or to the row. */
 static void quit_app(void) {
   char name[20], args[128];
+  blip(BLIP_BACK);
   leave_app_ex(s_nback == 0);
   if (s_nback > 0) {
     s_nback--;
@@ -468,6 +596,7 @@ static void quit_app(void) {
 static int said_why(const char *name) {
   const char *why = capprun_start_error();
   if (!why[0]) return 0;
+  blip(BLIP_ERROR);
   snprintf(s_note, sizeof s_note, "%s: %s", name, why);
   if (ui_shell() != UI_LAUNCHER) con_printf("%s: %s\n", name, why);
   s_dirty = 1;
@@ -548,8 +677,12 @@ static void launch_with(int i, const char *args) {
 
 /* `pos` is a carousel position at the current level. */
 static void launch(int pos) {
+  const Icon *ic = at(pos);
   s_nback = 0;                    /* opened from the row: back is the row */
-  launch_with(icon_index(at(pos)), NULL);
+  s_anim = 0;
+  blip(BLIP_OPEN);
+  if (ic && ic->kind != ICON_FOLDER) open_zoom();
+  launch_with(icon_index(ic), NULL);
 }
 
 /* ------------------------------------------------------------- search --- */
@@ -644,8 +777,16 @@ static void move(int delta) {
   if (icons_in_count(s_folder) == 0) return;
   s_sel = wrap(s_sel + delta);
   s_note[0] = 0;
-  s_dirty = 1;
-  flush();
+  /* From wherever the row is now, so keys faster than the slide add up
+   * rather than jump; never more than two slots behind. */
+  s_anim += delta * 256;
+  if (s_anim > 512) s_anim = 512;
+  if (s_anim < -512) s_anim = -512;
+  s_anim_from = s_anim;
+  s_anim_at = s_now_ms;
+  blip(BLIP_MOVE);
+  paint_pips(icons_in_count(s_folder));
+  anim_step(s_now_ms);
 }
 
 /* -------------------------------------------------------------- input --- */
@@ -925,7 +1066,7 @@ int launchui_key(uint8_t key) {
   switch (key) {
   case KEY_ESC:
     /* Interior only: out of a folder. Never out of the shell. */
-    if (s_folder >= 0) close_folder();
+    if (s_folder >= 0) { blip(BLIP_BACK); close_folder(); }
     return 0;
   case KEY_QUIT:
     if (s_folder >= 0) { close_folder(); return 0; }
@@ -942,6 +1083,7 @@ int launchui_key(uint8_t key) {
     if (icons_in_count(s_folder)) launch(s_sel);
     return 0;
   case ' ':
+    blip(BLIP_SOFT);
     search_open();
     return 0;
 
@@ -1012,6 +1154,7 @@ void launchui_tick(uint32_t ms) {
   s_now_ms = ms;
 
   if (s_has_next) run_next();
+  if (s_anim && !s_app && !s_search && !s_help && !picker_active()) anim_step(ms);
 
   /* An app that animates gets every pass, not every second: a game at one
    * frame a second is a slideshow. It runs before the once-a-second work

@@ -29,6 +29,8 @@
 static const char *TAG = "mic";
 static i2s_chan_handle_t s_rx;
 
+int mic_is_open(void) { return s_rx != NULL; }
+
 int mic_open(void) {
   i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
   i2s_pdm_rx_config_t pdm = {

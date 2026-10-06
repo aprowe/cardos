@@ -94,6 +94,12 @@ void draw_bitmap1_scaled(int16_t x, int16_t y, int16_t w, int16_t h,
 void draw_image_scaled(int16_t x, int16_t y, int16_t w, int16_t h,
                        const uint16_t *px, int scale, uint16_t transparent);
 
+/* The same two at any size dw x dh, nearest neighbour: for animation. */
+void draw_image_fit(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *px,
+                    int16_t dw, int16_t dh, uint16_t transparent);
+void draw_bitmap1_fit(int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *bits,
+                      int16_t dw, int16_t dh, uint16_t fg, uint16_t bg);
+
 void draw_cursor(int16_t x, int16_t y);
 Rect draw_cursor_bounds(int16_t x, int16_t y);
 

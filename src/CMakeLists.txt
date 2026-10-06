@@ -7,6 +7,7 @@ idf_component_register(
     "../kernel/drv/es8311.c"
     "../kernel/drv/imu.c"
     "../kernel/drv/usbdisk.c"
+    "../kernel/sys/blip.c"
     "../kernel/sys/midi.c"
     "../kernel/drv/keyboard.c"
     "../kernel/drv/bthid.c"

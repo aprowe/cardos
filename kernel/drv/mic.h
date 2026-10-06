@@ -29,6 +29,9 @@ int  mic_open(void);
  * can have G43 without a reboot. */
 void mic_close(void);
 
+/* Recording, or listening: the pins are the mic's. */
+int  mic_is_open(void);
+
 /* Record into `path` as a WAV, until `stop()` returns non-zero or max_ms
  * elapses, whichever comes first. `stop` is polled between blocks -- roughly
  * every 32 ms -- which is what makes push-to-talk feel immediate.

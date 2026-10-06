@@ -29,6 +29,8 @@ static const Pref PREFS[] = {
   { "pins",     P_STR },    /* kernel/ui/pins.c */
   { "dim_s",    P_U16 },    /* kernel/sys/power.c */
   { "off_s",    P_U16 },
+  { "ui_snd",   P_U16 },    /* kernel/sys/blip.c */
+  { "key_snd",  P_U16 },
 };
 #define NPREFS ((int)(sizeof PREFS / sizeof PREFS[0]))
 

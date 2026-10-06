@@ -12,6 +12,7 @@
 
 #include "kernel/sys/prefs.h"
 #include "kernel/drv/display.h"
+#include <string.h>
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -234,8 +235,37 @@ int display_init(void) {
  * frame landed on top of it at 10%. This is the only place every pixel
  * passes through, so this is where the rule is kept rather than by every
  * caller remembering it. */
+/* ---- drawing off the panel ----
+ *
+ * While a target is set, a blit lands in that buffer instead of on the
+ * panel: the part inside the target's rectangle is copied, the rest is
+ * dropped. Everything in draw.c ends in display_blit, so every drawing call
+ * can compose a strip of the screen in memory, and the strip goes to the
+ * panel in one blit -- no fill showing before what is drawn over it, which
+ * is what flicker was. One target at a time, on the drawing task. */
+static uint16_t *s_tgt;
+static int s_tgt_x, s_tgt_y, s_tgt_w, s_tgt_h;
+
+void display_target(uint16_t *buf, int x, int y, int w, int h) {
+  s_tgt = buf;
+  s_tgt_x = x; s_tgt_y = y; s_tgt_w = w; s_tgt_h = h;
+}
+
+static void to_target(int x, int y, int w, int h, const uint16_t *pixels) {
+  int x0 = x > s_tgt_x ? x : s_tgt_x, y0 = y > s_tgt_y ? y : s_tgt_y;
+  int x1 = x + w < s_tgt_x + s_tgt_w ? x + w : s_tgt_x + s_tgt_w;
+  int y1 = y + h < s_tgt_y + s_tgt_h ? y + h : s_tgt_y + s_tgt_h;
+  int r;
+  if (x0 >= x1 || y0 >= y1) return;
+  for (r = y0; r < y1; r++)
+    memcpy(s_tgt + (size_t)(r - s_tgt_y) * (size_t)s_tgt_w + (size_t)(x0 - s_tgt_x),
+           pixels + (size_t)(r - y) * (size_t)w + (size_t)(x0 - x),
+           (size_t)(x1 - x0) * 2);
+}
+
 void display_blit(int x, int y, int w, int h, const uint16_t *pixels) {
   if (!s_panel || w <= 0 || h <= 0) return;
+  if (s_tgt) { to_target(x, y, w, h, pixels); return; }
   if (s_panel_lock) xSemaphoreTake(s_panel_lock, portMAX_DELAY);
   if (esp_lcd_panel_draw_bitmap(s_panel, x, y, x + w, y + h, pixels) == ESP_OK) {
     /* Only if something was queued: nothing else will ever give it. */
