@@ -1,4 +1,9 @@
-/* PDM microphone capture. See mic.h. */
+/* Microphone capture. See mic.h.
+ *
+ * The original's SPM1423 is PDM on 46 (data) and 43 (clock). The ADV's mic
+ * is behind its ES8311 codec, which sends standard I2S: BCLK 41, WS 43, data
+ * in on 46, one 16-bit sample in the right slot (M5Unified's ADV setup).
+ * The same 16 kHz mono reaches everything above mic_open either way. */
 
 #include "kernel/drv/mic.h"
 #include "kernel/fs/fs.h"
@@ -6,11 +11,15 @@
 #include <string.h>
 
 #include "driver/i2s_pdm.h"
+#include "driver/i2s_std.h"
+#include "kernel/drv/board.h"
+#include "kernel/drv/es8311.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
 #define PIN_MIC_CLK 43
 #define PIN_MIC_DAT 46
+#define PIN_ADV_BCLK 41
 
 /* 512 samples: 32 ms at 16 kHz. Small enough that releasing the button feels
  * instant, large enough that the file is not written a handful of bytes at a
@@ -40,6 +49,32 @@ int mic_open(void) {
     s_rx = NULL;
     return -1;
   }
+  if (board() == BOARD_ADV) {
+    i2s_std_config_t std = {
+      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(MIC_RATE),
+      .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
+                                                      I2S_SLOT_MODE_MONO),
+      .gpio_cfg = {
+        .mclk = I2S_GPIO_UNUSED,
+        .bclk = PIN_ADV_BCLK,
+        .ws   = PIN_MIC_CLK,                 /* 43: WS on the ADV */
+        .dout = I2S_GPIO_UNUSED,
+        .din  = PIN_MIC_DAT,
+        .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },
+      },
+    };
+    std.slot_cfg.slot_mask = I2S_STD_SLOT_RIGHT;
+    if (i2s_channel_init_std_mode(s_rx, &std) != ESP_OK ||
+        i2s_channel_enable(s_rx) != ESP_OK) {
+      ESP_LOGE(TAG, "i2s std rx init failed");
+      i2s_del_channel(s_rx);
+      s_rx = NULL;
+      return -1;
+    }
+    /* The codec is told after the clocks run: it takes its MCLK from BCLK. */
+    if (es8311_mic_on() != 0) ESP_LOGW(TAG, "the codec did not answer");
+    return 0;
+  }
   if (i2s_channel_init_pdm_rx_mode(s_rx, &pdm) != ESP_OK) {
     ESP_LOGE(TAG, "pdm rx init failed");
     i2s_del_channel(s_rx);
@@ -57,6 +92,7 @@ int mic_open(void) {
 
 void mic_close(void) {
   if (!s_rx) return;
+  if (board() == BOARD_ADV) es8311_mic_off();
   i2s_channel_disable(s_rx);
   i2s_del_channel(s_rx);
   s_rx = NULL;

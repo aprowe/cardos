@@ -25,6 +25,7 @@ forklift  Games
 grep      -
 habits    Plan
 ide       Make
+level     Make
 memo      Make
 mines     Games
 noodle    Games

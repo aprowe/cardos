@@ -10,6 +10,7 @@
 #include "kernel/ui/draw.h"
 #include "kernel/fs/fs.h"
 #include "kernel/net/http.h"
+#include "kernel/drv/imu.h"
 #include "kernel/net/httpq.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/gauth.h"
@@ -440,6 +441,14 @@ static int api_shell(const char *line, char *out, size_t n) {
   return capprun_shell(line, out, n);
 }
 
+static int api_motion(CappMotion *out) {
+  ImuSample s;
+  if (!out || imu_read(&s) != 0) return -1;
+  out->ax = s.ax; out->ay = s.ay; out->az = s.az;
+  out->gx = s.gx; out->gy = s.gy; out->gz = s.gz;
+  return 0;
+}
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -473,6 +482,7 @@ static const CardApi API = {
   api_run_command,
   api_shell,
   api_http_upload,
+  api_motion,
 };
 
 const CardApi *cardos_api(void) { return &API; }

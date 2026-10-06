@@ -37,6 +37,7 @@
 #include "kernel/sys/printq.h"
 #include "kernel/sys/printdoc.h"
 #include "kernel/fs/path.h"
+#include "kernel/drv/board.h"
 
 static char s_cwd[FS_PATH_MAX] = "/";
 
@@ -250,6 +251,7 @@ static void boot_progress(void *ctx, int percent) {
 void cmd_bootinfo(void) {
   LauncherInfo info;
   launcher_info(&info);
+  con_printf("board: %s\n", board_name());
   con_printf("running from %s, %s build\n", info.running[0] ? info.running : "?",
              update_flavor());
   if (info.guest_valid)

@@ -1,4 +1,4 @@
-/* Cardputer keyboard matrix.
+/* Cardputer keyboard: the original's matrix, or the ADV's TCA8418.
  *
  * The scan and the coordinate mapping below are transcribed from M5Stack's own
  * IOMatrix reader, which is the only authoritative description of how this
@@ -12,9 +12,18 @@
  * to logical x = 2j for column selects 4..7 and x = 2j+1 for 0..3; y counts
  * down from 3. That asymmetry is the physical interleave of the key columns,
  * not a mistake.
+ *
+ * The ADV has the same 56 keys on a TCA8418 keypad controller on I2C (0x34,
+ * SDA 8, SCL 9, its interrupt on 11). It reports presses and releases as
+ * events, numbered 1..80; M5Stack's TCA8418 reader turns event n into the
+ * same x,y grid as above (b = n-1: x = 2*(b/10) + (b%10 > 3), y = b%10 % 4),
+ * so here the chip's events keep a held-keys grid and scan() hands that over.
+ * Everything above the scan -- the map, the modifiers, the chords, repeat --
+ * is the same on both. kernel/drv/board.h says which this is.
  */
 
 #include "kernel/drv/keyboard.h"
+#include "kernel/drv/board.h"
 #include "kernel/input/keyrepeat.h"
 #include "esp_timer.h"
 
@@ -49,6 +58,68 @@ static const char KEYMAP_SHIFT[4][14] = {
 static uint8_t s_down[4][14];      /* previous scan, for edge detection */
 static int s_shift, s_ctrl, s_fn, s_opt;
 
+/* ---- the ADV's TCA8418 -------------------------------------------------------------
+ *
+ * The init is M5Stack's (M5Cardputer, Adafruit_TCA8418): every pin a GPI
+ * with events and interrupts, then rows 0..6 and columns 0..7 as the keypad,
+ * the FIFO drained, and key and GPI interrupts on. Debounce is the chip's. */
+#define TCA       0x34
+#define TCA_INT   11
+#define R_CFG     0x01
+#define R_INT     0x02
+#define R_KEY_EC  0x03            /* events waiting, low 4 bits */
+#define R_EVENT   0x04
+
+static uint8_t s_held[4][14];      /* what the chip says is down */
+
+static int tca_init(void) {
+  static const uint8_t SETUP[][2] = {
+    { 0x23, 0x00 }, { 0x24, 0x00 }, { 0x25, 0x00 },   /* GPIO_DIR: inputs */
+    { 0x20, 0xFF }, { 0x21, 0xFF }, { 0x22, 0xFF },   /* GPI_EM: events */
+    { 0x26, 0x00 }, { 0x27, 0x00 }, { 0x28, 0x00 },   /* GPIO_INT_LVL */
+    { 0x1A, 0xFF }, { 0x1B, 0xFF }, { 0x1C, 0xFF },   /* GPIO_INT_EN */
+    { 0x1D, 0x7F }, { 0x1E, 0xFF },                   /* KP_GPIO: 7 rows, 8 cols */
+  };
+  gpio_config_t in = {
+    .pin_bit_mask = 1ULL << TCA_INT,
+    .mode = GPIO_MODE_INPUT,
+    .pull_up_en = GPIO_PULLUP_DISABLE,      /* the board pulls it up */
+    .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    .intr_type = GPIO_INTR_DISABLE,         /* polled: the shell asks every pass */
+  };
+  uint8_t v;
+  int i;
+  for (i = 0; i < (int)(sizeof SETUP / sizeof SETUP[0]); i++)
+    if (board_i2c_write_reg(TCA, SETUP[i][0], SETUP[i][1]) != 0) return -1;
+  for (i = 0; i < 80 && board_i2c_read_reg(TCA, R_EVENT, &v, 1) == 0 && v; i++) ;
+  for (i = 0x11; i <= 0x13; i++) board_i2c_read_reg(TCA, (uint8_t)i, &v, 1);
+  board_i2c_write_reg(TCA, R_INT, 0x03);
+  board_i2c_write_reg(TCA, R_CFG, 0x03);             /* KE_IEN | GPI_IEN */
+  gpio_config(&in);
+  return 0;
+}
+
+/* Take every event waiting into s_held. The interrupt line says whether there
+ * are any, so the common case -- nothing pressed -- costs one GPIO read, not
+ * an I2C transaction a pass. */
+static void tca_service(void) {
+  uint8_t n = 0, ev;
+  int i;
+  if (gpio_get_level(TCA_INT) != 0) return;
+  if (board_i2c_read_reg(TCA, R_KEY_EC, &n, 1) != 0) return;
+  n &= 0x0F;
+  for (i = 0; i < n; i++) {
+    int b, x, y;
+    if (board_i2c_read_reg(TCA, R_EVENT, &ev, 1) != 0 || !ev) break;
+    b = (ev & 0x7F) - 1;
+    if (b < 0 || b >= 70) continue;          /* not a key of ours */
+    x = 2 * (b / 10) + ((b % 10) > 3 ? 1 : 0);
+    y = (b % 10) % 4;
+    if (x < 14) s_held[y][x] = (ev & 0x80) ? 1 : 0;
+  }
+  board_i2c_write_reg(TCA, R_INT, 0x03);     /* K_INT and GPI_INT read */
+}
+
 static void set_address(int value) {
   gpio_set_level(ADDR_PINS[0], (value >> 0) & 1);
   gpio_set_level(ADDR_PINS[1], (value >> 1) & 1);
@@ -57,6 +128,10 @@ static void set_address(int value) {
 
 int keyboard_init(void) {
   int i;
+  if (board() == BOARD_ADV) {
+    for (i = 0; i < 4 * 14; i++) ((uint8_t *)s_down)[i] = ((uint8_t *)s_held)[i] = 0;
+    return tca_init();
+  }
   gpio_config_t out = {
     .pin_bit_mask = 0,
     .mode = GPIO_MODE_OUTPUT,
@@ -91,6 +166,20 @@ static void scan(uint8_t now[4][14]) {
     for (x = 0; x < 14; x++) now[y][x] = 0;
 
   s_shift = s_ctrl = s_fn = s_opt = 0;
+
+  if (board() == BOARD_ADV) {
+    tca_service();
+    for (y = 0; y < 4; y++)
+      for (x = 0; x < 14; x++) {
+        if (!s_held[y][x]) continue;
+        now[y][x] = 1;
+        if (IS_SHIFT(x, y)) s_shift = 1;
+        if (IS_CTRL(x, y))  s_ctrl = 1;
+        if (IS_FN(x, y))    s_fn = 1;
+        if (IS_OPT(x, y))   s_opt = 1;
+      }
+    return;
+  }
 
   for (col = 0; col < 8; col++) {
     set_address(col);

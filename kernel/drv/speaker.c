@@ -8,6 +8,8 @@
 #include <string.h>
 
 #include "driver/i2s_std.h"
+#include "kernel/drv/board.h"
+#include "kernel/drv/es8311.h"
 #include "esp_log.h"
 #include "nvs.h"
 
@@ -112,6 +114,8 @@ bad:
 
 /* ---- the channel --------------------------------------------------------- */
 
+static void close_tx(void);
+
 static int open_tx(uint32_t rate, int channels) {
   i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
   i2s_std_config_t std = {
@@ -138,6 +142,14 @@ static int open_tx(uint32_t rate, int channels) {
   if (i2s_channel_enable(s_tx) != ESP_OK) {
     i2s_del_channel(s_tx); s_tx = NULL;
     fail("I2S enable failed");
+    return -1;
+  }
+  /* The ADV: the same pins, but into an ES8311 that plays nothing until it
+   * is set up -- once the clocks are running, since it takes MCLK from BCLK.
+   * Philips 16-bit in two slots is the 32 fs it needs, mono or stereo. */
+  if (board() == BOARD_ADV && es8311_speaker_on() != 0) {
+    close_tx();
+    fail("the codec did not answer");
     return -1;
   }
   return 0;

@@ -48,6 +48,26 @@ INK = {
 }
 
 ICONS = {
+    # A round vial seen from above, its bubble just off the centre mark.
+    "Level": [
+        ".....KKKKKK.....",
+        "...KKggggggKK...",
+        "..KggggggggggK..",
+        ".KgggggeggggggK.",
+        ".KgggggeggggggK.",
+        "KgggggeeeWWWgggK",
+        "KggggggeWWWWWggK",
+        "KeeeeeeeWWWWWeeK",
+        "KggggggeeWWWgggK",
+        "KggggggeggggggK.",
+        ".KgggggeggggggK.",
+        ".KgggggeggggggK.",
+        "..KggggggggggK..",
+        "...KKggggggKK...",
+        ".....KKKKKK.....",
+        "................",
+    ],
+
     # The board from above: cells in grooves, a wall laid across, a pawn
     # each side. The wall is the game.
     "Quoridor": [

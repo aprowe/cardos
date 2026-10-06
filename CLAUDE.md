@@ -704,6 +704,23 @@ third of the free heap for that was why WiFi and TLS could not both fit while
 Bluetooth was connected. See `tools/mapsize.py` and the `mem` command. Every
 number here moved during bring-up — do not trust one you have not re-measured.
 
+**One firmware for the original Cardputer and the Cardputer ADV** (2026-10-06,
+written before the ADV arrived: the ADV paths are untested on hardware).
+`kernel/drv/board.c` asks for the ADV's TCA8418 at 0x34 on I2C 8/9 before
+the keyboard starts; on the original those pins are the 74HC138's inputs
+and the probe finds nothing. The banner and `bootinfo` name the board. On
+the ADV: the keyboard is the TCA8418 (`keyboard.c`, events into the same
+4x14 grid as the matrix -- M5Stack's mapping), audio is an ES8311 codec at
+0x18 (`es8311.c`, M5Unified's register sequences; MCLK from BCLK, so 16-bit
+two-slot I2S) with the speaker on the original's pins and the mic as I2S
+in on 46, and there is a BMI270 motion sensor (`imu.c`, Bosch's 8 KB
+configuration in `bmi270_config.h` under its BSD licence), started the
+first time it is asked for. `api->motion` (API 37) gives apps milli-g and
+tenths of a degree a second, or -1 on the original; `motion` in the console
+prints a reading. Level (Make) is the test app. To check on a new ADV: the
+keys (every one, and the modifiers), `listen`, Memo record and play, Timer's
+beep, and which way `motion`'s axes point against Level's bubble.
+
 ## Hardware facts — measured on the actual device, not from a datasheet
 
 M5Stack Cardputer v1.1, ESP32-S3FN8 (Xtensa LX7 dual-core, 240 MHz).

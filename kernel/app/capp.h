@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 36
+#define CAPP_API_VERSION 37
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -170,6 +170,12 @@ typedef struct {
 #define CAPP_CMD_ARGS_MAX 4
 
 #define CAPP_NAME_MAX 63
+
+/* One reading of the motion sensor; see CardApi.motion. */
+typedef struct {
+  int16_t ax, ay, az;    /* milli-g */
+  int16_t gx, gy, gz;    /* tenths of a degree a second */
+} CappMotion;
 
 /* One directory entry, as list_ex hands it over. Fixed-width on purpose: an
  * app has no allocator, so the caller holds the array. */
@@ -777,6 +783,15 @@ typedef struct {
    * negated). Notes uses it to turn a voice memo into a note. */
   int (*http_upload)(const char *url, const char *path, const char *content_type,
                      char *out, size_t out_size, int timeout_ms);
+
+  /* ---- the motion sensor (API 37) ----
+   *
+   * The Cardputer ADV's BMI270: acceleration in milli-g -- at rest, which way
+   * is down -- and rotation in tenths of a degree a second, on the sensor's
+   * own axes. 0 with a reading; -1 where there is none, as on the original
+   * Cardputer, and an app should say so in its own words. Started the first
+   * time it is asked for. kernel/drv/imu.h. */
+  int (*motion)(CappMotion *out);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

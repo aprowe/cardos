@@ -24,6 +24,8 @@
 #include "kernel/console/console.h"
 #include "kernel/drv/display.h"
 #include "kernel/drv/keyboard.h"
+#include "kernel/drv/board.h"
+#include "kernel/drv/imu.h"
 #include "kernel/mem/mem.h"
 #include "kernel/task/sched.h"
 #include "kernel/fs/fs.h"
@@ -345,6 +347,14 @@ static void run_builtin(const char *line, char *arg) {
   if (!strcmp(line, "help"))        cmd_help();
   else if (!strcmp(line, "log"))    cmd_log(arg);
   else if (!strcmp(line, "mem"))    { if (arg && !strcmp(arg, "map")) cmd_mem_map(); else cmd_mem(); }
+  /* One reading of the ADV's motion sensor, raw axes: the way to learn which
+   * way they point on a new board. */
+  else if (!strcmp(line, "motion")) {
+    ImuSample s;
+    if (imu_read(&s) != 0) con_printf("no motion sensor on this %s\n", board_name());
+    else con_printf("accel %d %d %d mg\ngyro  %d %d %d (0.1 dps)\n",
+                    s.ax, s.ay, s.az, s.gx, s.gy, s.gz);
+  }
   /* The verbs the running app offers, and a way to run one.
    *
    * This is the point of the `id` field in CappAction: the same table that
@@ -510,7 +520,7 @@ static void run_builtin(const char *line, char *arg) {
  * half-remembered a name. */
 static const char *const COMMANDS[] = {
   "apps", "boot", "boot!", "bootinfo", "cat", "cd", "clear", "df", "desk",
-  "echo", "flip", "get", "gui", "help", "launch", "log", "ls", "mem", "mkdir",
+  "echo", "flip", "get", "gui", "help", "launch", "log", "ls", "mem", "mkdir", "motion",
   "battery", "defaults", "listen", "mouse", "ps", "pwd", "reboot", "rm",
   "run", "time",
   "safe",
@@ -1257,7 +1267,11 @@ void app_main(void) {
   display_backlight(1);
 
   con_set_color(COLOR_WHITE);
-  con_printf("CardOS 0.1 (%s)\n", update_flavor());
+  /* Before the keyboard: on the ADV the keyboard is an I2C chip, and on
+   * the original the probe must be done with pins 8 and 9 before the matrix
+   * takes them. See kernel/drv/board.h. */
+  board_detect();
+  con_printf("CardOS 0.1 (%s) on %s\n", update_flavor(), board_name());
   con_set_color(COLOR_GREY);
   con_write("kernel core: memory + swap\n\n");
   con_set_color(COLOR_GREEN);
