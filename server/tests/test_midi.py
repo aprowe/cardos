@@ -86,6 +86,14 @@ class Compose(unittest.TestCase):
         self.assertEqual(len(self.asks), 2)
         self.assertIn("line 3", self.asks[1])
 
+    def test_a_change_sends_the_song_and_the_ask(self):
+        body = ("make it louder\n" + midi.SONG_MARK + "\n" + GOOD).encode()
+        s, jid = self.req("POST", "/midi/compose", body)
+        s, out = self.wait(jid.strip())
+        self.assertEqual(out, "ok\n" + GOOD)
+        self.assertIn("Change it: make it louder", self.asks[0])
+        self.assertIn("n 0.5 E4,G4", self.asks[0])
+
     def test_nothing_asked_is_refused(self):
         self.assertEqual(self.req("POST", "/midi/compose", b"   ")[0], 400)
         self.assertEqual(self.req("GET", "/midi/compose?id=nope")[0], 404)

@@ -13,6 +13,14 @@
  * cannot make a note late. While it plays, a piano roll: each channel its
  * own colour, a line where the song is.
  *
+ * Space previews a song on the device's own speaker instead: every note,
+ * up to eight at once, as soft triangle waves, rendered to
+ * /cache/midi-preview.wav and played by the audio task. Rendered, not
+ * played live, so the voices cost nothing while it sounds.
+ *
+ * `c` asks Claude to change the song on screen ("slower, and add the left
+ * hand"); the old one is kept, and `u` puts it back.
+ *
  * The converter listens on G1 or G2 depending on which it is; `g` swaps,
  * and the choice is kept in /config/midi.txt. `t` plays an arpeggio, to
  * find out which.
@@ -26,6 +34,41 @@
 
 static const CardApi *api;
 static const CappMidi *mi;
+static const CappAudio *au;
+
+#define PREVIEW     "/cache/midi-preview.wav"
+#define RATE        16000
+#define PV_BLOCK    256
+#define FADE        48             /* samples of fade at a note's ends: no clicks */
+#define VOICES      8
+#define UNDO        "/cache/midi-undo.song"
+
+/* Each MIDI note's phase step a sample at 16 kHz, 2^32 a cycle: 440 Hz times
+ * 2^((n-69)/12), worked out on the PC -- an app has no pow. */
+static const uint32_t STEP[128] = {
+  2194674u, 2325176u, 2463439u, 2609922u, 2765116u, 2929539u,
+  3103738u, 3288296u, 3483828u, 3690988u, 3910465u, 4142993u,
+  4389349u, 4650353u, 4926877u, 5219845u, 5530233u, 5859077u,
+  6207476u, 6576592u, 6967657u, 7381975u, 7820930u, 8285987u,
+  8778697u, 9300706u, 9853754u, 10439689u, 11060465u, 11718155u,
+  12414953u, 13153184u, 13935313u, 14763950u, 15641860u, 16571974u,
+  17557394u, 18601411u, 19707509u, 20879378u, 22120931u, 23436310u,
+  24829905u, 26306368u, 27870626u, 29527900u, 31283720u, 33143947u,
+  35114789u, 37202823u, 39415018u, 41758757u, 44241862u, 46872620u,
+  49659811u, 52612737u, 55741253u, 59055800u, 62567441u, 66287895u,
+  70229578u, 74405646u, 78830036u, 83517514u, 88483724u, 93745240u,
+  99319622u, 105225474u, 111482506u, 118111601u, 125134882u, 132575789u,
+  140459156u, 148811292u, 157660072u, 167035027u, 176967447u, 187490479u,
+  198639243u, 210450947u, 222965012u, 236223201u, 250269764u, 265151578u,
+  280918312u, 297622584u, 315320144u, 334070055u, 353934894u, 374980958u,
+  397278486u, 420901894u, 445930023u, 472446403u, 500539528u, 530303157u,
+  561836623u, 595245168u, 630640287u, 668140110u, 707869788u, 749961916u,
+  794556973u, 841803789u, 891860047u, 944892805u, 1001079055u, 1060606313u,
+  1123673247u, 1190490335u, 1261280574u, 1336280220u, 1415739577u, 1499923833u,
+  1589113945u, 1683607578u, 1783720094u, 1889785610u, 2002158110u, 2121212627u,
+  2247346494u, 2380980670u, 2522561148u, 2672560440u, 2831479154u, 2999847666u,
+  3178227890u, 3367215155u,
+};
 
 #define DIR        "/songs"
 #define CONF       "/config/midi.txt"
@@ -72,6 +115,9 @@ static struct {
   uint32_t len_ms;
   int      lo, hi;                 /* pitch range on the roll */
   int      head_x;                 /* the playhead as drawn */
+  int      preview;                /* playing on the speaker, not to MIDI */
+  char     change[NAMEL];          /* the song Claude is changing; "" for a new one */
+  char     undo[NAMEL];            /* the song UNDO holds the last version of */
   CRect    c;
   int      have_c;
   char     text[TEXT_MAX];
@@ -202,9 +248,156 @@ static void play_sel(void) {
 }
 
 static void stop(void) {
-  if (mi) mi->stop();
+  if (M.preview) { if (au) au->stop(); }
+  else if (mi) mi->stop();
+  M.preview = 0;
   M.view = V_LIST;
   say(0, "");
+}
+
+/* ---- the preview -------------------------------------------------------------------------- */
+
+static void put16(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+static void put32(uint8_t *p, uint32_t v) { put16(p, v); put16(p + 2, v >> 16); }
+
+/* What is sounding at `tick`: up to VOICES pitches, the highest first, each
+ * once (a unison across channels is one voice), with its velocity. */
+static int sounding(uint32_t tick, int *pitch, int *vel) {
+  int i, k, n = 0;
+  for (i = 0; i < M.S.nnotes; i++) {
+    const MsNote *nt = &M.S.note[i];
+    if (tick < nt->start || tick >= nt->start + nt->len) continue;
+    for (k = 0; k < n && pitch[k] != nt->pitch; k++) ;
+    if (k < n) { if (nt->vel > vel[k]) vel[k] = nt->vel; continue; }
+    if (n < VOICES) { pitch[n] = nt->pitch; vel[n] = nt->vel; n++; continue; }
+    for (k = 0; k < n; k++)                      /* full: a higher note displaces the lowest */
+      if (pitch[k] < nt->pitch) {
+        int low = k, j;
+        for (j = 0; j < n; j++) if (pitch[j] < pitch[low]) low = j;
+        pitch[low] = nt->pitch; vel[low] = nt->vel;
+        break;
+      }
+  }
+  return n;
+}
+
+/* The song as a WAV, every voice. A sample's tick is sample * tempo * 480 /
+ * (60 * RATE) = sample * tempo / 2000; what sounds is looked up a block at a
+ * time. Each voice keeps its phase while its note holds and fades in and
+ * out over FADE samples, so nothing clicks; the sum is squeezed above 24000
+ * rather than clipped, for the moments eight notes land at once. */
+static int render_preview(void) {
+  static int16_t block[PV_BLOCK];
+  static struct { int pitch, level, target; uint32_t phase, step; } v[VOICES];
+  uint8_t hdr[44];
+  uint32_t samples, s, data;
+  int fd, i;
+  for (i = 0; i < VOICES; i++) { v[i].pitch = -1; v[i].level = v[i].target = 0; v[i].phase = 0; }
+  samples = M.S.end_ticks / (uint32_t)M.S.tempo * 2000 + (M.S.end_ticks % (uint32_t)M.S.tempo) * 2000 / (uint32_t)M.S.tempo;
+  samples += RATE / 4;                        /* a quarter second to ring out */
+  if (samples > (uint32_t)RATE * 300) samples = (uint32_t)RATE * 300;
+  data = samples * 2;
+  fd = api->open(PREVIEW, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
+  if (fd < 0) return -1;
+  hdr[0] = 'R'; hdr[1] = 'I'; hdr[2] = 'F'; hdr[3] = 'F'; put32(hdr + 4, 36 + data);
+  hdr[8] = 'W'; hdr[9] = 'A'; hdr[10] = 'V'; hdr[11] = 'E';
+  hdr[12] = 'f'; hdr[13] = 'm'; hdr[14] = 't'; hdr[15] = ' '; put32(hdr + 16, 16);
+  put16(hdr + 20, 1); put16(hdr + 22, 1); put32(hdr + 24, RATE); put32(hdr + 28, RATE * 2);
+  put16(hdr + 32, 2); put16(hdr + 34, 16);
+  hdr[36] = 'd'; hdr[37] = 'a'; hdr[38] = 't'; hdr[39] = 'a'; put32(hdr + 40, data);
+  if (api->write(fd, hdr, 44) != 44) { api->close(fd); return -1; }
+  for (s = 0; s < samples; s += PV_BLOCK) {
+    uint32_t tick = s / 2000 * (uint32_t)M.S.tempo + (s % 2000) * (uint32_t)M.S.tempo / 2000;
+    int pitch[VOICES], vel[VOICES], used[VOICES], np, k, n;
+    np = sounding(tick, pitch, vel);
+    for (k = 0; k < np; k++) used[k] = 0;
+    /* Voices already on a note that still sounds keep it; the rest fade. */
+    for (i = 0; i < VOICES; i++) {
+      v[i].target = 0;
+      if (v[i].pitch < 0) continue;
+      for (k = 0; k < np; k++)
+        if (!used[k] && pitch[k] == v[i].pitch) { used[k] = 1; v[i].target = 2500 + vel[k] * 30; break; }
+    }
+    /* New notes take a voice that is free or has faded out. */
+    for (k = 0; k < np; k++) {
+      if (used[k]) continue;
+      for (i = 0; i < VOICES; i++)
+        if (v[i].pitch < 0 || (v[i].target == 0 && v[i].level == 0)) {
+          v[i].pitch = pitch[k];
+          v[i].step = STEP[pitch[k]];
+          v[i].phase = 0;
+          v[i].level = 0;
+          v[i].target = 2500 + vel[k] * 30;
+          break;
+        }
+    }
+    n = samples - s < PV_BLOCK ? (int)(samples - s) : PV_BLOCK;
+    for (k = 0; k < n; k++) {
+      int32_t sum = 0;
+      for (i = 0; i < VOICES; i++) {
+        uint32_t ph;
+        int32_t tri;
+        if (v[i].pitch < 0) continue;
+        if (v[i].level < v[i].target) {
+          v[i].level += (v[i].target - v[i].level) / FADE + 1;
+          if (v[i].level > v[i].target) v[i].level = v[i].target;
+        } else if (v[i].level > v[i].target) {
+          v[i].level -= (v[i].level - v[i].target) / FADE + 1;
+          if (v[i].level < v[i].target) v[i].level = v[i].target;
+        }
+        if (!v[i].level && !v[i].target) { v[i].pitch = -1; continue; }
+        v[i].phase += v[i].step;
+        ph = v[i].phase >> 16;
+        tri = ph < 32768 ? (int32_t)ph * 2 - 32768 : (int32_t)(65535 - ph) * 2 - 32768;
+        sum += tri * v[i].level / 32768;
+      }
+      if (sum > 24000) sum = 24000 + (sum - 24000) / 4;
+      else if (sum < -24000) sum = -24000 + (sum + 24000) / 4;
+      if (sum > 32767) sum = 32767;
+      if (sum < -32767) sum = -32767;
+      block[k] = (int16_t)sum;
+    }
+    if (api->write(fd, block, (size_t)n * 2) != n * 2) { api->close(fd); return -1; }
+  }
+  api->close(fd);
+  return 0;
+}
+
+static void preview_sel(void) {
+  char path[64];
+  int i;
+  if (!M.n || !au) return;
+  api->fmt(path, sizeof path, DIR "/%s", M.file[M.sel]);
+  if (read_text(path) < 0) { say(1, "cannot read it"); return; }
+  if (ms_parse(&M.S, M.text) != 0) {
+    api->fmt(M.status, sizeof M.status, "line %d: %s", M.S.err_line, M.S.err);
+    M.bad = 1;
+    return;
+  }
+  M.S.tempo += M.tempo_add;
+  if (M.S.tempo < 20) M.S.tempo = 20;
+  if (!M.S.nnotes) { say(1, "no notes to hear"); return; }
+  if (mi) mi->stop();
+  if (au->state() != CAPP_AUDIO_IDLE) au->stop();
+  say(0, "making the preview...");
+  if (M.have_c) { api->damage(M.c); }
+  if (render_preview() != 0) { say(1, "cannot write the preview to the card"); return; }
+  for (i = 0; i < 40 && au->state() != CAPP_AUDIO_IDLE; i++) {
+    uint32_t t0 = api->ticks_ms() + 10;
+    while ((int32_t)(api->ticks_ms() - t0) < 0) ;
+  }
+  if (au->play(PREVIEW) != 0) { say(1, "the speaker would not play it"); return; }
+  M.len_ms = ms_ms(&M.S, M.S.end_ticks);
+  M.lo = 127; M.hi = 0;
+  for (i = 0; i < M.S.nnotes; i++) {
+    if (M.S.note[i].pitch < M.lo) M.lo = M.S.note[i].pitch;
+    if (M.S.note[i].pitch > M.hi) M.hi = M.S.note[i].pitch;
+  }
+  M.preview = 1;
+  M.view = V_PLAY;
+  M.head_x = -1;
+  api->fmt(M.status, sizeof M.status, "%d bpm  on the speaker", M.S.tempo);
+  M.bad = 0;
 }
 
 /* A C-major arpeggio, now: to hear whether the converter is on this pin. */
@@ -226,14 +419,39 @@ static void test_tone(void) {
 
 /* ---- asking Claude ---------------------------------------------------------------------- */
 
+static int save_as(const char *path, const char *text) {
+  SafeFile f;
+  if (safe_begin(&f, api, path) != 0) return -1;
+  safe_write(&f, text, api->str_len(text));
+  return safe_commit(&f);
+}
+
 static void ask_send(void) {
   char url[128], reply[24];
+  const char *body = M.draft;
   int r, i;
   if (!M.draft[0]) { M.view = V_LIST; return; }
   if (!api->net_ready() && api->net_connect(15000) != 0) { say(1, "offline: Claude needs the server"); M.view = V_LIST; return; }
+  /* A change: what to change, the server's mark, and the song as it is --
+   * which is kept, so u can put it back. */
+  if (M.change[0]) {
+    static const char MARK[] = "\n---song---\n";
+    char path[64];
+    int pre = (int)api->str_len(M.draft) + (int)sizeof MARK - 1, fd, got = 0;
+    api->fmt(path, sizeof path, DIR "/%s", M.change);
+    if ((fd = safe_open_read(api, path)) < 0) { say(1, "cannot read it"); M.change[0] = 0; return; }
+    while (pre + got < TEXT_MAX - 1 &&
+           (r = api->read(fd, M.text + pre + got, (size_t)(TEXT_MAX - 1 - pre - got))) > 0) got += r;
+    api->close(fd);
+    M.text[pre + got] = 0;
+    if (save_as(UNDO, M.text + pre) == 0) api->fmt(M.undo, sizeof M.undo, "%s", M.change);
+    api->mem_cpy(M.text, M.draft, api->str_len(M.draft));
+    api->mem_cpy(M.text + api->str_len(M.draft), MARK, sizeof MARK - 1);
+    body = M.text;
+  }
   api->fmt(url, sizeof url, "%s/midi/compose", api->proxy());
-  r = api->http("POST", url, M.draft, "text/plain", "", reply, sizeof reply, 15000);
-  if (r < 0 || reply[0] == 'e') { say(1, "the server did not take it"); M.view = V_LIST; return; }
+  r = api->http("POST", url, body, "text/plain", "", reply, sizeof reply, 15000);
+  if (r < 0 || reply[0] == 'e') { say(1, "the server did not take it"); M.view = V_LIST; M.change[0] = 0; return; }
   for (i = 0; reply[i] && reply[i] != '\n' && i < (int)sizeof M.job - 1; i++) M.job[i] = reply[i];
   M.job[i] = 0;
   M.asked_at = api->ticks_ms();
@@ -277,7 +495,17 @@ static void ask_poll(void) {
     mark_all();
     return;
   }
-  /* "ok\n" and the song: its title names the file. */
+  /* "ok\n" and a change: over the song it changed. */
+  if (M.change[0]) {
+    api->fmt(path, sizeof path, DIR "/%s", M.change);
+    M.change[0] = 0;
+    if (save_as(path, M.text + 3) != 0) { say(1, "cannot write to the card"); return; }
+    rescan();
+    say(0, "changed: space hears it, u undoes");
+    mark_all();
+    return;
+  }
+  /* "ok\n" and a new song: its title names the file. */
   {
     char title[NAMEL];
     const char *song = M.text + 3;
@@ -393,20 +621,21 @@ static void app_paint(void *st, CRect c) {
     api->fill(rect(c.x + c.w - 4, c.y + TOP_H + 2, 4, roll_rect().h), CLR_BG);
     api->fill(rect(c.x, c.y + c.h - FOOT_H - 2, c.w, 2), CLR_BG);
     paint_roll();
-    footer_paint(api, c, "enter stop  + - tempo  l loop");
+    footer_paint(api, c, M.preview ? "space stop  + - tempo" : "enter stop  + - tempo  l loop");
   } else {
     paint_list();
     if (M.view == V_ASK) {
       char line[48];
       int n = (int)api->str_len(M.draft);
-      api->fmt(line, sizeof line, "write: %s_%-38s", n > 30 ? M.draft + n - 30 : M.draft, "");
+      api->fmt(line, sizeof line, "%s %s_%-38s", M.change[0] ? "change:" : "write:",
+               n > 29 ? M.draft + n - 29 : M.draft, "");
       line[38] = 0;
       footer_paint(api, c, line);
     } else if (M.ask_delete) {
       char line[48];
       api->fmt(line, sizeof line, "delete %.22s? y yes  n no", M.title[M.sel]);
       footer_paint(api, c, line);
-    } else footer_paint(api, c, "enter play  n new  e edit  g pin");
+    } else footer_paint(api, c, "enter midi  space hear  n new");
   }
 }
 
@@ -414,7 +643,7 @@ static void app_paint(void *st, CRect c) {
 
 static int key_ask(uint8_t k) {
   int n = (int)api->str_len(M.draft);
-  if (k == CAPP_KEY_ESC) { M.view = V_LIST; return 1; }
+  if (k == CAPP_KEY_ESC) { M.view = V_LIST; M.change[0] = 0; return 1; }
   if (k == CAPP_KEY_ENTER) { M.view = V_LIST; ask_send(); return 1; }
   if (k == CAPP_KEY_BACK) { if (n) M.draft[n - 1] = 0; return 1; }
   if (k >= 32 && k < 127 && n < (int)sizeof M.draft - 1) { M.draft[n] = (char)k; M.draft[n + 1] = 0; }
@@ -433,9 +662,10 @@ static int app_key(void *st, uint8_t k) {
   if (M.view == V_PLAY) {
     switch (k) {
     case CAPP_KEY_ENTER: case ' ': case CAPP_KEY_ESC: stop(); break;
-    case '+': case '=': M.tempo_add += 4; play_sel(); break;
-    case '-': case '_': M.tempo_add -= 4; play_sel(); break;
-    case 'l': case 'L': M.loop_on = M.S.loop_ticks && (M.loop_on < 0 ? M.S.loop : M.loop_on) ? 0 : 1; play_sel(); break;
+    case '+': case '=': M.tempo_add += 4; if (M.preview) preview_sel(); else play_sel(); break;
+    case '-': case '_': M.tempo_add -= 4; if (M.preview) preview_sel(); else play_sel(); break;
+    case 'l': case 'L': if (M.preview) break;
+                        M.loop_on = M.S.loop_ticks && (M.loop_on < 0 ? M.S.loop : M.loop_on) ? 0 : 1; play_sel(); break;
     default: return 0;
     }
     mark_all();
@@ -444,9 +674,22 @@ static int app_key(void *st, uint8_t k) {
   switch (k) {
   case CAPP_KEY_UP:    if (M.sel > 0) M.sel--; M.tempo_add = 0; M.loop_on = -1; break;
   case CAPP_KEY_DOWN:  if (M.sel < M.n - 1) M.sel++; M.tempo_add = 0; M.loop_on = -1; break;
-  case CAPP_KEY_ENTER: case ' ': play_sel(); break;
+  case CAPP_KEY_ENTER: play_sel(); break;
+  case ' ':            preview_sel(); break;
   case 'n': case 'N':  if (M.job[0]) { say(0, "Claude is still writing the last one"); break; }
-                       M.draft[0] = 0; M.view = V_ASK; break;
+                       M.draft[0] = 0; M.change[0] = 0; M.view = V_ASK; break;
+  case 'c': case 'C':  if (!M.n) break;
+                       if (M.job[0]) { say(0, "Claude is still writing the last one"); break; }
+                       M.draft[0] = 0; api->fmt(M.change, sizeof M.change, "%s", M.file[M.sel]);
+                       M.view = V_ASK; break;
+  case 'u': case 'U':
+    if (M.undo[0] && read_text(UNDO) > 0) {
+      char path[64];
+      api->fmt(path, sizeof path, DIR "/%s", M.undo);
+      if (save_as(path, M.text) == 0) { say(0, "put back as it was"); M.undo[0] = 0; rescan(); }
+      else say(1, "cannot write to the card");
+    } else say(0, "nothing to undo");
+    break;
   case 'e': case 'E':
     if (M.n) {
       char path[64];
@@ -470,10 +713,12 @@ static int app_wants_text(void *st) { (void)st; return M.view == V_ASK; }
 static int app_tick(void *st, uint32_t now) {
   (void)st;
   if (M.job[0] && (int32_t)(now - M.next_poll) >= 0) { ask_poll(); return 1; }
-  if (M.view == V_PLAY && mi) {
+  if (M.view == V_PLAY && (M.preview ? au != 0 : mi != 0)) {
     int x;
-    if (!mi->playing()) { M.view = V_LIST; say(0, ""); mark_all(); return 1; }
-    x = roll_x(mi->pos_ms() % (M.len_ms ? M.len_ms : 1));
+    int on = M.preview ? au->state() == CAPP_AUDIO_PLAYING : mi->playing();
+    uint32_t pos = M.preview ? au->pos_ms() : mi->pos_ms();
+    if (!on) { M.preview = 0; M.view = V_LIST; say(0, ""); mark_all(); return 1; }
+    x = roll_x(pos % (M.len_ms ? M.len_ms : 1));
     if (x != M.head_x && M.have_c) {
       CRect r = roll_rect();
       if (M.head_x >= r.x) api->damage(rect(M.head_x, r.y, 1, r.h));
@@ -494,7 +739,9 @@ const CappInfo capp_info = {
     0x92, 0x49, 0x92, 0x49, 0x92, 0x49, 0xB6, 0xDB,
     0xB6, 0xDB, 0xB6, 0xDB, 0x92, 0x49, 0x92, 0x49,
     0x92, 0x49, 0x92, 0x49, 0xFF, 0xFF, 0x00, 0x00 },
-  "up/down\tchoose a song\nenter, space\tplay it; again to stop\nn\task Claude to write one\n"
+  "up/down\tchoose a song\nenter\tplay it to MIDI; again to stop\n"
+  "space\thear it on the speaker, up to eight notes at once\nn\task Claude to write one\n"
+  "c\task Claude to change this one\nu\tput back the version before the last change\n"
   "e\tedit it (in Edit)\nd, del\tdelete it (asks)\n+ -\ttempo, while it plays\nl\tloop on and off, while it plays\n"
   "g\tMIDI out on G1 or G2 (whichever your converter uses)\nt\ta test arpeggio\nr\tread the folder again\n"
   "\nsongs are text in /songs; see apps/midiseq.h.\n",
@@ -506,6 +753,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   (void)argc; (void)argv;
   api = a;
   mi = api->midi();
+  au = api->audio();
   M.loop_on = -1;
   pin_load();
   api->mkdir(DIR);

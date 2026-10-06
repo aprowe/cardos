@@ -7,6 +7,7 @@ minute's work, so it is three short calls, as chat is: POST the request and
 get an id, GET until the song is there.
 
     POST /midi/compose          body: what to write -> id
+                                or: what to change, a line ---song---, the song
     GET  /midi/compose?id=ID    -> "pending" | "ok" then the song | "error why"
 
 What comes back is checked by check() below, a reading of the same format
@@ -114,9 +115,20 @@ def _claude(chat, prompt):
     return j["result"]
 
 
+SONG_MARK = "---song---"
+
+
 def compose(chat, request):
-    """The song for `request`, checked, with one chance to mend it."""
-    song = extract(_claude(chat, FORMAT + "\nWrite: " + request))
+    """The song for `request`, checked, with one chance to mend it. A request
+    with a song after SONG_MARK is a change to that song."""
+    if SONG_MARK in request:
+        ask, old = request.split(SONG_MARK, 1)
+        prompt = (FORMAT + "\nHere is a song:\n```song\n" + old.strip() + "\n```\n"
+                  "Change it: " + ask.strip() + "\nKeep everything not asked about the same, "
+                  "and return the whole song.")
+    else:
+        prompt = FORMAT + "\nWrite: " + request
+    song = extract(_claude(chat, prompt))
     bad = check(song)
     if bad:
         song = extract(_claude(chat, FORMAT + "\nThis song has a mistake on line %d (%s). "
@@ -142,7 +154,7 @@ def post_compose(h, path, args):
     """ask Claude for a song; the id to ask after"""
     if not notes._allowed(h):
         return
-    request = h.body(2000).decode("utf-8", "replace").strip()
+    request = h.body(16000).decode("utf-8", "replace").strip()
     if not request:
         h.text("error what should it write?\n", 400)
         return
