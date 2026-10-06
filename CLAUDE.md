@@ -309,6 +309,18 @@ tested): `n BEAT NOTE LEN [VEL]`, chords, `cc`, `ramp`, `bend`, `prog`,
 checked against the format and a mistake goes back to Claude once. The
 app's song buffers are sized to keep its data under 28 KB.
 
+**Talking to Claude about a document** (2026-10-06). `claude [-k song]
+PATH` opens the Claude app about one file instead of the device agent:
+`server/talk.py` takes the document, Claude answers there with no tools,
+and a revised document (a ```doc fence in the answer) waits on the server
+until ctrl-s saves it over the file; ctrl-z puts it back. Edit's ctrl-k
+and MIDI's `c` (in a song) open it, and fn-` goes back to the caller --
+the launcher's back stack keeps each app's arguments now, so Edit comes
+back to its file. Moving between apps no longer paints the launcher in
+between (`leave_app_ex(0)`, and `enter()` does not fill the screen when
+already in the launcher). A MIDI song opens like a project: Enter on the
+list shows the roll, and play, hear, tempo, loop, ask, edit happen there.
+
 **The launcher's order is chosen, not the card's** (2026-10-01).
 `/config/favorites.txt` (written with a default at first boot, hand-
 editable) lists apps or folders, in order: those come first, and a
