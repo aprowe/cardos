@@ -159,6 +159,29 @@ void overlay_memo_done(const char *text) {
   s_state = 4;
 }
 
+/* The volume, after a change: a bar and the number, up for a moment.
+ * The bar's two parts are drawn side by side rather than the whole bar
+ * cleared and refilled, so a held key does not flicker it. */
+void overlay_volume(int pct) {
+  Rect was = draw_clip();
+  int w = PW - 20, fill;
+  char line[16];
+  if (s_state != 6) { panel("Volume", C_WORK); s_state = 6; }
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  fill = (w - 2) * pct / 100;
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  draw_frame(R(PX + 10, PY + 24, w, 10), C_EDGE);
+  if (fill > 0) draw_rect(R(PX + 11, PY + 25, fill, 8), C_WORK);
+  if (fill < w - 2) draw_rect(R(PX + 11 + fill, PY + 25, w - 2 - fill, 8), C_BAR_BACK);
+  draw_set_clip(was);
+  if (pct) snprintf(line, sizeof line, "%d%%", pct);
+  else snprintf(line, sizeof line, "muted");
+  sub(line);
+}
+
+int overlay_showing_volume(void) { return s_state == 6; }
+
 void overlay_close(void) {
   if (!s_state) return;
   s_state = 0;

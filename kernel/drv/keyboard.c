@@ -299,6 +299,8 @@ static uint8_t translate(int x, int y) {
     /* The key labelled ESC. Alone it is Escape, which an app may keep
      * for going back a level; with fn it always leaves. */
     case '`': c = (char)KEY_QUIT;  break;
+    case '-': c = (char)KEY_VOL_DOWN; break;
+    case '=': c = (char)KEY_VOL_UP;   break;
     default:
       if (base >= 'a' && base <= 'z') c = (char)KEY_FN_LETTER(base);
       break;

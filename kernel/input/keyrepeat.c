@@ -5,6 +5,7 @@ int keyrepeat_wanted(uint8_t key) {
   if (key == 0x08 || key == 0x09 || key == 0x7F) return 1;   /* backspace, tab, delete */
   if (key >= 0x20 && key < 0x7F) return 1;                    /* printable */
   if (key >= 0x80 && key <= 0x83) return 1;                   /* arrows */
+  if (key == 0x85 || key == 0x86) return 1;                   /* volume, held */
   return 0;              /* enter, escape, ctrl chars, fn-`, every opt/fn chord */
 }
 

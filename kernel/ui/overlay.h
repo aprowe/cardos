@@ -38,6 +38,10 @@ void overlay_result(const char *text);
 void overlay_memo(int level, int secs);
 void overlay_memo_done(const char *text);
 
+/* The speaker's volume after a change, 0..100; up until closed. */
+void overlay_volume(int pct);
+int  overlay_showing_volume(void);
+
 /* Take it down and put back what it covered. */
 void overlay_close(void);
 

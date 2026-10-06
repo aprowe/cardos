@@ -68,6 +68,9 @@
  * the reason every fn chord is: it has to survive being typed into a text
  * field. */
 #define KEY_QUIT      0x84
+/* fn and the -_ and =+ keys: the speaker, from anywhere (as opt-7/opt-8). */
+#define KEY_VOL_DOWN  0x85
+#define KEY_VOL_UP    0x86
 
 #define KEY_UP        0x80   /* the ; , . / keys double as arrows under Fn */
 #define KEY_DOWN      0x81

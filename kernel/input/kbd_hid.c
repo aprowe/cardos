@@ -45,6 +45,10 @@ uint8_t kbd_hid_translate(uint8_t usage, uint8_t mods) {
    * and never reached the fn block at all. */
   if (fn && usage == 0x29) return KBD_KEY_QUIT;
   if (opt && usage == 0x2A) return KBD_KEY_QUIT;   /* alt-backspace: the same */
+  /* The volume: fn (the GUI key) with - or =, as on the Cardputer, and the
+   * volume keys a keyboard may have. 0x85/0x86 are keyboard.h's codes. */
+  if ((fn && usage == 0x2D) || usage == 0x81) return 0x85;
+  if ((fn && usage == 0x2E) || usage == 0x80) return 0x86;
 
   switch (usage) {
   case 0x28: return 0x0D;        /* enter */

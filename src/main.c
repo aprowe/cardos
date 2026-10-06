@@ -27,6 +27,7 @@
 #include "kernel/drv/board.h"
 #include "kernel/drv/usbdisk.h"
 #include "kernel/sys/blip.h"
+#include "kernel/ui/overlay.h"
 #include "kernel/drv/imu.h"
 #include "kernel/mem/mem.h"
 #include "kernel/task/sched.h"
@@ -1010,6 +1011,25 @@ static void hotkey_file_save(const char *text) {
   fs_close(fd);
 }
 
+/* The volume from anywhere: the step, a panel that says where it is now
+ * (taken down a second and a half after the last key), and a tick at the
+ * new level, so it can be set by ear. */
+static uint32_t s_vol_panel_until;
+static void volume_step(int by) {
+  speaker_set_volume(speaker_volume() + by);
+  overlay_volume(speaker_volume());
+  s_vol_panel_until = (uint32_t)(esp_timer_get_time() / 1000) + 1500;
+  if (!s_vol_panel_until) s_vol_panel_until = 1;
+  blip(BLIP_MOVE);
+}
+
+static void volume_panel_tick(void) {
+  if (!s_vol_panel_until) return;
+  if ((int32_t)((uint32_t)(esp_timer_get_time() / 1000) - s_vol_panel_until) < 0) return;
+  s_vol_panel_until = 0;
+  if (overlay_showing_volume()) overlay_close();
+}
+
 static int global_key(uint8_t k) {
   /* The panel is above everything, so it gets the key first. */
   if (s_opt_help) {
@@ -1051,10 +1071,12 @@ static int global_key(uint8_t k) {
   /* The speaker, on the next two digits down: opt-8 louder, opt-7 quieter.
    * Ten percent a step, remembered, and it takes effect mid-playback. */
   case KEY_OPT_DIGIT(8):
-    speaker_set_volume(speaker_volume() + 10);
+  case KEY_VOL_UP:
+    volume_step(+10);
     return 1;
   case KEY_OPT_DIGIT(7):
-    speaker_set_volume(speaker_volume() - 10);
+  case KEY_VOL_DOWN:
+    volume_step(-10);
     return 1;
 
   /* Reconnect the radios. Both, because "get me back to where I was" is one
@@ -1540,6 +1562,7 @@ void app_main(void) {
       }
     }
     power_tick();
+    volume_panel_tick();
     alarm_tick();           /* reads /config/alarms.txt when the minute changes */
     clock_persist_tick();   /* writes at most once every ten minutes */
 

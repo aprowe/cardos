@@ -144,11 +144,10 @@ static const char *kind_word(const Icon *ic) {
  * a 240-pixel bar saying things that a glyph says in eight. A radio that is
  * off is drawn dim rather than hidden, so the strip does not reflow and the
  * eye learns where to look. */
-static void paint_bar(void) {
+static void paint_bar_body(void) {
   char clock[8];
   int16_t x = DISPLAY_W - 4;
 
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   draw_rect(R(0, 0, DISPLAY_W, BAR_H), C_TITLE);
   draw_text(4, 2, "CardOS", C_TITLE_FG, C_TITLE);
 
@@ -187,6 +186,37 @@ static void paint_bar(void) {
   x = (int16_t)(x - 11);
   draw_bitmap1(x, 2, 8, 8, ICON8_WIFI,
                wifi_is_connected() ? C_TITLE_FG : C_SHADOW, C_TITLE);
+}
+
+/* What the bar shows, in one number: the once-a-second tick repaints it
+ * only when that changes. It used to repaint every second regardless, a
+ * navy fill and then the text over it, and the fill showed: the bar
+ * blinked once a second. */
+static uint32_t bar_state(void) {
+  char clock[8];
+  uint32_t h = 2166136261u;
+  const char *p;
+  clock_hm(clock, sizeof clock);
+  for (p = clock; *p; p++) h = (h ^ (uint8_t)*p) * 16777619u;
+  h = (h ^ (uint32_t)(battery_percent() * 10 / 100 + 1)) * 16777619u;
+  h = (h ^ (uint32_t)(battery_percent() <= 15)) * 16777619u;
+  h = (h ^ (uint32_t)(bthid_state(BTHID_KEYBOARD) == BTH_CONNECTED)) * 16777619u;
+  h = (h ^ (uint32_t)(bthid_state(BTHID_MOUSE) == BTH_CONNECTED) << 1) * 16777619u;
+  h = (h ^ (uint32_t)wifi_is_connected() << 2) * 16777619u;
+  return h;
+}
+static uint32_t s_bar_shown;
+
+/* Composed off the panel and sent whole, like the carousel. */
+static void paint_bar(void) {
+  static uint16_t strip[DISPLAY_W * BAR_H];      /* 5.6 KB, for good: it is drawn every minute */
+  s_bar_shown = bar_state();
+  display_target(strip, 0, 0, DISPLAY_W, BAR_H);
+  draw_set_clip(R(0, 0, DISPLAY_W, BAR_H));
+  paint_bar_body();
+  display_target(NULL, 0, 0, 0, 0);
+  display_blit(0, 0, DISPLAY_W, BAR_H, strip);
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
 }
 
 /* Colour if the card has one, the app's own 1bpp shape otherwise. The colour
@@ -1200,7 +1230,7 @@ void launchui_tick(uint32_t ms) {
       bg_idle_ms() > 2000)
     bg_submit(BG_BT_RECONNECT);
 
-  paint_bar();                     /* just the clock strip */
+  if (bar_state() != s_bar_shown) paint_bar();   /* just the clock strip, if it changed */
 }
 
 /* Over the carousel there is no pointer: nothing to drag, and the wheel and
