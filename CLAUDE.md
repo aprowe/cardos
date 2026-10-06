@@ -280,6 +280,18 @@ running `print FILE` through `api->shell`, which now reads the whole file
 (up to 48 KB; it stopped at 6). `api->http_download` now sends the
 device's token to its own server, as `http` and `http_upload` did.
 
+**Music: tracks dragged onto the dashboard, played on the device**
+(2026-10-06). The device plays PCM WAV only, so the dashboard's Music page
+converts in the browser -- decodeAudioData, an OfflineAudioContext at
+22050 Hz mono, lifted to near full scale -- and uploads a 16-bit WAV
+(about 2.6 MB a minute); `server/music.py` checks it is one and keeps it.
+`apps/music.c` (Make) syncs on open: the list, then each missing track
+streamed to /music/ID.part with a bar, renamed when whole; a key stops it.
+Enter plays, space stops, left/right step, s shuffles, + - volume; the next
+track starts when one ends. No pause: the audio API plays a file from its
+start. Leaving the app lets the current track finish. `api->http_stream`
+now carries the device's token to its own server.
+
 **The launcher's order is chosen, not the card's** (2026-10-01).
 `/config/favorites.txt` (written with a default at first boot, hand-
 editable) lists apps or folders, in order: those come first, and a

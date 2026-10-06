@@ -53,6 +53,11 @@ a{color:inherit}
 .drop{border:2px dashed var(--line2);border-radius:12px;padding:22px;text-align:center;color:var(--ink2);margin-bottom:14px;transition:background .15s,border-color .15s}
 .drop.over{background:var(--accent-soft);border-color:var(--accent)}
 .drop b{color:var(--ink)}
+.tracks{list-style:none;margin:0;padding:0}
+.tracks li{display:grid;grid-template-columns:auto 1fr auto auto auto;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line)}
+.tracks li:last-child{border-bottom:0}
+.tracks .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tracks .m{font-variant-numeric:tabular-nums;color:var(--ink2);font-size:13px}
 .photo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
 .ph{position:relative;border-radius:10px;overflow:hidden;background:var(--panel2);box-shadow:inset 0 0 0 1px var(--line)}
 .ph img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#000}
@@ -417,6 +422,7 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
       <a href="#/term" data-view="term"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Terminal<span class="end"><span class="dot js-nd-files"></span></span></a>
       <a href="#/notes" data-view="notes"><svg class="i" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>Notes</a>
       <a href="#/photos" data-view="photos"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg>Photos</a>
+      <a href="#/music" data-view="music"><svg class="i" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>Music</a>
     <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts &amp; keys<span class="end"><span class="dot js-nd-accounts"></span></span></a>
       <a href="#/server" data-view="server"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>Server<span class="end"><span class="dot js-nd-server"></span></span></a>
       <a href="#/updates" data-view="updates"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
@@ -478,6 +484,17 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
         <div class="drop" id="ph-drop"><b>Drop pictures here</b> &mdash; JPG, PNG, GIF, WebP. The device gets a screen copy and a print copy the next time Photos opens.</div>
         <div class="photo-grid" id="ph-grid"></div>
         <input type="file" id="ph-file" accept="image/*" multiple hidden>
+      </section>
+
+      <section class="view block" id="v-music">
+        <div class="sec-head">
+          <div><span class="lab">on the server, synced to the device</span><h2>Music</h2></div>
+          <div class="side-info"><span id="mu-state" class="faint"></span><button class="btn sm primary" data-act="mu-add">Add tracks</button></div>
+        </div>
+        <div class="drop" id="mu-drop"><b>Drop tracks here</b> &mdash; MP3, M4A, Ogg, FLAC, WAV. They are turned into what the device's speaker plays (22 kHz mono) here in the browser, then kept on the server; the Music app on the device fetches them when it opens.</div>
+        <div class="panel"><ul class="tracks" id="mu-list"></ul></div>
+        <audio id="mu-audio" preload="none"></audio>
+        <input type="file" id="mu-file" accept="audio/*" multiple hidden>
       </section>
 
       <section class="view block" id="v-notes">
@@ -552,6 +569,7 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
     <a href="#/term" data-view="term"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Term</a>
     <a href="#/notes" data-view="notes"><svg class="i" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>Notes</a>
       <a href="#/photos" data-view="photos"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg>Photos</a>
+      <a href="#/music" data-view="music"><svg class="i" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>Music</a>
     <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts<span class="dot js-nd-accounts"></span></a>
     <a href="#/server" data-view="server"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/></svg>Server<span class="dot js-nd-server"></span></a>
     <a href="#/updates" data-view="updates"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
@@ -1478,6 +1496,94 @@ $('#term-line').addEventListener('keydown',e=>{
   else if(e.key==='ArrowDown'){ if(T.hi<T.hist.length){ T.hi++; e.target.value=T.hist[T.hi]||''; } e.preventDefault(); }
 });
 
+/* ---------- music ----------
+ * The device plays 16-bit PCM WAV only. The browser decodes whatever it can
+ * (MP3, AAC, Ogg, FLAC) and resamples it to 22050 Hz mono -- about 2.6 MB a
+ * minute -- so the server and the device never see anything else
+ * (server/music.py). Quiet tracks are lifted to near full scale: the
+ * speaker is one watt. */
+const MU={list:[],busy:'',playing:''};
+const mmss=ms=>{ const s=Math.round(ms/1000); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
+async function musicLoad(){
+  try{ const r=await fetch('/dash/music',{credentials:'same-origin'}); if(r.status===403){ signedOut(); return; } MU.list=await r.json(); }
+  catch(e){ toast('Couldn’t load the music.','err'); }
+  renderMusic();
+}
+function renderMusic(){
+  const el=$('#mu-list'); if(!el) return;
+  const total=MU.list.reduce((a,m)=>a+m.bytes,0);
+  $('#mu-state').textContent=MU.busy||(MU.list.length?`${MU.list.length} track${MU.list.length===1?'':'s'}, ${(total/1048576).toFixed(1)} MB`:'');
+  el.innerHTML=MU.list.length?MU.list.map(m=>`<li>
+      <button class="icon-btn" data-act="mu-play" data-id="${esc(m.id)}" title="${MU.playing===m.id?'Stop':'Listen'}" aria-label="${MU.playing===m.id?'Stop':'Listen to'} ${esc(m.title)}">${MU.playing===m.id?'■':'▶'}</button>
+      <span class="t" title="${esc(m.title)}">${esc(m.title)}</span>
+      <span class="m">${mmss(m.ms)}</span><span class="m">${(m.bytes/1048576).toFixed(1)} MB</span>
+      <button class="icon-btn" data-act="mu-del" data-id="${esc(m.id)}" title="Delete" aria-label="Delete ${esc(m.title)}">${ic('trash')}</button></li>`).join('')
+    :'<li><span></span><span class="dim">No tracks yet.</span></li>';
+}
+async function toDeviceWav(file){
+  const AC=window.AudioContext||window.webkitAudioContext;
+  const ctx=new AC();
+  let decoded;
+  try{ decoded=await ctx.decodeAudioData(await file.arrayBuffer()); }
+  finally{ ctx.close(); }
+  const rate=22050, len=Math.max(1,Math.ceil(decoded.duration*rate));
+  const off=new OfflineAudioContext(1,len,rate);
+  const src=off.createBufferSource(); src.buffer=decoded; src.connect(off.destination); src.start();
+  const pcm=(await off.startRendering()).getChannelData(0);
+  let peak=0; for(let i=0;i<pcm.length;i++){ const a=Math.abs(pcm[i]); if(a>peak) peak=a; }
+  const gain=peak>0.01?Math.min(4,0.95/peak):1;
+  const buf=new ArrayBuffer(44+pcm.length*2), v=new DataView(buf);
+  const str=(o,s)=>{ for(let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
+  str(0,'RIFF'); v.setUint32(4,36+pcm.length*2,true); str(8,'WAVE'); str(12,'fmt ');
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true); v.setUint32(24,rate,true);
+  v.setUint32(28,rate*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true); str(36,'data'); v.setUint32(40,pcm.length*2,true);
+  for(let i=0;i<pcm.length;i++){ const s=Math.max(-1,Math.min(1,pcm[i]*gain)); v.setInt16(44+i*2,s<0?s*32768:s*32767,true); }
+  return new Blob([buf],{type:'audio/wav'});
+}
+async function musicAdd(files){
+  const tracks=[...files].filter(f=>/^audio\//.test(f.type)||/\.(mp3|m4a|aac|ogg|oga|opus|flac|wav)$/i.test(f.name));
+  if(!tracks.length){ toast('Those aren’t tracks.','err'); return; }
+  let added=0;
+  for(const f of tracks){
+    try{
+      MU.busy=`converting ${f.name}…`; renderMusic();
+      const wav=await toDeviceWav(f);
+      MU.busy=`uploading ${f.name} (${(wav.size/1048576).toFixed(1)} MB)…`; renderMusic();
+      const r=await fetch('/dash/music/upload?title='+encodeURIComponent(f.name),{method:'POST',credentials:'same-origin',body:wav});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(j.error||('the server said '+r.status));
+      added++;
+    }catch(e){ toast(`${f.name}: ${e.message||'this browser could not read it'}`,'err'); }
+  }
+  MU.busy='';
+  await musicLoad();
+  if(added) toast(added===1?'Added. The device gets it when Music opens.':`Added ${added}. The device gets them when Music opens.`);
+}
+function musicPlay(id){
+  const a=$('#mu-audio');
+  if(MU.playing===id){ a.pause(); MU.playing=''; renderMusic(); return; }
+  a.src='/dash/music/track?id='+encodeURIComponent(id); a.play().catch(()=>{}); MU.playing=id;
+  a.onended=()=>{ MU.playing=''; renderMusic(); };
+  renderMusic();
+}
+async function musicDelete(id){
+  const m=MU.list.find(x=>x.id===id);
+  const r=await modal({title:'Delete this track?',html:`<p>${esc(m?m.title:'')} goes from here, and from the device the next time it syncs.</p>`,actions:[{label:'Cancel'},{label:'Delete',value:1,kind:'danger'}]});
+  if(!r) return;
+  const res=await fetch('/dash/music/track?id='+encodeURIComponent(id),{method:'DELETE',credentials:'same-origin'});
+  if(!res.ok){ toast('Couldn’t delete it.','err'); return; }
+  await musicLoad();
+}
+(function(){
+  const d=$('#mu-drop'), v=$('#v-music');
+  ['dragenter','dragover'].forEach(ev=>d.addEventListener(ev,e=>{ e.preventDefault(); d.classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev=>d.addEventListener(ev,e=>{ e.preventDefault(); d.classList.remove('over'); }));
+  d.addEventListener('drop',e=>{ if(e.dataTransfer&&e.dataTransfer.files.length) musicAdd(e.dataTransfer.files); });
+  v.addEventListener('dragover',e=>e.preventDefault());
+  v.addEventListener('drop',e=>{ e.preventDefault(); d.classList.remove('over'); if(e.target!==d&&e.dataTransfer&&e.dataTransfer.files.length) musicAdd(e.dataTransfer.files); });
+  $('#mu-file').onchange=e=>{ musicAdd(e.target.files); e.target.value=''; };
+})();
+
 /* ---------- photos ----------
  * Kept on the server (server/photos.py) with a screen copy and a print copy;
  * the device's Photos app syncs them. */
@@ -1585,7 +1691,7 @@ $('#note-text').addEventListener('keydown',e=>{ if((e.ctrlKey||e.metaKey)&&e.key
 window.addEventListener('beforeunload',e=>{ if(N.id!==undefined&&noteDirty()){ e.preventDefault(); e.returnValue=''; } });
 
 /* ---------- routing ---------- */
-const VIEWS={home:'Overview',files:'SD card',term:'Terminal',notes:'Notes',photos:'Photos',accounts:'Accounts & keys',server:'Server',updates:'Updates',settings:'Settings'};
+const VIEWS={home:'Overview',files:'SD card',term:'Terminal',notes:'Notes',photos:'Photos',music:'Music',accounts:'Accounts & keys',server:'Server',updates:'Updates',settings:'Settings'};
 function currentView(){ const v=(location.hash.match(/^#\/(\w+)/)||[])[1]; return VIEWS[v]?v:'home'; }
 function route(){
   const v=currentView();
@@ -1598,6 +1704,7 @@ function route(){
   if(v==='term'){ renderTerm(); setTimeout(()=>$('#term-line').focus(),0); }
   if(v==='notes') notesLoad();
   if(v==='photos') photosLoad();
+  if(v==='music') musicLoad();
   if(v==='accounts'&&!CL.v&&!CL.busy) claudeLoad(false);
 }
 window.addEventListener('hashchange',route);
@@ -1636,6 +1743,9 @@ document.addEventListener('click',e=>{
     case 'g-signout': gSignOut(); break;
     case 't-disconnect': tDisconnect(); break;
     case 'ph-add': $('#ph-file').click(); break;
+    case 'mu-add': $('#mu-file').click(); break;
+    case 'mu-play': musicPlay(b.dataset.id); break;
+    case 'mu-del': musicDelete(b.dataset.id); break;
     case 'ph-del': photosDelete(b.dataset.id); break;
     case 'cl-start': claudeStart(); break;
     case 'cl-check': claudeLoad(true); break;

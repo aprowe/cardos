@@ -78,6 +78,10 @@ int http_exchange_files(const char *url, const char *body_path,
  * Returns bytes received, or negative. */
 typedef int (*HttpSink)(void *ctx, const uint8_t *data, int n);
 int http_stream(const char *url, HttpSink on_data, void *ctx, int timeout_ms);
+/* The same with a token (set_auth's forms), for a stream from a server that
+ * wants one -- Music's tracks from this device's own. */
+int http_stream_ex(const char *url, const char *bearer, HttpSink on_data, void *ctx,
+                   int timeout_ms);
 
 /* Why the last request failed, as a sentence -- "not enough memory: 21 KB
  * free, TLS needs about 34" rather than -4. An app that prints a number has

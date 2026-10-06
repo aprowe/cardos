@@ -48,6 +48,26 @@ INK = {
 }
 
 ICONS = {
+    # Two quavers on a beam, amber: the player's accent colour.
+    "Music": [
+        "................",
+        "......KKKKKKKKK.",
+        "......KyyyyyyyK.",
+        "......KyKKKKKyK.",
+        "......KyK...KyK.",
+        "......KyK...KyK.",
+        "......KyK...KyK.",
+        "......KyK...KyK.",
+        "......KyK...KyK.",
+        "...KKKKyK.KKKyK.",
+        "..KyyyyyK.KyyyK.",
+        ".KyyyyyyK.KyyyK.",
+        ".KyyyyyyK.KKKK..",
+        "..KyyyyK........",
+        "...KKKK.........",
+        "................",
+    ],
+
     # A round vial seen from above, its bubble just off the centre mark.
     "Level": [
         ".....KKKKKK.....",

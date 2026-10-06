@@ -361,6 +361,11 @@ int http_exchange_files(const char *url, const char *body_path,
 }
 
 int http_stream(const char *url, HttpSink on_data, void *ctx, int timeout_ms) {
+  return http_stream_ex(url, NULL, on_data, ctx, timeout_ms);
+}
+
+int http_stream_ex(const char *url, const char *bearer, HttpSink on_data, void *ctx,
+                   int timeout_ms) {
   esp_http_client_config_t cfg;
   esp_http_client_handle_t cli;
   int total = 0, status;
@@ -376,6 +381,7 @@ int http_stream(const char *url, HttpSink on_data, void *ctx, int timeout_ms) {
 
   cli = esp_http_client_init(&cfg);
   if (!cli) return -2;
+  set_auth(cli, bearer);
   if (esp_http_client_open(cli, 0) != ESP_OK) {
     esp_http_client_cleanup(cli);
     return -3;

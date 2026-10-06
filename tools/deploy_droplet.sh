@@ -170,6 +170,7 @@ server {
     location /dash/  { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-proxy.conf; }
     location = /dash/photos/upload { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-upload.conf; }
     location = /dash/files/put { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-upload.conf; }
+    location = /dash/music/upload { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-music.conf; }
     location = /google/creds { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-proxy.conf; }
     location = / { return 302 /dash; }
     location / { return 404; }
@@ -189,6 +190,15 @@ proxy_set_header Host \$host;
 proxy_set_header X-Real-IP \$remote_addr;
 proxy_set_header X-Forwarded-Proto \$scheme;
 client_max_body_size 24m;
+EOF
+    # A track: 22 kHz mono is 2.6 MB a minute, and up to half an hour of it.
+    # Not buffered whole in nginx before the server sees it.
+    cat > /etc/nginx/cardos-dash-music.conf <<'EOF'
+proxy_set_header Host \$host;
+proxy_set_header X-Real-IP \$remote_addr;
+proxy_set_header X-Forwarded-Proto \$scheme;
+client_max_body_size 64m;
+proxy_request_buffering off;
 EOF
     ln -sf /etc/nginx/sites-available/cardos-dash /etc/nginx/sites-enabled/cardos-dash
     nginx -t -q && systemctl reload nginx

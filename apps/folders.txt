@@ -27,6 +27,7 @@ habits    Plan
 ide       Make
 level     Make
 memo      Make
+music     Make
 mines     Games
 noodle    Games
 notes     Plan

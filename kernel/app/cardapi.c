@@ -225,7 +225,7 @@ static void api_damage(CRect r) { capprun_damage(r); }
 static int api_http_stream(const char *url,
                            int (*on_data)(void *ctx, const uint8_t *d, int n),
                            void *ctx, int timeout_ms) {
-  return http_stream(url, (HttpSink)on_data, ctx, timeout_ms);
+  return http_stream_ex(url, own_bearer(url, NULL), (HttpSink)on_data, ctx, timeout_ms);
 }
 
 /* The matrix, or a byte waiting on the serial line: an app blocked in a
