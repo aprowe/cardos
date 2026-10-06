@@ -27,7 +27,7 @@ typedef struct { uint16_t hz, ms; uint8_t amp; } Note;
 typedef struct { uint8_t level, wave, n; Note note[4]; } Sound;
 
 static const Sound SOUNDS[BLIP_COUNT] = {
-  [BLIP_KEY]    = { 18, 0, 1, { { 2400,  6, 100 } } },
+  [BLIP_KEY]    = { 50, 0, 1, { { 2200, 10, 100 } } },
   [BLIP_MOVE]   = { 28, 0, 1, { { 1760, 14, 100 } } },
   [BLIP_SOFT]   = { 30, 0, 1, { { 1320, 22, 100 } } },
   [BLIP_OPEN]   = { 38, 0, 2, { {  784, 30, 90 }, { 1175, 50, 100 } } },
