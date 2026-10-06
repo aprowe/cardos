@@ -340,7 +340,8 @@ carousel is drawn off the panel a 20-row strip at a time
 unchanged) and each strip is sent whole -- it used to fill teal and draw
 over it, which was its flicker. A move eases the row one slot over 170 ms;
 icons resize continuously (`draw_image_fit`), the name travels with its
-icon, Enter grows the icon before the app loads. `kernel/sys/blip.c` is a
+icon. (Enter growing the icon before an app opened was tried and taken
+out: the owner did not want it.) `kernel/sys/blip.c` is a
 library of synthesised sounds (BLIP_KEY, MOVE, SOFT, OPEN, BACK, ERROR,
 DONE, NOTIFY, BOOT) played by a low-priority task, never over music or the
 mic, sharing a lock with the WAV player (`speaker_play_pcm`); Settings >

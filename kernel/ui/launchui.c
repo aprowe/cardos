@@ -402,34 +402,6 @@ static int anim_step(uint32_t now) {
   return s_anim != 0;
 }
 
-/* The middle icon grows into the screen before an app takes it: 90 ms,
- * drawn straight through, since the app's load blocks the loop anyway. */
-static void open_zoom(void) {
-  const Icon *ic = at(s_sel);
-  int i, idx;
-  if (!ic) return;
-  idx = icon_index(ic);
-  for (i = 1; i <= 4; i++) {
-    int16_t size = (int16_t)(BIG + 16 * i);
-    uint16_t *strip = (uint16_t *)malloc((size_t)DISPLAY_W * STRIP_H * 2);
-    int y, top = ICON_TOP + BIG / 2 - size / 2, bot = top + size;
-    if (!strip) return;
-    if (top < BAR_H) top = BAR_H;
-    for (y = top; y < bot; y += STRIP_H) {
-      int h = bot - y < STRIP_H ? bot - y : STRIP_H;
-      display_target(strip, 0, y, DISPLAY_W, h);
-      draw_set_clip(R(0, y, DISPLAY_W, h));
-      draw_rect(R(0, y, DISPLAY_W, h), C_DESKTOP);
-      paint_icon_at(idx, DISPLAY_W / 2, size, C_TITLE_FG);
-      display_target(NULL, 0, 0, 0, 0);
-      display_blit(0, y, DISPLAY_W, h, strip);
-    }
-    free(strip);
-    draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-    vTaskDelay(pdMS_TO_TICKS(20));
-  }
-}
-
 /* Where an app sits. One that asked for a size smaller than the panel gets
  * exactly that, centred, rather than being stretched -- Minesweeper's board is
  * 90x106 and has no meaningful way to fill 240x135. */
@@ -712,7 +684,6 @@ static void launch(int pos) {
   s_nback = 0;                    /* opened from the row: back is the row */
   s_anim = 0;
   blip(BLIP_OPEN);
-  if (ic && ic->kind != ICON_FOLDER) open_zoom();
   launch_with(icon_index(ic), NULL);
 }
 
