@@ -707,6 +707,16 @@ static void edit_sel(void) {
   api->run("edit", path);
 }
 
+/* The song to the Claude app, to talk about and change; back here after. */
+static void talk_sel(void) {
+  char args[80];
+  if (!M.n) return;
+  stop();
+  save_as(REOPEN, M.file[M.sel]);
+  api->fmt(args, sizeof args, "-k song " DIR "/%s", M.file[M.sel]);
+  if (api->run("claude", args) != 0) say(1, "no Claude app");
+}
+
 static void reopen(void) {
   int i;
   if (read_text(REOPEN) <= 0) return;
@@ -739,20 +749,7 @@ static int key_song(uint8_t k) {
   case '+': case '=':  M.tempo_add += 4; replay(M.playing); break;
   case '-': case '_':  M.tempo_add -= 4; replay(M.playing); break;
   case 'l': case 'L':  M.loop_on = looping() ? 0 : 1; replay(M.playing); break;
-  case 'c': case 'C':  ask(1); break;
-  case 'u': case 'U':
-    if (M.undo[0] && read_text(UNDO) > 0) {
-      char path[64];
-      api->fmt(path, sizeof path, DIR "/%s", M.undo);
-      if (save_as(path, M.text) == 0) {
-        M.undo[0] = 0;
-        rescan();
-        stop();
-        load_song();
-        say(0, "put back as it was");
-      } else say(1, "cannot write to the card");
-    } else say(0, "nothing to undo");
-    break;
+  case 'c': case 'C':  talk_sel(); break;
   case 'e': case 'E':  edit_sel(); break;
   case 'r': case 'R':  stop(); if (load_song() == 0) idle_status(); break;
   default:             return key_common(k);
@@ -828,7 +825,7 @@ const CappInfo capp_info = {
   "n\task Claude to write one\nr\tread the folder again\n"
   "\nIn a song\nspace\thear it on the speaker, up to eight notes at once; again to stop\n"
   "enter\tplay it to MIDI; again to stop\n+ -\ttempo\nl\tloop on and off\n"
-  "c\task Claude to change it\nu\tput back the version before the last change\n"
+  "c\ttalk to Claude about it; ctrl-s there saves a change\n"
   "e\tedit it in Edit, and come back to it\nr\tread it again\nesc\tstop, then back to the list\n"
   "\nAnywhere\nd, del\tdelete (asks)\ng\tMIDI out on G1 or G2 (whichever your converter uses)\n"
   "t\ta test arpeggio\n\nsongs are text in /songs; see apps/midiseq.h.\n",

@@ -908,7 +908,7 @@ static void damage_after_key(int top0, int left0, int cy0, int n0, int view0) {
 /* What this editor can be asked to do. Keys map onto these and so do menu
  * items; see apps/toolbar.h for why a menu item is never a keystroke. */
 enum { ACT_NEW = 1, ACT_SAVE, ACT_SAVEAS, ACT_OPEN, ACT_PREVIEW, ACT_PRINT,
-       ACT_NOTE, ACT_NOTES, ACT_WRAP };
+       ACT_NOTE, ACT_NOTES, ACT_WRAP, ACT_CLAUDE };
 
 /* Commands (CAPP_CMD_YES): a note straight to the card, dated, without the
  * buffer -- the one thing people ask a notes app for by voice. They used to
@@ -927,6 +927,7 @@ static const CappAction EDIT_ACTIONS[] = {
   { "open",    "Open...", "File", 0x0F, ACT_OPEN },     /* ctrl-o */
   { "preview", "Preview", "View", 0x10, ACT_PREVIEW },  /* ctrl-p */
   { "wrap",    "Wrap lines", "View", 0x17, ACT_WRAP },  /* ctrl-w */
+  { "claude",  "Ask Claude", "File", 0x0B, ACT_CLAUDE }, /* ctrl-k */
   { "print",   "Print",   "File", CAPP_KEY_PRINT, ACT_PRINT },  /* fn-p */
 };
 static const TbIcon EDIT_ICONS[] = { { "S", ACT_SAVE } };
@@ -977,6 +978,15 @@ static int do_action(int a) {
     else { E.view = VIEW_PREVIEW; E.ptop = 0; }
     return 1;
   case ACT_PRINT:   print_buffer(); return 1;
+  /* The file to the Claude app, saved first, to talk about and revise;
+   * leaving Claude opens this file here again, changed if a revision was
+   * saved. */
+  case ACT_CLAUDE:
+    if (!E.path[0]) { say("save it first: ctrl-s"); return 1; }
+    if (E.dirty) save();
+    if (E.dirty) return 1;
+    if (api->run("claude", E.path) != 0) say("no Claude app");
+    return 1;
   /* The editor's wrap, so asked for from the preview it goes back to the
    * editor to show what it did. */
   case ACT_WRAP:
@@ -1280,7 +1290,7 @@ const CappInfo capp_info = {
     0x10, 0x12, 0x10, 0x1F, 0x13, 0xC1, 0x10, 0x01,
     0x13, 0xE1, 0x10, 0x01, 0x13, 0xC1, 0x10, 0x01,
     0x11, 0xE1, 0x10, 0x01, 0x1F, 0xFF, 0x00, 0x00 },
-  "arrows\tmove\nenter\tsplit the line\nbksp\tdelete\nctrl-a\tstart of line\nctrl-e\tend of line\nctrl-w\twrap long lines, or not\nctrl-p\tpreview, and back\nctrl-s\tsave\nctrl-r\tsave as\nctrl-o\topen a file\nctrl-n\tnew file\nfn-p\tprint\nIn the preview\narrows\tscroll\nspace\ta screen down\ng\tthe top\np\tprint\nesc\tback to editing\nenter\tback to editing\n",
+  "arrows\tmove\nenter\tsplit the line\nbksp\tdelete\nctrl-a\tstart of line\nctrl-e\tend of line\nctrl-w\twrap long lines, or not\nctrl-p\tpreview, and back\nctrl-s\tsave\nctrl-r\tsave as\nctrl-o\topen a file\nctrl-n\tnew file\nctrl-k\task Claude about it, or for changes\nfn-p\tprint\nIn the preview\narrows\tscroll\nspace\ta screen down\ng\tthe top\np\tprint\nesc\tback to editing\nenter\tback to editing\n",
   EDIT_ACTIONS,
   sizeof EDIT_ACTIONS / sizeof EDIT_ACTIONS[0],
 };

@@ -16,9 +16,18 @@
  *
  * Type /new to forget the conversation. The key lives in /config/claude.key
  * on the card and is sent to Anthropic and nowhere else.
+ *
+ * Opened with a file -- `claude PATH`, or `claude -k song PATH` -- it is
+ * something else: a conversation about that document, which another app
+ * handed over (Edit's ctrl-k, MIDI's c). The document goes to the CardOS
+ * server (server/talk.py), Claude answers there with no tools, and a
+ * revised document waits on the server until ctrl-s saves it over the
+ * file; ctrl-z puts the file back. fn-` returns to the app that asked,
+ * which opens the file again and finds it changed.
  */
 
 #include "kernel/app/capp.h"
+#include "apps/safefile.h"
 
 #define COLS        40
 #define LINES       80            /* the agent keeps ~2 KB; this is its wrap */
@@ -57,7 +66,20 @@ static struct {
 
   CRect at;
   int   have_at;
+
+  /* about a document */
+  int   talk;                     /* opened with a file */
+  char  path[96], name[48], kind[8];
+  char  sid[16];                  /* the server's conversation */
+  int   started, failed, waiting, have_rev, can_undo;
+  uint32_t next_poll;
 } C;
+
+#define TALK_REV   "/cache/talk-rev.txt"
+#define TALK_UNDO  "/cache/talk-undo.txt"
+#define REPLY_MAX  3072
+
+static char reply[REPLY_MAX];
 
 static CRect rect(int x, int y, int w, int h) {
   CRect r;
@@ -167,7 +189,11 @@ static void paint_bar(CRect c) {
   const char *s = agent->status();
   int cols = (c.w - 3 + 5) / 6;          /* the last, cut by the edge, still padded */
   if (cols > 63) cols = 63;
-  if (s[0])
+  if (C.talk)
+    api->fmt(bar, sizeof bar, "Claude  %s%s%s", C.waiting ? "thinking" : C.name,
+             !C.waiting || C.dots == 0 ? "" : C.dots == 1 ? "." : C.dots == 2 ? ".." : "...",
+             !C.waiting && C.have_rev ? "  ctrl-s saves" : "");
+  else if (s[0])
     api->fmt(bar, sizeof bar, "Claude  %s%s", s,
              C.dots == 0 ? "" : C.dots == 1 ? "." : C.dots == 2 ? ".." : "...");
   else
@@ -242,12 +268,180 @@ static void damage_in(void)  { if (C.have_at) api->damage(rect(C.at.x, C.at.y + 
 static void damage_log(void) { if (C.have_at) api->damage(rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
 static void damage_bar(void) { if (C.have_at) api->damage(rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
 
+
+/* ---- about a document ---------------------------------------------------------- */
+
+/* A file name as a query value: letters, digits and . - _ as they are. */
+static void url_enc(char *out, int n, const char *s) {
+  static const char HEX[] = "0123456789ABCDEF";
+  int k = 0;
+  for (; *s && k < n - 4; s++) {
+    unsigned char ch = (unsigned char)*s;
+    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+        ch == '.' || ch == '-' || ch == '_') out[k++] = (char)ch;
+    else { out[k++] = '%'; out[k++] = HEX[ch >> 4]; out[k++] = HEX[ch & 15]; }
+  }
+  out[k] = 0;
+}
+
+static void say_line(const char *s, int who) {
+  while (*s) s = push_wrapped(s, who);
+  damage_log();
+}
+
+/* `from` over `to`, through a .tmp so a power cut leaves one or the other. */
+static int copy_file(const char *from, const char *to) {
+  static char buf[512];
+  SafeFile f;
+  int fd = safe_open_read(api, from), r, ok = 0;
+  if (fd < 0) return -1;
+  if (api->str_len(to) < SF_PATH_MAX) {
+    if (safe_begin(&f, api, to) != 0) { api->close(fd); return -1; }
+    while ((r = api->read(fd, buf, sizeof buf)) > 0) safe_write(&f, buf, (size_t)r);
+    api->close(fd);
+    return safe_commit(&f);
+  }
+  {
+    int out = api->open(to, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
+    if (out < 0) { api->close(fd); return -1; }
+    while ((r = api->read(fd, buf, sizeof buf)) > 0) if (api->write(out, buf, (size_t)r) != r) ok = -1;
+    api->close(out);
+  }
+  api->close(fd);
+  return ok;
+}
+
+/* The document to the server, once there is a screen to say so on. */
+static void talk_start(void) {
+  char url[200], nm[100];
+  int r, i;
+  C.started = 1;
+  if (!api->net_ready() && api->net_connect(15000) != 0) {
+    C.failed = 1;
+    say_line("Offline: talking about a document needs the CardOS server.", WHO_ERR);
+    return;
+  }
+  url_enc(nm, sizeof nm, C.name);
+  api->fmt(url, sizeof url, "%s/talk/start?name=%s&kind=%s", api->proxy(), nm, C.kind);
+  r = api->http_upload(url, C.path, "text/plain", reply, sizeof reply, 20000);
+  if (r <= 0 || reply[0] == 'e' || reply[0] == '<') {
+    C.failed = 1;
+    say_line(r == -413 ? "The document is too long to send." : "The server did not take the document.", WHO_ERR);
+    return;
+  }
+  for (i = 0; reply[i] && reply[i] != '\n' && i < (int)sizeof C.sid - 1; i++) C.sid[i] = reply[i];
+  C.sid[i] = 0;
+}
+
+static void talk_say(void) {
+  char url[160];
+  int r;
+  if (C.failed || !C.sid[0]) { push("(not connected: fn-` and try again)", WHO_ERR); return; }
+  if (C.waiting) { push("(still thinking about the last one)", WHO_ERR); return; }
+  api->fmt(url, sizeof url, "%s/talk/say?s=%s", api->proxy(), C.sid);
+  r = api->http("POST", url, C.input, "text/plain", "", reply, 64, 15000);
+  push_wrapped(C.input, WHO_YOU);
+  if (r < 0 || reply[0] != 'o') {
+    say_line(r == -404 ? "That conversation is over: fn-` and open it again." : "Could not send it.", WHO_ERR);
+    return;
+  }
+  C.waiting = 1;
+  C.next_poll = api->ticks_ms() + 1500;
+}
+
+static void talk_poll(void) {
+  char url[160];
+  const char *body;
+  int r, rev;
+  api->fmt(url, sizeof url, "%s/talk/poll?s=%s", api->proxy(), C.sid);
+  r = api->http("GET", url, 0, 0, "", reply, sizeof reply - 1, 15000);
+  if (r < 0) { C.next_poll = api->ticks_ms() + 3000; return; }
+  reply[r < (int)sizeof reply ? r : (int)sizeof reply - 1] = 0;
+  if (reply[0] == 'p') { C.next_poll = api->ticks_ms() + 1500; return; }
+  C.waiting = 0;
+  damage_bar();
+  if (reply[0] == 'e') {
+    body = reply[5] ? reply + 6 : "Claude did not answer.";
+    say_line(body, WHO_ERR);
+    return;
+  }
+  if (reply[0] != 'r') return;
+  rev = reply[5] == ' ';
+  body = reply;
+  while (*body && *body != '\n') body++;
+  if (*body) body++;
+  say_line(body, WHO_CLAUDE);
+  if (rev) {
+    C.have_rev = 1;
+    say_line("[a revision is ready: ctrl-s saves it]", WHO_TOOL);
+  }
+}
+
+/* ctrl-s: the revision over the file, the file kept for ctrl-z first. */
+static void talk_save(void) {
+  char url[160], line[80];
+  int r;
+  if (!C.have_rev) { say_line("[nothing to save yet: ask for a change]", WHO_TOOL); return; }
+  api->fmt(url, sizeof url, "%s/talk/doc?s=%s", api->proxy(), C.sid);
+  r = api->http_download(url, TALK_REV, 20000);
+  if (r <= 0) { say_line("Could not fetch the revision.", WHO_ERR); return; }
+  if (copy_file(C.path, TALK_UNDO) != 0) { say_line("Could not keep a copy; not saved.", WHO_ERR); return; }
+  if (copy_file(TALK_REV, C.path) != 0) { say_line("Could not write the file.", WHO_ERR); return; }
+  C.have_rev = 0;
+  C.can_undo = 1;
+  api->fmt(line, sizeof line, "[saved to %s; ctrl-z puts it back]", C.name);
+  say_line(line, WHO_TOOL);
+  damage_bar();
+}
+
+static void talk_undo(void) {
+  if (!C.can_undo) { say_line("[nothing to undo]", WHO_TOOL); return; }
+  if (copy_file(TALK_UNDO, C.path) != 0) { say_line("Could not put it back.", WHO_ERR); return; }
+  C.can_undo = 0;
+  say_line("[put back as it was before]", WHO_TOOL);
+}
+
+/* `claude [-k KIND] PATH...`: the rest of the words are the path, spaces
+ * and all, since a note's name may have them. */
+static void talk_args(int argc, char **argv) {
+  int i = 1, k = 0;
+  const char *base;
+  api->fmt(C.kind, sizeof C.kind, "text");
+  if (argc > 2 && argv[1][0] == '-' && argv[1][1] == 'k' && !argv[1][2]) {
+    api->fmt(C.kind, sizeof C.kind, "%s", argv[2]);
+    i = 3;
+  }
+  for (; i < argc; i++) {
+    if (k) C.path[k++] = ' ';
+    k += api->fmt(C.path + k, sizeof C.path - (size_t)k, "%s", argv[i]);
+    if (k >= (int)sizeof C.path - 1) break;
+  }
+  if (!C.path[0]) return;
+  C.talk = 1;
+  for (base = C.path, i = 0; C.path[i]; i++) if (C.path[i] == '/') base = C.path + i + 1;
+  api->fmt(C.name, sizeof C.name, "%s", base);
+  {
+    char line[96];
+    api->fmt(line, sizeof line, "About %s. Ask a question, or ask for a change.", C.name);
+    push_wrapped(line, WHO_TOOL);
+    push_wrapped("ctrl-s saves Claude's revision, ctrl-z undoes it. fn-` goes back.", WHO_TOOL);
+  }
+}
+
 /* ---- input ------------------------------------------------------------------ */
 
 static void submit(void) {
   int rc;
   if (!C.in_len) return;
   damage_in();
+
+  if (C.talk) {
+    C.scroll = 0;
+    talk_say();
+    C.in_len = 0; C.input[0] = 0;
+    damage_log(); damage_bar();
+    return;
+  }
 
   if (C.input[0] == '/' && C.input[1] == 'n') {
     agent->reset();
@@ -270,6 +464,8 @@ static void submit(void) {
 static int app_key(void *st, unsigned char k) {
   (void)st;
   if (k == CAPP_KEY_ENTER) { submit(); return 1; }
+  if (C.talk && k == 0x13) { talk_save(); return 1; }     /* ctrl-s */
+  if (C.talk && k == 0x1A) { talk_undo(); return 1; }     /* ctrl-z */
   if (k == CAPP_KEY_BACK) {
     if (C.in_len) C.input[--C.in_len] = 0;
     damage_in();
@@ -294,6 +490,17 @@ static int app_key(void *st, unsigned char k) {
 static int app_tick(void *st, uint32_t now) {
   int changed = 0;
   (void)st;
+  if (C.talk) {
+    if (!C.started && C.have_at) { talk_start(); return 1; }
+    if (C.waiting && (int32_t)(now - C.next_poll) >= 0) { talk_poll(); return 1; }
+    if (C.waiting && (int32_t)(now - C.dot_at) >= 400) {
+      C.dot_at = now;
+      C.dots = (C.dots + 1) & 3;
+      damage_bar();
+      return 1;
+    }
+    return 0;
+  }
   agent->seen();
   if (agent->generation() != C.seen_gen) {
     rebuild();
@@ -332,19 +539,23 @@ const CappInfo capp_info = {
     0x8F, 0xF1, 0x80, 0x01, 0x40, 0x02, 0x60, 0x06,
     0x38, 0x1C, 0x1C, 0xF0, 0x07, 0x00, 0x03, 0x00 },
   "enter\tsend\narrows\tscrollback, when nothing is typed\n"
-  "/new\tforget the conversation\n",
+  "/new\tforget the conversation\n"
+  "\nAbout a document (from Edit's ctrl-k, MIDI's c)\n"
+  "ctrl-s\tsave Claude's revision over the file\nctrl-z\tput the file back\n",
 };
 
 static CappUi UI;
 
 int capp_main(const CardApi *a, int argc, char **argv) {
-  (void)argc; (void)argv;
   api = a;
   agent = api->agent();
   api->mem_set(&C, 0, sizeof C);
-  C.no_key = !agent->has_key();
-  C.seen_gen = (unsigned)-1;
-  rebuild();
+  talk_args(argc, argv);
+  if (!C.talk) {
+    C.no_key = !agent->has_key();
+    C.seen_gen = (unsigned)-1;
+    rebuild();
+  }
 
   UI.paint = app_paint;
   UI.key = app_key;

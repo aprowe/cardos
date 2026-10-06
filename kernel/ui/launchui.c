@@ -81,9 +81,17 @@ static int            s_pointer_on;   /* a mouse has moved: there is a cursor */
  * all. Names, not runs: the app comes back fresh, as it would from the row. */
 #define BACK_MAX 4
 static char s_back[BACK_MAX][20];
+/* What each was opened with, so Edit comes back to its file. */
+static char s_back_args[BACK_MAX][128];
 static int  s_nback;
+static char s_app_args[128];                /* what the app on screen was given */
 static char s_next[20], s_next_args[128];   /* asked for from a handler */
 static int  s_has_next;
+
+static void start_app(int slot, const char *name, const char *args) {
+  snprintf(s_app_args, sizeof s_app_args, "%s", args ? args : "");
+  capprun_start(slot, name, args);
+}
 
 /* The search (Space): what has been typed, and the best matches for it as
  * flat icon indices. */
@@ -425,7 +433,9 @@ void launchui_repaint(void) {
   flush();
 }
 
-static void leave_app(void) {
+/* `show`: paint the launcher now. Not when another app is about to take the
+ * screen -- the launcher drawn for a frame between two apps was a flash. */
+static void leave_app_ex(int show) {
   picker_close();                 /* a picker the app was waiting on goes with it */
   /* Hand the image back: an app the launcher is no longer showing is not
    * going to be called into, and its code is 4 KB of a small pool. Starting
@@ -434,19 +444,22 @@ static void leave_app(void) {
   s_app = NULL;
   s_note[0] = 0;
   s_dirty = 1;
-  flush();
+  if (show) flush();
 }
+
 
 static int run_now(const char *name, const char *args);
 
 /* Leaving an app by the quit key: back to the app that opened it, if one
  * did, or to the row. */
 static void quit_app(void) {
-  char name[20];
-  leave_app();
+  char name[20], args[128];
+  leave_app_ex(s_nback == 0);
   if (s_nback > 0) {
-    snprintf(name, sizeof name, "%s", s_back[--s_nback]);
-    run_now(name, NULL);
+    s_nback--;
+    snprintf(name, sizeof name, "%s", s_back[s_nback]);
+    snprintf(args, sizeof args, "%s", s_back_args[s_nback]);
+    if (run_now(name, args[0] ? args : NULL) != 0 || !s_app) flush();
   }
 }
 
@@ -513,7 +526,7 @@ static void launch_with(int i, const char *args) {
     /* Running the program *is* opening it: capp_main constructs whatever state
      * it has and installs an interface if it wants one. A program that
      * installs nothing was a command, and has already finished. */
-    capprun_start(ic->slot, ic->name, args);
+    start_app(ic->slot, ic->name, args);
     if (!capprun_is_app(ic->slot)) { said_why(ic->name); return; }
     a = capprun_def(ic->slot);
     if (!a) return;
@@ -642,13 +655,16 @@ static void move(int delta) {
  * at should still be there afterwards. Conflating the two meant the line after
  * "cat foo" was typed into the carousel. */
 static void enter(void) {
+  int here = ui_shell() == UI_LAUNCHER;
   ui_set_shell(UI_LAUNCHER);
   mouse_init(DISPLAY_W, DISPLAY_H);
   s_note[0] = 0;
   s_binding = 0;
   s_dirty = 1;
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-  draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
+  /* From another shell the screen is someone else's; from the launcher the
+   * app about to paint covers it, and a fill first is a flash. */
+  if (!here) draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
 }
 
 /* The icon list, loaded if it is not already. Not reloaded on every run: a
@@ -732,15 +748,19 @@ static void run_next(void) {
   if (s_app) {
     if (s_nback == BACK_MAX) {
       memmove(s_back[0], s_back[1], sizeof s_back - sizeof s_back[0]);
+      memmove(s_back_args[0], s_back_args[1], sizeof s_back_args - sizeof s_back_args[0]);
       s_nback--;
     }
-    snprintf(s_back[s_nback++], sizeof s_back[0], "%s", s_app->name);
-    leave_app();
+    snprintf(s_back[s_nback], sizeof s_back[0], "%s", s_app->name);
+    snprintf(s_back_args[s_nback], sizeof s_back_args[0], "%s", s_app_args);
+    s_nback++;
+    leave_app_ex(0);
   }
   if (run_now(name, args[0] ? args : NULL) != 0 || !s_app) {
     /* It did not open, and the row says why; going back to the app that
      * asked would hide that. */
     if (s_nback) s_nback--;
+    flush();
   }
 }
 
@@ -772,7 +792,7 @@ static int run_now(const char *name, const char *args) {
     /* A command runs and returns, and the console keeps the screen. Anything
      * else is an app, and the launcher takes over to host it. */
     if (ic->kind == ICON_CAPP) {
-      capprun_start(ic->slot, ic->name, args);
+      start_app(ic->slot, ic->name, args);
       if (!capprun_is_app(ic->slot)) {
         /* A command, and it is done -- or an app that would not start, and
          * the reason has been said. Either way the name was not unknown. */
@@ -807,7 +827,7 @@ int launchui_run_path(const char *path, const char *args) {
   for (i = 0; i < icons_total(); i++) {
     const Icon *ic = icon_at(i);
     if (ic && ic->kind == ICON_CAPP && strcmp(ic->path, path) == 0) {
-      capprun_start(ic->slot, ic->name, args);
+      start_app(ic->slot, ic->name, args);
       if (!capprun_is_app(ic->slot)) return 0;   /* a command, already done */
       if (from_dashboard(ic->slot)) return 0;
       select_flat(i);
@@ -819,7 +839,7 @@ int launchui_run_path(const char *path, const char *args) {
 
   slot = capprun_load_once(path);
   if (slot < 0) return -1;
-  capprun_start(slot, path, args);
+  start_app(slot, path, args);
   if (!capprun_is_app(slot)) return 0;    /* a command, and it is done */
   if (from_dashboard(slot)) return 0;
   a = capprun_def(slot);
