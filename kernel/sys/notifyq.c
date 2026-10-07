@@ -48,56 +48,6 @@ void nq_read_app(Nq *q, const char *app) {
     if (!strcmp(q->it[i].app, app)) q->it[i].read = 1;
 }
 
-/* ---- calendar ---- */
-
-static int field_ul(const char **p, unsigned long *v) {
-  const char *s = *p;
-  unsigned long n = 0;
-  int any = 0;
-  while (*s == ' ') s++;
-  while (*s >= '0' && *s <= '9') { n = n * 10ul + (unsigned long)(*s++ - '0'); any = 1; }
-  *p = s;
-  *v = n;
-  return any;
-}
-
-int nq_cal_due(const char *line, uint32_t now, int lead_s, uint32_t *start,
-               char *summary, size_t n) {
-  unsigned long all_day, dirty, deleted, st, en;
-  const char *p = line;
-  if (!field_ul(&p, &all_day) || !field_ul(&p, &dirty) || !field_ul(&p, &deleted) ||
-      !field_ul(&p, &st) || !field_ul(&p, &en))
-    return 0;
-  (void)dirty; (void)en;
-  if (all_day || deleted) return 0;
-  if (!(st > now && st <= (unsigned long)now + (unsigned long)lead_s)) return 0;
-  while (*p == ' ') p++;
-  while (*p && *p != ' ') p++;                         /* the id */
-  while (*p == ' ') p++;
-  {
-    size_t i = 0;
-    for (; p[i] && p[i] != '\n' && p[i] != '\r' && i < n - 1; i++) summary[i] = p[i];
-    summary[i] = 0;
-  }
-  *start = (uint32_t)st;
-  return 1;
-}
-
-uint32_t nq_key(uint32_t start, const char *summary) {
-  uint32_t h = 2166136261u ^ start;
-  while (summary && *summary) h = (h ^ (uint8_t)*summary++) * 16777619u;
-  return h;
-}
-
-int nq_fired_new(NqFired *f, uint32_t key) {
-  int i;
-  for (i = 0; i < f->n; i++) if (f->key[i] == key) return 0;
-  f->key[f->next] = key;
-  f->next = (f->next + 1) % NQ_FIRED;
-  if (f->n < NQ_FIRED) f->n++;
-  return 1;
-}
-
 /* ---- the server's answer ---- */
 
 int nq_parse_poll(const char *reply,

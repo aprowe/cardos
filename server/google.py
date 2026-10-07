@@ -273,25 +273,47 @@ def _route(fn):
     return wrapped
 
 
+def popup_minutes(reminders, default):
+    """When Google would pop up a reminder for an event, in minutes before
+    it, or -1 for none: its own popup override, else the calendar's default
+    (when it uses the default), else none."""
+    r = reminders or {}
+    if r.get("useDefault", True):
+        pops = [x.get("minutes") for x in default or [] if x.get("method") == "popup"]
+    else:
+        pops = [x.get("minutes") for x in r.get("overrides") or [] if x.get("method") == "popup"]
+    pops = [m for m in pops if isinstance(m, int) and m >= 0]
+    return min(pops) if pops else -1
+
+
 @_route
 def get_events(h, args):
-    """calendar events between from and to, one a line"""
+    """calendar events between from and to, one a line; &remind=1 adds the
+    minutes before each that Google would remind (-1 for none)"""
+    remind = _arg(args, "remind") == "1"
     q = {"singleEvents": "true", "orderBy": "startTime", "maxResults": "250",
-         "fields": "nextPageToken,items(id,summary,start,end)"}
+         "fields": "nextPageToken,items(id,summary,start,end%s)" % (",reminders" if remind else "")}
     for k in ("from", "to"):
         v = _arg(args, k)
         if not v:
             raise ValueError("%s= is needed" % k)
         q["timeMin" if k == "from" else "timeMax"] = v
+    default = []
+    if remind:          # the calendar's own default, for events that use it
+        default = call("GET", CAL + "?maxResults=1&fields=defaultReminders").get("defaultReminders") or []
     rows = []
     for e in pages(CAL + "?" + urllib.parse.urlencode(q)):
         s, en = e.get("start") or {}, e.get("end") or {}
         start = s.get("dateTime") or s.get("date") or ""
         end = en.get("dateTime") or en.get("date") or ""
         if e.get("id") and start:
-            rows.append((e["id"], start, end, clean(e.get("summary")) or "(no title)"))
+            rows.append((e["id"], start, end, clean(e.get("summary")) or "(no title)",
+                         popup_minutes(e.get("reminders"), default)))
     shorts = short_ids([r[0] for r in rows])
-    return "".join("%s\t%s\t%s\t%s\n" % ((s,) + r[1:]) for s, r in zip(shorts, rows))
+    # An older Calendar reads four fields and would take a fifth into the title.
+    if remind:
+        return "".join("%s\t%s\t%s\t%s\t%d\n" % ((s,) + r[1:]) for s, r in zip(shorts, rows))
+    return "".join("%s\t%s\t%s\t%s\n" % ((s,) + r[1:4]) for s, r in zip(shorts, rows))
 
 
 def _when(v):

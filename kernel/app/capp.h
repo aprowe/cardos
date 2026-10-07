@@ -839,7 +839,9 @@ typedef struct {
    * open or not -- the Timer's finish -- and is dropped if the app is on
    * screen when it is due, since the app is showing it. `ring` keeps the
    * banner up and the chime going, the screen on, until a key. Kept on the
-   * card through a restart when the clock is known. 0, or -1 if full. */
+   * card through a restart when the clock is known. 0, or -1 if full.
+   * notify_cancel("*") is everything this app set (Calendar replaces its
+   * week of reminders at each sync that way). */
   int  (*notify_at)(uint32_t seconds, const char *key, const char *title,
                     const char *text, int ring);
   void (*notify_cancel)(const char *key);

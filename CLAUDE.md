@@ -376,23 +376,29 @@ in by name; Accounts & keys has You (devices, tokens shown once, password)
 and People (admin). A new device's token goes in /config/claude.token.
 Design: docs/superpowers/specs/2026-10-06-accounts-design.md.
 
-**Notifications** (2026-10-07, API 39). `kernel/sys/notify.c`: anything
-calls `notify_post(app, title, text)` -- a banner across the top for 4.5 s
-(drawn off the panel and redrawn every 150 ms over whatever repaints), the
-notify chime, and the last sixteen in a list that fn-n opens (Enter opens
-the app, d clears; shells pause while it is open). The launcher's bar has a
-dot while any are unread; opening an app reads its own. Watchers: Chat --
-`GET /notify/poll?chat=ID&me=NAME` (server/msg.py) every 30 s while WiFi
-is already up, through `httpq_poll_as`, which only hands a reply to the
-request's owner (apps use it too now: the first to poll used to take any
-reply); Calendar -- the app's `/cache/calendar.cache` once a minute, an
-event N minutes before (Settings > Notifications: Chat, Calendar, Warn);
-the alarm logs itself as it rings. Apps post with `api->notify`. While a
+**Notifications** (2026-10-07, API 39/40). `kernel/sys/notify.c`: anything
+calls `notify_post(app, title, text)` -- a banner across the top for 4.5 s,
+the notify chime, and the last sixteen in a list that fn-n opens (Enter
+opens the app, d clears; shells pause while it is open). The launcher's bar
+has a dot while any are unread; opening an app reads its own. While a
 banner is up, `draw_reserve_top(24)` narrows every clip below it, so apps
-(api->pixels included) and shells draw around it rather than over it; the
-launcher's own direct blits (the clock strip, the off-panel strips) start
-below `notify_covers()`. The list,
-the due rule and the poll reply are `kernel/sys/notifyq.c`, host-tested.
+(api->pixels included) and shells draw around it; the launcher's own direct
+blits start below `notify_covers()`.
+Two kinds of source. **Polled**: Chat -- `GET /notify/poll?chat=ID&me=NAME`
+(server/msg.py) every 30 s while WiFi is already up, through
+`httpq_poll_as`, which only hands a reply to the request's owner (apps use
+it too: the first to poll used to take any reply). **Scheduled**:
+`notify_at(app, key, seconds, title, text, ring)` / `notify_cancel` (key
+"*" is all of an app's), 32 waiting, by the wall clock when known (then
+kept in /cache/notify.sched through a restart), dropped if the app is on
+screen when due; `ring` keeps the banner and chime going until a key.
+Apps: `api->notify`, `api->notify_at`, `api->notify_cancel`. Timer
+schedules its finish (and keeps its run in /cache/timer.state); Calendar,
+after each sync, replaces its week of reminders at each event's own Google
+reminder time (`/calendar/events?...&remind=1` adds the minutes; older apps
+do not ask, so do not get a fifth field). Clock alarms ring from
+kernel/sys/alarm.c and are logged. The only global setting is Settings >
+Notifications > Chat.
 
 **The launcher's order is chosen, not the card's** (2026-10-01).
 `/config/favorites.txt` (written with a default at first boot, hand-

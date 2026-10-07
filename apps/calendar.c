@@ -86,7 +86,9 @@
  * rfc3339_parse reads what it always read. Plain HTTP to api->proxy(), signed
  * by the kernel with the device's token. (2026-09-29; it was TLS and JSON
  * here, and the second-largest app on the device for it.) */
-#define EVENTS_URL "%s/calendar/events?from=%s&to=%s"
+#define EVENTS_URL "%s/calendar/events?from=%s&to=%s&remind=1"
+#define REMIND_DAYS  7                 /* reminders are set this far ahead */
+#define REMIND_MAX   20                /* and no more than this many */
 #define EVENT_URL  "%s/calendar/event"
 
 #define CLR_BG      CAPP_RGB(20, 22, 28)
@@ -132,6 +134,7 @@ typedef struct {
    * reason `sending` is one: a sync that lands while the form is up sorts
    * and rebuilds the array under it. absorb puts it back by id. */
   uint8_t  editing;
+  int16_t  remind;                  /* minutes before Google would remind; -1 none */
   /* The footer is asking "delete this?" about this event. A flag for the
    * same reason again: a sync may land between the question and the y. */
   uint8_t  asking;
@@ -625,6 +628,38 @@ static int start_fetch(const char *tok) {
   return api->http_start("GET", url, 0, 0, tok, 20000);
 }
 
+/* ---- reminders ---------------------------------------------------------------
+ *
+ * This app sets them, because it is the one that knows the events: after
+ * every sync it hands the OS (api->notify_at) a notification for each event
+ * of the next week at the time Google would remind -- the event's own
+ * reminder, or the calendar's default -- replacing everything it set before,
+ * so a moved or deleted event moves or loses its reminder. The OS rings
+ * them whether this app is open or not. An event added elsewhere is
+ * reminded of once this app (or Today, through its command) has synced. */
+static void schedule_reminders(void) {
+  uint32_t now = api->epoch();
+  int i, set = 0;
+  if (!now) return;                         /* no clock: nothing can be timed */
+  api->notify_cancel("*");
+  for (i = 0; i < C.n && set < REMIND_MAX; i++) {
+    const Event *e = &C.ev[i];
+    uint32_t at;
+    char key[8], title[32];
+    int h, m;
+    if (e->all_day || e->deleted || e->remind < 0) continue;
+    if (e->start <= now || e->start > now + REMIND_DAYS * DAY_SECS) continue;
+    at = e->start - (uint32_t)e->remind * 60u;
+    if (at <= now) continue;                 /* its reminder time has passed */
+    local_hm(e->start, &h, &m);
+    if (e->remind) api->fmt(title, sizeof title, "%02d:%02d, in %d min", h, m, e->remind);
+    else api->fmt(title, sizeof title, "%02d:%02d, now", h, m);
+    api->fmt(key, sizeof key, "e%d", set);
+    api->notify_at(at - now, key, title, e->summary, 0);
+    set++;
+  }
+}
+
 /* Two strings the same? The app links no libc. */
 static int same(const char *a, const char *b) {
   while (*a && *a == *b) { a++; b++; }
@@ -643,7 +678,7 @@ static int kept_id(int n, const char *id) {
  * deletion made in a browser disappears here too. An edit still queued wins
  * over Google's copy of the same event: it is newer, and it is on its way. */
 static int absorb(void) {
-  char *p, *f[4];
+  char *p, *f[5];
   int got = 0;
   int i, keep = 0, added = 0;
 
@@ -655,9 +690,21 @@ static int absorb(void) {
   C.n = keep;
 
   p = C.reply;
-  while (C.n < MAX_EVENTS && reply_line(&p, f, 4) == 4) {
+  /* No initialiser: an app links no memset, and = { 0 } calls it. f[4]
+   * is cleared by hand each line, since a four-field line leaves it. */
+  for (;;) {
+    f[4] = 0;
+    if (C.n >= MAX_EVENTS || reply_line(&p, f, 5) < 4) break;
+    {
     Event *e = &C.ev[C.n];
     api->mem_set(e, 0, sizeof *e);
+    e->remind = -1;
+    if (f[4] && f[4][0] && f[4][0] != '-') {
+      int m = 0;
+      const char *q = f[4];
+      while (*q >= '0' && *q <= '9') m = m * 10 + (*q++ - '0');
+      e->remind = (int16_t)(m > 30000 ? 30000 : m);
+    }
     api->fmt(e->id, ID_MAX, "%s", f[0]);
     api->fmt(e->summary, sizeof e->summary, "%s", f[3][0] ? f[3] : "(no title)");
     if (rfc3339_parse(f[1], &e->start, &got) == 0) e->all_day = (uint8_t)got;
@@ -669,10 +716,12 @@ static int absorb(void) {
     if (e->id[0] && C.form_edit && C.edit_id[0] && same(e->id, C.edit_id))
       e->editing = 1;
     if (e->id[0] && e->start) { C.n++; added++; }
+    }
   }
 
   sort_events();
   cache_save();
+  schedule_reminders();
   if (C.sel >= C.n) C.sel = C.n ? C.n - 1 : 0;
   /* A fetch that returns fewer events than the last one leaves the agenda
    * scrolled past the end, which paints nothing at all -- indistinguishable

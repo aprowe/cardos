@@ -1,6 +1,5 @@
 /* Notifications, portable part: the list keeps the newest sixteen, unread
- * counts and clears, a calendar line is due only inside its lead and only
- * once, and the server's poll reply is read whole. */
+ * counts and clears, and the server's poll reply is read whole. */
 #include <string.h>
 
 #include "tinytest.h"
@@ -26,31 +25,6 @@ void test_notifyq_list_keeps_the_newest(void) {
   CHECK_EQ(q.n, NQ_MAX - 1);
   nq_push(&q, "A very long app name indeed", "x", "y", 1);
   CHECK_EQ((int)strlen(q.it[0].app), NQ_APP - 1);       /* cut, not overrun */
-}
-
-void test_notifyq_calendar_is_due_inside_its_lead(void) {
-  uint32_t start;
-  char s[32];
-  const char *line = "0 0 0 1000600 1004200 abc123 Dentist appointment";
-  CHECK_EQ(nq_cal_due(line, 1000000, 600, &start, s, sizeof s), 1);     /* exactly 10 min */
-  CHECK_EQ((int)start, 1000600);
-  CHECK(!strcmp(s, "Dentist appointment"));
-  CHECK_EQ(nq_cal_due(line, 999000, 600, &start, s, sizeof s), 0);      /* too early */
-  CHECK_EQ(nq_cal_due(line, 1000600, 600, &start, s, sizeof s), 0);     /* started */
-  CHECK_EQ(nq_cal_due("1 0 0 1000600 1004200 x Holiday", 1000000, 600, &start, s, sizeof s), 0);
-  CHECK_EQ(nq_cal_due("0 0 1 1000600 1004200 x Gone", 1000000, 600, &start, s, sizeof s), 0);
-  CHECK_EQ(nq_cal_due("garbage", 1000000, 600, &start, s, sizeof s), 0);
-}
-
-void test_notifyq_an_event_fires_once(void) {
-  NqFired f;
-  int i;
-  memset(&f, 0, sizeof f);
-  CHECK_EQ(nq_fired_new(&f, nq_key(100, "a")), 1);
-  CHECK_EQ(nq_fired_new(&f, nq_key(100, "a")), 0);
-  CHECK_EQ(nq_fired_new(&f, nq_key(100, "b")), 1);
-  for (i = 0; i < NQ_FIRED; i++) nq_fired_new(&f, (uint32_t)(5000 + i));
-  CHECK_EQ(nq_fired_new(&f, nq_key(100, "a")), 1);       /* long forgotten */
 }
 
 static char names[3][16], texts[3][32];

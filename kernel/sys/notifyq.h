@@ -36,22 +36,6 @@ void nq_read_all(Nq *q);
 /* Everything from `app` is read: it has been opened. */
 void nq_read_app(Nq *q, const char *app);
 
-/* ---- calendar ----------------------------------------------------------
- *
- * One line of the Calendar app's cache (apps/calendar.c, cache_save):
- *   all_day dirty deleted start end id summary
- * 1 if it is a timed, not-deleted event starting in (now, now + lead_s],
- * with its start and summary. */
-int nq_cal_due(const char *line, uint32_t now, int lead_s, uint32_t *start,
-               char *summary, size_t n);
-
-/* Events already announced, so a minute's check does not announce one
- * twice. 1 if `key` is new (and now remembered). */
-#define NQ_FIRED 24
-typedef struct { uint32_t key[NQ_FIRED]; int n, next; } NqFired;
-int nq_fired_new(NqFired *f, uint32_t key);
-uint32_t nq_key(uint32_t start, const char *summary);
-
 /* ---- the server's answer -------------------------------------------------
  *
  * GET /notify/poll?chat=ID&me=NAME answers

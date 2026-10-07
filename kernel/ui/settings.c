@@ -286,18 +286,6 @@ static void act_nchat(SettingsState *st) {
   notify_set_chat(!notify_chat_on());
   snprintf(st->note, sizeof st->note, notify_chat_on() ? "Chat messages pop up while WiFi is on" : "no Chat pop-ups");
 }
-static void v_ncal(char *b, size_t n) { snprintf(b, n, "%s", notify_cal_on() ? "on" : "off"); }
-static void act_ncal(SettingsState *st) {
-  notify_set_cal(!notify_cal_on());
-  snprintf(st->note, sizeof st->note, notify_cal_on() ? "events pop up before they start" : "no Calendar pop-ups");
-}
-static void v_nlead(char *b, size_t n) { snprintf(b, n, "%d min before", notify_lead_min()); }
-static void act_nlead(SettingsState *st) {
-  int m = notify_lead_min();
-  m = m == 5 ? 10 : m == 10 ? 15 : m == 15 ? 30 : m == 30 ? 60 : 5;
-  notify_set_lead_min(m);
-  snprintf(st->note, sizeof st->note, "events %d minutes before", m);
-}
 
 static void v_volume(char *b, size_t n) {
   if (!speaker_volume()) snprintf(b, n, "%s", "muted");
@@ -337,8 +325,6 @@ static const Row ROWS[] = {
   { NULL,        "Key clicks",   v_keysnd, act_keysnd,     1 },
 
   { "Notifications", "Chat",       v_nchat,  act_nchat,      1 },
-  { NULL,        "Calendar",     v_ncal,   act_ncal,       1 },
-  { NULL,        "Warn",         v_nlead,  act_nlead,      0 },
 
   { "System",    "Memory",       v_ram,    NULL,           0 },
   { NULL,        "Forget all",   NULL,     act_forget,     0 },

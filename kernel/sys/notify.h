@@ -6,11 +6,11 @@
  * notification came from and d clears one. The launcher's bar has a dot
  * while any are unread.
  *
- * Three watchers post without their apps being open: Chat (a request to the
- * server every half minute while WiFi is up -- never bringing it up), the
- * Calendar app's cache (an event a few minutes before it starts), and the
- * alarm (logged as it rings; it keeps its own panel). Apps post with
- * api->notify. The list and the rules are kernel/sys/notifyq.c, host-tested.
+ * Posted without their apps open: Chat (a request to the server every half
+ * minute while WiFi is up -- never bringing it up), the alarm (logged as it
+ * rings; it keeps its own panel), and whatever an app scheduled with
+ * notify_at -- Calendar its events' reminders, Timer its finish. Apps post
+ * with api->notify. The list is kernel/sys/notifyq.c, host-tested.
  */
 #ifndef CARDOS_NOTIFY_H
 #define CARDOS_NOTIFY_H
@@ -38,7 +38,8 @@ void notify_paint_over(void);
  * since the app is showing it. Timed by the wall clock when there is one, and
  * then kept on the card through a restart; by uptime otherwise. `ring`: the
  * banner stays and the chime repeats, the screen awake, until a key (or a
- * minute). 0, or -1 if eight are already waiting. */
+ * minute). 0, or -1 if thirty-two are already waiting. key "*" to
+ * notify_cancel is everything `app` set. */
 int  notify_at(const char *app, const char *key, uint32_t seconds,
                const char *title, const char *text, int ring);
 void notify_cancel(const char *app, const char *key);
@@ -64,9 +65,6 @@ void notify_center_key(uint8_t k);
 /* Settings > Notifications. */
 int  notify_chat_on(void);
 void notify_set_chat(int on);
-int  notify_cal_on(void);
-void notify_set_cal(int on);
-int  notify_lead_min(void);           /* 5, 10, 15 or 30 */
-void notify_set_lead_min(int m);
+
 
 #endif /* CARDOS_NOTIFY_H */

@@ -40,10 +40,15 @@ class FakeGoogle:
             return 200, {"access_token": "AT%d" % self.refreshes, "expires_in": 3600}
         assert headers and headers["Authorization"].startswith("Bearer AT")
         if url.startswith(google.CAL) and method == "GET":
+            if "fields=defaultReminders" in url:
+                return 200, {"defaultReminders": [{"method": "email", "minutes": 60},
+                                                  {"method": "popup", "minutes": 30}]}
             if "pageToken=p2" in url:
                 return 200, {"items": [{"id": "e2", "summary": "Dinner",
                                         "start": {"date": "2026-09-30"},
-                                        "end": {"date": "2026-10-01"}}]}
+                                        "end": {"date": "2026-10-01"},
+                                        "reminders": {"useDefault": False, "overrides": [
+                                            {"method": "popup", "minutes": 10}]}}]}
             return 200, {"nextPageToken": "p2", "items": [
                 {"id": "e1", "summary": "Interview",
                  "start": {"dateTime": "2026-09-29T13:00:00-07:00"},
@@ -101,6 +106,13 @@ class Routes(unittest.TestCase):
         self.assertEqual(text,
             e1 + "\t2026-09-29T13:00:00-07:00\t2026-09-29T14:00:00-07:00\tInterview\n" +
             e2 + "\t2026-09-30\t2026-10-01\tDinner\n")
+
+    def test_events_with_their_reminders_when_asked(self):
+        s, text = self.req("GET", "/calendar/events?from=2026-09-29T00:00:00Z&to=2026-11-28T00:00:00Z&remind=1")
+        e1, e2 = google.short_ids(["e1", "e2"])
+        self.assertEqual(text,
+            e1 + "\t2026-09-29T13:00:00-07:00\t2026-09-29T14:00:00-07:00\tInterview\t30\n" +
+            e2 + "\t2026-09-30\t2026-10-01\tDinner\t10\n")
 
     def test_event_add_and_change(self):
         s, text = self.req("POST", "/calendar/event",
@@ -179,3 +191,14 @@ class Routes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
+
+
+class Reminders(unittest.TestCase):
+    def test_which_minutes(self):
+        d = [{"method": "popup", "minutes": 30}, {"method": "popup", "minutes": 10}]
+        self.assertEqual(google.popup_minutes(None, d), 10)                       # the default, soonest
+        self.assertEqual(google.popup_minutes({"useDefault": True}, d), 10)
+        self.assertEqual(google.popup_minutes({"useDefault": False, "overrides": [
+            {"method": "popup", "minutes": 45}]}, d), 45)
+        self.assertEqual(google.popup_minutes({"useDefault": False}, d), -1)      # none set
+        self.assertEqual(google.popup_minutes(None, [{"method": "email", "minutes": 5}]), -1)

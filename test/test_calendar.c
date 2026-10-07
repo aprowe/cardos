@@ -55,8 +55,30 @@ static void fake_damage(CRect r) { (void)r; }
 static int fake_no_card(const char *p, int f) { (void)p; (void)f; return -1; }
 static const char *fake_proxy(void) { return "http://server:8080"; }
 
+/* What the app asked the OS to remind about (API 40). */
+static int  NSCHED, NCANCEL_ALL;
+static uint32_t SCHED_SECS[32];
+static char SCHED_TITLE[32][40], SCHED_TEXT[32][64];
+static int fake_notify_at(uint32_t secs, const char *key, const char *title,
+                          const char *text, int ring) {
+  (void)key; (void)ring;
+  if (NSCHED < 32) {
+    SCHED_SECS[NSCHED] = secs;
+    snprintf(SCHED_TITLE[NSCHED], sizeof SCHED_TITLE[0], "%s", title);
+    snprintf(SCHED_TEXT[NSCHED], sizeof SCHED_TEXT[0], "%s", text);
+    NSCHED++;
+  }
+  return 0;
+}
+static void fake_notify_cancel(const char *key) { if (!strcmp(key, "*")) NCANCEL_ALL++; NSCHED = 0; }
+static uint32_t fake_no_epoch(void) { return 0; }
+
 static void use_fake_api(void) {
   memset(&FAKE, 0, sizeof FAKE);
+  FAKE.notify_at = fake_notify_at;
+  FAKE.notify_cancel = fake_notify_cancel;
+  FAKE.epoch = fake_no_epoch;
+  NSCHED = NCANCEL_ALL = 0;
   FAKE.open = fake_no_card;
   FAKE.proxy = fake_proxy;
   FAKE.fmt = fake_fmt;
@@ -1233,4 +1255,28 @@ void test_calendar_a_sync_in_the_air_does_not_repaint_the_window(void) {
   CHECK_EQ(1, NDAMAGED);
   CHECK_EQ(135 - FOOT_H, DAMAGED[0].y);
   CHECK_EQ(FOOT_H, DAMAGED[0].h);
+}
+
+/* After a sync the app sets the week's reminders itself: at the minutes
+ * Google gave, not for all-day events, past ones, or ones with none, and
+ * replacing what it set before. */
+void test_calendar_a_sync_sets_the_weeks_reminders(void) {
+  static char reply[512];
+  uint32_t now;
+  use_sync_api();
+  now = fake_epoch();                           /* 2026-09-13 12:00 UTC, offset 0 */
+  snprintf(reply, sizeof reply,
+           "a1\t2026-09-13T14:00:00Z\t2026-09-13T15:00:00Z\tDentist\t30\n"   /* in 2 h */
+           "a2\t2026-09-13T13:00:00Z\t2026-09-13T14:00:00Z\tLunch\t-1\n"     /* none */
+           "a3\t2026-09-14\t2026-09-15\tHoliday\t0\n"                       /* all day */
+           "a4\t2026-09-13T09:00:00Z\t2026-09-13T10:00:00Z\tPast\t10\n"     /* over */
+           "a5\t2026-09-30T09:00:00Z\t2026-09-30T10:00:00Z\tLater\t10\n");  /* past the week */
+  memcpy(C.reply, reply, strlen(reply) + 1);
+  absorb();
+  CHECK_EQ(NCANCEL_ALL, 1);
+  CHECK_EQ(NSCHED, 1);
+  CHECK_EQ((int)SCHED_SECS[0], 2 * 3600 - 30 * 60);
+  CHECK(!strcmp(SCHED_TITLE[0], "14:00, in 30 min"));
+  CHECK(!strcmp(SCHED_TEXT[0], "Dentist"));
+  (void)now;
 }

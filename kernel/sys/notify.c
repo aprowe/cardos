@@ -30,9 +30,8 @@ static const char *TAG = "notify";
 #define CHAT_EVERY   30000
 #define CHAT_SEEN    "/cache/chat.seen"   /* also written by apps/chat.c */
 #define CHAT_NAME    "/config/chat.txt"
-#define CAL_CACHE    "/cache/calendar.cache"
 #define SCHED_FILE   "/cache/notify.sched"
-#define SCHED_MAX    8
+#define SCHED_MAX    32
 #define RING_MS      60000
 #define RING_EVERY   1600
 
@@ -50,16 +49,9 @@ static int      s_center, s_sel;
 
 /* ---- settings ------------------------------------------------------------ */
 
-static int s_chat = -1, s_cal = -1, s_lead = -1;
+static int s_chat = -1;
 int  notify_chat_on(void) { if (s_chat < 0) s_chat = prefs_get_u16("n_chat", 1) != 0; return s_chat; }
 void notify_set_chat(int on) { s_chat = on != 0; prefs_set_u16("n_chat", s_chat); }
-int  notify_cal_on(void) { if (s_cal < 0) s_cal = prefs_get_u16("n_cal", 1) != 0; return s_cal; }
-void notify_set_cal(int on) { s_cal = on != 0; prefs_set_u16("n_cal", s_cal); }
-int  notify_lead_min(void) {
-  if (s_lead < 0) s_lead = prefs_get_u16("n_lead", 30);
-  return s_lead == 5 || s_lead == 10 || s_lead == 15 || s_lead == 60 ? s_lead : 30;
-}
-void notify_set_lead_min(int m) { s_lead = m; prefs_set_u16("n_lead", m); }
 
 /* ---- the colour of an app's notifications -------------------------------- */
 
@@ -238,41 +230,6 @@ static void chat_tick(uint32_t now) {
   }
 }
 
-/* ---- Calendar: the app's cache, once a minute --------------------------------- */
-
-static NqFired  s_fired;
-static uint32_t s_cal_minute;
-
-static void cal_check(void) {
-  uint32_t now = clock_epoch();
-  char buf[256], line[200], summary[NQ_TEXT];
-  int fd, n, i, len = 0;
-  if (!now || !notify_cal_on() || !fs_mounted()) return;
-  if (now / 60 == s_cal_minute) return;
-  s_cal_minute = now / 60;
-  fd = fs_open(CAL_CACHE, FS_O_READ);
-  if (fd < 0) return;
-  while ((n = fs_read(fd, buf, sizeof buf)) > 0) {
-    for (i = 0; i < n; i++) {
-      uint32_t start;
-      if (buf[i] != '\n') { if (len < (int)sizeof line - 1) line[len++] = buf[i]; continue; }
-      line[len] = 0;
-      len = 0;
-      if (nq_cal_due(line, now, notify_lead_min() * 60, &start, summary, sizeof summary) &&
-          nq_fired_new(&s_fired, nq_key(start, summary))) {
-        char title[NQ_TITLE];
-        struct tm tm;
-        time_t t = (time_t)start;
-        int mins = (int)((start - now + 59) / 60);
-        localtime_r(&t, &tm);
-        snprintf(title, sizeof title, "%02d:%02d, in %d min", tm.tm_hour, tm.tm_min, mins);
-        notify_post("Calendar", title, summary);
-      }
-    }
-  }
-  fs_close(fd);
-}
-
 /* ---- the centre ------------------------------------------------------------------- */
 
 static void center_paint(void) {
@@ -373,7 +330,8 @@ static void sched_save(void) {
 }
 
 static void sched_load(void) {
-  char buf[1024], *p, *f[6];
+  static char buf[SCHED_MAX * 144];
+  char *p, *f[6];
   int r, i = 0;
   if (read_small(SCHED_FILE, buf, sizeof buf) <= 0) return;
   for (p = buf; *p && i < SCHED_MAX; ) {
@@ -426,10 +384,15 @@ int notify_at(const char *app, const char *key, uint32_t seconds,
 }
 
 void notify_cancel(const char *app, const char *key) {
-  Sched *s = sched_find(app, key);
-  if (!s) return;
-  s->used = 0;
-  sched_save();
+  int i, any = 0;
+  if (!strcmp(key, "*")) {                     /* everything this app set */
+    for (i = 0; i < SCHED_MAX; i++)
+      if (s_sched[i].used && !strcmp(s_sched[i].app, app)) { s_sched[i].used = 0; any = 1; }
+  } else {
+    Sched *s = sched_find(app, key);
+    if (s) { s->used = 0; any = 1; }
+  }
+  if (any) sched_save();
 }
 
 static int app_on_screen(const char *app) {
@@ -499,7 +462,6 @@ void notify_tick(uint32_t now) {
     } else if ((int32_t)(now - s_banner_drawn) >= 150) banner_paint();
   }
   chat_tick(now);
-  cal_check();
   sched_tick(now);
   ring_tick(now);
 }
