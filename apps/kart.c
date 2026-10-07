@@ -67,7 +67,9 @@ static void read_tilt(int smooth) {
 
 static int tilt_steer(void) {
   int d = A.roll - A.roll0, s;
-  if (A.invert) d = -d;
+  /* The ADV's sensor reads roll the other way round from the steering:
+   * tilting right came out as left (2026-10-06). `i` turns it back. */
+  if (!A.invert) d = -d;
   if (d > -20 && d < 20) return 0;                         /* 2 degrees of nothing */
   s = d * 256 / 250;                                       /* full lock at 25 degrees */
   return s > 256 ? 256 : s < -256 ? -256 : s;
