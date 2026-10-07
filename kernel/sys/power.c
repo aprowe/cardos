@@ -15,6 +15,7 @@ static int s_was;          /* the brightness the user chose, to come back to */
 static int s_loaded;
 static int s_dim_s = POWER_DIM_DEFAULT_S;
 static int s_off_s = POWER_OFF_DEFAULT_S;
+static int s_forced;       /* dark by request, not by the idle timeout */
 static const void *s_hold[HOLDS_MAX];
 
 /* From NVS once, on first use: after boot has restored /config/settings.txt,
@@ -49,11 +50,19 @@ void power_wake(void) {
   display_backlight(1);
   display_set_brightness_now(s_was ? s_was : 100);
   s_state = LIT;
+  s_forced = 0;
 }
 
 void power_wake_now(void) {
   bg_note_activity();
   power_wake();
+}
+
+void power_off_now(void) {
+  if (s_state == LIT) s_was = display_brightness();
+  display_backlight(0);
+  s_state = DARK;
+  s_forced = 1;
 }
 
 void power_hold(const void *owner, int on) {
@@ -80,7 +89,10 @@ void power_tick(void) {
   load();
   /* Held on by an app, or never set to dim: lit, and that is all. */
   if (held() || !s_dim_s || idle < (uint32_t)s_dim_s * 1000u) {
-    if (s_state != LIT) power_wake();
+    /* Not if forced dark: the keypress that asked for that just reset the
+     * idle clock, and waking on the very next pass would make the chord
+     * into a no-op. */
+    if (s_state != LIT && !s_forced) power_wake();
     return;
   }
 
