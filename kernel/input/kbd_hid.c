@@ -48,6 +48,9 @@ uint8_t kbd_hid_translate(uint8_t usage, uint8_t mods) {
   /* Ctrl-alt-u: update everything, before the opt branch below claims u
    * for a plain opt-u hotkey. */
   if (ctrl && opt && usage == 0x18) return KBD_KEY_UPDATE_ALL;
+  /* Alt-space: the app search, before the opt branch below turns space
+   * into nothing at all (it is not a letter or a digit). */
+  if (opt && usage == 0x2C) return KBD_KEY_APP_SEARCH;
   /* The volume: fn (the GUI key) with - or =, as on the Cardputer, and the
    * volume keys a keyboard may have. 0x85/0x86 are keyboard.h's codes. */
   if ((fn && usage == 0x2D) || usage == 0x81) return 0x85;

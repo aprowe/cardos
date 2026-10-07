@@ -20,6 +20,17 @@
 
 void launchui_init(void);
 
+/* Space's own search (kernel/ui/appsearch.c does the ranking), open from
+ * wherever opt-space is pressed rather than only from inside the
+ * carousel. Call after making sure the launcher has the screen (this
+ * does not switch shells itself); already in the launcher it only opens
+ * the overlay, leaving a fullscreen app running underneath as is. */
+void launchui_open_search(void);
+
+/* Is it open right now? For whoever took the screen to show it (opt-space
+ * from outside the launcher) to know when to give the screen back. */
+int launchui_search_active(void);
+
 /* Repaint now, for an app that is about to block. */
 void launchui_repaint(void);
 

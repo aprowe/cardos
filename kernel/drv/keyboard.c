@@ -282,6 +282,8 @@ static uint8_t translate(int x, int y) {
     /* opt-backspace leaves the app, the same as fn-`: the two keys sit
      * on opposite corners and either hand finds one of them. */
     else if (base == (char)KEY_BACKSPACE) c = (char)KEY_QUIT;
+    /* opt-space: the app search, from wherever. */
+    else if (base == ' ') c = (char)KEY_APP_SEARCH;
     else c = 0;
   }
   else if (s_ctrl && c >= 'a' && c <= 'z') c = (char)(c - 'a' + 1);

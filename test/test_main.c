@@ -385,6 +385,7 @@ void test_the_newest_key_is_the_one_that_repeats(void);
 void test_repeat_survives_the_millisecond_counter_wrapping(void);
 void test_fn_escape_is_the_quit_chord_on_both_keyboards(void);
 void test_ctrl_opt_u_is_the_update_all_chord_on_both_keyboards(void);
+void test_opt_space_is_the_app_search_chord_on_both_keyboards(void);
 void test_keyrepeat_repeats_text_and_movement_only(void);
 void test_keyrepeat_waits_then_fires_on_the_rate(void);
 void test_keyrepeat_stops_when_the_key_lifts(void);
@@ -1192,6 +1193,7 @@ int main(void) {
   RUN(test_repeat_survives_the_millisecond_counter_wrapping);
   RUN(test_fn_escape_is_the_quit_chord_on_both_keyboards);
   RUN(test_ctrl_opt_u_is_the_update_all_chord_on_both_keyboards);
+  RUN(test_opt_space_is_the_app_search_chord_on_both_keyboards);
   printf("-- keyrepeat --\n");
   RUN(test_keyrepeat_repeats_text_and_movement_only);
   RUN(test_keyrepeat_waits_then_fires_on_the_rate);

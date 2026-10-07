@@ -943,6 +943,16 @@ static void enter_console(void) {
  * closes it, and the shell underneath repaints. */
 static int s_opt_help;
 
+/* opt-space from the console or the desktop takes the screen to show the
+ * app search, same as fn-` does to reach the launcher -- this remembers
+ * which shell it took it from, so cancelling (Escape, or backspace past
+ * the start) can give it back rather than stranding the user in the bare
+ * carousel. -1 is nothing pending: already in the launcher, or no search
+ * is open. Forgotten, not acted on, if the search instead opens an app --
+ * that app is what has the screen now, same as choosing one from the
+ * carousel itself would leave it. */
+static int s_search_from = -1;
+
 static void show_opt_help(void) {
   s_opt_help = 1;
   help_paint("Shortcuts", "opt-1\tlauncher\nopt-2\tdesktop\nopt-3\tconsole\nopt-0\tbacklight to full\nopt-9\tbacklight down a step\nopt-8\tlouder\nopt-7\tquieter\nfn-o\tscreen off, black\nfn-c\tscreen off, dim clock\nfn-n\tnotifications\nopt-t\ttodo\nopt-s\tstocks\nopt-e\tedit\nopt-m\tmines\nopt-b\treconnect bluetooth\nopt-w\treconnect wifi\n",
@@ -1126,6 +1136,19 @@ static int global_key(uint8_t k) {
     enter_console();
     cmd_update("all");
     prompt();
+    return 1;
+
+  /* opt-space: the app search, from wherever. Already in the launcher
+   * this only opens the overlay (a fullscreen app underneath keeps
+   * running); from the console or the desktop it takes the screen first,
+   * the same way fn-` already does from the console. */
+  case KEY_APP_SEARCH:
+    if (s_mode != MODE_LAUNCHER) {
+      s_search_from = s_mode;
+      launchui_init();
+      s_mode = MODE_LAUNCHER;
+    }
+    launchui_open_search();
     return 1;
 
   default:
@@ -1680,6 +1703,25 @@ void app_main(void) {
           prompt();
         } else if (r == 2) {
           s_mode = MODE_DESKTOP;      /* the launcher handed over */
+        } else if (s_search_from >= 0 && !launchui_search_active()) {
+          /* The search opt-space opened from outside the launcher just
+           * closed. Enter on a hit leaves an app running here, which
+           * stays; cancelling (Escape, or backspace past the start)
+           * gives the screen back to what opt-space took it from. */
+          int from = s_search_from;
+          s_search_from = -1;
+          if (!launchui_running()) {
+            if (from == MODE_CONSOLE) {
+              s_mode = MODE_CONSOLE;
+              ui_set_shell(UI_NONE);
+              con_clear();
+              con_write("back at the console\n");
+              prompt();
+            } else if (from == MODE_DESKTOP) {
+              s_mode = MODE_DESKTOP;
+              desktop_repaint();
+            }
+          }
         }
       }
       vTaskDelay(pdMS_TO_TICKS(rest_ms()));

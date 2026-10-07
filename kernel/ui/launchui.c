@@ -848,6 +848,23 @@ void launchui_init(void) {
   flush();
 }
 
+/* opt-space, from anywhere: the same search Space already opens inside
+ * the carousel, reached without going there first. Already in the
+ * launcher -- the carousel, or an app running fullscreen over it -- this
+ * only opens the overlay: launchui_key/tick/paint all check s_search
+ * before s_app already, so whatever is running stays loaded underneath,
+ * untouched, the same as pressing Space at the carousel never did
+ * anything to it either. From another shell there is no carousel to
+ * overlay yet, so this takes the screen the way fn-` already does from
+ * the console -- that leaves nothing to come back to on Escape, which is
+ * the next thing to fix. */
+void launchui_open_search(void) {
+  need_icons();
+  search_open();
+}
+
+int launchui_search_active(void) { return s_search; }
+
 /* Put an app on the screen. The launcher runs everything fullscreen: there is
  * no desktop behind it for a window to sit on. */
 static void host(const AppDef *a) {

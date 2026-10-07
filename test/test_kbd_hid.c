@@ -261,3 +261,20 @@ void test_ctrl_opt_u_is_the_update_all_chord_on_both_keyboards(void) {
   CHECK(KEY_UPDATE_ALL != KEY_QUIT && KEY_UPDATE_ALL != KEY_VOL_UP && KEY_UPDATE_ALL != KEY_VOL_DOWN);
   CHECK(!KEY_IS_FN(KEY_UPDATE_ALL) && !KEY_IS_OPT(KEY_UPDATE_ALL));
 }
+
+/* Opt-space opens the app search from wherever, the same reasoning as
+ * ctrl-opt-u: it has to survive being typed into a text field, so plain
+ * opt (which would otherwise answer nothing for a key that is not a
+ * letter or a digit) is not enough on its own. */
+void test_opt_space_is_the_app_search_chord_on_both_keyboards(void) {
+  CHECK_EQ(kbd_hid_translate(0x2C, KBD_MOD_LALT), KBD_KEY_APP_SEARCH);
+  CHECK_EQ(kbd_hid_translate(0x2C, KBD_MOD_RALT), KBD_KEY_APP_SEARCH);
+  CHECK_EQ(KBD_KEY_APP_SEARCH, KEY_APP_SEARCH);
+  /* Space alone still types a space. */
+  CHECK_EQ(kbd_hid_translate(0x2C, 0), ' ');
+  CHECK(KEY_APP_SEARCH != KEY_UP && KEY_APP_SEARCH != KEY_DOWN);
+  CHECK(KEY_APP_SEARCH != KEY_LEFT && KEY_APP_SEARCH != KEY_RIGHT);
+  CHECK(KEY_APP_SEARCH != KEY_QUIT && KEY_APP_SEARCH != KEY_UPDATE_ALL);
+  CHECK(KEY_APP_SEARCH != KEY_VOL_UP && KEY_APP_SEARCH != KEY_VOL_DOWN);
+  CHECK(!KEY_IS_FN(KEY_APP_SEARCH) && !KEY_IS_OPT(KEY_APP_SEARCH));
+}

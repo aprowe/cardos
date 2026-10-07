@@ -79,6 +79,13 @@
  * plain opt-u (a user hotkey slot). */
 #define KEY_UPDATE_ALL 0x87
 
+/* Opt and space: the app search, from wherever -- the same one Space
+ * already opens inside the launcher (kernel/ui/appsearch.c), reached
+ * without going there first. A chord of its own for the usual reason:
+ * opt alone would otherwise make it a plain opt-space, and this has to
+ * survive being typed into a text field too. */
+#define KEY_APP_SEARCH 0x88
+
 #define KEY_UP        0x80   /* the ; , . / keys double as arrows under Fn */
 #define KEY_DOWN      0x81
 #define KEY_LEFT      0x82
