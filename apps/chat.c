@@ -222,15 +222,16 @@ static int take_messages(void) {
 static void poll_server(uint32_t now) {
   int r;
   if (C.req == REQ_NONE) {
-    if (C.outbox[0] && C.name[0]) { start_post(); return; }
-    if ((int32_t)(now - C.next_poll) >= 0) start_get();
+    if ((int32_t)(now - C.next_poll) < 0) return;      /* a failed send waits too */
+    if (C.outbox[0] && C.name[0]) start_post();
+    else start_get();
     return;
   }
   r = api->http_poll(reply, sizeof reply - 1);
   if (r == CAPP_HTTP_PENDING) return;
   if (r < 0) {
     set_status(r == -403 ? "not signed in" : "offline", 1);
-    if (C.req == REQ_POST) say("(not sent: the server did not answer. enter sends it again)");
+    if (C.req == REQ_POST) say("(not sent yet: the server did not answer; trying again)");
     C.req = REQ_NONE;
     C.next_poll = now + POLL_MS * 2;
     return;
@@ -239,6 +240,7 @@ static void poll_server(uint32_t now) {
   if (C.offline) set_status("", 0);
   if (C.req == REQ_POST) {
     C.outbox[0] = 0;
+    set_status("", 0);
     C.req = REQ_NONE;
     C.next_poll = now;                       /* fetch it back, and anything else */
     return;
@@ -337,6 +339,7 @@ static void send(const char *text) {
   if (!text[0]) return;
   if (C.outbox[0]) { say("(still sending the last one)"); return; }
   api->fmt(C.outbox, sizeof C.outbox, "%s", text);
+  C.next_poll = api->ticks_ms();
   set_status("sending", 0);
 }
 
