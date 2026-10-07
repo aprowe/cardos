@@ -89,6 +89,15 @@ def main(argv=None):
         Handler.store = args.store
     Handler.voice = Voice(whisper_dir=args.whisper)
 
+    # More than one person (server/accounts.py): the first start with both a
+    # token and a dashboard password makes the owner's account from them and
+    # moves their files under users/. Every device keeps working.
+    if args.token and os.environ.get("DASH_PASSWORD"):
+        from . import accounts
+        if accounts.migrate(os.environ.get("CARDOS_OWNER", "alex"), os.environ["DASH_PASSWORD"],
+                            args.token):
+            print("  accounts: made, with %s as the owner" % os.environ.get("CARDOS_OWNER", "alex"))
+
     # Threading, because a chat turn takes a minute, a render takes ten
     # seconds, and the device polls for its answer throughout. On the
     # single-threaded server every poll queued behind the work it was polling.
