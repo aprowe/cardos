@@ -461,6 +461,15 @@ static const CappMidi MIDI = {
 };
 static const CappMidi *api_midi(void) { return &MIDI; }
 
+static int api_notify_at(uint32_t seconds, const char *key, const char *title,
+                         const char *text, int ring) {
+  return notify_at(capprun_executing_name(), key ? key : "", seconds,
+                   title ? title : "", text ? text : "", ring);
+}
+static void api_notify_cancel(const char *key) {
+  notify_cancel(capprun_executing_name(), key ? key : "");
+}
+
 static int api_notify(const char *title, const char *text) {
   notify_post(capprun_executing_name(), title ? title : "", text ? text : "");
   return 0;
@@ -502,6 +511,8 @@ static const CardApi API = {
   api_motion,
   api_midi,
   api_notify,
+  api_notify_at,
+  api_notify_cancel,
 };
 
 const CardApi *cardos_api(void) { return &API; }

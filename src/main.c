@@ -1603,6 +1603,10 @@ void app_main(void) {
      * type or close because someone reached out to stop it. */
     if (k && alarm_ringing()) { alarm_key(k); k = 0; }
 
+    /* A ringing notification (a Timer finished while closed) is stopped by
+     * any key, and the key goes no further. */
+    if (k && notify_ringing()) { notify_dismiss(); k = 0; }
+
     /* The notification centre (fn-n) has every key while it is open, and
      * the shells wait: an animating app would draw over it. */
     if (notify_center_active()) {

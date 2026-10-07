@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 39
+#define CAPP_API_VERSION 40
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -831,6 +831,18 @@ typedef struct {
    * the OS's list (fn-n), under this app's name. For something worth
    * looking up for: a timer done, a sync that found something. 0. */
   int (*notify)(const char *title, const char *text);
+
+  /* ---- later (API 40) ----
+   *
+   * A notification `seconds` from now, under this app's name, as `key`
+   * (asking again with the same key moves it). It comes whether the app is
+   * open or not -- the Timer's finish -- and is dropped if the app is on
+   * screen when it is due, since the app is showing it. `ring` keeps the
+   * banner up and the chime going, the screen on, until a key. Kept on the
+   * card through a restart when the clock is known. 0, or -1 if full. */
+  int  (*notify_at)(uint32_t seconds, const char *key, const char *title,
+                    const char *text, int ring);
+  void (*notify_cancel)(const char *key);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

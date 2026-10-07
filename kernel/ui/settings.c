@@ -294,7 +294,7 @@ static void act_ncal(SettingsState *st) {
 static void v_nlead(char *b, size_t n) { snprintf(b, n, "%d min before", notify_lead_min()); }
 static void act_nlead(SettingsState *st) {
   int m = notify_lead_min();
-  m = m == 5 ? 10 : m == 10 ? 15 : m == 15 ? 30 : 5;
+  m = m == 5 ? 10 : m == 10 ? 15 : m == 15 ? 30 : m == 30 ? 60 : 5;
   notify_set_lead_min(m);
   snprintf(st->note, sizeof st->note, "events %d minutes before", m);
 }

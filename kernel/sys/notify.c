@@ -14,6 +14,7 @@
 #include "kernel/ui/launchui.h"
 #include "kernel/ui/app.h"
 #include "kernel/drv/keyboard.h"
+#include "kernel/sys/power.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +31,10 @@ static const char *TAG = "notify";
 #define CHAT_SEEN    "/cache/chat.seen"   /* also written by apps/chat.c */
 #define CHAT_NAME    "/config/chat.txt"
 #define CAL_CACHE    "/cache/calendar.cache"
+#define SCHED_FILE   "/cache/notify.sched"
+#define SCHED_MAX    8
+#define RING_MS      60000
+#define RING_EVERY   1600
 
 #define C_BG     RGB565(24, 28, 40)
 #define C_EDGE   RGB565(70, 84, 120)
@@ -51,8 +56,8 @@ void notify_set_chat(int on) { s_chat = on != 0; prefs_set_u16("n_chat", s_chat)
 int  notify_cal_on(void) { if (s_cal < 0) s_cal = prefs_get_u16("n_cal", 1) != 0; return s_cal; }
 void notify_set_cal(int on) { s_cal = on != 0; prefs_set_u16("n_cal", s_cal); }
 int  notify_lead_min(void) {
-  if (s_lead < 0) s_lead = prefs_get_u16("n_lead", 10);
-  return s_lead == 5 || s_lead == 15 || s_lead == 30 ? s_lead : 10;
+  if (s_lead < 0) s_lead = prefs_get_u16("n_lead", 30);
+  return s_lead == 5 || s_lead == 10 || s_lead == 15 || s_lead == 60 ? s_lead : 30;
 }
 void notify_set_lead_min(int m) { s_lead = m; prefs_set_u16("n_lead", m); }
 
@@ -335,12 +340,153 @@ void notify_center_key(uint8_t k) {
   center_paint();
 }
 
+/* ---- later: scheduled notifications ---------------------------------------------- */
+
+typedef struct {
+  uint8_t  used, ring;
+  char     app[NQ_APP], key[16];
+  uint32_t due_epoch;                   /* wall clock, when there was one */
+  uint32_t due_ms;                      /* uptime, otherwise */
+  char     title[NQ_TITLE], text[NQ_TEXT];
+} Sched;
+
+static Sched    s_sched[SCHED_MAX];
+static int      s_ring;
+static uint32_t s_ring_until, s_ring_next;
+static const char s_ring_owner = 0;
+
+static void sched_save(void) {
+  int fd, i;
+  char line[NQ_APP + 16 + NQ_TITLE + NQ_TEXT + 40];
+  if (!fs_mounted()) return;
+  fd = fs_open(SCHED_FILE, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+  if (fd < 0) return;
+  for (i = 0; i < SCHED_MAX; i++) {
+    const Sched *s = &s_sched[i];
+    int n;
+    if (!s->used || !s->due_epoch) continue;    /* uptime ones do not outlive a restart */
+    n = snprintf(line, sizeof line, "%s\t%s\t%lu\t%d\t%s\t%s\n", s->app, s->key,
+                 (unsigned long)s->due_epoch, s->ring, s->title, s->text);
+    fs_write(fd, line, (size_t)n);
+  }
+  fs_close(fd);
+}
+
+static void sched_load(void) {
+  char buf[1024], *p, *f[6];
+  int r, i = 0;
+  if (read_small(SCHED_FILE, buf, sizeof buf) <= 0) return;
+  for (p = buf; *p && i < SCHED_MAX; ) {
+    char *end = strchr(p, '\n');
+    int k = 0;
+    if (end) *end = 0;
+    f[0] = p;
+    for (r = 0; p[r] && k < 5; r++) if (p[r] == '\t') { p[r] = 0; f[++k] = p + r + 1; }
+    if (k == 5) {
+      Sched *s = &s_sched[i++];
+      s->used = 1;
+      snprintf(s->app, sizeof s->app, "%s", f[0]);
+      snprintf(s->key, sizeof s->key, "%s", f[1]);
+      s->due_epoch = (uint32_t)strtoul(f[2], NULL, 10);
+      s->ring = (uint8_t)atoi(f[3]);
+      snprintf(s->title, sizeof s->title, "%s", f[4]);
+      snprintf(s->text, sizeof s->text, "%s", f[5]);
+    }
+    if (!end) break;
+    p = end + 1;
+  }
+}
+
+static Sched *sched_find(const char *app, const char *key) {
+  int i;
+  for (i = 0; i < SCHED_MAX; i++)
+    if (s_sched[i].used && !strcmp(s_sched[i].app, app) && !strcmp(s_sched[i].key, key))
+      return &s_sched[i];
+  return NULL;
+}
+
+int notify_at(const char *app, const char *key, uint32_t seconds,
+              const char *title, const char *text, int ring) {
+  Sched *s = sched_find(app, key);
+  int i;
+  uint32_t epoch = clock_epoch();
+  for (i = 0; !s && i < SCHED_MAX; i++) if (!s_sched[i].used) s = &s_sched[i];
+  if (!s) return -1;
+  memset(s, 0, sizeof *s);
+  s->used = 1;
+  s->ring = ring != 0;
+  snprintf(s->app, sizeof s->app, "%s", app);
+  snprintf(s->key, sizeof s->key, "%s", key);
+  snprintf(s->title, sizeof s->title, "%s", title);
+  snprintf(s->text, sizeof s->text, "%s", text);
+  s->due_ms = s_now + seconds * 1000u;
+  s->due_epoch = epoch ? epoch + seconds : 0;
+  sched_save();
+  return 0;
+}
+
+void notify_cancel(const char *app, const char *key) {
+  Sched *s = sched_find(app, key);
+  if (!s) return;
+  s->used = 0;
+  sched_save();
+}
+
+static int app_on_screen(const char *app) {
+  const AppDef *a = ui_shell() == UI_LAUNCHER ? launchui_running() : NULL;
+  return a && a->name && !strcmp(a->name, app);
+}
+
+static void sched_tick(uint32_t now) {
+  uint32_t epoch = clock_epoch();
+  int i, changed = 0;
+  for (i = 0; i < SCHED_MAX; i++) {
+    Sched *s = &s_sched[i];
+    int due;
+    if (!s->used) continue;
+    due = s->due_epoch && epoch ? epoch >= s->due_epoch : (int32_t)(now - s->due_ms) >= 0;
+    if (!due) continue;
+    s->used = 0;
+    changed = 1;
+    if (app_on_screen(s->app)) continue;       /* the app is showing it itself */
+    notify_post(s->app, s->title, s->text);
+    if (s->ring) {
+      s_ring = 1;
+      s_ring_until = now + RING_MS;
+      s_ring_next = now + RING_EVERY;
+      s_banner_until = s_ring_until;           /* the banner stays while it rings */
+      power_wake_now();
+      power_hold(&s_ring_owner, 1);
+    }
+  }
+  if (changed) sched_save();
+}
+
+int notify_ringing(void) { return s_ring; }
+
+void notify_dismiss(void) {
+  if (!s_ring) return;
+  s_ring = 0;
+  power_hold(&s_ring_owner, 0);
+  s_banner_until = s_now;                      /* down at the next tick */
+}
+
+static void ring_tick(uint32_t now) {
+  if (!s_ring) return;
+  if ((int32_t)(now - s_ring_until) >= 0) { notify_dismiss(); return; }
+  if ((int32_t)(now - s_ring_next) >= 0) {
+    s_ring_next = now + RING_EVERY;
+    blip(BLIP_NOTIFY);
+  }
+}
+
 /* ---- time ------------------------------------------------------------------------- */
 
 void notify_init(void (*repaint)(void)) {
   s_repaint = repaint;
   nq_init(&s_q);
   s_chat_next = 15000;                          /* the first look, a little after boot */
+  if (fs_mounted()) sched_load();
 }
 
 void notify_tick(uint32_t now) {
@@ -354,4 +500,6 @@ void notify_tick(uint32_t now) {
   }
   chat_tick(now);
   cal_check();
+  sched_tick(now);
+  ring_tick(now);
 }

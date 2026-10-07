@@ -11,6 +11,13 @@
  * from there. No card, no beep; the flash still happens, because the alarm
  * should not depend on the SD card working.
  *
+ * IT GOES ON WITHOUT THE APP (API 40). Starting asks the OS for a ringing
+ * notification at the finish (api->notify_at), and pausing or resetting
+ * cancels it, so a timer left running rings over whatever is open -- or
+ * after a restart, when the clock is known. The run is kept in
+ * /cache/timer.state (its end, by the wall clock if there is one, else by
+ * uptime), so opening Timer again shows it still counting, or finished.
+ *
  * The keys are the hint bar along the bottom (apps/footer.h), the same bar
  * every app has; Start and Reset are also a menu (apps/toolbar.h), fn-b or
  * a mouse, from the same action table as the ctrl-r chord.
@@ -133,6 +140,83 @@ static void ensure_beep(void) {
   T.beep_ready = 1;
 }
 
+/* ---- the run, kept, and the OS told -------------------------------------------- */
+
+#define STATE_PATH CAPP_CACHE "/timer.state"
+
+/* state set_min set_sec total_ms remain_ms end_epoch end_ms */
+static void state_save(uint32_t now_ms) {
+  char b[96];
+  int fd, n;
+  uint32_t end_ms = 0, end_epoch = 0;
+  if (T.state == ST_RUNNING) {
+    uint32_t left = T.remain_at_start - (now_ms - T.start_ms);
+    end_ms = now_ms + left;
+    if (api->epoch()) end_epoch = api->epoch() + (left + 999) / 1000;
+  }
+  fd = api->open(STATE_PATH, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
+  if (fd < 0) return;
+  n = api->fmt(b, sizeof b, "%d %d %d %lu %lu %lu %lu\n", T.state, T.set_min, T.set_sec,
+               (unsigned long)T.total_ms, (unsigned long)T.remain_ms,
+               (unsigned long)end_epoch, (unsigned long)end_ms);
+  api->write(fd, b, (size_t)n);
+  api->close(fd);
+}
+
+static unsigned long num(const char **p) {
+  unsigned long v = 0;
+  while (**p == ' ') (*p)++;
+  while (**p >= '0' && **p <= '9') v = v * 10ul + (unsigned long)(*(*p)++ - '0');
+  return v;
+}
+
+/* Where a run left off, as if the app had stayed open. */
+static void state_load(uint32_t now_ms) {
+  char b[96];
+  const char *p = b;
+  int fd = api->open(STATE_PATH, CAPP_O_READ), n;
+  unsigned long st, end_epoch, end_ms;
+  if (fd < 0) return;
+  n = api->read(fd, b, sizeof b - 1);
+  api->close(fd);
+  if (n <= 0) return;
+  b[n] = 0;
+  st = num(&p);
+  T.set_min = (int)num(&p);
+  T.set_sec = (int)num(&p);
+  T.total_ms = (uint32_t)num(&p);
+  T.remain_ms = (uint32_t)num(&p);
+  end_epoch = num(&p);
+  end_ms = num(&p);
+  if (T.set_min > 99 || T.set_sec > 59) { T.set_min = T.set_sec = 0; return; }
+  if (st == ST_PAUSED && T.remain_ms) { T.state = ST_PAUSED; return; }
+  if (st == ST_RUNNING) {
+    uint32_t left = 0;
+    if (end_epoch && api->epoch()) {
+      if (end_epoch > api->epoch()) left = (uint32_t)(end_epoch - api->epoch()) * 1000u;
+    } else if ((int32_t)(end_ms - now_ms) > 0 && end_ms - now_ms <= T.total_ms) {
+      left = (uint32_t)(end_ms - now_ms);       /* by uptime: only if no restart since */
+    }
+    if (left) {
+      T.state = ST_RUNNING;
+      T.remain_at_start = T.remain_ms = left;
+      T.start_ms = now_ms;
+      api->keep_awake(1);
+    }
+    /* Ran out while closed: the OS rang it, and this is the set screen. */
+  }
+}
+
+/* The finish, told to the OS so it rings with Timer closed. */
+static void tell_os(void) {
+  char text[40];
+  int mm = T.set_min, ss = T.set_sec;
+  if (T.state == ST_RUNNING) {
+    api->fmt(text, sizeof text, "%d:%02d is up", mm, ss);
+    api->notify_at((T.remain_at_start + 999) / 1000, "done", "Timer", text, 1);
+  } else api->notify_cancel("done");
+}
+
 /* ---- the clock ------------------------------------------------------------ */
 
 static uint32_t configured_ms(void) {
@@ -152,6 +236,8 @@ static void start_or_resume(uint32_t now_ms) {
   T.remain_ms = T.remain_at_start;     /* so the repaint before the first tick is right */
   T.start_ms = now_ms;
   T.state = ST_RUNNING;
+  tell_os();
+  state_save(now_ms);
   /* A countdown is watched, not touched: the screen stays on while it runs
    * and while it rings (API 32), and goes back to its own timeouts after. */
   api->keep_awake(1);
@@ -163,11 +249,15 @@ static void pause(uint32_t now_ms) {
   T.remain_ms = elapsed >= T.remain_at_start ? 0 : T.remain_at_start - elapsed;
   T.state = ST_PAUSED;
   api->keep_awake(0);
+  tell_os();
+  state_save(now_ms);
 }
 
 static void go_off(uint32_t now_ms) {
   T.remain_ms = 0;
   T.state = ST_DONE;
+  api->notify_cancel("done");          /* ringing here, not as a notification */
+  state_save(now_ms);
   api->wake();                           /* in case it went dark anyway */
   api->keep_awake(1);
   T.flash_on = 1;
@@ -180,6 +270,7 @@ static void dismiss(void) {
   if (au->state() != CAPP_AUDIO_IDLE) au->stop();
   T.state = ST_SET;
   api->keep_awake(0);
+  state_save(api->ticks_ms());
 }
 
 static void reset(void) {
@@ -187,6 +278,8 @@ static void reset(void) {
   if (au->state() != CAPP_AUDIO_IDLE) au->stop();
   if (T.state == ST_SET) { T.set_min = 0; T.set_sec = 0; }
   T.state = ST_SET;
+  tell_os();
+  state_save(api->ticks_ms());
 }
 
 /* ---- painting -------------------------------------------------------------- */
@@ -714,6 +807,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   s_font = api->headless() ? -1 : api->font_load(CLOCK_FONT);
   if (!api->headless()) toolbar_init(api, ACTIONS, NACT, 0, 0);
 
+  if (!api->headless()) state_load(api->ticks_ms());
   minutes =argc > 1 ? parse_minutes(argv[1]) : 0;
   if (minutes) {
     T.set_min = minutes;

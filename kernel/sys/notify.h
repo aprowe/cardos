@@ -30,6 +30,23 @@ void notify_tick(uint32_t now_ms);
 /* After a shell has painted: the banner goes back on top. */
 void notify_paint_over(void);
 
+/* ---- later -----------------------------------------------------------------
+ *
+ * A notification `seconds` from now, for `app`, named `key` so it can be
+ * replaced or cancelled -- the Timer's finish, say. It fires whether the app
+ * is open or not; if the app is on screen when it comes due, it is dropped,
+ * since the app is showing it. Timed by the wall clock when there is one, and
+ * then kept on the card through a restart; by uptime otherwise. `ring`: the
+ * banner stays and the chime repeats, the screen awake, until a key (or a
+ * minute). 0, or -1 if eight are already waiting. */
+int  notify_at(const char *app, const char *key, uint32_t seconds,
+               const char *title, const char *text, int ring);
+void notify_cancel(const char *app, const char *key);
+
+/* Ringing: any key stops it, and is not passed on. */
+int  notify_ringing(void);
+void notify_dismiss(void);
+
 /* `app` was opened: its notifications are read. */
 void notify_opened(const char *app);
 
