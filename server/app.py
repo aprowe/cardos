@@ -19,6 +19,7 @@ banner to anyone but renders only for the device.
 Run it with `python -m server`; see __main__.py for the flags.
 """
 import hmac
+import os
 import sys
 import traceback
 import urllib.parse
@@ -71,9 +72,33 @@ def get_banner(h, path, args):
     h.text("\n".join(lines) + "\n")
 
 
+STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".gif": "image/gif", ".css": "text/css"}
+
+
+def get_static(h, path, args):
+    """a file from server/static: pictures for an email, say -- public, since
+    an email client fetches them with no cookie. Nothing secret goes there."""
+    name = path[len("/dash/static/"):]
+    full = os.path.normpath(os.path.join(STATIC, name))
+    ext = os.path.splitext(full)[1].lower()
+    if not full.startswith(STATIC + os.sep) or ext not in _TYPES or not os.path.isfile(full):
+        h.send_error(404)
+        return
+    with open(full, "rb") as f:
+        data = f.read()
+    h.send_response(200)
+    h.send_header("Content-Type", _TYPES[ext])
+    h.send_header("Content-Length", str(len(data)))
+    h.send_header("Cache-Control", "public, max-age=86400")
+    h.end_headers()
+    h.wfile.write(data)
+
+
 SERVER_ROUTES = [
     ("GET", "/", get_banner, "open"),
     ("GET", "/status", get_status, "open"),
+    ("GET", "/dash/static/*", get_static, "open"),
 ]
 
 
