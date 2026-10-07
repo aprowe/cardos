@@ -63,12 +63,14 @@ void power_wake_now(void);
 
 /* Off now, on purpose -- fn-o, from anywhere. Unlike the idle timeout this
  * is not undone by power_tick() just because the idle clock is still low
- * (the keypress that asked for this just reset it); it holds dark until the
- * next key wakes it, same as the idle-triggered dark does. */
+ * (the keypress that asked for this just reset it); it holds dark until
+ * fn-c, fn-o or opt-backspace wakes it (src/main.c), same as the
+ * idle-triggered dark does. */
 void power_off_now(void);
 
 /* The dim clock now (fn-c), as power_off_now is black now (fn-o): held
- * until a key, the backlight at its lowest, a face redrawn once a minute. */
+ * the same way, the backlight at its lowest, a face redrawn once a
+ * minute. */
 void power_clock_now(void);
 
 /* Settings > Display > Sleep: what the idle timeout's "off" shows. */

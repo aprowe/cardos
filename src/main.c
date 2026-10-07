@@ -1578,11 +1578,23 @@ void app_main(void) {
       /* Wake first. A key pressed at a dark screen means "come back", and
        * acting on it as well would open an app nobody asked for. */
       if (power_dimmed()) {
-        power_wake();
-        /* Not from the serial port: that is a program typing a command, not
-         * someone at a dark screen, and swallowing the first byte cut the
-         * first letter off every command sent after a pause (2026-09-30). */
-        if (!from_serial) k = 0;
+        /* Black and the clock are a sleeping screen, not a merely dim one:
+         * only the keys that name a sleep state -- fn-o, fn-c -- or the
+         * universal way-out, opt-backspace, wake it. Anything else is a key
+         * brushed by accident and must not light a screen meant to stay
+         * dark. A dim screen (not yet fully asleep) still wakes on any key,
+         * as before. */
+        int wakes_asleep = k == KEY_FN_LETTER('o') || k == KEY_FN_LETTER('c') ||
+                            k == KEY_QUIT;
+        if (power_asleep() && !wakes_asleep && !from_serial) {
+          k = 0;
+        } else {
+          power_wake();
+          /* Not from the serial port: that is a program typing a command, not
+           * someone at a dark screen, and swallowing the first byte cut the
+           * first letter off every command sent after a pause (2026-09-30). */
+          if (!from_serial) k = 0;
+        }
       }
     }
     power_tick();

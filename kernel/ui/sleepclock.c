@@ -5,7 +5,9 @@
  * the backlight's lowest, drawn once a minute and not otherwise. While it
  * shows, display_freeze() keeps everything else off the panel: apps and
  * shells go on running and painting into nothing, so nothing has to stop,
- * and a key wakes the screen and repaints it all (kernel/sys/power.c).
+ * and fn-c, fn-o or opt-backspace wakes the screen and repaints it all --
+ * not any key, so a key brushed by accident does not light it
+ * (src/main.c, kernel/sys/power.c).
  */
 #include "kernel/ui/sleepclock.h"
 #include "kernel/ui/draw.h"

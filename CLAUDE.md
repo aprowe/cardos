@@ -407,8 +407,11 @@ Settings > Display > Sleep shows (clock, the default, or black; prefs
 (`kernel/ui/sleepclock.c`) is clock56 in dark grey on black with the date,
 the backlight at its floor, drawn once a minute. While it shows,
 `display_freeze(1)` drops every blit to the panel, so apps and shells keep
-running and paint into nothing; any key wakes, unfreezes and repaints
-(power_set_painters). The loop polls every 40 ms while asleep, not 5.
+running and paint into nothing; fn-c, fn-o or opt-backspace wakes,
+unfreezes and repaints (power_set_painters) -- not any key, so a key
+brushed by accident (in a bag, under a book) does not light a screen that
+is asleep on purpose; a merely dimmed screen still wakes on any key, as
+before. The loop polls every 40 ms while asleep, not 5.
 
 **The launcher's order is chosen, not the card's** (2026-10-01).
 `/config/favorites.txt` (written with a default at first boot, hand-
