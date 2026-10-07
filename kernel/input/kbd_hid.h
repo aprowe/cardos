@@ -31,6 +31,10 @@
  * on the Cardputer's own keyboard. See KEY_QUIT in kernel/drv/keyboard.h. */
 #define KBD_KEY_QUIT 0x84
 
+/* Ctrl and Alt (Opt) together on u: update everything now. See
+ * KEY_UPDATE_ALL in kernel/drv/keyboard.h. */
+#define KBD_KEY_UPDATE_ALL 0x87
+
 /* Must match KEY_OPT_DIGIT / KEY_OPT_LETTER in kernel/drv/keyboard.h. Repeated
  * because this module is portable and that one is device code; the test is
  * what keeps the two in step. */

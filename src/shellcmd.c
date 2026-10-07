@@ -17,6 +17,7 @@
 #include "kernel/sys/env.h"
 #include "kernel/sys/clock.h"
 #include "kernel/sys/hotkeys.h"
+#include "kernel/sys/notify.h"
 #include "kernel/sys/sio.h"
 #include "kernel/net/gauth.h"
 
@@ -520,6 +521,17 @@ void cmd_update(const char *arg) {
   if (!c.nstale_apps && !c.firmware_stale) {
     con_write("everything is current\n");
     return;
+  }
+  {
+    char text[64];
+    if (c.nstale_apps && c.firmware_stale)
+      snprintf(text, sizeof text, "%d app%s and the firmware", c.nstale_apps,
+               c.nstale_apps == 1 ? "" : "s");
+    else if (c.nstale_apps)
+      snprintf(text, sizeof text, "%d app%s", c.nstale_apps, c.nstale_apps == 1 ? "" : "s");
+    else
+      snprintf(text, sizeof text, "the firmware (%s)", flavor);
+    notify_post("Update", "Update available", text);
   }
   for (i = 0; i < c.m.napps; i++)
     if (c.stale[i]) con_printf("  app %s\n", c.m.app[i].name);

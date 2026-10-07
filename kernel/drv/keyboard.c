@@ -274,7 +274,10 @@ static uint8_t translate(int x, int y) {
    * otherwise mean, which is the point of having one. */
   if (s_opt) {
     char base = KEYMAP[y][x];
-    if (base >= '0' && base <= '9') c = (char)KEY_OPT_DIGIT(base - '0');
+    /* ctrl-opt-u: update everything, checked before the plain opt-letter
+     * case claims 'u' for a user hotkey. */
+    if (s_ctrl && base == 'u') c = (char)KEY_UPDATE_ALL;
+    else if (base >= '0' && base <= '9') c = (char)KEY_OPT_DIGIT(base - '0');
     else if (base >= 'a' && base <= 'z') c = (char)KEY_OPT_LETTER(base);
     /* opt-backspace leaves the app, the same as fn-`: the two keys sit
      * on opposite corners and either hand finds one of them. */

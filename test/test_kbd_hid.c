@@ -242,3 +242,22 @@ void test_fn_escape_is_the_quit_chord_on_both_keyboards(void) {
   CHECK(KEY_QUIT != KEY_LEFT && KEY_QUIT != KEY_RIGHT);
   CHECK(!KEY_IS_FN(KEY_QUIT) && !KEY_IS_OPT(KEY_QUIT));
 }
+
+/* Ctrl-opt-u updates everything, from wherever, without finding the
+ * console first -- and has to survive being typed into a text field like
+ * every other chord, so it needs a code of its own rather than letting the
+ * opt branch turn it into a plain opt-u hotkey. */
+void test_ctrl_opt_u_is_the_update_all_chord_on_both_keyboards(void) {
+  CHECK_EQ(kbd_hid_translate(0x18, KBD_MOD_LCTRL | KBD_MOD_LALT), KBD_KEY_UPDATE_ALL);
+  CHECK_EQ(kbd_hid_translate(0x18, KBD_MOD_RCTRL | KBD_MOD_RALT), KBD_KEY_UPDATE_ALL);
+  CHECK_EQ(KBD_KEY_UPDATE_ALL, KEY_UPDATE_ALL);
+  /* Opt alone still gives the plain hotkey slot; ctrl alone still gives
+   * the app its control character. */
+  CHECK_EQ(kbd_hid_translate(0x18, KBD_MOD_LALT), KBD_KEY_OPT_LETTER('u'));
+  CHECK_EQ(kbd_hid_translate(0x18, KBD_MOD_LCTRL), 21);   /* ctrl-u */
+  CHECK_EQ(kbd_hid_translate(0x18, 0), 'u');
+  CHECK(KEY_UPDATE_ALL != KEY_UP && KEY_UPDATE_ALL != KEY_DOWN);
+  CHECK(KEY_UPDATE_ALL != KEY_LEFT && KEY_UPDATE_ALL != KEY_RIGHT);
+  CHECK(KEY_UPDATE_ALL != KEY_QUIT && KEY_UPDATE_ALL != KEY_VOL_UP && KEY_UPDATE_ALL != KEY_VOL_DOWN);
+  CHECK(!KEY_IS_FN(KEY_UPDATE_ALL) && !KEY_IS_OPT(KEY_UPDATE_ALL));
+}

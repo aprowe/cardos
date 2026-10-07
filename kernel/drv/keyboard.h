@@ -72,6 +72,13 @@
 #define KEY_VOL_DOWN  0x85
 #define KEY_VOL_UP    0x86
 
+/* Ctrl and opt together, on the u key: update everything now, from
+ * wherever, without going to the console first. A chord of its own for
+ * the same reason KEY_QUIT is -- it has to survive being typed into a
+ * text field, and the opt branch alone would otherwise turn it into a
+ * plain opt-u (a user hotkey slot). */
+#define KEY_UPDATE_ALL 0x87
+
 #define KEY_UP        0x80   /* the ; , . / keys double as arrows under Fn */
 #define KEY_DOWN      0x81
 #define KEY_LEFT      0x82

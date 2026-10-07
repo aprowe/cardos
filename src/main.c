@@ -1119,6 +1119,15 @@ static int global_key(uint8_t k) {
     power_clock_now();
     return 1;
 
+  /* ctrl-opt-u: update everything now, the same code path `update all`
+   * runs at the console -- so the chord works from wherever, without
+   * finding the console first. */
+  case KEY_UPDATE_ALL:
+    enter_console();
+    cmd_update("all");
+    prompt();
+    return 1;
+
   default:
     /* Any other opt letter is a shortcut if the user bound one (`hotkey` in
      * the console, or k in the launcher). Unbound, it is swallowed rather
