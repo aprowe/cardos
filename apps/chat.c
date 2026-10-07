@@ -59,6 +59,7 @@ static struct {
   uint32_t next_poll;
   char     status[24];
   int      offline;
+  int      dirty;                  /* something was marked since the last tick */
   CRect    at;
   int      have_at;
 } C;
@@ -71,9 +72,11 @@ static CRect rect(int x, int y, int w, int h) {
   return r;
 }
 
-static void damage_in(void)  { if (C.have_at) api->damage(rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
-static void damage_log(void) { if (C.have_at) api->damage(rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
-static void damage_bar(void) { if (C.have_at) api->damage(rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
+/* Marked, and remembered: tick says so, or a message that arrives while no
+ * key is pressed waits for one to be drawn (2026-10-06). */
+static void damage_in(void)  { C.dirty = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
+static void damage_log(void) { C.dirty = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
+static void damage_bar(void) { C.dirty = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
 
 static int same(const char *a, const char *b) {
   while (*a && *a == *b) { a++; b++; }
@@ -397,9 +400,12 @@ static int app_key(void *st, uint8_t k) {
 }
 
 static int app_tick(void *st, uint32_t now) {
+  int d;
   (void)st;
   if (!C.naming) poll_server(now);
-  return 0;
+  d = C.dirty;
+  C.dirty = 0;
+  return d;
 }
 
 /* Always taking text, so a spoken sentence reaches the prompt. */
