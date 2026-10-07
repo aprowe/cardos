@@ -246,6 +246,12 @@ int display_init(void) {
 static uint16_t *s_tgt;
 static int s_tgt_x, s_tgt_y, s_tgt_w, s_tgt_h;
 
+/* Frozen: blits to the panel are dropped (blits into a target still work).
+ * For the sleep clock, which owns the panel while the shells go on drawing
+ * into nothing (kernel/ui/sleepclock.c). */
+static int s_frozen;
+void display_freeze(int on) { s_frozen = on; }
+
 void display_target(uint16_t *buf, int x, int y, int w, int h) {
   s_tgt = buf;
   s_tgt_x = x; s_tgt_y = y; s_tgt_w = w; s_tgt_h = h;
@@ -266,6 +272,7 @@ static void to_target(int x, int y, int w, int h, const uint16_t *pixels) {
 void display_blit(int x, int y, int w, int h, const uint16_t *pixels) {
   if (!s_panel || w <= 0 || h <= 0) return;
   if (s_tgt) { to_target(x, y, w, h, pixels); return; }
+  if (s_frozen) return;
   if (s_panel_lock) xSemaphoreTake(s_panel_lock, portMAX_DELAY);
   if (esp_lcd_panel_draw_bitmap(s_panel, x, y, x + w, y + h, pixels) == ESP_OK) {
     /* Only if something was queued: nothing else will ever give it. */

@@ -5,10 +5,11 @@
 #include "kernel/sys/bg.h"
 #include "kernel/sys/prefs.h"
 #include "kernel/drv/display.h"
+#include "kernel/sys/clock.h"
 
 #define HOLDS_MAX 4
 
-enum { LIT = 0, DIMMED, DARK };
+enum { LIT = 0, DIMMED, DARK, CLOCK };
 
 static int s_state;
 static int s_was;          /* the brightness the user chose, to come back to */
@@ -17,6 +18,39 @@ static int s_dim_s = POWER_DIM_DEFAULT_S;
 static int s_off_s = POWER_OFF_DEFAULT_S;
 static int s_forced;       /* dark by request, not by the idle timeout */
 static const void *s_hold[HOLDS_MAX];
+static int s_sleep_clock = -1;   /* Settings > Display > Sleep: 1 clock, 0 black */
+static void (*s_paint_clock)(void), (*s_repaint)(void);
+static uint32_t s_clock_minute;
+
+void power_set_painters(void (*paint_clock)(void), void (*repaint)(void)) {
+  s_paint_clock = paint_clock;
+  s_repaint = repaint;
+}
+
+int  power_sleep_clock(void) {
+  if (s_sleep_clock < 0) s_sleep_clock = prefs_get_u16("sleep_clk", 1) != 0;
+  return s_sleep_clock;
+}
+void power_set_sleep_clock(int on) { s_sleep_clock = on != 0; prefs_set_u16("sleep_clk", s_sleep_clock); }
+
+int power_showing_clock(void) { return s_state == CLOCK; }
+int power_asleep(void) { return s_state == DARK || s_state == CLOCK; }
+
+static uint32_t minute_now(void) {
+  uint32_t t = clock_epoch();
+  return t ? t / 60 : bg_idle_ms() / 60000;
+}
+
+/* The dim clock: the backlight at its lowest, the face painted, and the panel
+ * frozen against everything else until a key. */
+static void to_clock(void) {
+  if (!s_paint_clock) { display_backlight(0); s_state = DARK; return; }
+  display_backlight(1);
+  display_set_brightness_now(DISPLAY_BRIGHT_MIN);
+  s_state = CLOCK;
+  s_clock_minute = minute_now();
+  s_paint_clock();
+}
 
 /* From NVS once, on first use: after boot has restored /config/settings.txt,
  * which is why it is not done at init. */
@@ -43,7 +77,9 @@ void power_set_timeouts(int dim_s, int off_s) {
 int power_dimmed(void) { return s_state != LIT; }
 
 void power_wake(void) {
+  int was_clock = s_state == CLOCK;
   if (s_state == LIT) return;
+  display_freeze(0);            /* whatever put it to sleep, the panel is back */
 
   /* Back to what it was, not to full: waking a screen brighter than the
    * setting would be its own small insult. */
@@ -51,6 +87,7 @@ void power_wake(void) {
   display_set_brightness_now(s_was ? s_was : 100);
   s_state = LIT;
   s_forced = 0;
+  if (was_clock && s_repaint) s_repaint();     /* what the clock covered */
 }
 
 void power_wake_now(void) {
@@ -58,8 +95,15 @@ void power_wake_now(void) {
   power_wake();
 }
 
+void power_clock_now(void) {
+  if (s_state == LIT) s_was = display_brightness();
+  s_forced = 1;
+  to_clock();
+}
+
 void power_off_now(void) {
   if (s_state == LIT) s_was = display_brightness();
+  if (s_state == CLOCK) display_freeze(0);
   display_backlight(0);
   s_state = DARK;
   s_forced = 1;
@@ -87,6 +131,11 @@ void power_tick(void) {
   uint32_t idle = bg_idle_ms();
 
   load();
+  /* The clock face once a minute, and nothing between. */
+  if (s_state == CLOCK && minute_now() != s_clock_minute) {
+    s_clock_minute = minute_now();
+    if (s_paint_clock) s_paint_clock();
+  }
   /* Held on by an app, or never set to dim: lit, and that is all. */
   if (held() || !s_dim_s || idle < (uint32_t)s_dim_s * 1000u) {
     /* Not if forced dark: the keypress that asked for that just reset the
@@ -106,8 +155,9 @@ void power_tick(void) {
 
   if (s_state == DIMMED && s_off_s && idle >= (uint32_t)s_off_s * 1000u) {
     /* Off, not asleep. The shell keeps running, the radios stay up, a script
-     * keeps ticking -- only the panel stops drawing power. */
-    display_backlight(0);
-    s_state = DARK;
+     * keeps ticking -- only the panel stops drawing power. Or the dim clock,
+     * if that is what sleep is set to show. */
+    if (power_sleep_clock()) to_clock();
+    else { display_backlight(0); s_state = DARK; }
   }
 }

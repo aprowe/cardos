@@ -67,4 +67,18 @@ void power_wake_now(void);
  * next key wakes it, same as the idle-triggered dark does. */
 void power_off_now(void);
 
+/* The dim clock now (fn-c), as power_off_now is black now (opt-o): held
+ * until a key, the backlight at its lowest, a face redrawn once a minute. */
+void power_clock_now(void);
+
+/* Settings > Display > Sleep: what the idle timeout's "off" shows. */
+int  power_sleep_clock(void);
+void power_set_sleep_clock(int on);
+
+int  power_showing_clock(void);
+int  power_asleep(void);              /* dark or the clock */
+
+/* The clock's painter, and the repaint that puts the screen back on waking. */
+void power_set_painters(void (*paint_clock)(void), void (*repaint)(void));
+
 #endif /* CARDOS_POWER_H */

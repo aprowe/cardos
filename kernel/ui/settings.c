@@ -287,6 +287,13 @@ static void act_nchat(SettingsState *st) {
   snprintf(st->note, sizeof st->note, notify_chat_on() ? "Chat messages pop up while WiFi is on" : "no Chat pop-ups");
 }
 
+static void v_sleep(char *b, size_t n) { snprintf(b, n, "%s", power_sleep_clock() ? "clock" : "black"); }
+static void act_sleep(SettingsState *st) {
+  power_set_sleep_clock(!power_sleep_clock());
+  snprintf(st->note, sizeof st->note, power_sleep_clock()
+           ? "asleep, a dim clock (fn-c for it now)" : "asleep, black (opt-o for it now)");
+}
+
 static void v_volume(char *b, size_t n) {
   if (!speaker_volume()) snprintf(b, n, "%s", "muted");
   else snprintf(b, n, "%d%%", speaker_volume());
@@ -318,6 +325,7 @@ static const Row ROWS[] = {
   { "Display",   "Brightness",   v_bright, act_bright,     0 },
   { NULL,        "Dim after",    v_dim,    act_dim,        0 },
   { NULL,        "Screen off",   v_off,    act_off,        0 },
+  { NULL,        "Sleep shows",  v_sleep,  act_sleep,      0 },
   { NULL,        "Menu bar",     v_menubar, act_menubar,   1 },
 
   { "Sound",     "Volume",       v_volume, act_volume,     0 },

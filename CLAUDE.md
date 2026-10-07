@@ -400,6 +400,16 @@ do not ask, so do not get a fifth field). Clock alarms ring from
 kernel/sys/alarm.c and are logged. The only global setting is Settings >
 Notifications > Chat.
 
+**Sleep: black or a dim clock** (2026-10-07). opt-o is black now (a Build
+turn, `power_off_now`); fn-c is the dim clock now (`power_clock_now`), and
+Settings > Display > Sleep shows (clock, the default, or black; prefs
+`sleep_clk`) is what the Screen-off timeout goes to. The clock
+(`kernel/ui/sleepclock.c`) is clock56 in dark grey on black with the date,
+the backlight at its floor, drawn once a minute. While it shows,
+`display_freeze(1)` drops every blit to the panel, so apps and shells keep
+running and paint into nothing; any key wakes, unfreezes and repaints
+(power_set_painters). The loop polls every 40 ms while asleep, not 5.
+
 **The launcher's order is chosen, not the card's** (2026-10-01).
 `/config/favorites.txt` (written with a default at first boot, hand-
 editable) lists apps or folders, in order: those come first, and a

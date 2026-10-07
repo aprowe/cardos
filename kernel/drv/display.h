@@ -53,6 +53,9 @@ void display_blit(int x, int y, int w, int h, const uint16_t *pixels);
  * sending it whole: see display.c. */
 void display_target(uint16_t *buf, int x, int y, int w, int h);
 
+/* While frozen, blits to the panel are dropped: the sleep clock has it. */
+void display_freeze(int on);
+
 /* A copy of every blit, for a screenshot. There is no framebuffer to read
  * and the panel is write-only, so the only way to know what is on the screen
  * is to watch it being sent: set a tap, repaint everything, clear the tap.

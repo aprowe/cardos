@@ -29,6 +29,7 @@
 #include "kernel/sys/blip.h"
 #include "kernel/ui/overlay.h"
 #include "kernel/sys/notify.h"
+#include "kernel/ui/sleepclock.h"
 #include "kernel/drv/imu.h"
 #include "kernel/mem/mem.h"
 #include "kernel/task/sched.h"
@@ -1031,6 +1032,10 @@ static void volume_panel_tick(void) {
   if (overlay_showing_volume()) overlay_close();
 }
 
+/* The loop's pause: 5 ms while someone is there; 40 once the screen sleeps,
+ * when a keypress need only wake it -- an eighth of the polling. */
+static int rest_ms(void) { return power_asleep() ? 40 : 5; }
+
 static int global_key(uint8_t k) {
   /* The panel is above everything, so it gets the key first. */
   if (s_opt_help) {
@@ -1107,6 +1112,11 @@ static int global_key(uint8_t k) {
    * reaches, so the same "any key wakes it" path brings it back. */
   case KEY_OPT_LETTER('o'):
     power_off_now();
+    return 1;
+  /* The dim clock now: fn, not opt, because opt letters are the user's own
+   * shortcuts and reserving one could take a binding away. */
+  case KEY_FN_LETTER('c'):
+    power_clock_now();
     return 1;
 
   default:
@@ -1193,6 +1203,7 @@ static void repaint_shells(void) {
 
 /* Everything, the console included -- what a screenshot needs painted. */
 static void repaint_all(void) {
+  if (power_showing_clock()) { sleepclock_paint(); return; }   /* it has the panel */
   if (s_mode == MODE_CONSOLE) con_repaint();
   else repaint_shells();
   alarm_paint_over();          /* a ringing alarm stays on top */
@@ -1474,6 +1485,7 @@ void app_main(void) {
   }
   alarm_set_repaint(repaint_all);    /* what a ringing alarm's panel covered */
   notify_init(repaint_all);          /* and what a banner covered */
+  power_set_painters(sleepclock_paint, repaint_all);   /* the sleep clock, and waking */
 
   /* The icon scan, whichever shell comes up. It is also what writes a new
    * firmware's apps to the card (seed_capps) and the command catalog, and it
@@ -1620,7 +1632,7 @@ void app_main(void) {
         uint8_t arrow = keyboard_arrow_for(k);
         notify_center_key(arrow ? arrow : k);
       }
-      vTaskDelay(pdMS_TO_TICKS(5));
+      vTaskDelay(pdMS_TO_TICKS(rest_ms()));
       continue;
     }
 
@@ -1645,7 +1657,7 @@ void app_main(void) {
           s_mode = MODE_DESKTOP;      /* the launcher handed over */
         }
       }
-      vTaskDelay(pdMS_TO_TICKS(5));
+      vTaskDelay(pdMS_TO_TICKS(rest_ms()));
       continue;
     }
 
@@ -1668,7 +1680,7 @@ void app_main(void) {
         con_write("back at the console\n");
         prompt();
       }
-      vTaskDelay(pdMS_TO_TICKS(5));
+      vTaskDelay(pdMS_TO_TICKS(rest_ms()));
       continue;
     }
 
@@ -1717,6 +1729,7 @@ void app_main(void) {
       uint32_t quiet = bg_idle_ms();
       int ms = (s_mode != MODE_CONSOLE) ? 5 : 10;
       if (quiet > 2000) ms = 25;
+      if (power_asleep()) ms = 40;
       vTaskDelay(pdMS_TO_TICKS(ms));
     }
   }
