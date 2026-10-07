@@ -349,6 +349,21 @@ static void talk_say(void) {
   C.next_poll = api->ticks_ms() + 1500;
 }
 
+/* The screen keeps drawing while it is dark (fn-o, fn-c, the idle
+ * timeout), same as it does for the main agent's own conversation --
+ * kernel/sys/agent.c's notify_done -- which this has no equivalent to:
+ * a document conversation is this app's own state (C.sid and all),
+ * gone the moment the app closes, so unlike the main agent it cannot
+ * notify once closed, only while open and ticking (foreground in the
+ * launcher, or any window at all on the desktop). The title says which
+ * document and the text is the reply itself, cut to what the banner can
+ * hold. */
+static void notify_doc_reply(const char *text) {
+  char title[32];
+  api->fmt(title, sizeof title, "Claude: %s", C.name);
+  api->notify(title, text);
+}
+
 static void talk_poll(void) {
   char url[160];
   const char *body;
@@ -363,6 +378,7 @@ static void talk_poll(void) {
   if (reply[0] == 'e') {
     body = reply[5] ? reply + 6 : "Claude did not answer.";
     say_line(body, WHO_ERR);
+    notify_doc_reply(body);
     return;
   }
   if (reply[0] != 'r') return;
@@ -371,6 +387,7 @@ static void talk_poll(void) {
   while (*body && *body != '\n') body++;
   if (*body) body++;
   say_line(body, WHO_CLAUDE);
+  notify_doc_reply(body[0] ? body : "a revision is ready: ctrl-s saves it");
   if (rev) {
     C.have_rev = 1;
     say_line("[a revision is ready: ctrl-s saves it]", WHO_TOOL);

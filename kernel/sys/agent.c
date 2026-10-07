@@ -12,6 +12,7 @@
 #include "kernel/net/wifi.h"
 #include "kernel/sys/chatlog.h"
 #include "kernel/sys/input.h"
+#include "kernel/sys/notify.h"
 #include "kernel/ui/overlay.h"
 #include "kernel/ui/shell.h"
 
@@ -404,17 +405,32 @@ void agent_new(void) {
 }
 
 /* Show the answer where the user is: the terminal, if it is on screen, or
- * an overlay over whatever is, taken down a few seconds later. */
+ * an overlay over whatever is, taken down a few seconds later. This alone
+ * used to be the whole of it, which meant nothing said so if the screen
+ * was asleep (fn-o, fn-c, the idle timeout) when the reply landed -- the
+ * app was still "seen" by agent_seen's clock, which this app_tick keeps
+ * resetting every pass whether or not the panel is lit, and a frozen
+ * overlay is not news to anyone. notify_post, below, is unconditional and
+ * is the real fix: this call stays for whoever is actively looking at
+ * something else on an awake screen. */
 static void show_answer(const char *text) {
   if (now_us() - s_seen_us < 500 * 1000) return;
   overlay_result(text);
   s_toast_until_us = now_us() + (int64_t)TOAST_MS * 1000;
 }
 
+/* The chime, a banner, and a line in fn-n's list -- every time, whether
+ * the terminal is open, closed, foreground, backgrounded or the screen is
+ * dark: agent_tick (src/main.c) runs unconditionally, which is the one
+ * thing that makes this reach a closed app's conversation at all. */
+static void notify_done(const char *text) {
+  notify_post("Claude", "Claude", text);
+}
+
 static void finish_with(const char *text) {
   s_running = 0;
   status("");
-  if (text && *text) { transcript_add("", text); show_answer(text); }
+  if (text && *text) { transcript_add("", text); show_answer(text); notify_done(text); }
 }
 
 /* The reply is in. Read it, act on it, and either start the next round or
@@ -451,7 +467,7 @@ static void on_reply(int rc) {
   if (r.stop != CHAT_STOP_TOOL || r.ntools == 0) {
     s_running = 0;
     status(r.stop == CHAT_STOP_MAX ? "answer cut short" : "");
-    if (r.text[0]) show_answer(r.text);
+    if (r.text[0]) { show_answer(r.text); notify_done(r.text); }
     return;
   }
 

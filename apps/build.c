@@ -42,6 +42,7 @@
 #define REPLY_MAX 4000
 
 #define POLL_MS   1200
+#define JOB_PATH  CAPP_CACHE "/build-job.txt"   /* base, token, job id -- see job_save */
 
 #define CLR_BG     CAPP_RGB(18, 20, 26)
 #define CLR_BAR    CAPP_RGB(48, 40, 96)
@@ -200,6 +201,60 @@ static int online(void) {
   return 0;
 }
 
+/* A job outstanding when the app closes is not told to stop -- apps are
+ * never told they are closing -- and the server keeps going regardless.
+ * Without this the device simply forgot which id to ask about, and
+ * reopening Build started a fresh conversation over one still cooking.
+ * Saved whenever a job starts, removed whenever it resolves; capp_main
+ * reads it back and asks right away rather than waiting POLL_MS, so an
+ * answer that finished while the app was shut shows up the moment it
+ * reopens instead of up to 1.2s later.
+ *
+ * This still only reaches a Build that gets reopened -- there is nowhere
+ * for the poll to run while nothing has the app loaded at all, the way
+ * kernel/sys/agent.c's agent_tick runs for apps/claude.c's own
+ * conversation whether or not that app is open. Doing the same for Build
+ * would need a persistent kernel-side poller of its own; this is the
+ * lighter fix of the two the task allowed. */
+static void job_save(void) {
+  char buf[256];
+  int fd;
+  api->fmt(buf, sizeof buf, "%s\n%s\n%d\n", C.base, C.token, C.job);
+  fd = api->open(JOB_PATH, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
+  if (fd < 0) return;
+  api->write(fd, buf, api->str_len(buf));
+  api->close(fd);
+}
+
+static void job_clear(void) { api->remove(JOB_PATH); }
+
+static void job_resume(void) {
+  char buf[256], *p, *line;
+  int fd, n;
+  fd = api->open(JOB_PATH, CAPP_O_READ);
+  if (fd < 0) return;
+  n = api->read(fd, buf, sizeof buf - 1);
+  api->close(fd);
+  if (n <= 0) return;
+  buf[n] = 0;
+
+  p = buf;
+  line = p; while (*p && *p != '\n') p++; if (*p) *p++ = 0;
+  api->fmt(C.base, sizeof C.base, "%s", line);
+  line = p; while (*p && *p != '\n') p++; if (*p) *p++ = 0;
+  api->fmt(C.token, sizeof C.token, "%s", line);
+  line = p; while (*p && *p != '\n') p++; *p = 0;
+  C.job = 0;
+  for (; *line >= '0' && *line <= '9'; line++) C.job = C.job * 10 + (*line - '0');
+
+  if (C.job <= 0) { job_clear(); return; }
+  note("picking back up an answer still coming...");
+  C.progress[0] = 0;
+  C.log_seen = 0;
+  C.started = api->ticks_ms();
+  C.next_poll = C.started;
+}
+
 /* Post the message and keep the id. Short: the server answers as soon as it
  * has queued the work, not when it has finished it. */
 static void send_now(void) {
@@ -237,6 +292,7 @@ static void send_now(void) {
   C.log_seen = 0;
   C.started = api->ticks_ms();
   C.next_poll = C.started + POLL_MS;
+  job_save();
 }
 
 /* The next queued message into the send slot, if there is one. The send
@@ -309,8 +365,13 @@ static void poll_now(void) {
     while (*body && *body != '\n') body++;
     if (*body == '\n') body++;
     push_wrapped(body, err ? WHO_ERR : WHO_CLAUDE);
+    /* The chime, a banner and a line in fn-n's list, same as Claude's own
+     * conversation (kernel/sys/agent.c) -- every time, not only while
+     * Build happens to be the app on screen. */
+    api->notify("Build", body);
   }
   C.job = 0;
+  job_clear();
   C.scroll = 0;
   api->fmt(C.status, sizeof C.status, "%lus",
            (unsigned long)((api->ticks_ms() - C.started) / 1000u));
@@ -639,6 +700,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   note("Claude, through the server on your PC.");
   note("It can read and edit the CardOS folder.");
   note("Type and press enter.");
+  job_resume();
 
   UI.paint = app_paint;
   UI.key = app_key;
