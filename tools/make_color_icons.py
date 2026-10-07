@@ -108,6 +108,26 @@ ICONS = {
         "................",
     ],
 
+    # Two speech bubbles, one each way: talk between the devices.
+    "Chat": [
+        "................",
+        ".KKKKKKKKK......",
+        "KbbbbbbbbbK.....",
+        "KbWWWWWWWbK.....",
+        "KbbbbbbbbbK.....",
+        "KbWWWWWbbbK.....",
+        ".KKKbKKKKK......",
+        "...KbK.KKKKKKKK.",
+        "...KK.KggggggggK",
+        "......KgWWWWWWgK",
+        "......KggggggggK",
+        "......KgWWWWgggK",
+        ".......KKKKKgKK.",
+        "...........KgK..",
+        "............KK..",
+        "................",
+    ],
+
     # A red kart from behind on the road, kerbs either side.
     "Kart": [
         "................",

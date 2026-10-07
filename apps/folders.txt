@@ -36,6 +36,7 @@ photo     Make
 pinball   Games
 quoridor  Games
 kart      Games
+chat      Net
 roku      Net
 screen    Net
 share     Net
