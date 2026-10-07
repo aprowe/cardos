@@ -10,7 +10,7 @@ static HotkeyStore s_store;
 
 /* The letters global_key answers to itself. Kept here rather than in main.c
  * so the launcher, the console and the tests refuse the same ones. */
-static const char RESERVED[] = "bwho";
+static const char RESERVED[] = "bwh";
 
 static int slot_of(char letter) {
   if (letter >= 'A' && letter <= 'Z') letter = (char)(letter + 32);

@@ -291,7 +291,7 @@ static void v_sleep(char *b, size_t n) { snprintf(b, n, "%s", power_sleep_clock(
 static void act_sleep(SettingsState *st) {
   power_set_sleep_clock(!power_sleep_clock());
   snprintf(st->note, sizeof st->note, power_sleep_clock()
-           ? "asleep, a dim clock (fn-c for it now)" : "asleep, black (opt-o for it now)");
+           ? "asleep, a dim clock (fn-c for it now)" : "asleep, black (fn-o for it now)");
 }
 
 static void v_volume(char *b, size_t n) {

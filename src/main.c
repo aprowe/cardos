@@ -945,7 +945,7 @@ static int s_opt_help;
 
 static void show_opt_help(void) {
   s_opt_help = 1;
-  help_paint("Shortcuts", "opt-1\tlauncher\nopt-2\tdesktop\nopt-3\tconsole\nopt-0\tbacklight to full\nopt-9\tbacklight down a step\nopt-8\tlouder\nopt-7\tquieter\nopt-o\tscreen off\nopt-t\ttodo\nopt-s\tstocks\nopt-e\tedit\nopt-m\tmines\nopt-b\treconnect bluetooth\nopt-w\treconnect wifi\n",
+  help_paint("Shortcuts", "opt-1\tlauncher\nopt-2\tdesktop\nopt-3\tconsole\nopt-0\tbacklight to full\nopt-9\tbacklight down a step\nopt-8\tlouder\nopt-7\tquieter\nfn-o\tscreen off, black\nfn-c\tscreen off, dim clock\nfn-n\tnotifications\nopt-t\ttodo\nopt-s\tstocks\nopt-e\tedit\nopt-m\tmines\nopt-b\treconnect bluetooth\nopt-w\treconnect wifi\n",
              "fn-h\tthe keys of whatever is running\nany key\tclose this\n");
 }
 
@@ -1110,7 +1110,7 @@ static int global_key(uint8_t k) {
 
   /* Screen off, on request, from anywhere -- the same dark the idle timeout
    * reaches, so the same "any key wakes it" path brings it back. */
-  case KEY_OPT_LETTER('o'):
+  case KEY_FN_LETTER('o'):
     power_off_now();
     return 1;
   /* The dim clock now: fn, not opt, because opt letters are the user's own

@@ -400,7 +400,7 @@ do not ask, so do not get a fifth field). Clock alarms ring from
 kernel/sys/alarm.c and are logged. The only global setting is Settings >
 Notifications > Chat.
 
-**Sleep: black or a dim clock** (2026-10-07). opt-o is black now (a Build
+**Sleep: black or a dim clock** (2026-10-07). fn-o is black now (a Build
 turn, `power_off_now`); fn-c is the dim clock now (`power_clock_now`), and
 Settings > Display > Sleep shows (clock, the default, or black; prefs
 `sleep_clk`) is what the Screen-off timeout goes to. The clock
