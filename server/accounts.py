@@ -5,7 +5,12 @@ See docs/superpowers/specs/2026-10-06-accounts-design.md.
     CARDOS_STATE/accounts.json
       {"users":   {"alex": {"pw": "pbkdf2$...", "admin": true}, ...},
        "devices": [{"id": "d1a2", "user": "alex", "label": "ADV",
-                    "hash": sha256(token)}, ...]}
+                    "hash": sha256(token), "token": token}, ...]}
+
+The token is kept as well as its hash (2026-10-06: the owner asked for one
+that can be looked up again rather than shown once). accounts.json is
+owner-only on disk, like google.json beside it. A device from before that
+has only its hash, until it is given a new token.
 
 A request is somebody's once its token or cookie has been checked
 (app.Handler.authorised, notes._allowed, dash.logged_in): current() is
@@ -185,7 +190,9 @@ def user_for_token(token):
 
 
 def devices(user):
-    return [{"id": x["id"], "label": x["label"]} for x in load()["devices"] if x["user"] == user]
+    """Their devices, with each token where it is known."""
+    return [{"id": x["id"], "label": x["label"], "token": x.get("token")}
+            for x in load()["devices"] if x["user"] == user]
 
 
 def add_device(user, label, token=None):
@@ -197,10 +204,38 @@ def add_device(user, label, token=None):
         d = load()
         if user not in d["users"]:
             raise ValueError("no such person")
-        dev = {"id": secrets.token_hex(3), "user": user, "label": label, "hash": _token_hash(token)}
+        dev = {"id": secrets.token_hex(3), "user": user, "label": label, "hash": _token_hash(token),
+               "token": token}
         d["devices"].append(dev)
         _save(d)
     return dev["id"], token
+
+
+def new_token(user, dev_id):
+    """A device's token replaced: the old one stops working. The new one."""
+    token = secrets.token_urlsafe(18)
+    with _lock:
+        d = load()
+        for x in d["devices"]:
+            if x["id"] == dev_id and (x["user"] == user or is_admin(user)):
+                x["hash"], x["token"] = _token_hash(token), token
+                _save(d)
+                return token
+    raise ValueError("no such device")
+
+
+def know_token(token):
+    """Fill in the token of a device that has only its hash -- the server's
+    own --token, given again at every start."""
+    if not token or not enabled():
+        return
+    h = _token_hash(token)
+    with _lock:
+        d = load()
+        for x in d["devices"]:
+            if x["hash"] == h and not x.get("token"):
+                x["token"] = token
+                _save(d)
 
 
 def remove_device(user, dev_id):
@@ -227,7 +262,7 @@ def migrate(owner, password, token):
     d = {"users": {owner: {"pw": hash_password(password), "admin": True}}, "devices": []}
     if token:
         d["devices"].append({"id": secrets.token_hex(3), "user": owner, "label": "first device",
-                             "hash": _token_hash(token)})
+                             "hash": _token_hash(token), "token": token})
     dest = os.path.join(base, "users", owner)
     os.makedirs(dest, mode=0o700, exist_ok=True)
     for name in PER_USER:

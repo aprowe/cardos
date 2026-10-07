@@ -102,6 +102,7 @@ class Accounts(unittest.TestCase):
         self.assertTrue(os.path.isdir(os.path.join(self.dir, "users", "alex", "notes")))
         self.assertFalse(os.path.exists(os.path.join(self.dir, "toggl.json")))
         self.assertFalse(accounts.migrate("alex", PASSWORD, TOKEN))     # once only
+        self.assertEqual(accounts.devices("alex")[0]["token"], TOKEN)    # and it can be looked up
         # the owner's existing device token still works
         self.assertEqual(self.req("GET", "/msg", bearer=TOKEN)[0], 200)
         self.assertEqual(self.req("GET", "/msg", bearer="nonsense")[0], 403)
@@ -154,6 +155,15 @@ class Accounts(unittest.TestCase):
         self.assertEqual(accounts.user_for_token(tok), "sam")
         devs = json.loads(self.req("GET", "/dash/api/me", cookie=hers)[2])["devices"]
         self.assertEqual(sorted(d["label"] for d in devs), ["her Cardputer", "spare"])
+        # kept, so it can be looked up again
+        self.assertEqual([d["token"] for d in devs if d["label"] == "spare"], [tok])
+        # a new token: the old one stops, the new one works
+        spare = [d["id"] for d in devs if d["label"] == "spare"][0]
+        s, _, body = self.req("POST", "/dash/api/device/token", cookie=hers, js={"id": spare})
+        fresh = json.loads(body)["token"]
+        self.assertIsNone(accounts.user_for_token(tok))
+        self.assertEqual(accounts.user_for_token(fresh), "sam")
+        tok = fresh
         spare = [d["id"] for d in devs if d["label"] == "spare"][0]
         self.assertEqual(self.req("POST", "/dash/api/device/remove", cookie=hers, js={"id": spare})[0], 200)
         self.assertIsNone(accounts.user_for_token(tok))

@@ -97,6 +97,7 @@ def main(argv=None):
         if accounts.migrate(os.environ.get("CARDOS_OWNER", "alex"), os.environ["DASH_PASSWORD"],
                             args.token):
             print("  accounts: made, with %s as the owner" % os.environ.get("CARDOS_OWNER", "alex"))
+        accounts.know_token(args.token)
 
     # Threading, because a chat turn takes a minute, a render takes ten
     # seconds, and the device polls for its answer throughout. On the

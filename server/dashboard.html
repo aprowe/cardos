@@ -1743,7 +1743,11 @@ function renderMe(){
   if(!v.accounts){ el.innerHTML=h+'<p class="dim" style="margin:0">This server has one person. Accounts start the next time the server restarts with a dashboard password.</p>'; return; }
   h+=`<dl class="facts"><dt>Signed in as</dt><dd>${esc(v.user)}</dd></dl>`;
   h+='<div class="field"><label>Devices</label>';
-  h+=v.devices.length?'<ul class="plain">'+v.devices.map(d=>`<li style="display:flex;gap:8px;align-items:center;justify-content:space-between">${esc(d.label)} <button class="btn ghost sm" data-act="dev-del" data-id="${esc(d.id)}" data-label="${esc(d.label)}">Remove</button></li>`).join('')+'</ul>'
+  h+=v.devices.length?'<ul class="plain">'+v.devices.map(d=>`<li style="margin-bottom:10px">
+      <div style="display:flex;gap:8px;align-items:center;justify-content:space-between"><b>${esc(d.label)}</b>
+        <span><button class="btn ghost sm" data-act="dev-token" data-id="${esc(d.id)}" data-label="${esc(d.label)}">New token</button><button class="btn ghost sm" data-act="dev-del" data-id="${esc(d.id)}" data-label="${esc(d.label)}">Remove</button></span></div>
+      ${d.token?`<input class="inp" readonly value="${esc(d.token)}" onclick="this.select()" style="font-family:var(--mono,monospace);font-size:13px;margin-top:4px">`
+        :'<span class="faint" style="font-size:13px">Its token was made before tokens were kept here; “New token” makes one to see.</span>'}</li>`).join('')+'</ul>'
     :'<p class="dim" style="margin:0">None yet.</p>';
   h+='<span class="hint">A device signs in with a token in <code>/config/claude.token</code> on its card.</span></div>';
   h+='<div class="acts"><button class="btn primary" data-act="dev-add">Add a device</button><button class="btn ghost" data-act="pw-change">Change password</button></div>';
@@ -1761,14 +1765,20 @@ function renderPeople(){
   el.innerHTML=h;
 }
 async function showToken(r){
-  await modal({title:'The device’s token',html:`<p>Put this in <code>/config/claude.token</code> on ${esc(r.user)}’s device card, then restart it. It is shown this once.</p>
-    <p><input class="inp" readonly value="${esc(r.token)}" onclick="this.select()" style="font-family:var(--mono,monospace)"></p>`,actions:[{label:'Done',value:1,kind:'primary'}]});
+  await modal({title:'The device’s token',html:`<p>Put this in <code>/config/claude.token</code> on ${esc(r.user)}’s device card, then restart it.</p>
+    <p><input class="inp" readonly value="${esc(r.token)}" onclick="this.select()" style="font-family:var(--mono,monospace)"></p>
+    <p class="dim" style="font-size:13px">It stays on this page under the device, if you need it again.</p>`,actions:[{label:'Done',value:1,kind:'primary'}]});
 }
 async function devAdd(forUser){
   const r=await modal({title:forUser?`A device for ${forUser}`:'Add a device',input:{label:'What to call it',value:'Cardputer'},actions:[{label:'Cancel'},{label:'Make a token',value:1,kind:'primary'}],validate:v=>v?'':'Give it a name'});
   if(!r) return;
   try{ const j=await api('POST','/dash/api/device',{label:r.input,user:forUser||undefined}); await showToken(j); meLoad(); }
   catch(e){ toast(e.message,'err'); }
+}
+async function devToken(id,label){
+  const r=await modal({title:'A new token?',html:`<p>${esc(label)}’s token is replaced; the old one stops working, so the new one has to go in <code>/config/claude.token</code> on its card.</p>`,actions:[{label:'Cancel'},{label:'New token',value:1,kind:'primary'}]});
+  if(!r) return;
+  try{ const j=await api('POST','/dash/api/device/token',{id}); await showToken(j); meLoad(); }catch(e){ toast(e.message,'err'); }
 }
 async function devDel(id,label){
   const r=await modal({title:'Remove this device?',html:`<p>${esc(label)} will no longer reach the server until it is given a new token.</p>`,actions:[{label:'Cancel'},{label:'Remove',value:1,kind:'danger'}]});
@@ -1833,6 +1843,7 @@ document.addEventListener('click',e=>{
     case 'dev-add': devAdd(); break;
     case 'dev-add-for': devAdd(b.dataset.name); break;
     case 'dev-del': devDel(b.dataset.id,b.dataset.label); break;
+    case 'dev-token': devToken(b.dataset.id,b.dataset.label); break;
     case 'pw-change': pwChange(); break;
     case 'user-add': userAdd(); break;
     case 'user-del': userDel(b.dataset.name); break;

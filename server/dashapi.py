@@ -378,6 +378,20 @@ def post_device(h, args):
 
 
 @_api
+def post_device_token(h, args):
+    """a device's token replaced; the old one stops working"""
+    from . import accounts
+    if not _need_accounts(h):
+        return
+    try:
+        token = accounts.new_token(accounts.current(), _body_json(h).get("id") or "")
+    except ValueError as e:
+        _json(h, {"error": str(e)}, 400)
+        return
+    _json(h, {"ok": True, "token": token, "user": accounts.current()})
+
+
+@_api
 def post_device_remove(h, args):
     """a device's token stops working"""
     from . import accounts
@@ -449,6 +463,7 @@ ROUTES = [
     ("GET", "/dash/api/me", get_me, "open"),
     ("POST", "/dash/api/device", post_device, "open"),
     ("POST", "/dash/api/device/remove", post_device_remove, "open"),
+    ("POST", "/dash/api/device/token", post_device_token, "open"),
     ("POST", "/dash/api/password", post_password, "open"),
     ("POST", "/dash/api/user", post_user, "open"),
     ("POST", "/dash/api/user/remove", post_user_remove, "open"),
