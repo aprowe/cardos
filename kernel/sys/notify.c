@@ -92,6 +92,7 @@ static void banner_paint(void) {
   Rect was = draw_clip();
   if (!s_banner || !s_q.n) return;
   buf = (uint16_t *)malloc((size_t)DISPLAY_W * BANNER_H * 2);
+  draw_reserve_top(0);                         /* the one thing allowed there */
   draw_set_clip(R(0, 0, DISPLAY_W, BANNER_H));
   if (buf) {
     display_target(buf, 0, 0, DISPLAY_W, BANNER_H);
@@ -100,13 +101,18 @@ static void banner_paint(void) {
     display_blit(0, 0, DISPLAY_W, BANNER_H, buf);
     free(buf);
   } else banner_body();
+  draw_reserve_top(BANNER_H);                  /* and nothing else */
   draw_set_clip(was);
   s_banner_drawn = s_now;
 }
 
+static void center_paint(void);
+
+/* After a shell has painted -- a screenshot repaints everything -- what is
+ * over it goes back: the centre if it is open, else the banner. */
 void notify_paint_over(void) {
-  if (s_center) return;
-  banner_paint();
+  if (s_center) center_paint();
+  else banner_paint();
 }
 
 /* ---- posting ------------------------------------------------------------------ */
@@ -136,6 +142,8 @@ void notify_opened(const char *app) {
 }
 
 int notify_unread(void) { return nq_unread(&s_q); }
+
+int notify_covers(void) { return s_banner && !s_center ? BANNER_H : 0; }
 
 /* ---- Chat: one request every half minute, while WiFi is up -------------------- */
 
@@ -290,6 +298,7 @@ void notify_center_open(void) {
   s_center = 1;
   s_sel = 0;
   s_banner = 0;
+  draw_reserve_top(0);
   center_paint();
 }
 
@@ -339,6 +348,7 @@ void notify_tick(uint32_t now) {
   if (s_banner) {
     if ((int32_t)(now - s_banner_until) >= 0) {
       s_banner = 0;
+      draw_reserve_top(0);
       if (s_repaint && !s_center) s_repaint();  /* what the banner covered */
     } else if ((int32_t)(now - s_banner_drawn) >= 150) banner_paint();
   }

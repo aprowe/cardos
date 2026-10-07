@@ -217,6 +217,7 @@ static uint32_t s_bar_shown;
 /* Composed off the panel and sent whole, like the carousel. */
 static void paint_bar(void) {
   static uint16_t strip[DISPLAY_W * BAR_H];      /* 5.6 KB, for good: it is drawn every minute */
+  if (notify_covers()) return;                   /* under a banner; repainted when it goes */
   s_bar_shown = bar_state();
   display_target(strip, 0, 0, DISPLAY_W, BAR_H);
   draw_set_clip(R(0, 0, DISPLAY_W, BAR_H));
@@ -390,7 +391,10 @@ static void paint_offscreen(int y0, int y1, void (*body)(void)) {
 }
 
 static void paint_carousel_rows(int y0, int y1) { paint_offscreen(y0, y1, paint_carousel_body); }
-static void paint_carousel(void) { paint_carousel_rows(BAR_H, DISPLAY_H); }
+static void paint_carousel(void) {
+  int top = notify_covers() > BAR_H ? notify_covers() : BAR_H;   /* not under a banner */
+  paint_carousel_rows(top, DISPLAY_H);
+}
 
 /* One step of the slide; 1 while there is more to go. Ease-out: fast away,
  * slow to settle, which is what reads as smooth rather than mechanical. */
@@ -405,7 +409,7 @@ static int anim_step(uint32_t now) {
     s_anim = (int)((int64_t)s_anim_from * left * left / ANIM_MS * left / ANIM_MS / ANIM_MS);
   }
   /* The icons and the two lines under them; the pips are already right. */
-  paint_carousel_rows(ICON_TOP, KIND_Y + 8);
+  paint_carousel_rows(notify_covers() > ICON_TOP ? notify_covers() : ICON_TOP, KIND_Y + 8);
   return s_anim != 0;
 }
 
@@ -730,7 +734,10 @@ static void search_open(void) {
 /* Off the panel like the carousel: it cleared the screen and redrew every
  * row on each arrow, and the clear showed. */
 static void paint_search_body(void);
-static void paint_search(void) { paint_offscreen(BAR_H, DISPLAY_H, paint_search_body); }
+static void paint_search(void) {
+  int top = notify_covers() > BAR_H ? notify_covers() : BAR_H;
+  paint_offscreen(top, DISPLAY_H, paint_search_body);
+}
 
 static void paint_search_body(void) {
   int i, y = BAR_H + 26;

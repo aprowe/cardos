@@ -28,9 +28,34 @@ static uint16_t s_row[DISPLAY_W];
  * for the thing the screen spends most of its time doing. */
 static uint16_t s_text[DISPLAY_W * FONT_H];
 
-void draw_set_clip(Rect r) {
-  s_clip = rect_clip(r, DISPLAY_W, DISPLAY_H);
+/* Rows at the top that nothing may draw on: a notification's banner is
+ * there (kernel/sys/notify.c). Every clip is narrowed below them, so an app
+ * -- api->pixels included, which honours the clip -- draws around the
+ * banner rather than over it, and nothing has to be redrawn on top. */
+static int  s_reserve;
+static Rect s_asked = { 0, 0, DISPLAY_W, DISPLAY_H };
+
+static void apply_clip(void) {
+  Rect r = rect_clip(s_asked, DISPLAY_W, DISPLAY_H);
+  if (s_reserve > 0 && r.y < s_reserve) {
+    int cut = s_reserve - r.y;
+    r.h = (int16_t)(r.h > cut ? r.h - cut : 0);
+    r.y = (int16_t)s_reserve;
+  }
+  s_clip = r;
 }
+
+void draw_set_clip(Rect r) {
+  s_asked = r;
+  apply_clip();
+}
+
+void draw_reserve_top(int rows) {
+  s_reserve = rows < 0 ? 0 : rows;
+  apply_clip();
+}
+
+int draw_reserved_top(void) { return s_reserve; }
 
 Rect draw_clip(void) { return s_clip; }
 

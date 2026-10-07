@@ -35,6 +35,10 @@ void notify_opened(const char *app);
 
 int  notify_unread(void);
 
+/* Rows at the top a banner covers right now (0 when there is none): a shell
+ * leaves them alone, and repaints them when the banner goes. */
+int  notify_covers(void);
+
 /* The centre. While it is open it has every key. */
 void notify_center_open(void);
 int  notify_center_active(void);

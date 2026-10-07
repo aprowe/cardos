@@ -33,6 +33,11 @@
 #define C_RED      RGB565(200, 0,   0)   /* the selection cursor in Mines */
 
 void draw_set_clip(Rect r);
+
+/* Keep the top `rows` rows out of every clip until set back to 0: for a
+ * banner drawn over everything (kernel/sys/notify.c). */
+void draw_reserve_top(int rows);
+int  draw_reserved_top(void);
 Rect draw_clip(void);
 
 void draw_rect(Rect r, uint16_t color);            /* filled */

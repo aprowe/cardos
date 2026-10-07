@@ -387,7 +387,11 @@ is already up, through `httpq_poll_as`, which only hands a reply to the
 request's owner (apps use it too now: the first to poll used to take any
 reply); Calendar -- the app's `/cache/calendar.cache` once a minute, an
 event N minutes before (Settings > Notifications: Chat, Calendar, Warn);
-the alarm logs itself as it rings. Apps post with `api->notify`. The list,
+the alarm logs itself as it rings. Apps post with `api->notify`. While a
+banner is up, `draw_reserve_top(24)` narrows every clip below it, so apps
+(api->pixels included) and shells draw around it rather than over it; the
+launcher's own direct blits (the clock strip, the off-panel strips) start
+below `notify_covers()`. The list,
 the due rule and the poll reply are `kernel/sys/notifyq.c`, host-tested.
 
 **The launcher's order is chosen, not the card's** (2026-10-01).
