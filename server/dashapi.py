@@ -43,6 +43,18 @@ def _api(fn):
     return wrapped
 
 
+def _admin_api(fn):
+    """Signed in as the server's owner: Claude's login is theirs."""
+    def wrapped(h, args):
+        from . import accounts
+        if not accounts.is_admin():
+            _json(h, {"error": "that is the server owner's"}, 403)
+            return
+        fn(h, args)
+    wrapped.__doc__ = fn.__doc__
+    return _api(wrapped)
+
+
 def _body_json(h):
     try:
         return json.loads(h.body(8192) or b"{}")
@@ -53,13 +65,16 @@ def _body_json(h):
 # ---- the parts of the state --------------------------------------------------------
 
 def session_state(h):
-    exp = dash._cookie(h).split(".", 1)[0]
-    return {"expires": int(exp) if exp.isdigit() else None}
+    from . import accounts
+    exp = dash._cookie(h).rpartition(":")[2].split(".", 1)[0]
+    return {"expires": int(exp) if exp.isdigit() else None,
+            "user": accounts.current(), "admin": accounts.is_admin(),
+            "accounts": accounts.enabled()}
 
 
 def device_state():
     from . import files
-    b = files.broker
+    b = files._broker()
     return {"connected": b.connected(), "last_seen": int(b.last_seen) if b.last_seen else None}
 
 
@@ -256,7 +271,7 @@ def post_logout(h, path, args):
 
 # ---- Claude's login (server/claudeauth.py) ------------------------------------------
 
-@_api
+@_admin_api
 def get_claude(h, args):
     """whether Claude answers, and with which login"""
     from . import claudeauth
@@ -266,7 +281,7 @@ def get_claude(h, args):
     _json(h, v)
 
 
-@_api
+@_admin_api
 def post_claude_start(h, args):
     """start `claude setup-token`; the link to sign in at"""
     from . import claudeauth
@@ -282,7 +297,7 @@ def post_claude_start(h, args):
     _json(h, {"ok": True, "url": s.url})
 
 
-@_api
+@_admin_api
 def post_claude_code(h, args):
     """the code claude.com showed: typed into the waiting sign-in"""
     from . import claudeauth
@@ -299,7 +314,7 @@ def post_claude_code(h, args):
     _json(h, {"ok": True, "status": claudeauth.status(h.chat, fresh=True)})
 
 
-@_api
+@_admin_api
 def post_claude_token(h, args):
     """a token made elsewhere (claude setup-token), kept"""
     from . import claudeauth
@@ -311,7 +326,7 @@ def post_claude_token(h, args):
     _json(h, {"ok": True, "status": claudeauth.status(h.chat, fresh=True)})
 
 
-@_api
+@_admin_api
 def post_claude_forget(h, args):
     """forget the dashboard's token; the environment's is used again"""
     from . import claudeauth
@@ -319,7 +334,123 @@ def post_claude_forget(h, args):
     _json(h, {"ok": True})
 
 
+# ---- people and their devices (server/accounts.py) -------------------------------------
+
+def _need_accounts(h):
+    from . import accounts
+    if not accounts.enabled():
+        _json(h, {"error": "this server has one person; accounts start with the server's next restart"}, 400)
+        return False
+    return True
+
+
+@_api
+def get_me(h, args):
+    """who is signed in, their devices, and (for an admin) everyone"""
+    from . import accounts
+    me = accounts.current()
+    out = {"user": me, "admin": accounts.is_admin(), "accounts": accounts.enabled(),
+           "devices": accounts.devices(me) if me else []}
+    if accounts.enabled() and accounts.is_admin():
+        out["users"] = [{"name": n, "admin": bool(u.get("admin")), "devices": len(accounts.devices(n))}
+                        for n, u in sorted(accounts.users().items())]
+    _json(h, out)
+
+
+@_api
+def post_device(h, args):
+    """a new device: its token, shown this once"""
+    from . import accounts
+    if not _need_accounts(h):
+        return
+    body = _body_json(h)
+    owner = accounts.current()
+    if body.get("user") and accounts.is_admin():          # an admin may set one up for someone
+        owner = body["user"]
+    try:
+        did, token = accounts.add_device(owner, body.get("label") or "device")
+    except ValueError as e:
+        _json(h, {"error": str(e)}, 400)
+        return
+    sys.stderr.write("dash: device %s for %s\n" % (did, owner))
+    _json(h, {"ok": True, "id": did, "token": token, "user": owner})
+
+
+@_api
+def post_device_remove(h, args):
+    """a device's token stops working"""
+    from . import accounts
+    if not _need_accounts(h):
+        return
+    try:
+        accounts.remove_device(accounts.current(), _body_json(h).get("id") or "")
+    except ValueError as e:
+        _json(h, {"error": str(e)}, 400)
+        return
+    _json(h, {"ok": True})
+
+
+@_api
+def post_password(h, args):
+    """a new password for whoever is signed in (and a fresh session)"""
+    from . import accounts
+    if not _need_accounts(h):
+        return
+    body, me = _body_json(h), accounts.current()
+    if not accounts.login(me, body.get("old") or ""):
+        _json(h, {"error": "the current password is not that"}, 403)
+        return
+    try:
+        accounts.set_password(me, body.get("new") or "")
+    except ValueError as e:
+        _json(h, {"error": str(e)}, 400)
+        return
+    _json(h, {"ok": True}, headers=[dash._set_cookie(dash.make_user_cookie(h, me),
+                                                     dash.SESSION_DAYS * 86400)])
+
+
+@_admin_api
+def post_user(h, args):
+    """a new person"""
+    from . import accounts
+    if not _need_accounts(h):
+        return
+    body = _body_json(h)
+    try:
+        name = accounts.add_user(body.get("name") or "", body.get("password") or "",
+                                 bool(body.get("admin")))
+    except ValueError as e:
+        _json(h, {"error": str(e)}, 400)
+        return
+    sys.stderr.write("dash: account %s made\n" % name)
+    _json(h, {"ok": True, "name": name})
+
+
+@_admin_api
+def post_user_remove(h, args):
+    """a person goes, with their devices; their files stay on the server"""
+    from . import accounts
+    if not _need_accounts(h):
+        return
+    name = _body_json(h).get("name") or ""
+    if name == accounts.current():
+        _json(h, {"error": "not yourself"}, 400)
+        return
+    try:
+        accounts.remove_user(name)
+    except ValueError as e:
+        _json(h, {"error": str(e)}, 400)
+        return
+    _json(h, {"ok": True})
+
+
 ROUTES = [
+    ("GET", "/dash/api/me", get_me, "open"),
+    ("POST", "/dash/api/device", post_device, "open"),
+    ("POST", "/dash/api/device/remove", post_device_remove, "open"),
+    ("POST", "/dash/api/password", post_password, "open"),
+    ("POST", "/dash/api/user", post_user, "open"),
+    ("POST", "/dash/api/user/remove", post_user_remove, "open"),
     ("GET", "/dash/api/claude", get_claude, "open"),
     ("POST", "/dash/api/claude/start", post_claude_start, "open"),
     ("POST", "/dash/api/claude/code", post_claude_code, "open"),

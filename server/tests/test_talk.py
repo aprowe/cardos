@@ -35,6 +35,7 @@ class Split(unittest.TestCase):
 class Talk(unittest.TestCase):
     def setUp(self):
         os.environ["CARDOS_STATE"] = tempfile.mkdtemp()
+        self.addCleanup(setattr, dash, "logged_in", dash.logged_in)
         dash.logged_in = lambda h: False
         self.calls = []
         real = talk._claude

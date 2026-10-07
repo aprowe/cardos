@@ -361,6 +361,21 @@ start; lean back to brake; `x` swaps the axis, `i` flips it, in
 `apps/kart.h`, host-tested in `test/test_kart.c`; `KART_DUMP=dir` writes
 frames. Drawn in 15-row strips in paint, physics in 16 ms steps in tick.
 
+**More than one person on the server** (2026-10-06, branch `accounts`).
+`server/accounts.py`: `CARDOS_STATE/accounts.json` holds people (PBKDF2
+password, admin flag) and devices (the SHA-256 of each token, its owner).
+A request's token or cookie says whose it is -- `accounts.current()`, a
+thread-local -- and each person's Google, Toggl, notes, photos, music and
+daily live under `users/<name>/`, with their in-memory caches split the
+same way. Shared: Chat, updates, voice, render, the Claude helpers.
+Owner only: `/chat*` (the repo-editing agent, route auth "admin") and
+Claude's sign-in. The first start with `--token` and `DASH_PASSWORD` makes
+the owner (`CARDOS_OWNER`, default alex) and moves the files; with no
+accounts.json everything is single-person as before. The dashboard signs
+in by name; Accounts & keys has You (devices, tokens shown once, password)
+and People (admin). A new device's token goes in /config/claude.token.
+Design: docs/superpowers/specs/2026-10-06-accounts-design.md.
+
 **The launcher's order is chosen, not the card's** (2026-10-01).
 `/config/favorites.txt` (written with a default at first boot, hand-
 editable) lists apps or folders, in order: those come first, and a

@@ -79,7 +79,8 @@ def state_dir():
 
 
 def creds_path():
-    return os.path.join(state_dir(), "google.json")
+    from . import accounts
+    return os.path.join(accounts.user_dir(), "google.json")
 
 
 # ---- the saved sign-in ------------------------------------------------------
@@ -97,7 +98,7 @@ def load_creds():
 
 def save_creds(c):
     """Owner-only, and written whole: a half-written file is a lost login."""
-    os.makedirs(state_dir(), mode=0o700, exist_ok=True)
+    os.makedirs(os.path.dirname(creds_path()), mode=0o700, exist_ok=True)
     tmp = creds_path() + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -185,7 +186,27 @@ def _cookie(h):
     return ""
 
 
+def _user_key(h, name):
+    """With accounts: the server's token and that user's password hash, so a
+    new password ends that user's sessions and nobody else's."""
+    from . import accounts
+    t, pw = _server_token(h), accounts.password_hash(name)
+    return t + "\0" + name + "\0" + pw if t and pw else None
+
+
+def make_user_cookie(h, name, now=None):
+    return name + ":" + make_cookie(_user_key(h, name), now)
+
+
 def logged_in(h):
+    """Signed in; with accounts, as whom (accounts.current())."""
+    from . import accounts
+    if accounts.enabled():
+        name, _, rest = _cookie(h).partition(":")
+        if name and rest and cookie_ok(_user_key(h, name), rest):
+            accounts.set_current(name)
+            return True
+        return False
     return cookie_ok(_cookie_key(h), _cookie(h))
 
 
@@ -296,9 +317,18 @@ def login_page(msg=""):
     note = "<p class='msg bad'>%s</p>" % html.escape(msg) if msg else ""
     return _page("CardOS", "<h1>CardOS</h1>%s<section><h2>Sign in</h2>"
                  "<form method=post action=/dash/login style='display:block'>"
-                 "<label>Password<input type=password name=password autofocus "
+                 "%s<label>Password<input type=password name=password autofocus "
                  "autocomplete=current-password></label>"
-                 "<button class=primary>Sign in</button></form></section>" % note)
+                 "<button class=primary>Sign in</button></form></section>"
+                 % (note, _name_field()))
+
+
+def _name_field():
+    from . import accounts
+    if not accounts.enabled():
+        return ""
+    return ("<label>Name<input name=name autocomplete=username autocapitalize=none "
+            "autofocus></label>")
 
 
 def _google_check():
@@ -355,7 +385,20 @@ def post_login(h, path, args):
     """dashboard sign-in"""
     if not _need_token(h):
         return
-    given = (_form(h).get("password") or [""])[0]
+    from . import accounts
+    form = _form(h)
+    given = (form.get("password") or [""])[0]
+    if accounts.enabled():
+        name = accounts.login((form.get("name") or [""])[0], given)
+        if not name:
+            with _fail_lock:
+                time.sleep(1)
+            sys.stderr.write("dash: failed sign-in from %s\n"
+                             % (h.headers.get("X-Real-IP") or h.client_address[0]))
+            h.html(login_page("That name and password do not match."), 403)
+            return
+        h.redirect("/dash", [_set_cookie(make_user_cookie(h, name), SESSION_DAYS * 86400)])
+        return
     if not hmac.compare_digest(password().encode(), given.encode()):
         with _fail_lock:
             time.sleep(1)                      # a guess a second, not a thousand

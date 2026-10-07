@@ -521,6 +521,10 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
           <div class="side-info"><span>The server holds these logins; the device never sees a password.</span><button class="btn sm" data-act="state-refresh">Check again</button></div>
         </div>
         <div class="two">
+          <div class="panel acct" id="me"></div>
+          <div class="panel acct" id="people"></div>
+        </div>
+        <div class="two">
           <div class="panel acct" id="google"></div>
           <div class="panel acct" id="toggl"></div>
         </div>
@@ -682,7 +686,7 @@ function modal({title,html='',input=null,actions,validate}){
   return new Promise(resolve=>{
     const v=document.createElement('div'); v.className='veil';
     v.innerHTML=`<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}">
-      <h3>${esc(title)}</h3><div class="body">${html}
+      <h3>${esc(title)}</h3><div class="body">${html}${input?'':'<div class="ferr" id="dlg-err"></div>'}
       ${input?`<div class="field" style="margin-top:6px"><label for="dlg-in">${esc(input.label)}</label><input class="inp" id="dlg-in" value="${esc(input.value||'')}" spellcheck="false" autocomplete="off">${input.hint?`<span class="hint">${esc(input.hint)}</span>`:''}<div class="ferr" id="dlg-err"></div></div>`:''}
       </div><div class="dacts">${actions.map((a,i)=>`<button class="btn ${a.kind||''}" data-i="${i}">${esc(a.label)}</button>`).join('')}</div></div>`;
     const prevFocus=document.activeElement;
@@ -1314,6 +1318,10 @@ async function claudeLoad(fresh){
 }
 function renderClaude(){
   const el=$('#claude'); if(!el) return;
+  if(ME.v&&ME.v.accounts&&!ME.v.admin){
+    el.innerHTML=`<div class="acct-top"><div class="logo c">✳</div><div style="min-width:0"><h3>Claude</h3><div class="sub">Talking about documents, songs, voice, Today’s focus</div></div><span class="pill">The owner’s</span></div><p class="dim" style="margin:0">Claude runs on the server owner’s login; there is nothing to set up here.</p>`;
+    return;
+  }
   const v=CL.v;
   const pill=CL.busy&&!v?'<span class="pill"><span class="spin"></span>Checking</span>'
     :!v?'':v.ok?'<span class="pill ok">Working</span>':v.ok===false?'<span class="pill bad">Not working</span>':'<span class="pill">Not checked</span>';
@@ -1712,9 +1720,83 @@ function route(){
   if(v==='notes') notesLoad();
   if(v==='photos') photosLoad();
   if(v==='music') musicLoad();
-  if(v==='accounts'&&!CL.v&&!CL.busy) claudeLoad(false);
+  if(v==='accounts'&&!ME.busy) meLoad();
+  if(v==='accounts'&&!CL.v&&!CL.busy&&(!ME.v||ME.v.admin)) claudeLoad(false);
 }
 window.addEventListener('hashchange',route);
+
+
+/* ---------- you, your devices, and the people (server/accounts.py) ---------- */
+const ME={v:null,err:'',busy:false};
+async function meLoad(){
+  ME.busy=true;
+  try{ ME.v=await api('GET','/dash/api/me'); ME.err=''; }catch(e){ ME.err=e.message; }
+  ME.busy=false; renderMe(); renderPeople(); renderClaude();
+}
+function renderMe(){
+  const el=$('#me'); if(!el) return;
+  const v=ME.v;
+  let h=`<div class="acct-top"><div class="logo">${esc(((v&&v.user)||'?').slice(0,1).toUpperCase())}</div><div style="min-width:0"><h3>You</h3><div class="sub">Who is signed in, and their devices</div></div>${v&&v.admin?'<span class="pill ok">Owner</span>':''}</div>`;
+  if(ME.err){ el.innerHTML=h+`<div class="note warn">${esc(ME.err)}</div>`; return; }
+  if(!v){ el.innerHTML=h+'<p class="dim" style="margin:0"><span class="spin"></span>Loading…</p>'; return; }
+  if(!v.accounts){ el.innerHTML=h+'<p class="dim" style="margin:0">This server has one person. Accounts start the next time the server restarts with a dashboard password.</p>'; return; }
+  h+=`<dl class="facts"><dt>Signed in as</dt><dd>${esc(v.user)}</dd></dl>`;
+  h+='<div class="field"><label>Devices</label>';
+  h+=v.devices.length?'<ul class="plain">'+v.devices.map(d=>`<li style="display:flex;gap:8px;align-items:center;justify-content:space-between">${esc(d.label)} <button class="btn ghost sm" data-act="dev-del" data-id="${esc(d.id)}" data-label="${esc(d.label)}">Remove</button></li>`).join('')+'</ul>'
+    :'<p class="dim" style="margin:0">None yet.</p>';
+  h+='<span class="hint">A device signs in with a token in <code>/config/claude.token</code> on its card.</span></div>';
+  h+='<div class="acts"><button class="btn primary" data-act="dev-add">Add a device</button><button class="btn ghost" data-act="pw-change">Change password</button></div>';
+  el.innerHTML=h;
+}
+function renderPeople(){
+  const el=$('#people'); if(!el) return;
+  const v=ME.v;
+  if(!v||!v.accounts||!v.admin){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  let h=`<div class="acct-top"><div class="logo">${(v.users||[]).length}</div><div style="min-width:0"><h3>People</h3><div class="sub">Each has their own Google, Toggl, notes, photos and music</div></div></div>`;
+  h+='<ul class="plain">'+(v.users||[]).map(u=>`<li style="display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;justify-content:space-between;margin-bottom:6px"><span style="white-space:nowrap">${esc(u.name)} <span class="faint">${u.admin?'owner · ':''}${u.devices} device${u.devices===1?'':'s'}</span></span>${u.name!==v.user?`<span><button class="btn ghost sm" data-act="dev-add-for" data-name="${esc(u.name)}">Add device</button><button class="btn ghost sm" data-act="user-del" data-name="${esc(u.name)}">Remove</button></span>`:''}</li>`).join('')+'</ul>';
+  h+='<div class="acts"><button class="btn primary" data-act="user-add">Add a person</button></div>';
+  h+='<p class="dim" style="margin:0;font-size:13px">For their Google sign-in, add their address as a test user on the OAuth consent screen while it is in Testing.</p>';
+  el.innerHTML=h;
+}
+async function showToken(r){
+  await modal({title:'The device’s token',html:`<p>Put this in <code>/config/claude.token</code> on ${esc(r.user)}’s device card, then restart it. It is shown this once.</p>
+    <p><input class="inp" readonly value="${esc(r.token)}" onclick="this.select()" style="font-family:var(--mono,monospace)"></p>`,actions:[{label:'Done',value:1,kind:'primary'}]});
+}
+async function devAdd(forUser){
+  const r=await modal({title:forUser?`A device for ${forUser}`:'Add a device',input:{label:'What to call it',value:'Cardputer'},actions:[{label:'Cancel'},{label:'Make a token',value:1,kind:'primary'}],validate:v=>v?'':'Give it a name'});
+  if(!r) return;
+  try{ const j=await api('POST','/dash/api/device',{label:r.input,user:forUser||undefined}); await showToken(j); meLoad(); }
+  catch(e){ toast(e.message,'err'); }
+}
+async function devDel(id,label){
+  const r=await modal({title:'Remove this device?',html:`<p>${esc(label)} will no longer reach the server until it is given a new token.</p>`,actions:[{label:'Cancel'},{label:'Remove',value:1,kind:'danger'}]});
+  if(!r) return;
+  try{ await api('POST','/dash/api/device/remove',{id}); meLoad(); }catch(e){ toast(e.message,'err'); }
+}
+async function pwChange(){
+  let old='',nw='';
+  const r=await modal({title:'Change your password',html:`<div class="field"><label for="pw-old">Current</label><input class="inp" id="pw-old" type="password" autocomplete="current-password"></div>
+    <div class="field"><label for="pw-new">New, six characters at least</label><input class="inp" id="pw-new" type="password" autocomplete="new-password"></div>`,
+    actions:[{label:'Cancel'},{label:'Change',value:1,kind:'primary'}],validate:()=>{ old=($('#pw-old')||{}).value||''; nw=($('#pw-new')||{}).value||''; return old&&nw.length>=6?'':'Your current password, and a new one of six or more'; }});
+  if(!r) return;
+  try{ await api('POST','/dash/api/password',{old,new:nw}); toast('Changed. Other browsers signed in as you are signed out.'); }
+  catch(e){ toast(e.message,'err'); }
+}
+async function userAdd(){
+  let name='',pw='';
+  const r=await modal({title:'Add a person',html:`<div class="field"><label for="u-name">Name (letters and digits)</label><input class="inp" id="u-name" autocomplete="off" oninput="this.dataset.v=this.value"></div>
+    <div class="field"><label for="u-pw">Their password, six characters at least</label><input class="inp" id="u-pw" type="password" autocomplete="new-password" oninput="this.dataset.v=this.value"></div>`,
+    actions:[{label:'Cancel'},{label:'Add',value:1,kind:'primary'}],validate:()=>{ name=($('#u-name')||{}).value||''; pw=($('#u-pw')||{}).value||''; return name&&pw.length>=6?'':'A name, and a password of six or more'; }});
+  if(!r) return;
+  try{ await api('POST','/dash/api/user',{name,password:pw}); toast(`${name} can sign in now. Add a device for them next.`); meLoad(); }
+  catch(e){ toast(e.message,'err'); }
+}
+async function userDel(name){
+  const r=await modal({title:`Remove ${name}?`,html:'<p>Their devices stop reaching the server. Their notes, photos and music stay on the server, in case.</p>',actions:[{label:'Cancel'},{label:'Remove',value:1,kind:'danger'}]});
+  if(!r) return;
+  try{ await api('POST','/dash/api/user/remove',{name}); meLoad(); }catch(e){ toast(e.message,'err'); }
+}
 
 /* ---------- events ---------- */
 document.addEventListener('click',e=>{
@@ -1747,6 +1829,12 @@ document.addEventListener('click',e=>{
     case 'ed-close': edClose(); break;
     case 'ed-dl': saveBlob(baseOf(S.editor.path),new Blob([enc.encode($('#ed-ta').value)])); toast('Copied to this computer. The card is unchanged.','info'); break;
     case 'g-signin': gSignIn(); break;
+    case 'dev-add': devAdd(); break;
+    case 'dev-add-for': devAdd(b.dataset.name); break;
+    case 'dev-del': devDel(b.dataset.id,b.dataset.label); break;
+    case 'pw-change': pwChange(); break;
+    case 'user-add': userAdd(); break;
+    case 'user-del': userDel(b.dataset.name); break;
     case 'g-signout': gSignOut(); break;
     case 't-disconnect': tDisconnect(); break;
     case 'ph-add': $('#ph-file').click(); break;

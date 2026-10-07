@@ -53,7 +53,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import dash
+from . import accounts, dash
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 CAL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
@@ -62,6 +62,14 @@ TASKS = "https://tasks.googleapis.com/tasks/v1"
 
 _lock = threading.Lock()
 _access = {"token": None, "until": 0.0}
+_access_by = {}               # with accounts: user -> the same, each their own login
+
+
+def _acc():
+    u = accounts.current()
+    if u is None:
+        return _access
+    return _access_by.setdefault(u, {"token": None, "until": 0.0})
 
 
 class GoogleError(Exception):
@@ -78,28 +86,38 @@ _ids = None                   # short -> [long, last seen], loaded on first use
 
 
 def _ids_path():
-    return os.path.join(dash.state_dir(), "ids.json")
+    return os.path.join(accounts.user_dir(), "ids.json")
+
+
+_ids_by = {}                  # with accounts: user -> their ids
 
 
 def _ids_load():
     global _ids
-    if _ids is None:
+    u = accounts.current()
+    have = _ids if u is None else _ids_by.get(u)
+    if have is None:
         try:
             with open(_ids_path()) as f:
-                _ids = json.load(f)
+                have = json.load(f)
         except (OSError, ValueError):
-            _ids = {}
-    return _ids
+            have = {}
+        if u is None:
+            _ids = have
+        else:
+            _ids_by[u] = have
+    return have
 
 
 def _ids_save():
     now = time.time()
-    for k in [k for k, v in _ids.items() if now - v[1] > KEEP_IDS]:
-        del _ids[k]
-    os.makedirs(dash.state_dir(), mode=0o700, exist_ok=True)
+    ids = _ids_load()
+    for k in [k for k, v in ids.items() if now - v[1] > KEEP_IDS]:
+        del ids[k]
+    os.makedirs(accounts.user_dir(), mode=0o700, exist_ok=True)
     tmp = _ids_path() + ".tmp"
     with open(tmp, "w") as f:
-        json.dump(_ids, f)
+        json.dump(ids, f)
     os.replace(tmp, _ids_path())
 
 
@@ -165,14 +183,14 @@ def save_creds(client_id, secret, refresh):
                      "refresh_token": refresh, "issued_at": int(time.time()),
                      "email": "", "scope": "pushed from the device"})
     with _lock:
-        _access["token"] = None
+        _acc()["token"] = None
 
 
 def access_token():
     """A current access token, refreshed a minute before it runs out."""
     with _lock:
-        if _access["token"] and time.time() < _access["until"]:
-            return _access["token"]
+        if _acc()["token"] and time.time() < _acc()["until"]:
+            return _acc()["token"]
     c = load_creds()
     if not c:
         raise GoogleError(401, "the server has no Google login: sign in at /dash")
@@ -187,8 +205,8 @@ def access_token():
             why = "invalid_grant: sign in again at /dash"
         raise GoogleError(401, "google refused the login: %s" % why)
     with _lock:
-        _access["token"] = j["access_token"]
-        _access["until"] = time.time() + int(j.get("expires_in", 3600)) - 60
+        _acc()["token"] = j["access_token"]
+        _acc()["until"] = time.time() + int(j.get("expires_in", 3600)) - 60
     return j["access_token"]
 
 
@@ -198,7 +216,7 @@ def call(method, url, body=None):
                      headers={"Authorization": "Bearer " + access_token()})
     if status == 401:                       # expired early: once more, fresh
         with _lock:
-            _access["token"] = None
+            _acc()["token"] = None
         status, j = http(method, url, body=body,
                          headers={"Authorization": "Bearer " + access_token()})
     if status >= 400:

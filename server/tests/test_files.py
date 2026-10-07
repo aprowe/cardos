@@ -109,6 +109,7 @@ class FilesTest(unittest.TestCase):
     def setUp(self):
         files.broker = files.Broker()
         self.signed_in = True
+        self.addCleanup(setattr, dash, "logged_in", dash.logged_in)
         dash.logged_in = lambda h: self.signed_in
         app.Handler.chat = chatmod.ChatService(claude="stub", token=TOKEN)
         app.Handler.store = None

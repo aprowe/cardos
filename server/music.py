@@ -28,7 +28,7 @@ import sys
 import tempfile
 import time
 
-from . import dash, notes
+from . import accounts, dash, notes
 
 MAX_IN = 60 << 20                  # half an hour at 22050 mono, or a long MP3
 RATE = 22050
@@ -36,7 +36,7 @@ _route_err = "error %s\n"
 
 
 def music_dir():
-    return os.path.join(dash.state_dir(), "music")
+    return os.path.join(accounts.user_dir(), "music")
 
 
 def _dir(tid):

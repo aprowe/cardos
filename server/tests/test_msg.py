@@ -24,6 +24,7 @@ TOKEN = "tok"
 class Room(unittest.TestCase):
     def setUp(self):
         os.environ["CARDOS_STATE"] = tempfile.mkdtemp()
+        self.addCleanup(setattr, dash, "logged_in", dash.logged_in)
         dash.logged_in = lambda h: False
         app.Handler.chat = chatmod.ChatService(claude="stub", token=TOKEN)
         app.Handler.store = None
