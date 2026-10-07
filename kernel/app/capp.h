@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 40
+#define CAPP_API_VERSION 41
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -845,6 +845,19 @@ typedef struct {
   int  (*notify_at)(uint32_t seconds, const char *key, const char *title,
                     const char *text, int ring);
   void (*notify_cancel)(const char *key);
+
+  /* ---- update progress (API 41) ----
+   *
+   * update_apply, with a line as it happens rather than only the last one:
+   * "downloading 40%", "pinball.capp 19672 bytes", the same lines the
+   * console already prints as they occur. `on_line` is called from inside
+   * the blocking call, like http_stream's on_data -- return promptly, and
+   * use key_pending() if the user should be able to stop reading it. `out`
+   * still gets the last line and the return is the same as update_apply's,
+   * so a screen can draw a progress bar that moves instead of a result
+   * that appears once it is all over. */
+  int (*update_apply_progress)(int os, void (*on_line)(void *ctx, const char *line),
+                               void *ctx, char *out, size_t n);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

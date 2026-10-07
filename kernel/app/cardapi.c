@@ -308,6 +308,39 @@ static int api_update_apply(int os, char *out, size_t n) {
   return done;
 }
 
+/* The same line upd_say puts in `out`, handed to the app's own callback as
+ * it happens -- what the console already sees (update_say in shellcmd.c),
+ * an app now can too, for a progress bar that moves rather than a result
+ * that appears. `out` still gets the last line, so a caller that ignores
+ * `on_line` sees exactly api_update_apply's behaviour. */
+typedef struct { char *out; size_t n; void (*on_line)(void *ctx, const char *line); void *ctx; } UpdSayProgress;
+
+static void upd_say_progress(void *ctx, const char *line) {
+  UpdSayProgress *u = (UpdSayProgress *)ctx;
+  snprintf(u->out, u->n, "%s", line);
+  if (u->on_line) u->on_line(u->ctx, line);
+}
+
+static int api_update_apply_progress(int os, void (*on_line)(void *ctx, const char *line),
+                                     void *ctx, char *out, size_t n) {
+  UpdSayProgress say = { out, n, on_line, ctx };
+  int done;
+  if (!out || n == 0) return -1;
+  if (!s_upd_valid && update_check(&s_upd) != 0) {
+    snprintf(out, n, "%s", update_error());
+    return -1;
+  }
+  s_upd_valid = 0;
+  out[0] = 0;
+  done = update_apps(&s_upd, upd_say_progress, &say);
+  if (os && s_upd.firmware_stale) {
+    update_firmware(upd_say_progress, &say);   /* only returns on failure */
+    snprintf(out, n, "%s", update_error());
+    return -1;
+  }
+  return done;
+}
+
 /* Local time, broken down for an app that has no libc to do it with. The zone
  * rules are the kernel's -- clock.c has already applied env TZ -- so this is
  * localtime_r and a copy, and the honest answer when the clock is unset. */
@@ -513,6 +546,7 @@ static const CardApi API = {
   api_notify,
   api_notify_at,
   api_notify_cancel,
+  api_update_apply_progress,
 };
 
 const CardApi *cardos_api(void) { return &API; }

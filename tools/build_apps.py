@@ -33,7 +33,10 @@ HEADER = os.path.join(ROOT, "kernel", "app", "capp_blobs.h")
 # Everything else comes from `update apps`. All of them used to be
 # embedded -- 948 KB of the image by 2026-10-01, which pushed the firmware
 # past the 2304 KB update slots, so `update os` could no longer install it.
-EMBED = ("dashlink", "files", "edit")
+# Update joins them for the same reason Memory, About and Settings need no
+# `update apps` first: the one app that fetches updates must not itself be
+# missing, or stale, on a card that has never synced.
+EMBED = ("dashlink", "files", "edit", "update")
 
 TOOLCHAIN = os.path.join(
     os.path.expanduser("~"), ".platformio", "packages",

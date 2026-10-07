@@ -45,4 +45,5 @@ timer     Plan
 today     Plan
 todo      Plan
 toggl     Plan
+update    System
 web       Net

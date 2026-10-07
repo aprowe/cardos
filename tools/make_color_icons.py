@@ -287,6 +287,25 @@ ICONS = {
         "................",
         "................",
     ],
+    # An arrow down into a tray: new things, landing.
+    "Update": [
+        "................",
+        "......KKKK......",
+        "......KbbK......",
+        "......KbbK......",
+        "......KbbK......",
+        "......KbbK......",
+        ".....KbbbbK.....",
+        "....KbbbbbbK....",
+        "...KbbbbbbbbK...",
+        "....KbbbbbbK....",
+        ".....KbbbbK.....",
+        "......KbbK......",
+        "................",
+        "..KKKKKKKKKKKK..",
+        "..KnnnnnnnnnnK..",
+        "..KKKKKKKKKKKK..",
+    ],
     # A mine with a fuse.
     "Mines": [
         "................",
