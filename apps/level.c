@@ -173,7 +173,7 @@ static void app_paint(void *st, CRect c) {
    * themselves, and nothing else is touched. */
   if (a.w >= c.w && a.h >= c.h - FOOT_H) {
     api->fill(rect(c.x, c.y, CX - R, c.h - FOOT_H), CLR_BG);
-    api->fill(rect(c.x + CX + R + 1, c.y, 26, c.h - FOOT_H), CLR_BG);
+    api->fill(rect(c.x + CX + R + 1, c.y, c.w - (CX + R + 1), c.h - FOOT_H), CLR_BG);
     api->fill(rect(c.x + CX - R, c.y, 2 * R + 1, CY - R), CLR_BG);
     api->fill(rect(c.x + CX - R, c.y + CY + R + 1, 2 * R + 1, c.h - FOOT_H - (CY + R + 1)), CLR_BG);
     footer_paint(api, c, "c set level  r reset  h hold");
