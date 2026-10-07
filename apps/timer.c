@@ -212,8 +212,8 @@ static void tell_os(void) {
   char text[40];
   int mm = T.set_min, ss = T.set_sec;
   if (T.state == ST_RUNNING) {
-    api->fmt(text, sizeof text, "%d:%02d is up", mm, ss);
-    api->notify_at((T.remain_at_start + 999) / 1000, "done", "Timer", text, 1);
+    api->fmt(text, sizeof text, "the %d:%02d timer", mm, ss);
+    api->notify_at((T.remain_at_start + 999) / 1000, "done", "time's up", text, 1);
   } else api->notify_cancel("done");
 }
 
