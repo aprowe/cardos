@@ -42,6 +42,7 @@ class Check(unittest.TestCase):
 class Compose(unittest.TestCase):
     def setUp(self):
         os.environ["CARDOS_STATE"] = tempfile.mkdtemp()
+        self.addCleanup(setattr, dash, "logged_in", dash.logged_in)
         dash.logged_in = lambda h: False
         self.asks = []
         real = midi._claude

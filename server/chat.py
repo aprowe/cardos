@@ -534,7 +534,7 @@ def get_chat_new(h, path, args):
 
 
 ROUTES = [
-    ("POST", "/chat", post_chat),
-    ("GET", "/chat", get_chat),
-    ("GET", "/chat/new", get_chat_new),
+    ("POST", "/chat", post_chat, "admin"),
+    ("GET", "/chat", get_chat, "admin"),
+    ("GET", "/chat/new", get_chat_new, "admin"),
 ]

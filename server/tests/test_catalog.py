@@ -21,7 +21,7 @@ class Catalog(unittest.TestCase):
 
     def test_todo_declares_its_commands(self):
         cmds = {c["id"]: c for c in build_apps.read_commands(TODO)}
-        self.assertEqual(sorted(cmds), ["add", "done", "list", "newlist", "sync"])
+        self.assertEqual(sorted(cmds), ["add", "done", "list", "lists", "newlist", "show", "sync"])
         self.assertEqual(cmds["add"]["params"],
                          [{"name": "text", "type": "text", "about": "what the task says"}])
         self.assertTrue(cmds["sync"]["net"])
@@ -29,7 +29,7 @@ class Catalog(unittest.TestCase):
 
     def test_gui_only_actions_are_not_commands(self):
         ids = [c["id"] for c in build_apps.read_commands(TODO)]
-        for gui in ("tick", "delete", "lists", "all", "print"):
+        for gui in ("tick", "delete", "all", "print"):
             self.assertNotIn(gui, ids)
 
     def test_an_app_with_no_commands_has_an_empty_list(self):

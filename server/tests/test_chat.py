@@ -5,7 +5,7 @@ depends on -- post returns an id immediately, polling says pending until it
 does not, an answer is delivered once and then forgotten -- not whether Claude
 can write C. Starting a real agent from a test would edit this repository.
 """
-import os, sys, threading, time, urllib.request, urllib.error
+import os, sys, threading, time, unittest, urllib.request, urllib.error
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))             # the repository root
 
@@ -115,4 +115,12 @@ def main():
     return 1 if fails else 0
 
 
-sys.exit(main())
+class Script(unittest.TestCase):
+    """So `unittest discover` runs this too, rather than exiting on import."""
+
+    def test_the_whole_script(self):
+        self.assertEqual(main(), 0)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

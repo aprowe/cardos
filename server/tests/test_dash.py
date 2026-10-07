@@ -68,7 +68,9 @@ class Server(unittest.TestCase):
                 return {"access_token": "a"}
             return {"access_token": "a", "refresh_token": "r-" + code,
                     "id_token": fake_id_token("me@example.com"), "scope": "x"}
+        self.addCleanup(setattr, dash, "exchange_code", dash.exchange_code)
         dash.exchange_code = fake_exchange
+        self.addCleanup(setattr, dash, "revoke", dash.revoke)
         dash.revoke = self.revoked.append
         app.Handler.chat = chatmod.ChatService(claude="stub", token=self.token)
         app.Handler.store = None
@@ -172,6 +174,8 @@ class Google(Server):
         self.assertEqual(self.exchanged,
                          [("abc", "cid.apps", "csec", "https://dash.example/dash/google/callback")])
         self.assertEqual(os.stat(dash.creds_path()).st_mode & 0o077 if os.name != "nt" else 0, 0)
+
+        self.addCleanup(setattr, google, "access_token", google.access_token)
 
         google.access_token = lambda: "a"               # no Google in a test
         _, _, state = self.req("/dash/api/state", cookie=cookie)

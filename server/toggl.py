@@ -47,7 +47,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 
-from . import dash
+from . import accounts, dash
 
 API = "https://api.track.toggl.com/api/v9"
 RECENT = 10
@@ -69,7 +69,7 @@ class TogglError(Exception):
 # ---- the token ------------------------------------------------------------------
 
 def path():
-    return os.path.join(dash.state_dir(), "toggl.json")
+    return os.path.join(accounts.user_dir(), "toggl.json")
 
 
 def load():
@@ -81,7 +81,7 @@ def load():
 
 
 def save(c):
-    os.makedirs(dash.state_dir(), mode=0o700, exist_ok=True)
+    os.makedirs(accounts.user_dir(), mode=0o700, exist_ok=True)
     tmp = path() + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -138,6 +138,7 @@ def call(method, rel, body=None, token=None):
 def cached(key, seconds, fn):
     now = time.time()
     with _lock:
+        key = (accounts.current(), key)           # one person's answers are not another's
         hit = _cache.get(key)
         if hit and hit[0] > now:
             return hit[1]

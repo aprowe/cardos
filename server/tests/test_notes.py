@@ -34,6 +34,7 @@ class NotesTest(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         os.environ["CARDOS_STATE"] = self.dir
         self.cookie = False
+        self.addCleanup(setattr, dash, "logged_in", dash.logged_in)
         dash.logged_in = lambda h: self.cookie
         app.Handler.chat = chatmod.ChatService(claude="stub", token=TOKEN)
         app.Handler.voice = FakeVoice()

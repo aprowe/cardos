@@ -16,7 +16,7 @@ import threading
 import time
 import zlib
 
-from . import dash
+from . import accounts, dash
 
 _lock = threading.Lock()
 
@@ -49,7 +49,7 @@ FACT = [
 
 
 def path():
-    return os.path.join(dash.state_dir(), "daily.json")
+    return os.path.join(accounts.user_dir(), "daily.json")
 
 
 def _load():
@@ -61,7 +61,7 @@ def _load():
 
 
 def _save(d):
-    os.makedirs(dash.state_dir(), mode=0o700, exist_ok=True)
+    os.makedirs(accounts.user_dir(), mode=0o700, exist_ok=True)
     keep = dict(sorted(d.items())[-14:])          # two weeks is plenty
     tmp = path() + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

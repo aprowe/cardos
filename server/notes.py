@@ -28,14 +28,14 @@ import sys
 import threading
 import time
 
-from . import dash
+from . import accounts, dash
 
 MAX_TEXT = 64 * 1024
 _lock = threading.Lock()
 
 
 def notes_dir():
-    return os.path.join(dash.state_dir(), "notes")
+    return os.path.join(accounts.user_dir(), "notes")
 
 
 def fnv(text):
@@ -115,6 +115,8 @@ def _allowed(h):
     tok = h.chat.token if h.chat else None
     if not tok:
         return True
+    if accounts.enabled():
+        return h.authorised()               # says whose, or answers 403
     auth = h.headers.get("Authorization", "")
     if auth.startswith("Bearer ") and hmac.compare_digest(tok, auth[7:]):
         return True

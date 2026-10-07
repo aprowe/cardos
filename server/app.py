@@ -24,7 +24,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 
-from . import chat, daily, dash, dashapi, files, google, images, midi, msg, music, notes, photos, shots, talk, toggl, tz, updates, voice
+from . import accounts, chat, daily, dash, dashapi, files, google, images, midi, msg, music, notes, photos, shots, talk, toggl, tz, updates, voice
 from .chat import ROOT as ROOT_DIR
 
 
@@ -189,6 +189,18 @@ class Handler(BaseHTTPRequestHandler):
         nobody uses. On when it matters -- see the warning at startup."""
         if not self.chat or not self.chat.token:
             return True
+        given_all = [self.headers.get("X-Token", ""), self.headers.get("Authorization", "")]
+        if given_all[1].startswith("Bearer "):
+            given_all[1] = given_all[1][7:]
+        # With accounts, a device's token says whose it is (server/accounts.py).
+        if accounts.enabled():
+            for given in given_all:
+                user = accounts.user_for_token(given)
+                if user:
+                    accounts.set_current(user)
+                    return True
+            self.text("unauthorised\n", 403)
+            return False
         # Two spellings, because the device has only one. CardApi's http()
         # takes a bearer token and sends "Authorization: Bearer x" -- there is
         # no way to set an arbitrary header from an app -- while curl and a
@@ -234,7 +246,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(404)
                 return
             fn, auth = found
+            accounts.set_current(None)          # nobody, until a token or cookie says
             if auth != "open" and not self.authorised():
+                return
+            # The repo-editing agent and its builds are the owner's alone.
+            if auth == "admin" and not accounts.is_admin():
+                self.text("error that is the server owner's\n", 403)
                 return
             fn(self, q.path, urllib.parse.parse_qs(q.query))
         except (BrokenPipeError, ConnectionResetError):

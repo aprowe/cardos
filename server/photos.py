@@ -31,7 +31,7 @@ import sys
 import threading
 import time
 
-from . import dash, images, notes
+from . import accounts, dash, images, notes
 
 MAX_IN = 24 << 20
 PRINT_W = 384                      # the printer's dots across
@@ -42,7 +42,7 @@ _lock = threading.Lock()
 
 
 def photos_dir():
-    return os.path.join(dash.state_dir(), "photos")
+    return os.path.join(accounts.user_dir(), "photos")
 
 
 def _dir(pid):

@@ -48,7 +48,10 @@ class Parsing(unittest.TestCase):
 class Routes(unittest.TestCase):
     def setUp(self):
         os.environ["CARDOS_STATE"] = tempfile.mkdtemp()
+        self.addCleanup(setattr, dash, "logged_in", dash.logged_in)
         dash.logged_in = lambda h: True
+        self.addCleanup(setattr, dash, "password", dash.password)
+        self.addCleanup(setattr, dash, "_server_token", dash._server_token)
         dash.password = lambda: "pw"
         dash._server_token = lambda h: TOKEN
         self.checks = []

@@ -44,7 +44,7 @@ import time
 import urllib.parse
 from collections import deque
 
-from . import dash
+from . import accounts, dash
 
 CHUNK = 3072                 # bytes a job carries: 4096 of base64
 POLL_WAIT = 1.5              # how long an idle poll is held open
@@ -115,7 +115,13 @@ class Broker:
             return self.jobs.popleft()
 
 
-broker = Broker()
+broker = Broker()             # without accounts, the one there is
+_brokers = {}                 # with them: one per person -- each their own device
+
+
+def _broker():
+    u = accounts.current()
+    return broker if u is None else _brokers.setdefault(u, Broker())
 
 
 # ---- what the page asks, in terms of jobs ------------------------------------
@@ -132,7 +138,7 @@ def clean_path(p):
 
 
 def list_dir(path):
-    _, rest = broker.ask("list", path)
+    _, rest = _broker().ask("list", path)
     out = []
     for line in rest.splitlines():
         f = line.split("\t", 2)
@@ -143,7 +149,7 @@ def list_dir(path):
 
 
 def stat(path):
-    head, _ = broker.ask("stat", path)
+    head, _ = _broker().ask("stat", path)
     kind, _, size = head.partition(" ")
     return kind == "d", int(size or 0)
 
@@ -152,7 +158,7 @@ def read_chunks(path, size):
     off = 0
     while off < size:
         n = min(CHUNK, size - off)
-        _, rest = broker.ask("read", path, "%d,%d" % (off, n))
+        _, rest = _broker().ask("read", path, "%d,%d" % (off, n))
         data = base64.b64decode(rest.strip() or b"")
         if not data:
             raise IOError("the device read nothing at %d" % off)
@@ -164,11 +170,11 @@ def write_file(path, data):
     off = 0
     while True:
         part = data[off:off + CHUNK]
-        broker.ask("write", path, str(off), base64.b64encode(part).decode())
+        _broker().ask("write", path, str(off), base64.b64encode(part).decode())
         off += len(part)
         if off >= len(data):
             break
-    broker.ask("commit", path)
+    _broker().ask("commit", path)
 
 
 # ---- routes ----------------------------------------------------------------------
@@ -208,8 +214,8 @@ def get_page(h, path, args):
 @_browser
 def get_status(h, args):
     """whether Remote Files is open on the device"""
-    _json(h, {"connected": broker.connected(),
-              "last_seen": int(broker.last_seen) if broker.last_seen else None})
+    _json(h, {"connected": _broker().connected(),
+              "last_seen": int(_broker().last_seen) if _broker().last_seen else None})
 
 
 @_browser
@@ -253,21 +259,21 @@ def post_put(h, args):
 @_browser
 def post_mkdir(h, args):
     """a new folder"""
-    broker.ask("mkdir", clean_path(_arg(args, "path")))
+    _broker().ask("mkdir", clean_path(_arg(args, "path")))
     _json(h, {"ok": True})
 
 
 @_browser
 def post_rm(h, args):
     """delete a file or an empty folder"""
-    broker.ask("rm", clean_path(_arg(args, "path")))
+    _broker().ask("rm", clean_path(_arg(args, "path")))
     _json(h, {"ok": True})
 
 
 @_browser
 def post_mv(h, args):
     """rename or move"""
-    broker.ask("mv", clean_path(_arg(args, "from")), clean_path(_arg(args, "to")))
+    _broker().ask("mv", clean_path(_arg(args, "from")), clean_path(_arg(args, "to")))
     _json(h, {"ok": True})
 
 
@@ -278,7 +284,7 @@ def run_line(line):
         raise ValueError("an empty line")
     if len(line) > LINE_MAX:
         raise ValueError("a line of at most %d characters" % LINE_MAX)
-    head, rest = broker.ask("sh", "/", "", line, timeout=SH_TIMEOUT)
+    head, rest = _broker().ask("sh", "/", "", line, timeout=SH_TIMEOUT)
     return head == "refused", rest
 
 
@@ -300,7 +306,7 @@ def post_poll(h, path, args):
     except ValueError:
         jid = 0
     answer = h.body(64 * 1024).decode("utf-8", "replace")
-    h.text(broker.poll(jid, answer))
+    h.text(_broker().poll(jid, answer))
 
 
 ROUTES = [
