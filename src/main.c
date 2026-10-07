@@ -1560,8 +1560,12 @@ void app_main(void) {
       input_set_repeat(k ? repeat : 0);
       /* A click per key from either keyboard, not per repeat. A key that
        * also does something audible (the launcher's move) is heard as that
-       * instead: blip.c keeps only the newest of a burst. */
-      if (k && !repeat) blip(BLIP_KEY);
+       * instead: blip.c keeps only the newest of a burst. Not while asleep
+       * (off or the dim clock): a key pressed there is either one of the
+       * three that wakes it -- which is its own event, not a click -- or
+       * one that does nothing at all, and a click for a key that did
+       * nothing is the thing this is fixing. */
+      if (k && !repeat && !power_asleep()) blip(BLIP_KEY);
     }
 
     int from_serial = 0;

@@ -95,19 +95,21 @@ void power_wake_now(void) {
   power_wake();
 }
 
-void power_clock_now(void) {
+/* fn-o and fn-c, on purpose, are the same sequence -- remember the
+ * brightness to come back to, mark it forced so the keypress that asked
+ * for this is not undone by the very next tick -- and differ only in
+ * whether the clock gets painted over the black. */
+static void sleep_now(int clock) {
   if (s_state == LIT) s_was = display_brightness();
   s_forced = 1;
-  to_clock();
-}
-
-void power_off_now(void) {
-  if (s_state == LIT) s_was = display_brightness();
+  if (clock) { to_clock(); return; }
   if (s_state == CLOCK) display_freeze(0);
   display_backlight(0);
   s_state = DARK;
-  s_forced = 1;
 }
+
+void power_clock_now(void) { sleep_now(1); }
+void power_off_now(void)   { sleep_now(0); }
 
 void power_hold(const void *owner, int on) {
   int i, free_slot = -1;
