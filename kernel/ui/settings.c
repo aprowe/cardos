@@ -482,14 +482,26 @@ static void paint_pass(SettingsState *st, Rect c) {
                      st->note, S_DIM, S_BG);
 }
 
-static void settings_paint(void *state, Rect c) {
-  SettingsState *st = (SettingsState *)state;
-  draw_rect(c, C_WHITE);
+static SettingsState *s_paint_st;
+static Rect           s_paint_c;
+
+static void paint_body(void *ctx) {
+  SettingsState *st = s_paint_st;
+  Rect c = s_paint_c;
+  (void)ctx;
   switch (st->view) {
   case VIEW_SCAN: paint_scan(st, c); break;
   case VIEW_PASS: paint_pass(st, c); break;
   default:        paint_rows(st, c); break;
   }
+}
+
+/* Composed off the panel and sent a strip at a time: each view clears its
+ * area and draws over it, and on the panel the clear showed on every key. */
+static void settings_paint(void *state, Rect c) {
+  s_paint_st = (SettingsState *)state;
+  s_paint_c = c;
+  draw_offscreen(c, paint_body, NULL);
 }
 
 /* The list is as tall as it needs to be and the window scrolls it, rather than

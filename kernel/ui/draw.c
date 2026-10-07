@@ -4,6 +4,7 @@
 #include "kernel/console/font6x8.h"
 
 #include <string.h>
+#include <stdlib.h>
 
 static Rect s_clip = { 0, 0, DISPLAY_W, DISPLAY_H };
 
@@ -56,6 +57,33 @@ void draw_reserve_top(int rows) {
 }
 
 int draw_reserved_top(void) { return s_reserve; }
+
+/* `area` painted by `body` off the panel, a strip of rows at a time, each
+ * strip sent whole. Only the part inside the current clip, so a damage rect
+ * still limits the work, and never under a banner's reserved rows. Without
+ * the memory for a strip, `body` draws straight to the panel as it would
+ * have. The clip is put back afterwards. */
+#define OFF_STRIP 16
+void draw_offscreen(Rect area, void (*body)(void *ctx), void *ctx) {
+  Rect asked = s_asked, vis = rect_intersect(area, s_clip);
+  uint16_t *buf;
+  int16_t y;
+  if (rect_is_empty(vis)) return;
+  buf = (uint16_t *)malloc((size_t)vis.w * OFF_STRIP * 2);
+  if (!buf) { body(ctx); return; }
+  for (y = vis.y; y < vis.y + vis.h; y = (int16_t)(y + OFF_STRIP)) {
+    int16_t h = (int16_t)(vis.y + vis.h - y < OFF_STRIP ? vis.y + vis.h - y : OFF_STRIP);
+    Rect strip;
+    strip.x = vis.x; strip.y = y; strip.w = vis.w; strip.h = h;
+    display_target(buf, vis.x, y, vis.w, h);
+    draw_set_clip(strip);
+    body(ctx);
+    display_target(NULL, 0, 0, 0, 0);
+    display_blit(vis.x, y, vis.w, h, buf);
+  }
+  free(buf);
+  draw_set_clip(asked);
+}
 
 Rect draw_clip(void) { return s_clip; }
 

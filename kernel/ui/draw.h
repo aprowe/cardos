@@ -38,6 +38,11 @@ void draw_set_clip(Rect r);
  * banner drawn over everything (kernel/sys/notify.c). */
 void draw_reserve_top(int rows);
 int  draw_reserved_top(void);
+
+/* Paint `area` by calling `body` once per strip of rows, composed off the
+ * panel and each strip sent whole: a screen that clears and redraws itself
+ * this way does not flicker. Within the current clip; restores it. */
+void draw_offscreen(Rect area, void (*body)(void *ctx), void *ctx);
 Rect draw_clip(void);
 
 void draw_rect(Rect r, uint16_t color);            /* filled */
