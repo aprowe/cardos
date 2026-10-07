@@ -60,6 +60,20 @@ class Room(unittest.TestCase):
         s, body = self.req("GET", "/msg?since=1&max=1")       # the next one, not the last
         self.assertEqual(body.split("\t")[0], "2")
 
+    def test_the_notify_poll(self):
+        # a device that has never asked is only told where the room is
+        self.req("POST", "/msg?name=Alex", b"one")
+        self.assertEqual(self.req("GET", "/notify/poll"), (200, "ok 1\n"))
+        for i in range(5):
+            self.req("POST", "/msg?name=britney", ("b%d" % i).encode())
+        self.req("POST", "/msg?name=Alex", b"mine")
+        s, body = self.req("GET", "/notify/poll?chat=1&me=alex")
+        lines = body.splitlines()
+        self.assertEqual(lines[0], "ok 7")
+        # the newest three from others, oldest first; never your own
+        self.assertEqual(lines[1:], ["chat\tbritney\tb2", "chat\tbritney\tb3", "chat\tbritney\tb4"])
+        self.assertEqual(self.req("GET", "/notify/poll?chat=7&me=Alex"), (200, "ok 7\n"))
+
     def test_refusals(self):
         self.assertEqual(self.req("POST", "/msg?name=", b"x")[0], 400)
         self.assertEqual(self.req("POST", "/msg?name=A", b"   ")[0], 400)

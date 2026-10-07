@@ -28,6 +28,7 @@ file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
   ${ROOT}/kernel/sys/hotkeys.c ${ROOT}/kernel/sys/chatlog.c ${ROOT}/kernel/sys/conf.c
   ${ROOT}/kernel/sys/logring.c   # applog.c is the device glue around it
   ${ROOT}/kernel/sys/tzreply.c   # tzlookup.c is the device glue around it
+  ${ROOT}/kernel/sys/notifyq.c   # notify.c is the banner, the centre and the watching
   ${ROOT}/kernel/app/cmdline.c   # commands as words, checked against a table
   ${ROOT}/kernel/app/appidx.c    # /cache/apps.idx; capprun.c reads and writes it
   ${ROOT}/kernel/sys/g0gesture.c # voice.c is the device glue around it

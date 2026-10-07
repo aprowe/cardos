@@ -13,6 +13,7 @@
 #include "kernel/drv/imu.h"
 #include "kernel/sys/midi.h"
 #include "kernel/net/httpq.h"
+#include "kernel/sys/notify.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/gauth.h"
 #include "kernel/net/update.h"
@@ -361,7 +362,7 @@ static int api_http_start(const char *method, const char *url, const char *body,
                      own_bearer(url, bearer), timeout_ms);
 }
 
-static int api_http_poll(char *out, size_t n) { return httpq_poll(out, n); }
+static int api_http_poll(char *out, size_t n) { return httpq_poll_as(capprun_executing(), out, n); }
 
 static const CappAgent AGENT = {
   agent_ask, agent_new, agent_busy, agent_has_key,
@@ -460,6 +461,11 @@ static const CappMidi MIDI = {
 };
 static const CappMidi *api_midi(void) { return &MIDI; }
 
+static int api_notify(const char *title, const char *text) {
+  notify_post(capprun_executing_name(), title ? title : "", text ? text : "");
+  return 0;
+}
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -495,6 +501,7 @@ static const CardApi API = {
   api_http_upload,
   api_motion,
   api_midi,
+  api_notify,
 };
 
 const CardApi *cardos_api(void) { return &API; }

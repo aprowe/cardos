@@ -63,6 +63,11 @@ int httpq_start_files(const void *owner, const char *url,
  * pending and then stop. */
 int httpq_poll(char *out, size_t out_size);
 
+/* The same, but only the request `owner` started: -1 if the slot is busy
+ * with someone else's (or idle). What apps and the notification watcher
+ * use, since they share the slot. */
+int httpq_poll_as(const void *owner, char *out, size_t out_size);
+
 /* Is a request in flight? For a shell that wants to show a spinner, and for
  * anything deciding whether to start another. */
 int httpq_active(void);

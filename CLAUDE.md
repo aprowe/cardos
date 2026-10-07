@@ -376,6 +376,20 @@ in by name; Accounts & keys has You (devices, tokens shown once, password)
 and People (admin). A new device's token goes in /config/claude.token.
 Design: docs/superpowers/specs/2026-10-06-accounts-design.md.
 
+**Notifications** (2026-10-07, API 39). `kernel/sys/notify.c`: anything
+calls `notify_post(app, title, text)` -- a banner across the top for 4.5 s
+(drawn off the panel and redrawn every 150 ms over whatever repaints), the
+notify chime, and the last sixteen in a list that fn-n opens (Enter opens
+the app, d clears; shells pause while it is open). The launcher's bar has a
+dot while any are unread; opening an app reads its own. Watchers: Chat --
+`GET /notify/poll?chat=ID&me=NAME` (server/msg.py) every 30 s while WiFi
+is already up, through `httpq_poll_as`, which only hands a reply to the
+request's owner (apps use it too now: the first to poll used to take any
+reply); Calendar -- the app's `/cache/calendar.cache` once a minute, an
+event N minutes before (Settings > Notifications: Chat, Calendar, Warn);
+the alarm logs itself as it rings. Apps post with `api->notify`. The list,
+the due rule and the poll reply are `kernel/sys/notifyq.c`, host-tested.
+
 **The launcher's order is chosen, not the card's** (2026-10-01).
 `/config/favorites.txt` (written with a default at first boot, hand-
 editable) lists apps or folders, in order: those come first, and a

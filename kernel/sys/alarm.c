@@ -1,6 +1,7 @@
 /* Alarms ringing. See alarm.h; the format is alarmfmt.h. */
 
 #include "kernel/sys/alarm.h"
+#include "kernel/sys/notify.h"
 #include "kernel/sys/alarmfmt.h"
 #include "kernel/sys/audio.h"
 #include "kernel/sys/clock.h"
@@ -238,6 +239,11 @@ static void start(const Alarm *a) {
   beep();
   paint();
   applogf("alarm", "ringing %02u:%02u %s", a->hour, a->min, a->label);
+  {
+    char t[16];
+    snprintf(t, sizeof t, "Alarm %02u:%02u", a->hour, a->min);
+    notify_log("Clock", t, a->label[0] ? a->label : "");   /* a missed one is in the list */
+  }
 }
 
 static void stop(int snooze) {

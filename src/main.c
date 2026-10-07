@@ -28,6 +28,7 @@
 #include "kernel/drv/usbdisk.h"
 #include "kernel/sys/blip.h"
 #include "kernel/ui/overlay.h"
+#include "kernel/sys/notify.h"
 #include "kernel/drv/imu.h"
 #include "kernel/mem/mem.h"
 #include "kernel/task/sched.h"
@@ -1044,6 +1045,9 @@ static int global_key(uint8_t k) {
   case KEY_OPT_LETTER('h'):
     show_opt_help();
     return 1;
+  case KEY_FN_LETTER('n'):                     /* the notification centre */
+    notify_center_open();
+    return 1;
   case KEY_OPT_DIGIT(1):
     launchui_init();
     s_mode = MODE_LAUNCHER;
@@ -1186,6 +1190,7 @@ static void repaint_all(void) {
   if (s_mode == MODE_CONSOLE) con_repaint();
   else repaint_shells();
   alarm_paint_over();          /* a ringing alarm stays on top */
+  notify_paint_over();         /* and a notification's banner */
 }
 
 /* A screenshot asked for over the serial line, from tools/shots.py. Named by
@@ -1462,6 +1467,7 @@ void app_main(void) {
     serlink_init(&hooks);
   }
   alarm_set_repaint(repaint_all);    /* what a ringing alarm's panel covered */
+  notify_init(repaint_all);          /* and what a banner covered */
 
   /* The icon scan, whichever shell comes up. It is also what writes a new
    * firmware's apps to the card (seed_capps) and the command catalog, and it
@@ -1564,6 +1570,7 @@ void app_main(void) {
     power_tick();
     volume_panel_tick();
     alarm_tick();           /* reads /config/alarms.txt when the minute changes */
+    notify_tick((uint32_t)(esp_timer_get_time() / 1000));   /* banners, Chat, Calendar */
     clock_persist_tick();   /* writes at most once every ten minutes */
 
     /* What the background task finished while nobody was waiting. One per
@@ -1595,6 +1602,17 @@ void app_main(void) {
     /* A ringing alarm answers every key: nothing underneath should open,
      * type or close because someone reached out to stop it. */
     if (k && alarm_ringing()) { alarm_key(k); k = 0; }
+
+    /* The notification centre (fn-n) has every key while it is open, and
+     * the shells wait: an animating app would draw over it. */
+    if (notify_center_active()) {
+      if (k) {
+        uint8_t arrow = keyboard_arrow_for(k);
+        notify_center_key(arrow ? arrow : k);
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
+      continue;
+    }
 
     /* Before any shell sees it. */
     if (k && global_key(k)) k = 0;

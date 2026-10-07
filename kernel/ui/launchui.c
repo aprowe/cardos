@@ -37,6 +37,7 @@
 #include "kernel/drv/battery.h"
 #include "kernel/drv/display.h"
 #include "kernel/sys/blip.h"
+#include "kernel/sys/notify.h"
 
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
@@ -96,6 +97,7 @@ static int  s_has_next;
 
 static void start_app(int slot, const char *name, const char *args) {
   snprintf(s_app_args, sizeof s_app_args, "%s", args ? args : "");
+  notify_opened(name);                         /* its notifications are read */
   capprun_start(slot, name, args);
 }
 
@@ -150,6 +152,10 @@ static void paint_bar_body(void) {
 
   draw_rect(R(0, 0, DISPLAY_W, BAR_H), C_TITLE);
   draw_text(4, 2, "CardOS", C_TITLE_FG, C_TITLE);
+  /* Unread notifications: a dot after the name; fn-n shows them. */
+  if (notify_unread()) {
+    draw_rect(R(4 + 6 * 6 + 3, 4, 4, 4), RGB565(255, 196, 64));
+  }
 
   /* The time, if the device has been told it. Before this it showed
    * uptime in minutes and seconds, formatted as a clock -- right for the
@@ -203,6 +209,7 @@ static uint32_t bar_state(void) {
   h = (h ^ (uint32_t)(bthid_state(BTHID_KEYBOARD) == BTH_CONNECTED)) * 16777619u;
   h = (h ^ (uint32_t)(bthid_state(BTHID_MOUSE) == BTH_CONNECTED) << 1) * 16777619u;
   h = (h ^ (uint32_t)wifi_is_connected() << 2) * 16777619u;
+  h = (h ^ (uint32_t)(notify_unread() != 0) << 3) * 16777619u;
   return h;
 }
 static uint32_t s_bar_shown;

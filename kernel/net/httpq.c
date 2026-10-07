@@ -189,6 +189,14 @@ int httpq_poll(char *out, size_t out_size) {
   return r;
 }
 
+int httpq_poll_as(const void *owner, char *out, size_t out_size) {
+  /* Another's request -- running or waiting to be collected -- is not
+   * yours to take: the notification watcher and an app share the one slot,
+   * and the first to poll used to walk off with the other's reply. */
+  if (s_slot.state != HTTPSLOT_IDLE && s_slot.owner != owner) return -1;
+  return httpq_poll(out, out_size);
+}
+
 void httpq_abandon(const void *owner) {
   if (!s_lock || !owner) return;
   xSemaphoreTake(s_lock, portMAX_DELAY);

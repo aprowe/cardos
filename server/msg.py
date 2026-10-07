@@ -100,7 +100,35 @@ def post_msg(h, path, args):
     h.text("%d\n" % mid)
 
 
+POLL_MAX = 3
+
+
+def get_notify_poll(h, path, args):
+    """what a device should tell its owner about, while Chat is closed:
+    ?chat=ID&me=NAME -> "ok LAST" and up to three newer messages from others
+
+    The device (kernel/sys/notify.c) asks every half minute. With no chat id
+    -- a device that has never asked -- it is only told where the room is,
+    so its first poll is not every message ever sent. Other sources can add
+    their own lines here later; the device ignores kinds it does not know."""
+    if not notes._allowed(h):
+        return
+    try:
+        sid = int((args.get("chat") or ["-1"])[0])
+    except ValueError:
+        sid = -1
+    me = _flat((args.get("me") or [""])[0], NAME_MAX).lower()
+    msgs = load()
+    last = msgs[-1]["id"] if msgs else 0
+    out = ["ok %d\n" % last]
+    if sid >= 0:
+        new = [m for m in msgs if m["id"] > sid and m["name"].lower() != me][-POLL_MAX:]
+        out += ["chat\t%s\t%s\n" % (m["name"], m["text"]) for m in new]
+    h.text("".join(out))
+
+
 ROUTES = [
+    ("GET", "/notify/poll", get_notify_poll, "open"),
     ("GET", "/msg", get_msg, "open"),
     ("POST", "/msg", post_msg, "open"),
 ]

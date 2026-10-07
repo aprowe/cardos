@@ -8,6 +8,8 @@ idf_component_register(
     "../kernel/drv/imu.c"
     "../kernel/drv/usbdisk.c"
     "../kernel/sys/blip.c"
+    "../kernel/sys/notify.c"
+    "../kernel/sys/notifyq.c"
     "../kernel/sys/midi.c"
     "../kernel/drv/keyboard.c"
     "../kernel/drv/bthid.c"

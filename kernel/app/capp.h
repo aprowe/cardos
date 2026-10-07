@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 38
+#define CAPP_API_VERSION 39
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -824,6 +824,13 @@ typedef struct {
    * time-stamped messages for a task that keeps time and loops. Closed, its
    * notes stopped, when the app that opened it closes. */
   const CappMidi *(*midi)(void);
+
+  /* ---- notifications (API 39) ----
+   *
+   * A banner across the top of the screen, the notify chime, and a line in
+   * the OS's list (fn-n), under this app's name. For something worth
+   * looking up for: a timer done, a sync that found something. 0. */
+  int (*notify)(const char *title, const char *text);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

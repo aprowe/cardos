@@ -222,6 +222,17 @@ static int take_messages(void) {
   return got;
 }
 
+/* The last message shown, for the OS's notification watcher
+ * (kernel/sys/notify.c): what has been read here is not announced. */
+static void seen_save(void) {
+  char b[16];
+  int fd = api->open("/cache/chat.seen", CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC), n;
+  if (fd < 0) return;
+  n = api->fmt(b, sizeof b, "%d\n", C.last_id);
+  api->write(fd, b, (size_t)n);
+  api->close(fd);
+}
+
 static void poll_server(uint32_t now) {
   int r;
   if (C.req == REQ_NONE) {
@@ -251,7 +262,11 @@ static void poll_server(uint32_t now) {
   C.req = REQ_NONE;
   {
     int got = take_messages();
-    if (got) { C.scroll = 0; damage_log(); }
+    if (got) {
+      C.scroll = 0;
+      damage_log();
+      seen_save();                            /* the OS does not announce these */
+    }
     /* A full batch means there may be more: ask again at once. */
     C.next_poll = now + (got >= BATCH ? 200 : POLL_MS);
   }
