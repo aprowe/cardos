@@ -108,6 +108,26 @@ ICONS = {
         "................",
     ],
 
+    # A red kart from behind on the road, kerbs either side.
+    "Kart": [
+        "................",
+        "......KKKK......",
+        ".....KWWWWK.....",
+        ".....KWrrWK.....",
+        "......KyyK......",
+        "....KKrrrrKK....",
+        "...KrrmmmmrrK...",
+        "..KKKKKKKKKKKK..",
+        ".KKKrrrrrrrrKKK.",
+        ".KKKrmmmmmmrKKK.",
+        ".KKKGGGGGGGGKKK.",
+        "..KKK.GGGG.KKK..",
+        "DDDDDDDDDDDDDDDD",
+        "rWDDDDDWDDDDDDWr",
+        "WrDDDDDDDDDDDDrW",
+        "rWDDDDDDDDDDDDWr",
+    ],
+
     # The board from above: cells in grooves, a wall laid across, a pawn
     # each side. The wall is the game.
     "Quoridor": [
