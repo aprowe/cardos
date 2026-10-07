@@ -654,8 +654,9 @@ function signedOut(){ if(leaving) return; leaving=true; location.href='/dash'; }
 class ApiError extends Error{}
 function netError(e){ if(e&&e.name==='AbortError') return new ApiError('Cancelled.'); return new ApiError('Couldn’t reach the CardOS server. Check this computer’s connection and try again.'); }
 async function failFrom(r){
-  if(r.status===403){ signedOut(); return new ApiError('You’re signed out.'); }
   let j=null; try{ j=await r.json(); }catch(e){}
+  // A 403 is "signed out" -- unless it says the thing is the owner's.
+  if(r.status===403&&!(j&&j.owner_only)){ signedOut(); return new ApiError('You’re signed out.'); }
   if(j&&j.gone) markGone();
   if(j&&j.error) return new ApiError(j.error);
   if(r.status===503) return new ApiError('The card isn’t reachable — Dashboard Link isn’t open on the device.');
@@ -1720,8 +1721,8 @@ function route(){
   if(v==='notes') notesLoad();
   if(v==='photos') photosLoad();
   if(v==='music') musicLoad();
-  if(v==='accounts'&&!ME.busy) meLoad();
-  if(v==='accounts'&&!CL.v&&!CL.busy&&(!ME.v||ME.v.admin)) claudeLoad(false);
+  // Who you are first: Claude's login is only asked about for its owner.
+  if(v==='accounts'&&!ME.busy) meLoad().then(()=>{ if(ME.v&&ME.v.admin&&!CL.v&&!CL.busy) claudeLoad(false); });
 }
 window.addEventListener('hashchange',route);
 

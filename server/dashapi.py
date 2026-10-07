@@ -48,7 +48,8 @@ def _admin_api(fn):
     def wrapped(h, args):
         from . import accounts
         if not accounts.is_admin():
-            _json(h, {"error": "that is the server owner's"}, 403)
+            # owner_only: the page reads a plain 403 as "signed out"
+            _json(h, {"error": "that is the server owner's", "owner_only": True}, 403)
             return
         fn(h, args)
     wrapped.__doc__ = fn.__doc__

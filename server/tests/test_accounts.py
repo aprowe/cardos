@@ -138,7 +138,9 @@ class Accounts(unittest.TestCase):
         self.assertNotIn("users", her_me)
         # people are the owner's to make, and so is Claude's login
         self.assertEqual(self.req("POST", "/dash/api/user", cookie=hers, js={"name": "x", "password": "123456"})[0], 403)
-        self.assertEqual(self.req("GET", "/dash/api/claude", cookie=hers)[0], 403)
+        s, _, body = self.req("GET", "/dash/api/claude", cookie=hers)
+        self.assertEqual(s, 403)
+        self.assertTrue(json.loads(body)["owner_only"])        # not "signed out" to the page
         self.assertEqual(self.req("POST", "/dash/api/user", cookie=mine, js={"name": "kid", "password": "123456"})[0], 200)
         # a cookie made up for someone else does not work
         forged = "alex:" + hers.split(":", 1)[1]
