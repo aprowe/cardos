@@ -45,7 +45,15 @@ class Agent(unittest.TestCase):
         self.assertEqual(seen["url"], agent.API)
         self.assertEqual(seen["headers"]["Authorization"], "Bearer sk-ant-oat01-xyz")
         self.assertEqual(seen["headers"]["Anthropic-beta"], "oauth-2025-04-20")
-        self.assertEqual(seen["data"], b'{"model":"m"}')
+        sent = json.loads(seen["data"])
+        self.assertEqual(sent["model"], "m")
+        self.assertEqual(sent["system"][0]["text"], agent.IDENTITY)     # a login needs it
+        # a system prompt of its own is kept, after it, and not doubled
+        agent.forward(json.dumps({"system": "be brief"}).encode(), opener=opener)
+        self.assertEqual([b["text"] for b in json.loads(seen["data"])["system"]],
+                         [agent.IDENTITY, "be brief"])
+        agent.forward(seen["data"], opener=opener)
+        self.assertEqual(len(json.loads(seen["data"])["system"]), 2)
         # an API key wins
         os.environ["ANTHROPIC_API_KEY"] = "sk-ant-api-1"
         self.addCleanup(os.environ.pop, "ANTHROPIC_API_KEY", None)

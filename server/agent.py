@@ -39,6 +39,25 @@ def credentials():
     return None
 
 
+# A Claude login (OAuth) is Claude Code's, and the API answers a request on
+# it only when the system prompt opens with Claude Code's own first line --
+# without it, a bare "rate_limit_error" (measured 2026-10-07). An API key
+# needs nothing.
+IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
+def with_identity(body):
+    """The request with IDENTITY as its first system block."""
+    req = json.loads(body)
+    system = req.get("system") or []
+    if isinstance(system, str):
+        system = [{"type": "text", "text": system}] if system else []
+    if not (system and system[0].get("text", "").startswith(IDENTITY)):
+        system = [{"type": "text", "text": IDENTITY}] + system
+    req["system"] = system
+    return json.dumps(req).encode()
+
+
 def forward(body, opener=urllib.request.urlopen):
     """(status, bytes) from Anthropic for a request body."""
     cred = credentials()
@@ -46,6 +65,8 @@ def forward(body, opener=urllib.request.urlopen):
         return 503, json.dumps({"type": "error", "error": {
             "type": "no_credentials",
             "message": "the server has no Claude login: sign in on the dashboard"}}).encode()
+    if cred[0][0] == "Authorization":
+        body = with_identity(body)
     req = urllib.request.Request(API, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
     req.add_header("anthropic-version", "2023-06-01")
