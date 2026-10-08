@@ -124,6 +124,17 @@ class TogglTest(unittest.TestCase):
         s, text = self.req("GET", "/toggl/status")
         self.assertTrue(text.startswith("running\t99\t"))
 
+    def test_a_status_after_a_start_or_stop_is_not_the_cached_one(self):
+        # The device asks for the status on open, and again right after a
+        # start: within the cache's ten seconds, so the start must drop it.
+        # It dropped the bare key while the cache held (person, key), and the
+        # app saw "idle" just after starting -- the timer vanished.
+        self.assertTrue(self.req("GET", "/toggl/status")[1].startswith("idle"))
+        self.req("POST", "/toggl/start", "description=Writing\nproject=10")
+        self.assertTrue(self.req("GET", "/toggl/status")[1].startswith("running\t99\t"))
+        self.req("POST", "/toggl/stop")
+        self.assertTrue(self.req("GET", "/toggl/status")[1].startswith("idle"))
+
     def test_status_lists_the_projects_to_start_from(self):
         s, text = self.req("GET", "/toggl/status")
         self.assertTrue(text.endswith("project\t10\tCardOS\t#0b83d9\nproject\t11\tHome\t\n"), text)

@@ -149,9 +149,12 @@ def cached(key, seconds, fn):
 
 
 def drop(*keys):
+    """Forget the current person's answers for `keys` -- keyed as cached()
+    keys them. Popping the bare key, as this did once accounts came, dropped
+    nothing: a status right after a start was the cached "idle"."""
     with _lock:
         for k in keys:
-            _cache.pop(k, None)
+            _cache.pop((accounts.current(), k), None)
 
 
 # ---- the parts ----------------------------------------------------------------------
