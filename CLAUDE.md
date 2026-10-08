@@ -854,6 +854,34 @@ prints a reading. Level (Make) is the test app. To check on a new ADV: the
 keys (every one, and the modifiers), `listen`, Memo record and play, Timer's
 beep, and which way `motion`'s axes point against Level's bubble.
 
+**Build for someone who is not the owner, fenced to their own apps**
+(2026-10-07). `accounts.set_build(name, True)` gives a person Build with
+their own conversation; their turns may make new apps and change only the
+ones they made (`server/fence.py`: apps/NAME.c, apps/NAME_*.h,
+apps/icons/NAME.txt, their lines of folders.txt; ownership in
+CARDOS_STATE/app_owners.json, claimed when a file is first written). Three
+walls: the prompt, a PreToolUse hook (`server/fence_hook.py`, verified
+against the real CLI on the droplet), and a post-turn sweep that puts back
+anything else before the build. A fenced turn never builds firmware.
+Build steps run at `--effort xhigh`, and the planner asks for a finished
+app rather than the simplest one. A finished Build pushes "Build done" to
+the person's devices through `/notify/poll?note=` -- with the app shut.
+
+**The Claude app goes through the server** (2026-10-07):
+`kernel/sys/agent.c` posts to `/agent/messages` (`server/agent.py`) with
+the device token over plain HTTP, and the server forwards it with its own
+Claude login -- which the API accepts only with Claude Code's identity line
+first in the system prompt, so the server adds it. No key on any card, and
+no TLS on the device. With no server configured, the card key and direct
+HTTPS as before; a -3 there now says which step failed.
+
+**The lock screen** (2026-10-07): the dim clock and black are one lock.
+fn-l locks as whichever was last, fn-c / fn-o choose; on the lock, c and o
+switch, and opt-backspace, or Enter, Space, Esc or Del twice within 1.5 s,
+unlocks. Unread notifications are listed under the clock; one arriving at
+black shows the clock for 15 s. An app with no colour icon (made by Build,
+arrived by `update apps`) wears its 1bpp icon, coloured.
+
 ## Hardware facts — measured on the actual device, not from a datasheet
 
 M5Stack Cardputer v1.1, ESP32-S3FN8 (Xtensa LX7 dual-core, 240 MHz).
