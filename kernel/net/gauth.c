@@ -246,6 +246,7 @@ int gauth_pull(const char *base, const char *bearer) {
 
   snprintf(url, sizeof url, "%s/google/creds", base);
   n = http_request("GET", url, NULL, NULL, bearer, reply, sizeof reply, 15000);
+
   if (n < 0) {
     if (n == -403)
       snprintf(s_detail, sizeof s_detail, "the server wants the token in "
@@ -255,7 +256,8 @@ int gauth_pull(const char *base, const char *bearer) {
     else if (n == -503)
       snprintf(s_detail, sizeof s_detail, "the server has no --token set");
     else
-      snprintf(s_detail, sizeof s_detail, "cannot reach %s (%d)", base, n);
+      snprintf(s_detail, sizeof s_detail, "cannot reach %s: %s", base,
+               n == -3 ? http_last_error() : n == -4 ? "not enough memory for HTTPS" : "no network");
     return -1;
   }
   reply[n < (int)sizeof reply ? n : (int)sizeof reply - 1] = 0;

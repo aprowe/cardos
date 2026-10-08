@@ -98,6 +98,42 @@ static int enough_memory(const char *url) {
   return 0;
 }
 
+
+/* ---- opening, past a certificate check that fails for no reason ----
+ *
+ * Measured 2026-10-08 on the ADV: after every boot the first two or three
+ * HTTPS handshakes failed in ESP-IDF's certificate bundle -- for this
+ * server, google.com and github.com alike, whichever came first -- and every
+ * one after them passed. The bundle's lookup (esp_crt_bundle.c) matched a
+ * root by name and then got it wrong: an RSA-4096 key for an all-ECDSA
+ * chain, then "no matching root", then the right one, for the same chain a
+ * second apart. Not time (a minute's wait changed nothing), not memory, not
+ * the hash (it succeeds), not MPI acceleration (off, the same). Until that
+ * is found in ESP-IDF, a handshake that fails on the certificate -- and
+ * only that: a network that is down is not asked again -- is tried again,
+ * up to three more times. Every boot measured succeeded by the fourth. */
+#define CERT_RETRIES 3
+
+static int cert_failure(esp_http_client_handle_t cli) {
+  int code = 0, flags = 0;
+  esp_http_client_get_and_clear_last_tls_error(cli, &code, &flags);
+  if (code < 0) code = -code;                /* esp-tls hands mbedTLS's code back positive */
+  /* X509_FATAL_ERROR (what the bundle's failure surfaces as) or CERT_VERIFY_FAILED */
+  return code == 0x3000 || code == 0x2700 || flags != 0;
+}
+
+static esp_err_t open_tls(esp_http_client_handle_t cli, int len) {
+  esp_err_t e = esp_http_client_open(cli, len);
+  int tries = 0;
+  while (e != ESP_OK && tries < CERT_RETRIES && cert_failure(cli)) {
+    tries++;
+    ESP_LOGW(TAG, "certificate check failed; trying again (%d)", tries);
+    esp_http_client_close(cli);
+    e = esp_http_client_open(cli, len);
+  }
+  return e;
+}
+
 /* The indicator wraps the two calls that block for seconds. http_stream is
  * deliberately not among them: it runs for as long as a viewer is open and
  * paints the screen itself, so a badge over it would be fighting the very
@@ -146,13 +182,17 @@ int http_request_quiet(const char *method, const char *url,
   if (content_type && *content_type)
     esp_http_client_set_header(cli, "Content-Type", content_type);
 
+  s_why[0] = 0;
   {
     int blen = body ? (int)strlen(body) : 0;
-    if (esp_http_client_open(cli, blen) != ESP_OK) {
+    esp_err_t e = open_tls(cli, blen);
+    if (e != ESP_OK) {
+      why_failed("could not connect", e);
       esp_http_client_cleanup(cli);
       return -3;
     }
     if (blen > 0 && esp_http_client_write(cli, body, blen) != blen) {
+      why_failed("the request was cut off sending", ESP_OK);
       esp_http_client_close(cli);
       esp_http_client_cleanup(cli);
       return -3;
@@ -236,7 +276,7 @@ int http_post_file_progress(const char *url, const char *path,
    * whole point of this function is that the body never exists in memory: a
    * fifteen-second recording is 480 KB and there are about 120 KB to play
    * with. */
-  if (esp_http_client_open(cli, size) != ESP_OK) {
+  if (open_tls(cli, size) != ESP_OK) {
     fs_close(fd);
     esp_http_client_cleanup(cli);
     return -3;
@@ -315,7 +355,7 @@ int http_exchange_files(const char *url, const char *body_path,
 
   s_why[0] = 0;
   {
-    esp_err_t e = esp_http_client_open(cli, size);
+    esp_err_t e = open_tls(cli, size);
     if (e != ESP_OK) {
       why_failed("could not connect", e);
       fs_close(fd);
@@ -439,7 +479,7 @@ int http_stream_ex(const char *url, const char *bearer, HttpSink on_data, void *
   cli = esp_http_client_init(&cfg);
   if (!cli) return -2;
   set_auth(cli, bearer);
-  if (esp_http_client_open(cli, 0) != ESP_OK) {
+  if (open_tls(cli, 0) != ESP_OK) {
     esp_http_client_cleanup(cli);
     return -3;
   }
@@ -506,7 +546,7 @@ static int http_download_ex_do(const char *url, const char *path, const char *be
 
   set_auth(cli, bearer);
 
-  if (esp_http_client_open(cli, 0) != ESP_OK) {
+  if (open_tls(cli, 0) != ESP_OK) {
     esp_http_client_cleanup(cli);
     return -3;
   }
