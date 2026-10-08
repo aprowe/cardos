@@ -57,8 +57,15 @@ MAX_REPLY = 3500
 # outside, from a hang. Silence past IDLE_TIMEOUT is a hang; STEP_TIMEOUT is
 # the backstop for one step that is busy and getting nowhere. Thinking emits
 # nothing, so IDLE_TIMEOUT has to cover the longest think (140 s measured).
-IDLE_TIMEOUT = 240
-STEP_TIMEOUT = 900
+# At effort xhigh a think runs longer than that, so the allowance is longer.
+IDLE_TIMEOUT = 420
+STEP_TIMEOUT = 1500
+
+# How hard Claude Code thinks (`claude --effort`). The apps a Build made at
+# the default were too simple -- a screen and one interaction -- so the
+# steps that write code think hardest; the plan, which is a list, less.
+STEP_EFFORT = "xhigh"
+PLAN_EFFORT = "high"
 PLAN_TIMEOUT = 180
 TURN_TIMEOUT = STEP_TIMEOUT        # old name; the test stubs still read it
 
@@ -71,9 +78,14 @@ repository (CardOS; CLAUDE.md describes it). Each step must be small enough to
 finish in a few minutes: one file written, one feature added, one fix. A small
 request, or a question, is one step -- do not pad it. At most %d steps.
 
-Plan exactly what was asked, the simplest version of it: no features the
-request did not mention. No step to build, compile, test or install -- that
-happens by itself after the last step, and the agent cannot run commands.
+Plan what was asked as a finished, polished thing someone would enjoy
+using, not a demo: a game has a goal, scoring, levels or rising difficulty,
+a title and game-over screen, and saves its best score; a tool handles its
+edge cases and keeps its data. Use the screen well (colour, the fonts in
+/fonts, smooth redraws with api->damage). Stay within what was asked -- no
+unrelated features -- but do not make it the smallest version of itself.
+No step to build, compile, test or install -- that happens by itself after
+the last step, and the agent cannot run commands.
 
 Reply with the numbered steps only, one line each, and nothing else.
 
@@ -86,7 +98,9 @@ That request has been split into steps:
 %s
 
 Do step %d now, and only step %d. Later steps come as their own messages.
-End with one short sentence saying what you did."""
+Do it thoroughly: read the apps and headers it touches first, and write
+complete code -- no placeholders, no TODOs. End with one short sentence
+saying what you did."""
 
 
 class TurnTimeout(Exception):
@@ -409,7 +423,8 @@ class ChatService:
             return [text]
         cmd = [self.claude, "-p", PLAN_PROMPT % (MAX_STEPS, text),
                "--output-format", "stream-json", "--verbose",
-               "--max-turns", "1", "--disallowed-tools", ALLOWED_TOOLS]
+               "--max-turns", "1", "--disallowed-tools", ALLOWED_TOOLS,
+               "--effort", PLAN_EFFORT]
         if self.model:
             cmd += ["--model", self.model]
         reply, _ = run_stream(cmd, self._child_env(), self.cwd, None,
@@ -463,7 +478,8 @@ class ChatService:
                # does what it was told.
                "--permission-mode", "acceptEdits",
                "--allowed-tools", self.allowed_tools,
-               "--add-dir", self.cwd]
+               "--add-dir", self.cwd,
+               "--effort", STEP_EFFORT]
         if self.disallowed_tools:
             cmd += ["--disallowed-tools", self.disallowed_tools]
         if self.model:
