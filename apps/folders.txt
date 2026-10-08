@@ -33,6 +33,7 @@ mines     Games
 noodle    Games
 notes     Plan
 photo     Make
+pet       Games
 pinball   Games
 quoridor  Games
 kart      Games

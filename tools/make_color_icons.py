@@ -699,6 +699,25 @@ ICONS = {
         ".KKKKKKKKKKKKKK.",
         "................",
     ],
+    # A round little pet, pink, with eyes and cheeks: Pet.
+    "Pet": [
+        "................",
+        "....KK....KK....",
+        "...KPPK..KPPK...",
+        "...KPPPKKPPPK...",
+        "..KPPPPPPPPPPK..",
+        ".KPPPPPPPPPPPPK.",
+        ".KPPKKPPPPKKPPK.",
+        ".KPPKKPPPPKKPPK.",
+        ".KPrPPPPPPPPrPK.",
+        ".KPPPPPKKPPPPPK.",
+        ".KPPPWWWWWWPPPK.",
+        "..KPPWWWWWWPPK..",
+        "...KPPPPPPPPK...",
+        "...KPPKKKKPPK...",
+        "...KKK....KKK...",
+        "................",
+    ],
     # A rounded badge with a plus in it: one more.
     "Counter": [
         "................",

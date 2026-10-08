@@ -38,14 +38,19 @@ void nq_read_app(Nq *q, const char *app);
 
 /* ---- the server's answer -------------------------------------------------
  *
- * GET /notify/poll?chat=ID&me=NAME answers
- *   ok LAST_CHAT_ID
- *   chat <tab> name <tab> text        (newest messages from others, oldest first)
+ * GET /notify/poll?chat=ID&me=NAME&note=ID answers
+ *   ok LAST_CHAT_ID [LAST_NOTE_ID]
+ *   chat <tab> name <tab> text                (messages from others, oldest first)
+ *   note <tab> app <tab> title <tab> text     (the server's own: a Build done)
  * Returns the last chat id (or -1 if the reply is not that), calling `each`
- * for every chat line. The reply is read, not changed. */
+ * for every chat line and `note` for every note line; *note_last is the
+ * second number, or -1 when there is none. Any callback may be NULL. The
+ * reply is read, not changed. */
+typedef struct { const char *s; size_t n; } NqStr;
 int nq_parse_poll(const char *reply,
                   void (*each)(void *ctx, const char *name, size_t name_len,
                                const char *text, size_t text_len),
-                  void *ctx);
+                  void (*note)(void *ctx, NqStr app, NqStr title, NqStr text),
+                  int *note_last, void *ctx);
 
 #endif /* CARDOS_NOTIFYQ_H */

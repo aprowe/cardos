@@ -19,7 +19,7 @@ import os
 import threading
 import time
 
-from . import dash, notes
+from . import accounts, dash, notes
 
 KEEP = 500
 SHOW = 40
@@ -101,11 +101,37 @@ def post_msg(h, path, args):
 
 
 POLL_MAX = 3
+NOTES_KEEP = 20
+
+# Things to tell a person's devices about, from the server's own work -- a
+# Build that finished while its app was shut. Per person, in memory: a
+# restart loses what was not yet fetched, which is a notification, not data.
+_notes = {}             # user -> [{"id", "app", "title", "text"}]
+_note_ids = {}          # user -> the last id given
+
+
+def notify_push(user, app, title, text):
+    """A note for every device of `user` (None: the one person a server
+    without accounts has), fetched at their next /notify/poll."""
+    with _lock:
+        n = _note_ids.get(user, 0) + 1
+        _note_ids[user] = n
+        q = _notes.setdefault(user, [])
+        q.append({"id": n, "app": _flat(app, 12), "title": _flat(title, 30),
+                  "text": _flat(text, 70)})
+        del q[:-NOTES_KEEP]
+
+
+def notes_since(user, nid):
+    with _lock:
+        return [x for x in _notes.get(user, []) if x["id"] > nid], _note_ids.get(user, 0)
 
 
 def get_notify_poll(h, path, args):
     """what a device should tell its owner about, while Chat is closed:
     ?chat=ID&me=NAME -> "ok LAST" and up to three newer messages from others
+    &note=ID         -> "ok LAST NOTELAST", and the server's own news after
+                        ID: "note <tab> app <tab> title <tab> text" (a Build done)
 
     The device (kernel/sys/notify.c) asks every half minute. With no chat id
     -- a device that has never asked -- it is only told where the room is,
@@ -115,15 +141,25 @@ def get_notify_poll(h, path, args):
         return
     try:
         sid = int((args.get("chat") or ["-1"])[0])
+        nid = int((args.get("note") or ["-1"])[0])
     except ValueError:
-        sid = -1
+        sid, nid = -1, -1
     me = _flat((args.get("me") or [""])[0], NAME_MAX).lower()
     msgs = load()
     last = msgs[-1]["id"] if msgs else 0
-    out = ["ok %d\n" % last]
+    user = accounts.current()
+    _, note_last = notes_since(user, 0)
+    if nid > note_last:
+        nid = 0                 # the server restarted: its ids did too
+    news, _ = notes_since(user, max(nid, 0))
+    # The second number only for a device that asks for notes; one that
+    # does not reads the first and stops there either way.
+    out = ["ok %d %d\n" % (last, note_last) if nid >= 0 or "note" in args else "ok %d\n" % last]
     if sid >= 0:
         new = [m for m in msgs if m["id"] > sid and m["name"].lower() != me][-POLL_MAX:]
         out += ["chat\t%s\t%s\n" % (m["name"], m["text"]) for m in new]
+    if nid >= 0:
+        out += ["note\t%s\t%s\t%s\n" % (x["app"], x["title"], x["text"]) for x in news[-POLL_MAX:]]
     h.text("".join(out))
 
 

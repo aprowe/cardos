@@ -73,9 +73,17 @@ void power_off_now(void);
  * minute. */
 void power_clock_now(void);
 
+/* fn-l: locked, as whichever of the two it was last -- the clock or black.
+ * The two are one lock with two faces; fn-c and fn-o set which. */
+void power_lock_now(void);
+
 /* Settings > Display > Sleep: what the idle timeout's "off" shows. */
 int  power_sleep_clock(void);
 void power_set_sleep_clock(int on);
+
+/* A notification came while asleep: the clock repaints with it listed, and
+ * a black screen shows the clock for fifteen seconds, then black again. */
+void power_notice(void);
 
 int  power_showing_clock(void);
 int  power_asleep(void);              /* dark or the clock */

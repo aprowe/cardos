@@ -1046,6 +1046,29 @@ static void volume_panel_tick(void) {
  * when a keypress need only wake it -- an eighth of the polling. */
 static int rest_ms(void) { return power_asleep() ? 40 : 5; }
 
+/* A key at the lock screen -- the clock or black, one lock with two faces.
+ * c shows the clock, o turns it black (fn-c and fn-o too); opt-backspace
+ * unlocks, and so does Enter, Space, Escape or Delete pressed twice in a
+ * row, within a second and a half. Anything else is a key brushed in a
+ * pocket and does nothing. Returns 1 to unlock. */
+#define LOCK_TWICE_MS 1500
+static int lock_key(uint8_t k) {
+  static uint8_t last;
+  static int64_t last_us;
+  int64_t now = esp_timer_get_time();
+  int twice;
+  if (k == KEY_QUIT) { last = 0; return 1; }
+  if (k == 'c' || k == 'C' || k == KEY_FN_LETTER('c')) { power_clock_now(); last = 0; return 0; }
+  if (k == 'o' || k == 'O' || k == KEY_FN_LETTER('o')) { power_off_now(); last = 0; return 0; }
+  if (k == KEY_FN_LETTER('l')) { last = 0; return 0; }
+  if (k == 0x7F) k = KEY_BACKSPACE;                 /* delete and backspace are one key here */
+  if (k != KEY_ENTER && k != ' ' && k != KEY_ESC && k != KEY_BACKSPACE) { last = 0; return 0; }
+  twice = k == last && now - last_us < (int64_t)LOCK_TWICE_MS * 1000;
+  last = twice ? 0 : k;
+  last_us = now;
+  return twice;
+}
+
 static int global_key(uint8_t k) {
   /* The panel is above everything, so it gets the key first. */
   if (s_opt_help) {
@@ -1127,6 +1150,10 @@ static int global_key(uint8_t k) {
    * shortcuts and reserving one could take a binding away. */
   case KEY_FN_LETTER('c'):
     power_clock_now();
+    return 1;
+  /* Lock: the clock or black, whichever it was last. */
+  case KEY_FN_LETTER('l'):
+    power_lock_now();
     return 1;
 
   /* ctrl-opt-u: update everything now, the same code path `update all`
@@ -1614,15 +1641,13 @@ void app_main(void) {
       /* Wake first. A key pressed at a dark screen means "come back", and
        * acting on it as well would open an app nobody asked for. */
       if (power_dimmed()) {
-        /* Black and the clock are a sleeping screen, not a merely dim one:
-         * only the keys that name a sleep state -- fn-o, fn-c -- or the
-         * universal way-out, opt-backspace, wake it. Anything else is a key
-         * brushed by accident and must not light a screen meant to stay
-         * dark. A dim screen (not yet fully asleep) still wakes on any key,
-         * as before. */
-        int wakes_asleep = k == KEY_FN_LETTER('o') || k == KEY_FN_LETTER('c') ||
-                            k == KEY_QUIT;
-        if (power_asleep() && !wakes_asleep && !from_serial) {
+        /* Black and the clock are the lock screen, not a merely dim one:
+         * lock_key decides (c, o, a key twice, opt-backspace), and a key
+         * brushed by accident must not light a screen meant to stay dark.
+         * A held key's repeats are not "twice". A dim screen (not yet
+         * locked) still wakes on any key, as before. */
+        if (power_asleep() && !from_serial) {
+          if (!input_is_repeat() && lock_key(k)) power_wake();
           k = 0;
         } else {
           power_wake();

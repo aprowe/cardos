@@ -30,6 +30,7 @@ static const char *TAG = "notify";
 #define CHAT_EVERY   30000
 #define CHAT_SEEN    "/cache/chat.seen"   /* also written by apps/chat.c */
 #define CHAT_NAME    "/config/chat.txt"
+#define NOTE_SEEN    "/cache/note.seen"
 #define SCHED_FILE   "/cache/notify.sched"
 #define SCHED_MAX    32
 #define RING_MS      60000
@@ -127,6 +128,13 @@ void notify_log(const char *app, const char *title, const char *text) {
 void notify_post(const char *app, const char *title, const char *text) {
   notify_log(app, title, text);
   if (s_center) return;                     /* it is in the list in front of them */
+  if (power_asleep()) {
+    /* No banner on a sleeping screen: the clock lists it, and only fn-o,
+     * fn-c or opt-backspace wakes the screen (src/main.c). */
+    blip(BLIP_NOTIFY);
+    power_notice();
+    return;
+  }
   s_banner = 1;
   s_banner_until = s_now + BANNER_MS;
   banner_paint();
@@ -139,6 +147,16 @@ void notify_opened(const char *app) {
 }
 
 int notify_unread(void) { return nq_unread(&s_q); }
+
+int notify_unread_at(int i, const char **app, const char **title, const char **text) {
+  int k;
+  for (k = 0; k < s_q.n; k++) {
+    const NqItem *it = &s_q.it[k];
+    if (it->read) continue;
+    if (i-- == 0) { *app = it->app; *title = it->title; *text = it->text; return 1; }
+  }
+  return 0;
+}
 
 int notify_covers(void) { return s_banner && !s_center ? BANNER_H : 0; }
 
@@ -174,9 +192,32 @@ static void chat_seen_save(int id) {
   fs_close(fd);
 }
 
-static int chat_on_screen(void) {
+/* `app` is what an awake screen shows: it is telling them itself. */
+static int on_screen(const char *app) {
   const AppDef *a = ui_shell() == UI_LAUNCHER ? launchui_running() : NULL;
-  return a && a->name && !strcmp(a->name, "Chat");
+  return a && a->name && !strcmp(a->name, app) && !power_asleep();
+}
+static int chat_on_screen(void) { return on_screen("Chat"); }
+
+static int s_note_seen = -2;            /* -2 not read yet; -1 never asked */
+
+static void note_seen_save(int id) {
+  char b[16];
+  int fd = fs_open(NOTE_SEEN, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC), n;
+  if (fd < 0) return;
+  n = snprintf(b, sizeof b, "%d\n", id);
+  fs_write(fd, b, (size_t)n);
+  fs_close(fd);
+}
+
+static void each_note(void *ctx, NqStr app, NqStr title, NqStr text) {
+  char a[NQ_APP], t[NQ_TITLE], x[NQ_TEXT];
+  (void)ctx;
+  snprintf(a, sizeof a, "%.*s", (int)app.n, app.s);
+  snprintf(t, sizeof t, "%.*s", (int)title.n, title.s);
+  snprintf(x, sizeof x, "%.*s", (int)text.n, text.s);
+  if (on_screen(a)) notify_log(a, t, x);       /* the app showed it already */
+  else notify_post(a, t, x);
 }
 
 static void each_message(void *ctx, const char *name, size_t nl, const char *text, size_t tl) {
@@ -208,13 +249,20 @@ static void chat_tick(uint32_t now) {
     if (r == HTTPQ_PENDING) return;
     s_chat_busy = 0;
     if (r < 0) return;                          /* offline, signed out: try later */
-    last = nq_parse_poll(s_reply, each_message, NULL);
-    if (last >= 0 && last != s_chat_seen) { s_chat_seen = last; chat_seen_save(last); }
+    {
+      int nl;
+      /* a first ask (-1) is told only where things are: not old news */
+      last = nq_parse_poll(s_reply, notify_chat_on() && s_chat_seen >= 0 ? each_message : NULL,
+                           s_note_seen >= 0 ? each_note : NULL, &nl, NULL);
+      if (last >= 0 && last != s_chat_seen && notify_chat_on()) { s_chat_seen = last; chat_seen_save(last); }
+      if (nl >= 0 && nl != s_note_seen) { s_note_seen = nl; note_seen_save(nl); }
+    }
     return;
   }
   if ((int32_t)(now - s_chat_next) < 0) return;
   s_chat_next = now + CHAT_EVERY;
-  if (!notify_chat_on() || !wifi_is_connected() || httpq_active() || !fs_mounted()) return;
+  /* Not only for Chat: the server's own notes (a Build done) come this way. */
+  if (!wifi_is_connected() || httpq_active() || !fs_mounted()) return;
   {
     char url[256], name[24], me[64], b[16];
     const char *base = update_base(), *tok = update_token();
@@ -222,9 +270,11 @@ static void chat_tick(uint32_t now) {
     /* The Chat app writes the last message it showed: read since then. */
     if (read_small(CHAT_SEEN, b, sizeof b) > 0 && atoi(b) > s_chat_seen) s_chat_seen = atoi(b);
     if (s_chat_seen == -2) chat_seen_load();
+    if (s_note_seen == -2) s_note_seen = read_small(NOTE_SEEN, b, sizeof b) > 0 ? atoi(b) : -1;
     read_small(CHAT_NAME, name, sizeof name);
     url_enc(me, sizeof me, name);
-    snprintf(url, sizeof url, "%s/notify/poll?chat=%d&me=%s", base, s_chat_seen, me);
+    snprintf(url, sizeof url, "%s/notify/poll?chat=%d&me=%s&note=%d", base,
+             notify_chat_on() ? s_chat_seen : -1, me, s_note_seen);
     if (httpq_start(&s_owner, "GET", url, NULL, NULL, tok[0] ? tok : NULL, 10000) == 0)
       s_chat_busy = 1;
   }

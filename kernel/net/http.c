@@ -70,6 +70,15 @@ static char s_why[96];
 
 const char *http_last_error(void) { return s_why[0] ? s_why : "no error"; }
 
+/* A -3 that says which step, with the heap beside it. Not logged to the
+ * card from here: this runs on httpq's task, and the caller logs it. */
+static void why_failed(const char *what, esp_err_t e) {
+  unsigned kb = (unsigned)(heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024);
+  if (e != ESP_OK) snprintf(s_why, sizeof s_why, "%s: %s, %u KB free", what, esp_err_to_name(e), kb);
+  else snprintf(s_why, sizeof s_why, "%s, %u KB free", what, kb);
+  ESP_LOGW(TAG, "%s", s_why);
+}
+
 /* Refuse early, and say what is actually wrong. "Not enough memory: 21 KB
  * free, a secure request needs about 34" is something the owner of the device
  * can act on -- turn Bluetooth off, close an app. "Network error" is not. */
@@ -304,10 +313,15 @@ int http_exchange_files(const char *url, const char *body_path,
   if (content_type && *content_type)
     esp_http_client_set_header(cli, "Content-Type", content_type);
 
-  if (esp_http_client_open(cli, size) != ESP_OK) {
-    fs_close(fd);
-    esp_http_client_cleanup(cli);
-    return -3;
+  s_why[0] = 0;
+  {
+    esp_err_t e = esp_http_client_open(cli, size);
+    if (e != ESP_OK) {
+      why_failed("could not connect", e);
+      fs_close(fd);
+      esp_http_client_cleanup(cli);
+      return -3;
+    }
   }
   while (sent < size) {
     int n = fs_read(fd, s_chunk, sizeof s_chunk);
@@ -317,6 +331,7 @@ int http_exchange_files(const char *url, const char *body_path,
   }
   fs_close(fd);
   if (sent != size || esp_http_client_fetch_headers(cli) < 0) {
+    why_failed(sent != size ? "the request was cut off sending" : "no answer (timed out?)", ESP_OK);
     esp_http_client_close(cli);
     esp_http_client_cleanup(cli);
     return -3;
@@ -352,7 +367,12 @@ int http_exchange_files(const char *url, const char *body_path,
   status = esp_http_client_get_status_code(cli);
   esp_http_client_close(cli);
   esp_http_client_cleanup(cli);
-  if (got < 0) return -3;
+  if (got < 0) {
+    char what[48];
+    snprintf(what, sizeof what, "the answer was cut off (HTTP %d)", status);
+    why_failed(what, ESP_OK);
+    return -3;
+  }
   if (status < 200 || status >= 300) {
     ESP_LOGW(TAG, "POST %s -> %d", url, status);
     rc = (status > 0 && status < 1000) ? -status : -4;

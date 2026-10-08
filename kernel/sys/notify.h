@@ -52,6 +52,9 @@ void notify_dismiss(void);
 void notify_opened(const char *app);
 
 int  notify_unread(void);
+/* The i-th unread one, newest first: 0 when there are not that many. For
+ * the sleep clock, which lists them. */
+int  notify_unread_at(int i, const char **app, const char **title, const char **text);
 
 /* Rows at the top a banner covers right now (0 when there is none): a shell
  * leaves them alone, and repaints them when the banner goes. */

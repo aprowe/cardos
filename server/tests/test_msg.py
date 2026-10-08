@@ -74,6 +74,21 @@ class Room(unittest.TestCase):
         self.assertEqual(lines[1:], ["chat\tbritney\tb2", "chat\tbritney\tb3", "chat\tbritney\tb4"])
         self.assertEqual(self.req("GET", "/notify/poll?chat=7&me=Alex"), (200, "ok 7\n"))
 
+    def test_notes_reach_the_poll(self):
+        from server import msg
+        msg._notes.clear(); msg._note_ids.clear()
+        # first ask: only where the notes are, so a new device is not told old news
+        msg.notify_push(None, "Build", "done", "made timer.c\tbetter")
+        self.assertEqual(self.req("GET", "/notify/poll?note=-1"), (200, "ok 0 1\n"))
+        msg.notify_push(None, "Build", "stopped", "it went quiet")
+        s, body = self.req("GET", "/notify/poll?note=1")
+        self.assertEqual(body.splitlines(), ["ok 0 2", "note\tBuild\tstopped\tit went quiet"])
+        self.assertEqual(self.req("GET", "/notify/poll?note=2"), (200, "ok 0 2\n"))
+        # a device that saw 9 before the server restarted is given what there is
+        s, body = self.req("GET", "/notify/poll?note=9")
+        self.assertEqual(len(body.splitlines()), 3)
+        msg._notes.clear(); msg._note_ids.clear()
+
     def test_refusals(self):
         self.assertEqual(self.req("POST", "/msg?name=", b"x")[0], 400)
         self.assertEqual(self.req("POST", "/msg?name=A", b"   ")[0], 400)

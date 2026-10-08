@@ -7,6 +7,8 @@
 #include "kernel/drv/display.h"
 #include "kernel/sys/clock.h"
 
+#include "esp_timer.h"
+
 #define HOLDS_MAX 4
 
 enum { LIT = 0, DIMMED, DARK, CLOCK };
@@ -21,6 +23,8 @@ static const void *s_hold[HOLDS_MAX];
 static int s_sleep_clock = -1;   /* Settings > Display > Sleep: 1 clock, 0 black */
 static void (*s_paint_clock)(void), (*s_repaint)(void);
 static uint32_t s_clock_minute;
+static int64_t  s_peek_until;    /* black, showing the clock for a notification */
+#define PEEK_MS 15000
 
 void power_set_painters(void (*paint_clock)(void), void (*repaint)(void)) {
   s_paint_clock = paint_clock;
@@ -78,6 +82,7 @@ int power_dimmed(void) { return s_state != LIT; }
 
 void power_wake(void) {
   int was_clock = s_state == CLOCK;
+  s_peek_until = 0;
   if (s_state == LIT) return;
   display_freeze(0);            /* whatever put it to sleep, the panel is back */
 
@@ -100,15 +105,35 @@ void power_wake_now(void) {
  * for this is not undone by the very next tick -- and differ only in
  * whether the clock gets painted over the black. */
 static void sleep_now(int clock) {
+  int was_clock = s_state == CLOCK;
   if (s_state == LIT) s_was = display_brightness();
   s_forced = 1;
+  s_peek_until = 0;
+  /* The lock remembers which face it wore last: fn-l, and the idle
+   * timeout, go back to it. */
+  if (power_sleep_clock() != clock) power_set_sleep_clock(clock);
   if (clock) { to_clock(); return; }
-  if (s_state == CLOCK) display_freeze(0);
   display_backlight(0);
   s_state = DARK;
+  if (was_clock) {
+    /* From the clock to black: the panel is the shells' again, and what
+     * the clock covered is drawn behind the dark, so waking finds it. */
+    display_freeze(0);
+    if (s_repaint) s_repaint();
+  }
 }
 
 void power_clock_now(void) { sleep_now(1); }
+void power_lock_now(void)  { sleep_now(power_sleep_clock()); }
+
+/* Something to tell a sleeping screen: the clock shows it (it lists what is
+ * unread), and a black one shows the clock for a while and goes black again. */
+void power_notice(void) {
+  if (s_state == CLOCK) { if (s_paint_clock) s_paint_clock(); return; }
+  if (s_state != DARK || !s_paint_clock) return;
+  to_clock();
+  s_peek_until = esp_timer_get_time() + (int64_t)PEEK_MS * 1000;
+}
 void power_off_now(void)   { sleep_now(0); }
 
 void power_hold(const void *owner, int on) {
@@ -133,6 +158,16 @@ void power_tick(void) {
   uint32_t idle = bg_idle_ms();
 
   load();
+  /* A peek is over: black again, and what the clock covered drawn behind it,
+   * so waking from black finds the screen as it is. */
+  if (s_peek_until && s_state == CLOCK && esp_timer_get_time() >= s_peek_until) {
+    s_peek_until = 0;
+    display_freeze(0);
+    display_backlight(0);
+    s_state = DARK;
+    if (s_repaint) s_repaint();
+    return;
+  }
   /* The clock face once a minute, and nothing between. */
   if (s_state == CLOCK && minute_now() != s_clock_minute) {
     s_clock_minute = minute_now();

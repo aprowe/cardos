@@ -365,10 +365,10 @@ static void poll_now(void) {
     while (*body && *body != '\n') body++;
     if (*body == '\n') body++;
     push_wrapped(body, err ? WHO_ERR : WHO_CLAUDE);
-    /* The chime, a banner and a line in fn-n's list, same as Claude's own
-     * conversation (kernel/sys/agent.c) -- every time, not only while
-     * Build happens to be the app on screen. */
-    api->notify("Build", body);
+    /* No api->notify here: the server pushes "Build done" to every one of
+     * the person's devices (server/chat.py, kernel/sys/notify.c's poll),
+     * which reaches them with Build shut -- and is only logged, not shown,
+     * when Build is the app on screen. */
   }
   C.job = 0;
   job_clear();

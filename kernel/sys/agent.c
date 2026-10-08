@@ -13,6 +13,8 @@
 #include "kernel/sys/chatlog.h"
 #include "kernel/sys/input.h"
 #include "kernel/sys/notify.h"
+#include "kernel/net/http.h"
+#include "kernel/sys/applog.h"
 #include "kernel/ui/overlay.h"
 #include "kernel/ui/shell.h"
 
@@ -424,7 +426,7 @@ static void show_answer(const char *text) {
  * dark: agent_tick (src/main.c) runs unconditionally, which is the one
  * thing that makes this reach a closed app's conversation at all. */
 static void notify_done(const char *text) {
-  notify_post("Claude", "Claude", text);
+  notify_post("Claude", "answered", text);
 }
 
 static void finish_with(const char *text) {
@@ -442,8 +444,10 @@ static void on_reply(int rc) {
   int i;
 
   if (rc < 0 && chatlog_scan_reply(REPLY, &r) != 0) {
-    char line[64];
-    snprintf(line, sizeof line, "request failed (%d)", rc);
+    char line[128];
+    if (rc == -3) snprintf(line, sizeof line, "request failed: %s", http_last_error());
+    else snprintf(line, sizeof line, "request failed (%d)", rc);
+    applog("claude", line);       /* `log` shows it: the USB port is rarely there */
     finish_with(line);
     return;
   }

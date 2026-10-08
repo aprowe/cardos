@@ -360,7 +360,7 @@ static void talk_say(void) {
  * hold. */
 static void notify_doc_reply(const char *text) {
   char title[32];
-  api->fmt(title, sizeof title, "Claude: %s", C.name);
+  api->fmt(title, sizeof title, "on %s", C.name);
   api->notify(title, text);
 }
 

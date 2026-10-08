@@ -71,6 +71,10 @@ static void paint_now(void) {
   HAVE_PENDING = 0;
 }
 
+static int fake_remove(const char *p) { (void)p; return 0; }
+static int fake_write(int fd, const void *b, size_t n) { (void)fd; (void)b; return (int)n; }
+static void fake_close(int fd) { (void)fd; }
+
 static void boot(void) {
   char arg0[] = "claude";
   char *argv[1];
@@ -86,6 +90,9 @@ static void boot(void) {
   API.fmt = fake_fmt;
   API.ticks_ms = fake_ticks;
   API.open = fake_open;
+  API.remove = fake_remove;     /* job_clear: the saved job is gone */
+  API.write = fake_write;
+  API.close = fake_close;
   API.ui = fake_ui;
   API.proxy = fake_proxy;
   API.damage = fake_damage;

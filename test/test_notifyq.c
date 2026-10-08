@@ -37,16 +37,47 @@ static void each(void *ctx, const char *name, size_t nl, const char *text, size_
   got++;
 }
 
+static char napp[16], ntitle[16], ntext[32];
+static int ngot;
+static void each_note(void *ctx, NqStr app, NqStr title, NqStr text) {
+  (void)ctx;
+  memcpy(napp, app.s, app.n); napp[app.n] = 0;
+  memcpy(ntitle, title.s, title.n); ntitle[title.n] = 0;
+  memcpy(ntext, text.s, text.n); ntext[text.n] = 0;
+  ngot++;
+}
+
+void test_notifyq_reads_notes(void) {
+  int nl = 99;
+  got = ngot = 0;
+  CHECK_EQ(nq_parse_poll("ok 3 12\nchat\tb\thi\nnote\tBuild\tdone\tmade timer.c\n",
+                         each, each_note, &nl, 0), 3);
+  CHECK_EQ(nl, 12);
+  CHECK_EQ(got, 1);
+  CHECK_EQ(ngot, 1);
+  CHECK(!strcmp(napp, "Build"));
+  CHECK(!strcmp(ntitle, "done"));
+  CHECK(!strcmp(ntext, "made timer.c"));
+  /* an older server: one number, so no notes and no note id */
+  CHECK_EQ(nq_parse_poll("ok 3\n", each, each_note, &nl, 0), 3);
+  CHECK_EQ(nl, -1);
+  /* a note with no text still is one */
+  ngot = 0;
+  nq_parse_poll("ok 1 2\nnote\tBuild\tdone", 0, each_note, &nl, 0);
+  CHECK_EQ(ngot, 1);
+  CHECK(!strcmp(ntext, ""));
+}
+
 void test_notifyq_reads_the_poll_reply(void) {
   got = 0;
-  CHECK_EQ(nq_parse_poll("ok 42\nchat\tbritney\thi there\nchat\tAlex\tyo\n", each, 0), 42);
+  CHECK_EQ(nq_parse_poll("ok 42\nchat\tbritney\thi there\nchat\tAlex\tyo\n", each, 0, 0, 0), 42);
   CHECK_EQ(got, 2);
   CHECK(!strcmp(names[0], "britney"));
   CHECK(!strcmp(texts[0], "hi there"));
   CHECK(!strcmp(texts[1], "yo"));
   got = 0;
-  CHECK_EQ(nq_parse_poll("ok 7\n", each, 0), 7);
+  CHECK_EQ(nq_parse_poll("ok 7\n", each, 0, 0, 0), 7);
   CHECK_EQ(got, 0);
-  CHECK_EQ(nq_parse_poll("error signed out\n", each, 0), -1);
-  CHECK_EQ(nq_parse_poll("ok \n", each, 0), -1);
+  CHECK_EQ(nq_parse_poll("error signed out\n", each, 0, 0, 0), -1);
+  CHECK_EQ(nq_parse_poll("ok \n", each, 0, 0, 0), -1);
 }

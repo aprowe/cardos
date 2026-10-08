@@ -281,12 +281,14 @@ class ChatService:
     # ---- the queue the device sees --------------------------------------
 
     def start(self, text):
+        from . import accounts
+        user = accounts.current()          # whose devices hear when it is done
         with self.lock:
             jid = self.next_id
             self.next_id += 1
             self.jobs[jid] = {"state": "pending", "reply": "", "status": "",
                               "log": [], "at": time.time()}
-        t = threading.Thread(target=self._run, args=(jid, text), daemon=True)
+        t = threading.Thread(target=self._run, args=(jid, text, user), daemon=True)
         t.start()
         return jid
 
@@ -377,7 +379,7 @@ class ChatService:
             reply = reply[:MAX_REPLY] + "\n\n[cut: reply was %d characters]" % len(reply)
         return state, reply
 
-    def _run(self, jid, text):
+    def _run(self, jid, text, user=None):
         def report(line):
             with self.lock:
                 if jid in self.jobs and self.jobs[jid]["state"] == "pending":
@@ -391,6 +393,14 @@ class ChatService:
             if jid in self.jobs:
                 self.jobs[jid] = {"state": state, "reply": reply, "status": "",
                                   "at": time.time()}
+        # The device's Build app may be shut, and nothing on it is polling
+        # for this job then: the notification watcher there polls for this.
+        try:
+            from . import msg
+            first = next((l.strip() for l in (reply or "").splitlines() if l.strip()), "")
+            msg.notify_push(user, "Build", "done" if state == "done" else "stopped", first or "finished")
+        except Exception as e:                    # never the turn's problem
+            sys.stderr.write("chat: notify: %s\n" % e)
 
     def _plan(self, text):
         """The request as numbered steps: one planning call, no tools, no
