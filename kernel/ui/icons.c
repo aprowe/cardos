@@ -727,6 +727,40 @@ static uint16_t *load_cic(const char *name) {
   return px;
 }
 
+/* An app with no colour icon of its own -- one Build made, which reached
+ * the card with `update apps` and no firmware to carry a .cic -- wears its
+ * 1bpp icon from capp_info, coloured: the drawn pixels in a light teal, an
+ * outline round them, the rest transparent. Better than generic.cic's blank
+ * page, and it is the picture the app's author drew. */
+static uint16_t swap565(uint8_t r, uint8_t g, uint8_t b) {
+  uint16_t v = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+  return (uint16_t)((v >> 8) | (v << 8));    /* the panel's byte order, as .cic stores */
+}
+
+static int mono_bit(const uint8_t *m, int x, int y) {
+  if (x < 0 || y < 0 || x > 15 || y > 15) return 0;
+  return (m[y * 2 + (x >> 3)] >> (7 - (x & 7))) & 1;
+}
+
+static uint16_t *mono_colour(const uint8_t *m) {
+  uint16_t *px, ink = swap565(110, 214, 200), edge = swap565(24, 26, 32);
+  int x, y, any = 0;
+  if (!m) return NULL;
+  for (x = 0; x < 32; x++) any |= m[x];
+  if (!any) return NULL;
+  px = (uint16_t *)malloc(16 * 16 * 2);
+  if (!px) return NULL;
+  for (y = 0; y < 16; y++)
+    for (x = 0; x < 16; x++) {
+      uint16_t v = 0;
+      if (mono_bit(m, x, y)) v = ink;
+      else if (mono_bit(m, x - 1, y) || mono_bit(m, x + 1, y) ||
+               mono_bit(m, x, y - 1) || mono_bit(m, x, y + 1)) v = edge;
+      px[y * 16 + x] = v;
+    }
+  return px;
+}
+
 const uint16_t *icon_colour(int i) {
   Icon *ic;
   if (i < 0 || i >= s_nicon) return NULL;
@@ -748,6 +782,7 @@ const uint16_t *icon_colour(int i) {
     return ic->colour;
   }
   ic->colour = load_cic(ic->kind == ICON_FIRMWARE ? "firmware" : ic->name);
+  if (!ic->colour && ic->kind == ICON_CAPP) ic->colour = mono_colour(capprun_icon(ic->slot));
   if (!ic->colour && ic->kind != ICON_FIRMWARE) ic->colour = load_cic("generic");
   return ic->colour;
 }

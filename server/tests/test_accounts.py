@@ -126,6 +126,49 @@ class Accounts(unittest.TestCase):
         self.assertEqual(self.req("GET", "/chat/new", bearer=tok)[0], 403)
         self.assertEqual(self.req("GET", "/chat/new", bearer=TOKEN)[0], 200)
 
+    def wait(self, jid, tok):
+        import time
+        for _ in range(50):
+            s, _, body = self.req("GET", "/chat?id=" + jid, bearer=tok)
+            if not body.startswith("pending"):
+                return body
+            time.sleep(0.1)
+        return body
+
+    def test_build_given_to_someone_is_fenced_and_their_own(self):
+        tok = self.her()
+        accounts.set_build("sam", True)
+        seen = []
+
+        def fake_stream(cmd, env, cwd, on_status, idle, cap, on_log=None):
+            seen.append((cmd, dict(env)))
+            return "ok", "sid-" + env.get("FENCE_USER", "owner")
+        real = chatmod.run_stream
+        chatmod.run_stream = fake_stream
+        self.addCleanup(setattr, chatmod, "run_stream", real)
+        app.Handler.chat._plan = lambda text: [text]
+        s, _, body = self.req("POST", "/chat", body=b"make me a maze game", bearer=tok)
+        self.assertEqual(s, 200)
+        jid = body.split()[1]
+        # the owner cannot read her answer, nor she his
+        b = self.wait(jid, tok); self.assertTrue(b.startswith("done"), b)
+        cmd, env = seen[-1]
+        self.assertEqual(env["FENCE_USER"], "sam")          # the hook knows whose
+        self.assertIn("--settings", cmd)                     # and is installed
+        self.assertIn("Bash", cmd[cmd.index("--disallowed-tools") + 1])
+        self.assertIn("may make new apps", cmd[cmd.index("-p") + 1])
+        self.assertEqual(app.Handler.chat.sessions.get("sam"), "sid-sam")
+        self.assertIsNone(app.Handler.chat.session_id)      # not the owner's conversation
+        # the owner's turn is not fenced, and its answer is not hers to read
+        s, _, body = self.req("POST", "/chat", body=b"fix the kernel", bearer=TOKEN)
+        jid2 = body.split()[1]
+        self.assertIn("no such request", self.req("GET", "/chat?id=" + jid2, bearer=tok)[2])
+        self.assertTrue(self.wait(jid2, TOKEN).startswith("done"))
+        cmd, env = seen[-1]
+        self.assertNotIn("FENCE_USER", env)
+        self.assertNotIn("--settings", cmd)
+        self.assertEqual(app.Handler.chat.session_id, "sid-owner")
+
     def test_the_dashboard_signs_people_in_by_name(self):
         self.her()
         self.assertIsNone(self.login("alex", "wrong"))

@@ -285,8 +285,10 @@ class ChatService:
         self.token = token
         self.model = model
         self.use_api_key = use_api_key
-        self.session_id = None
+        self.session_id = None     # the owner's conversation
+        self.sessions = {}         # everyone else's, by name: one each, never shared
         self.generation = 0        # bumped by reset(); see _claude
+        self._turn = threading.local()   # whose turn this thread is running
         self.jobs = {}
         self.next_id = 1
         self.lock = threading.Lock()
@@ -301,15 +303,17 @@ class ChatService:
             jid = self.next_id
             self.next_id += 1
             self.jobs[jid] = {"state": "pending", "reply": "", "status": "",
-                              "log": [], "at": time.time()}
+                              "log": [], "at": time.time(), "user": user}
         t = threading.Thread(target=self._run, args=(jid, text, user), daemon=True)
         t.start()
         return jid
 
     def poll(self, jid):
+        from . import accounts
         with self.lock:
             job = self.jobs.get(jid)
-            if not job:
+            # One person's answers are not another's to read.
+            if not job or job.get("user") != accounts.current():
                 return "error", "no such request"
             if job["state"] == "pending":
                 return "pending", job.get("status", "")
@@ -321,14 +325,27 @@ class ChatService:
 
     def progress(self, jid, since=0):
         """(status, log lines from `since` on) for a job still pending."""
+        from . import accounts
         with self.lock:
             job = self.jobs.get(jid) or {}
+            if job.get("user") != accounts.current():
+                job = {}
             return job.get("status", ""), list(job.get("log", [])[max(0, since):])
 
-    def reset(self):
+    def reset(self, user=None):
+        """Forget a conversation: the owner's (user None or an admin), or
+        that one person's."""
+        from . import accounts
+        if user is not None and accounts.fenced(user):
+            with self.lock:
+                self.sessions.pop(user, None)
+                for j in [j for j, v in self.jobs.items() if v.get("user") == user]:
+                    self.jobs.pop(j, None)
+            return
         with self.lock:
             self.session_id = None
-            self.jobs.clear()
+            for j in [j for j, v in self.jobs.items() if not accounts.fenced(v.get("user"))]:
+                self.jobs.pop(j, None)
             # A turn already running belongs to the conversation just
             # forgotten. It used to finish a minute later and put its session
             # id back, and the next "new" conversation was resumed into it.
@@ -346,6 +363,9 @@ class ChatService:
         report = report or (lambda line: None)
         log = log or (lambda line: None)
         generation = self.generation
+        fence_note = self._fence_note()
+        if fence_note:
+            text = fence_note + text
         report("planning")
         try:
             steps = self._plan(text)
@@ -402,11 +422,15 @@ class ChatService:
             with self.lock:
                 if jid in self.jobs and self.jobs[jid]["state"] == "pending":
                     self.jobs[jid]["log"].append(line)
-        state, reply = self.run_turn(text, report=report, log=log)
+        self._turn.user = user
+        try:
+            state, reply = self.run_turn(text, report=report, log=log)
+        finally:
+            self._turn.user = None
         with self.lock:
             if jid in self.jobs:
                 self.jobs[jid] = {"state": state, "reply": reply, "status": "",
-                                  "at": time.time()}
+                                  "at": time.time(), "user": user}
         # The device's Build app may be shut, and nothing on it is polling
         # for this job then: the notification watcher there polls for this.
         try:
@@ -432,6 +456,41 @@ class ChatService:
         steps = parse_plan(reply, text)
         sys.stderr.write("chat: plan of %d: %s\n" % (len(steps), "; ".join(steps)[:200]))
         return steps
+
+    # ---- the fence: someone who is not the owner (server/fence.py) ---------
+
+    def turn_user(self):
+        return getattr(self._turn, "user", None)
+
+    def fenced_user(self):
+        """The person this turn is for, if their Build is fenced; else None."""
+        from . import accounts
+        u = self.turn_user()
+        return u if u and accounts.fenced(u) else None
+
+    def _fence_note(self):
+        from . import dash, fence
+        u = self.fenced_user()
+        return fence.fence_prompt(dash.state_dir(), u) if u else ""
+
+    def _fence_args(self, env):
+        """The hook that refuses a write outside the fence, and the
+        environment it reads the fence from."""
+        from . import dash
+        u = self.fenced_user()
+        if not u:
+            return []
+        env["FENCE_USER"] = u
+        env["FENCE_STATE"] = dash.state_dir()
+        env["FENCE_ROOT"] = self.cwd
+        hook = '"%s" "%s"' % (sys.executable, os.path.join(ROOT, "server", "fence_hook.py"))
+        settings = {"hooks": {"PreToolUse": [
+            {"matcher": "*", "hooks": [{"type": "command", "command": hook}]}]}}
+        return ["--settings", json.dumps(settings)]
+
+    def _session(self):
+        u = self.fenced_user()
+        return self.sessions.get(u) if u else self.session_id
 
     def _child_env(self):
         """The environment the agent runs in, minus two kinds of inheritance.
@@ -480,24 +539,36 @@ class ChatService:
                "--allowed-tools", self.allowed_tools,
                "--add-dir", self.cwd,
                "--effort", STEP_EFFORT]
-        if self.disallowed_tools:
-            cmd += ["--disallowed-tools", self.disallowed_tools]
+        # One list: a fenced turn adds to it -- no shell, no web, no
+        # subagent that would run without the hook's eye on it.
+        deny = [x for x in (self.disallowed_tools or "").split(",") if x]
+        if self.fenced_user():
+            deny += [x for x in ("Bash", "WebFetch", "WebSearch", "Task") if x not in deny]
+        if deny:
+            cmd += ["--disallowed-tools", ",".join(deny)]
         if self.model:
             cmd += ["--model", self.model]
-        if self.session_id:
-            cmd += ["--resume", self.session_id]
+        env = self._child_env()
+        cmd += self._fence_args(env)
+        if self._session():
+            cmd += ["--resume", self._session()]
         generation = self.generation
+        who = self.fenced_user()
 
         def keep(sid):
             # A turn already running belongs to the conversation it started
             # in; after /chat/new its session id must not come back.
-            if sid and generation == self.generation:
+            if not sid or generation != self.generation:
+                return
+            if who:
+                self.sessions[who] = sid
+            else:
                 self.session_id = sid
 
         # Serialised: one agent in one working tree at a time.
         with self.run_lock:
             try:
-                text, sid = run_stream(cmd, self._child_env(), self.cwd, on_status,
+                text, sid = run_stream(cmd, env, self.cwd, on_status,
                                        idle=IDLE_TIMEOUT, cap=STEP_TIMEOUT,
                                        on_log=on_log)
             except TurnTimeout as e:
@@ -514,8 +585,18 @@ class ChatService:
 # Three short requests rather than one long one, because the device's shell is
 # a single cooperative loop and a two-minute request is a frozen machine.
 
+def _may_build(h):
+    from . import accounts
+    if accounts.can_build():
+        return True
+    h.text("error Build is not turned on for you -- ask the owner\n", 403)
+    return False
+
+
 def post_chat(h, path, args):
     """ask Claude; returns an id"""
+    if not _may_build(h):
+        return
     text = h.body(64 << 10).decode("utf-8", "replace").strip()
     if not text:
         h.text("empty\n", 400)
@@ -527,6 +608,8 @@ def post_chat(h, path, args):
 
 def get_chat(h, path, args):
     """the answer to ?id=N, once it is ready"""
+    if not _may_build(h):
+        return
     jid = h.int_arg(args, "id", 0)
     state, reply = h.chat.poll(jid)
     if state == "pending":
@@ -554,13 +637,17 @@ def get_chat(h, path, args):
 
 def get_chat_new(h, path, args):
     """forget the conversation"""
-    h.chat.reset()
+    from . import accounts
+    if not _may_build(h):
+        return
+    h.chat.reset(accounts.current())
     sys.stderr.write("chat: new conversation\n")
     h.text("ok\n")
 
 
 ROUTES = [
-    ("POST", "/chat", post_chat, "admin"),
-    ("GET", "/chat", get_chat, "admin"),
-    ("GET", "/chat/new", get_chat_new, "admin"),
+    # Not "admin" any more: anyone given Build, fenced to their own apps.
+    ("POST", "/chat", post_chat, "token"),
+    ("GET", "/chat", get_chat, "token"),
+    ("GET", "/chat/new", get_chat_new, "token"),
 ]

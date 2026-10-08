@@ -14,6 +14,7 @@
 #include "kernel/sys/input.h"
 #include "kernel/sys/notify.h"
 #include "kernel/net/http.h"
+#include "kernel/net/update.h"
 #include "kernel/sys/applog.h"
 #include "kernel/ui/overlay.h"
 #include "kernel/ui/shell.h"
@@ -31,10 +32,11 @@ static const char *TAG = "agent";
 #define DIR         CAPP_CACHE "/claude"
 #define REQUEST     "request.json"
 #define REPLY       "reply.json"
-#define URL         "https://api.anthropic.com/v1/messages"
+#define URL         "https://api.anthropic.com/v1/messages"   /* with a key on the card */
+#define VIA_SERVER  "/agent/messages"                         /* server/agent.py */
 #define HISTORY_CAP 16384        /* bytes of conversation resent per request */
 #define ROUNDS_MAX  10           /* tool rounds in one ask */
-#define TIMEOUT_MS  60000
+#define TIMEOUT_MS  120000      /* a long think, through the server */
 #define TOAST_MS    4000
 #define TRANSCRIPT  2048
 
@@ -97,6 +99,7 @@ static int      s_inited;
 static int      s_running;              /* a request is in flight */
 static int      s_rounds;               /* tool rounds so far in this ask */
 static char     s_auth[400];            /* the headers, built from the key */
+static char     s_url[160];             /* where the conversation goes: see read_key */
 static char     s_transcript[TRANSCRIPT];
 static unsigned s_generation;
 static char     s_status[48];
@@ -158,9 +161,24 @@ static void status(const char *s) {
 
 /* ---- the key ------------------------------------------------------------ */
 
+/* Where the request goes, and the headers that let it in. The server when
+ * there is one (`env PROXY`): plain HTTP with the device's token, and the
+ * server adds its own Claude login -- no key on the card, and no TLS
+ * handshake on a heap that WiFi has mostly taken, which is where "request
+ * failed (-3)" came from. With no server, straight to Anthropic with the
+ * key in /config/claude.key, as before. */
 static int read_key(void) {
   char key[240];
   int fd, n, i;
+  const char *base = update_base();
+  if (base && *base) {
+    const char *tok = update_token();
+    snprintf(s_url, sizeof s_url, "%s%s", base, VIA_SERVER);
+    if (tok && *tok) snprintf(s_auth, sizeof s_auth, "Authorization: Bearer %s", tok);
+    else s_auth[0] = 0;
+    return 1;
+  }
+  snprintf(s_url, sizeof s_url, "%s", URL);
   fd = fs_open(KEY_PATH, FS_O_READ);
   if (fd < 0) return 0;
   n = fs_read(fd, key, sizeof key - 1);
@@ -374,7 +392,7 @@ static int start_request(void) {
     free(head);
     if (rc != 0) return -4;
   }
-  if (httpq_start_files(&s_running, URL, DIR "/" REQUEST, "application/json",
+  if (httpq_start_files(&s_running, s_url, DIR "/" REQUEST, "application/json",
                         s_auth, DIR "/" REPLY, TIMEOUT_MS) != 0)
     return -4;
   s_running = 1;

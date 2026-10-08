@@ -988,6 +988,32 @@ ICONS = {
     ],
 }
 
+# More icons, one file each: apps/icons/STEM.txt, the app's name (as in its
+# capp_info) on the first line and sixteen rows of art under it, in the INK
+# letters above. A file per app so a Build turn fenced to its own app's files
+# (server/fence.py) can draw one without editing this one.
+ICON_FILES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "apps", "icons")
+
+
+def _load_icon_files():
+    if not os.path.isdir(ICON_FILES):
+        return
+    for fn in sorted(os.listdir(ICON_FILES)):
+        if not fn.endswith(".txt"):
+            continue
+        with open(os.path.join(ICON_FILES, fn), encoding="utf-8") as f:
+            rows = [r.rstrip() for r in f if r.strip()]
+        if len(rows) != 17:
+            raise SystemExit("apps/icons/%s: the name, then 16 rows of art (%d lines)" % (fn, len(rows)))
+        name, art = rows[0].strip(), [r.strip() for r in rows[1:]]
+        if name in ICONS:
+            raise SystemExit("apps/icons/%s: '%s' already has an icon here" % (fn, name))
+        ICONS[name] = art
+
+
+_load_icon_files()
+
 # Transparent is drawn as the launcher's own background, so an icon never has
 # a box of its own colour around it.
 TRANSPARENT = 0x0000

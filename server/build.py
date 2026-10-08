@@ -215,10 +215,24 @@ class BuildingChat(ChatService):
             # stopped.
             state, reply = super().run_turn(text, report=report, log=log)
             paths = changed(before, self.snapshot())
+            who = self.fenced_user()
+            if who and paths:
+                # The third wall: anything outside their apps goes back before
+                # it can be built, published or committed.
+                from . import dash, fence
+                back = fence.enforce(dash.state_dir(), self.cwd, who, paths)
+                if back:
+                    log("-- put back (not yours to change): " + ", ".join(back))
+                    reply += "\n\nput back, not yours to change: " + ", ".join(back)
+                paths = changed(before, self.snapshot())
             if not paths:
                 return state, reply
             title = "Build: " + " ".join(text.split())[:60]
+            if who:
+                title = "Build (%s): " % who + " ".join(text.split())[:50]
             apps, firmware = build_plan(paths)
+            if who:
+                firmware = False          # never, for a fenced turn
             if not (apps or firmware):
                 self.commit(title + "\n\n" + text)
                 return state, reply

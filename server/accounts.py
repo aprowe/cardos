@@ -123,6 +123,31 @@ def is_admin(user=None):
     return bool(u and u.get("admin"))
 
 
+def can_build(user=None):
+    """May use Build (and its conversation): an admin, or someone given
+    "build": true -- whose turns are fenced to their own apps (fence.py)."""
+    if not enabled():
+        return True
+    name = user if user is not None else current()
+    u = users().get(name)
+    return bool(u and (u.get("admin") or u.get("build")))
+
+
+def fenced(user=None):
+    """Is this person's Build fenced to their own apps? Everyone but an admin."""
+    return enabled() and not is_admin(user)
+
+
+def set_build(name, on):
+    """Give or take Build from someone. An admin has it anyway."""
+    with _lock:
+        d = load()
+        if name not in d["users"]:
+            raise ValueError("no such user")
+        d["users"][name]["build"] = bool(on)
+        _save(d)
+
+
 def login(name, pw):
     """The name, if the password is theirs."""
     name = (name or "").strip().lower()
