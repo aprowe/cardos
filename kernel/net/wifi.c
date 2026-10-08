@@ -187,8 +187,13 @@ int wifi_start(void) {
  * 50 the driver holds (measured 2026-10-02), and that was the difference
  * between Bluetooth starting and not with Today open. Everything wifi_start
  * built goes, so the next start builds it again from nothing. */
+static int s_pinned;
+void wifi_pin(int on) { if (on) s_pinned++; else if (s_pinned > 0) s_pinned--; }
+
 void wifi_release(void) {
-  if (!s_inited) return;
+  /* Not under ESP-NOW (kernel/net/link.c): deinit with it running fails,
+   * and a game would lose its partner to make room for a print. */
+  if (!s_inited || s_pinned) return;
   wifi_stop();
   if (s_on_wifi) esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_on_wifi);
   if (s_on_ip) esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, s_on_ip);

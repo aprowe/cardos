@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 42
+#define CAPP_API_VERSION 43
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -189,6 +189,36 @@ typedef struct {
   int      (*playing)(void);
   uint32_t (*pos_ms)(void);                           /* this time round */
 } CappMidi;
+
+/* Two Cardputers, one game, with no router: ESP-NOW (kernel/net/link.c,
+ * the protocol in kernel/net/linkproto.c). Open it with the game's name;
+ * the others with the same game open appear in peers. Invite one, or answer
+ * an invitation; then send and recv are whole messages (1..200 bytes),
+ * delivered in order, once each, resent until they arrive. Poll state and
+ * recv from tick. It closes with the app; the other side is told.
+ *
+ *   if (L->open("quoridor", 0) == 0) ...           0: the Chat name
+ *   CAPP_LINK_LOOKING: L->peers(), L->peer_name(i), L->invite(i)
+ *   CAPP_LINK_INVITED: L->peer_name(-1) is asking; L->answer(1) or (0)
+ *   CAPP_LINK_CONNECTED: L->role() 0 if you invited (go first), 1 if not
+ *   CAPP_LINK_ENDED: L->why() says why; L->look() to find another
+ */
+enum { CAPP_LINK_OFF = 0, CAPP_LINK_LOOKING, CAPP_LINK_INVITING, CAPP_LINK_INVITED,
+       CAPP_LINK_CONNECTED, CAPP_LINK_ENDED };
+typedef struct {
+  int  (*open)(const char *game, const char *me);
+  void (*close)(void);
+  int  (*state)(void);
+  int  (*peers)(void);
+  const char *(*peer_name)(int i);
+  int  (*invite)(int i);
+  int  (*answer)(int yes);
+  int  (*role)(void);
+  int  (*send)(const void *buf, int len);
+  int  (*recv)(void *buf, int max);
+  void (*look)(void);
+  const char *(*why)(void);
+} CappLink;
 
 /* One reading of the motion sensor; see CardApi.motion. */
 typedef struct {
@@ -868,6 +898,10 @@ typedef struct {
    * the reason in `why`. Paint "booting" before calling: nothing is drawn
    * while it copies. */
   int (*firmware_boot)(const char *path, char *why, size_t n);
+
+  /* ---- two devices, one game: ESP-NOW (API 43) ----
+   * See CappLink above. NULL on firmware without it. */
+  const CappLink *(*link)(void);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

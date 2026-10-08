@@ -10,6 +10,8 @@ idf_component_register(
     "../kernel/sys/blip.c"
     "../kernel/sys/notify.c"
     "../kernel/sys/notifyq.c"
+    "../kernel/net/linkproto.c"
+    "../kernel/net/link.c"
     "../kernel/ui/sleepclock.c"
     "../kernel/sys/midi.c"
     "../kernel/drv/keyboard.c"

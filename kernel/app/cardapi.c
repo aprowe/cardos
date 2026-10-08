@@ -8,6 +8,7 @@
 
 #include "kernel/app/capp.h"
 #include "kernel/app/launcher.h"
+#include "kernel/net/link.h"
 #include "kernel/ui/draw.h"
 #include "kernel/fs/fs.h"
 #include "kernel/net/http.h"
@@ -322,6 +323,12 @@ static void upd_say_progress(void *ctx, const char *line) {
   if (u->on_line) u->on_line(u->ctx, line);
 }
 
+static const CappLink LINK = {
+  link_open, link_close, link_state, link_peer_count, link_peer_name, link_invite,
+  link_answer, link_role, link_send, link_recv, link_look, link_why,
+};
+static const CappLink *api_link(void) { return &LINK; }
+
 static int api_firmware_boot(const char *path, char *why, size_t n) {
   AppImageInfo info;
   AppImageResult bad;
@@ -561,6 +568,7 @@ static const CardApi API = {
   api_notify_cancel,
   api_update_apply_progress,
   api_firmware_boot,
+  api_link,
 };
 
 const CardApi *cardos_api(void) { return &API; }

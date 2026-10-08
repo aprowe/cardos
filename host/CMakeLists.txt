@@ -21,6 +21,7 @@ file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
   ${ROOT}/kernel/net/httpslot.c   # httpq.c is the task and lock around it
   ${ROOT}/kernel/net/dav.c
   ${ROOT}/kernel/net/wifilist.c   # wifi.c is the radio around it
+  ${ROOT}/kernel/net/linkproto.c  # link.c is the ESP-NOW radio around it
   ${ROOT}/kernel/ui/iconorder.c   # icons.c is the card around it
   ${ROOT}/kernel/ui/appsearch.c   # the launcher draws it
   ${ROOT}/kernel/input/mouse.c ${ROOT}/kernel/input/kbd_hid.c ${ROOT}/kernel/input/keyrepeat.c

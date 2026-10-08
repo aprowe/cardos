@@ -29,6 +29,7 @@
 #include "kernel/sys/blip.h"
 #include "kernel/ui/overlay.h"
 #include "kernel/sys/notify.h"
+#include "kernel/net/link.h"
 #include "kernel/ui/sleepclock.h"
 #include "kernel/drv/imu.h"
 #include "kernel/mem/mem.h"
@@ -1223,13 +1224,13 @@ static int factory_is_newer(const esp_partition_t *self) {
 
 /* The serial link's hooks (kernel/sys/serlink.h): a PC working on the
  * device over USB, whatever is on screen. */
-static int link_open(const char *name, const char *args) {
+static int ser_open(const char *name, const char *args) {
   if (shell_exec(name, (args && *args) ? args : NULL) != 0) return -1;
   if (ui_shell() == UI_LAUNCHER) s_mode = MODE_LAUNCHER;
   return 0;
 }
 
-static void link_state(char *out, size_t n) {
+static void ser_state(char *out, size_t n) {
   const AppDef *a = s_mode == MODE_LAUNCHER ? launchui_running()
                   : s_mode == MODE_DESKTOP ? desktop_focused_app() : NULL;
   snprintf(out, n, "shell=%s app=%s heap=%u low=%u up=%lus",
@@ -1539,7 +1540,7 @@ void app_main(void) {
   capprun_set_opener(launchui_run);
   capprun_set_shell(shell_remote);
   {
-    static const SerlinkHooks hooks = { shell_remote, link_open, link_state, repaint_all };
+    static const SerlinkHooks hooks = { shell_remote, ser_open, ser_state, repaint_all };
     serlink_init(&hooks);
   }
   alarm_set_repaint(repaint_all);    /* what a ringing alarm's panel covered */
@@ -1662,6 +1663,7 @@ void app_main(void) {
     volume_panel_tick();
     alarm_tick();           /* reads /config/alarms.txt when the minute changes */
     notify_tick((uint32_t)(esp_timer_get_time() / 1000));   /* banners, Chat, Calendar */
+    link_tick();            /* ESP-NOW frames in, resends out (kernel/net/link.c) */
     clock_persist_tick();   /* writes at most once every ten minutes */
 
     /* What the background task finished while nobody was waiting. One per

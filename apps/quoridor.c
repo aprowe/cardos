@@ -1,5 +1,10 @@
 /* Quoridor -- the game wallz.gg plays. Against the computer at three
- * strengths, or two people passing the device between them.
+ * strengths, two people passing the device between them, or two devices
+ * nearby over ESP-NOW (api->link): "Play nearby" lists the others with
+ * Quoridor open, Enter invites one, and the inviter is blue and goes first.
+ * A move goes across as five bytes ("M" wall vert row col); "N" is another
+ * game. Each side checks the other's move with the same rules, so a board
+ * that disagrees is said, not played on.
  *
  * The rules and the computer are apps/quoridor.h; this is the title screen,
  * the board and the keys. Blue starts at the bottom going up, red at the top
@@ -46,13 +51,15 @@ static const uint16_t WALL[2] = { CAPP_RGB(130, 192, 255), CAPP_RGB(255, 140, 11
 static const uint16_t GOAL[2] = { CAPP_RGB(34, 58, 98), CAPP_RGB(92, 38, 44) };
 static const char *const NAME[2] = { "blue", "red" };
 
-enum { SCREEN_TITLE, SCREEN_GAME };
+enum { SCREEN_TITLE, SCREEN_GAME, SCREEN_LOBBY };
 enum { MODE_MOVE, MODE_WALL };
 /* What the title offers, in order; RESUME only while a game is on. */
-enum { PICK_RESUME, PICK_EASY, PICK_MEDIUM, PICK_HARD, PICK_TWO, PICKS };
+enum { PICK_RESUME, PICK_EASY, PICK_MEDIUM, PICK_HARD, PICK_TWO, PICK_NEAR, PICKS };
 static const char *const PICK_TEXT[PICKS] = {
   "Resume", "1 player - easy", "1 player - medium", "1 player - hard", "2 players",
+  "Play nearby",
 };
+#define LEVEL_NET (-2)               /* G.level for a game against another device */
 
 static struct {
   int      screen;
@@ -68,6 +75,13 @@ static struct {
   uint32_t seed;
   int      f_big, f_ui;
   CRect    area;
+  /* nearby: the other device */
+  const CappLink *L;
+  int      me;                     /* 0 blue or 1 red, on this device */
+  int      lsel;                   /* the lobby's highlighted player */
+  int      lstate, lpeers;         /* what the lobby last drew, to know when to again */
+  char     note[48];               /* "they left", "Sam said no" ... */
+  uint32_t lobby_at;
 } G;
 
 static CRect rect(int x, int y, int w, int h) {
@@ -79,15 +93,51 @@ static CRect rect(int x, int y, int w, int h) {
 static int bx(void) { return G.area.x + 6; }
 static int by(void) { return G.area.y + (G.area.h - FOOT_H - BOARD) / 2; }
 static int cpu_game(void) { return G.level >= 0; }
-static int humans_turn(void) { return !cpu_game() || G.q.turn == 0; }
+static int net_game(void) { return G.level == LEVEL_NET; }
+static int net_live(void) { return net_game() && G.L && G.L->state() == CAPP_LINK_CONNECTED; }
+static int humans_turn(void) {
+  if (net_game()) return net_live() && G.q.turn == G.me;
+  return !cpu_game() || G.q.turn == 0;
+}
+
+/* ---- nearby ------------------------------------------------------------------------ */
+
+static void net_close(void) {
+  if (G.L) G.L->close();
+  G.note[0] = 0;
+}
+
+static void lobby_open(void) {
+  G.L = api->link ? api->link() : 0;
+  G.screen = SCREEN_LOBBY;
+  G.lsel = 0;
+  G.lstate = -1;
+  G.note[0] = 0;
+  if (!G.L) { api->fmt(G.note, sizeof G.note, "this firmware has no link"); return; }
+  if (G.L->state() == CAPP_LINK_OFF && G.L->open("quoridor", 0) != 0)
+    api->fmt(G.note, sizeof G.note, "%.46s", G.L->why());
+}
+
+static void send_move(QMove m) {
+  uint8_t b[5];
+  b[0] = 'M'; b[1] = (uint8_t)m.wall; b[2] = (uint8_t)m.vert; b[3] = (uint8_t)m.r; b[4] = (uint8_t)m.c;
+  if (net_game() && G.L) G.L->send(b, 5);
+}
 
 static void cursor_to_pawn(void) {
   G.cr = G.q.r[G.q.turn];
   G.cc = G.q.c[G.q.turn];
 }
 
+/* In a game across devices the cursor is always on this side's pawn. */
+static void cursor_to_pawn_mine(void) {
+  G.cr = G.q.r[G.me];
+  G.cc = G.q.c[G.me];
+}
+
 static void new_game(void) {
   q_init(&G.q);
+  G.note[0] = 0;
   G.mode = MODE_MOVE;
   cursor_to_pawn();
   G.wv = 0;
@@ -115,6 +165,45 @@ static void paint_title(CRect c) {
     y += 17;
   }
   footer_paint(api, c, "enter start  up/down choose");
+}
+
+/* ---- paint: the lobby ------------------------------------------------------------- */
+
+static void text(int x, int y, const char *s, uint16_t fg);
+
+static void paint_lobby(CRect c) {
+  int i, y = c.y + 30, st = G.L ? G.L->state() : CAPP_LINK_OFF;
+  char line[48];
+  api->fill(rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
+  api->text_font(G.f_big, (int16_t)(c.x + 12), (int16_t)(c.y + 8), "Play nearby", CLR_TEXT, CLR_BG);
+  G.lstate = st;
+  G.lpeers = G.L ? G.L->peers() : 0;
+  if (st == CAPP_LINK_INVITED) {
+    api->fmt(line, sizeof line, "%.16s wants to play.", G.L->peer_name(-1));
+    api->text_font(G.f_ui, (int16_t)(c.x + 14), (int16_t)y, line, CLR_TEXT, CLR_BG);
+    api->text_font(G.f_ui, (int16_t)(c.x + 14), (int16_t)(y + 18), "y to play, n not now", CLR_DIM, CLR_BG);
+    footer_paint(api, c, "y play  n no");
+    return;
+  }
+  if (st == CAPP_LINK_INVITING) {
+    api->fmt(line, sizeof line, "asking %.16s...", G.L->peer_name(-1));
+    api->text_font(G.f_ui, (int16_t)(c.x + 14), (int16_t)y, line, CLR_TEXT, CLR_BG);
+    footer_paint(api, c, "esc stop asking");
+    return;
+  }
+  if (st == CAPP_LINK_LOOKING && !G.lpeers)
+    api->text_font(G.f_ui, (int16_t)(c.x + 14), (int16_t)y,
+                   "looking for others with Quoridor open...", CLR_DIM, CLR_BG);
+  if (G.lsel >= G.lpeers) G.lsel = G.lpeers ? G.lpeers - 1 : 0;
+  for (i = 0; i < G.lpeers && i < 5; i++) {
+    uint16_t bg = i == G.lsel ? CLR_SEL : CLR_BG;
+    api->fill(rect(c.x + 8, y, c.w - 16, 16), bg);
+    api->text_font(G.f_ui, (int16_t)(c.x + 14), (int16_t)(y + 1), G.L->peer_name(i),
+                   i == G.lsel ? CLR_TEXT : CLR_DIM, bg);
+    y += 17;
+  }
+  if (G.note[0]) text(c.x + 14, c.y + c.h - FOOT_H - 12, G.note, PAWN[1]);
+  footer_paint(api, c, G.lpeers ? "enter invite  esc back" : "esc back");
 }
 
 /* ---- paint: the game -------------------------------------------------------------- */
@@ -170,23 +259,36 @@ static void paint_side(void) {
   const char *label[2];
   label[0] = cpu_game() ? "you" : "blue";
   label[1] = cpu_game() ? "cpu" : "red";
+  if (net_game()) {
+    label[G.me] = "you";
+    label[1 - G.me] = G.L ? G.L->peer_name(-1) : "them";
+    api->fmt(line, sizeof line, "vs %.14s", label[1 - G.me]);
+    text(x, y, line, CLR_DIM);
+  } else
   text(x, y, cpu_game() ? (G.level == Q_EASY ? "vs cpu: easy" : G.level == Q_MEDIUM ?
                            "vs cpu: medium" : "vs cpu: hard") : "2 players", CLR_DIM);
   y += 14;
   for (i = 0; i < 2; i++, y += 12) {
     api->fill(rect(x, y, 7, 7), PAWN[i]);
-    api->fmt(line, sizeof line, "%-4s %d walls", label[i], G.q.left[i]);
+    api->fmt(line, sizeof line, "%-4.6s %d walls", label[i], G.q.left[i]);
     text(x + 11, y, line, G.q.winner < 0 && G.q.turn == i ? CLR_TEXT : CLR_DIM);
   }
   y += 6;
   for (i = 0; i < 2; i++, y += 10) {
-    api->fmt(line, sizeof line, "%s %d to go", label[i], q_path(&G.q, i));
+    api->fmt(line, sizeof line, "%.6s %d to go", label[i], q_path(&G.q, i));
     text(x, y, line, PAWN[i]);
   }
   y += 8;
-  if (G.q.winner >= 0) {
+  if (net_game() && G.note[0]) {
+    api->fmt(line, sizeof line, "%.24s", G.note);
+  } else if (G.q.winner >= 0) {
     if (cpu_game()) api->fmt(line, sizeof line, "%s", G.q.winner == 0 ? "you win!" : "the cpu wins");
+    else if (net_game()) api->fmt(line, sizeof line, "%s", G.q.winner == G.me ? "you win!" : "they win");
     else api->fmt(line, sizeof line, "%s wins!", NAME[G.q.winner]);
+  } else if (net_game() && !humans_turn()) {
+    api->fmt(line, sizeof line, "their move...");
+  } else if (net_game()) {
+    api->fmt(line, sizeof line, "%s", G.mode == MODE_WALL ? "lay a wall" : "your move");
   } else if (!humans_turn()) {
     api->fmt(line, sizeof line, "thinking...");
   } else if (cpu_game()) {
@@ -196,7 +298,7 @@ static void paint_side(void) {
   }
   text(x, y, line, G.q.winner >= 0 ? PAWN[G.q.winner] : humans_turn() ? PAWN[G.q.turn] : CLR_DIM);
   y += 16;
-  api->fmt(line, sizeof line, "%s %d  %s %d", label[0], G.wins[0], label[1], G.wins[1]);
+  api->fmt(line, sizeof line, "%.6s %d  %.6s %d", label[0], G.wins[0], label[1], G.wins[1]);
   text(x, y, line, CLR_DIM);
 }
 
@@ -204,10 +306,12 @@ static void app_paint(void *st, CRect c) {
   (void)st;
   G.area = c;
   if (G.screen == SCREEN_TITLE) { paint_title(c); return; }
+  if (G.screen == SCREEN_LOBBY) { paint_lobby(c); return; }
   api->fill(rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
   paint_board();
   paint_side();
-  footer_paint(api, c, G.q.winner >= 0 ? "n again  esc title" :
+  footer_paint(api, c, net_game() && !net_live() ? "enter find another  esc title" :
+               G.q.winner >= 0 ? "n again  esc title" :
                G.mode == MODE_WALL ? "enter lay  r turn  esc back" :
                                      "shift+arrow step  w wall  esc menu");
 }
@@ -222,13 +326,14 @@ static void after_turn(void) {
     return;
   }
   if (cpu_game()) G.ai_at = api->ticks_ms() + AI_MS;
-  else cursor_to_pawn();                     /* hand it over */
+  else if (!net_game()) cursor_to_pawn();    /* hand it over */
 }
 
 static void play_step(int r, int c) {
   QMove m;
   m.wall = 0; m.vert = 0; m.r = (int8_t)r; m.c = (int8_t)c;
   if (q_play(&G.q, m) == 0) {
+    send_move(m);
     G.cr = (int8_t)r;
     G.cc = (int8_t)c;
     after_turn();
@@ -237,7 +342,8 @@ static void play_step(int r, int c) {
 
 static void to_title(void) {
   G.screen = SCREEN_TITLE;
-  G.pick = G.playing ? PICK_RESUME : G.level < 0 ? PICK_TWO : PICK_EASY + G.level;
+  G.pick = G.playing ? PICK_RESUME : G.level == LEVEL_NET ? PICK_NEAR :
+           G.level < 0 ? PICK_TWO : PICK_EASY + G.level;
 }
 
 static int key_move(uint8_t k) {
@@ -278,7 +384,7 @@ static int key_wall(uint8_t k) {
   case 'r': case 'R': case ' ': G.wv = (int8_t)!G.wv; return 1;
   case CAPP_KEY_ENTER:
     m.wall = 1; m.vert = G.wv; m.r = G.wr; m.c = G.wc;
-    if (q_play(&G.q, m) == 0) after_turn();
+    if (q_play(&G.q, m) == 0) { send_move(m); after_turn(); }
     return 1;
   case CAPP_KEY_ESC: case 'w': case 'W': case '\t':
     G.mode = MODE_MOVE;
@@ -298,6 +404,14 @@ static int key_title(uint8_t k) {
   }
   if (k != CAPP_KEY_ENTER && k != ' ') return 0;
   if (G.pick == PICK_RESUME) { G.screen = SCREEN_GAME; return 1; }
+  if (G.pick == PICK_NEAR) {
+    if (net_live()) { G.screen = SCREEN_GAME; return 1; }   /* the game that is on */
+    if (!net_game()) { G.wins[0] = G.wins[1] = 0; G.playing = 0; }
+    G.level = LEVEL_NET;
+    lobby_open();
+    return 1;
+  }
+  if (net_game()) net_close();              /* a different game: the other side is told */
   {
     int level = G.pick == PICK_TWO ? -1 : G.pick - PICK_EASY;
     /* A different opponent is a different score. */
@@ -319,12 +433,46 @@ static int shifted_arrow(uint8_t k) {
   return -1;
 }
 
+static int key_lobby(uint8_t k) {
+  int st = G.L ? G.L->state() : CAPP_LINK_OFF;
+  if (st == CAPP_LINK_INVITED) {
+    if (k == 'y' || k == 'Y' || k == CAPP_KEY_ENTER) G.L->answer(1);
+    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) G.L->answer(0);
+    return 1;
+  }
+  if (k == CAPP_KEY_ESC) {
+    if (st == CAPP_LINK_INVITING) { G.L->look(); return 1; }
+    net_close();
+    G.playing = 0;
+    to_title();
+    return 1;
+  }
+  if (k == CAPP_KEY_UP && G.lsel > 0) G.lsel--;
+  else if (k == CAPP_KEY_DOWN && G.lsel < G.lpeers - 1) G.lsel++;
+  else if ((k == CAPP_KEY_ENTER || k == ' ') && st == CAPP_LINK_LOOKING && G.lpeers) {
+    G.note[0] = 0;
+    G.L->invite(G.lsel);
+  }
+  return 1;
+}
+
 static int app_key(void *st, uint8_t k) {
   int d, r, c;
   (void)st;
   if (G.screen == SCREEN_TITLE) return key_title(k);
+  if (G.screen == SCREEN_LOBBY) return key_lobby(k);
+  if (net_game() && !net_live()) {          /* they left, or went out of range */
+    if (k == CAPP_KEY_ENTER) { if (G.L) G.L->look(); lobby_open(); return 1; }
+    if (k == CAPP_KEY_ESC) { net_close(); G.playing = 0; to_title(); return 1; }
+    return 0;
+  }
   if (G.q.winner >= 0) {
-    if (k == 'n' || k == 'N' || k == CAPP_KEY_ENTER) { new_game(); return 1; }
+    if (k == 'n' || k == 'N' || k == CAPP_KEY_ENTER) {
+      if (net_game()) { uint8_t b = 'N'; G.L->send(&b, 1); }   /* both boards start again */
+      new_game();
+      if (net_game()) cursor_to_pawn_mine();
+      return 1;
+    }
     if (k == CAPP_KEY_ESC) { to_title(); return 1; }
     return 0;
   }
@@ -341,9 +489,54 @@ static int app_key(void *st, uint8_t k) {
 
 /* The computer's reply, a moment after yours -- and only while the board is
  * on screen: it does not move behind the title. */
+/* The other device: the lobby's changes, the game starting, their moves. */
+static int net_tick(uint32_t now) {
+  int st, n, redraw = 0;
+  uint8_t b[16];
+  if (!net_game() || !G.L) return 0;
+  st = G.L->state();
+  if (G.screen == SCREEN_LOBBY) {
+    if (st == CAPP_LINK_CONNECTED) {
+      G.me = G.L->role();                    /* the inviter is blue and goes first */
+      G.wins[0] = G.wins[1] = 0;
+      new_game();
+      cursor_to_pawn_mine();
+      return 1;
+    }
+    if (st == CAPP_LINK_LOOKING && G.lstate == CAPP_LINK_INVITING && G.L->why()[0])
+      api->fmt(G.note, sizeof G.note, "%.46s", G.L->why());
+    if (st != G.lstate || G.L->peers() != G.lpeers || (uint32_t)(now - G.lobby_at) > 1000) {
+      G.lobby_at = now;
+      return 1;
+    }
+    return 0;
+  }
+  if (st == CAPP_LINK_ENDED && !G.note[0]) {
+    api->fmt(G.note, sizeof G.note, "%.46s", G.L->why());
+    G.playing = 0;
+    return 1;
+  }
+  while ((n = G.L->recv(b, sizeof b)) > 0) {
+    if (b[0] == 'N') { new_game(); cursor_to_pawn_mine(); redraw = 1; continue; }
+    if (b[0] == 'M' && n >= 5 && G.q.turn != G.me && G.q.winner < 0) {
+      QMove m;
+      m.wall = (int8_t)b[1]; m.vert = (int8_t)b[2]; m.r = (int8_t)b[3]; m.c = (int8_t)b[4];
+      if (q_play(&G.q, m) != 0) {
+        api->fmt(G.note, sizeof G.note, "the boards disagree: start again");
+      } else if (G.q.winner >= 0) {
+        G.wins[G.q.winner]++;
+        G.playing = 0;
+      } else cursor_to_pawn_mine();
+      redraw = 1;
+    }
+  }
+  return redraw;
+}
+
 static int app_tick(void *st, uint32_t now) {
   QMove m;
   (void)st;
+  if (net_game()) return net_tick(now);
   if (!G.ai_at || G.screen != SCREEN_GAME || (int32_t)(now - G.ai_at) < 0) return 0;
   G.ai_at = 0;
   if (G.q.winner >= 0 || G.q.turn != 1 || !cpu_game()) return 0;
@@ -375,6 +568,10 @@ const CappInfo capp_info = {
   "enter\tlay the wall (in wall mode)\n"
   "esc\tback to moving; from moving, the title\n"
   "n\tanother game, once one is won\n"
+  "\n"
+  "play nearby: the other Cardputer opens\n"
+  "Quoridor and picks it too; enter invites,\n"
+  "y accepts. no router needed.\n"
   "\n"
   "reach the far row -- your colour -- first.\n"
   "a wall blocks two cells and may not shut\n"

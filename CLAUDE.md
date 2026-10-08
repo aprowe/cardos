@@ -893,6 +893,24 @@ through `api->firmware_boot` (API 42) -- the launcher's chain-boot, reset
 comes home. A version that also wants a SPIFFS/FAT partition is marked
 "+data": its app boots without that data.
 
+**Two devices, one game: ESP-NOW** (2026-10-08, API 43). `api->link()`
+(CappLink) is local multiplayer with no router: the WiFi radio sending
+frames device to device. `kernel/net/linkproto.c` is the protocol --
+HELLO broadcasts with a name and the game's hash, INVITE/ACCEPT/DECLINE
+with a session number (crossed invites: the lower MAC invites), DATA
+stop-and-wait, resent until ACKed, delivered once and in order, PING, BYE,
+"lost" after 8 s of silence -- portable and host-tested through a lossy
+fake radio (`test/test_linkproto.c`). `kernel/net/link.c` is ESP-NOW:
+frames come in on the WiFi task through a ring and are handled in
+`link_tick` on the shell's loop. ESP-NOW shares the radio's one channel
+with WiFi: joined to a router it is the router's (HELLO says so), else it
+sits on channel 1 and walks 2-13 while it hears nobody. `wifi_pin` keeps
+`wifi_release` off it, and it closes with the app. Quoridor's "Play nearby"
+is the first user (the inviter is blue; a move is 5 bytes);
+`test/test_quoridor_net.c` runs the real app against the real protocol.
+The USB serial link's hooks in main.c are `ser_open`/`ser_state` now: "link"
+is this.
+
 ## Hardware facts — measured on the actual device, not from a datasheet
 
 M5Stack Cardputer v1.1, ESP32-S3FN8 (Xtensa LX7 dual-core, 240 MHz).

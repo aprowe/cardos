@@ -40,6 +40,8 @@ void wifi_stop(void);
  * wifi_start (any connect) builds it again. For Bluetooth, which will not
  * start beside it when an app is open. */
 void wifi_release(void);
+/* Held up: wifi_release does nothing while pinned (ESP-NOW is on). Counted. */
+void wifi_pin(int on);
 
 /* Blocking, up to `timeout_ms`. Saves the credentials on success. */
 int wifi_connect(const char *ssid, const char *pass, int timeout_ms);
