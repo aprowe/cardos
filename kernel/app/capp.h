@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 41
+#define CAPP_API_VERSION 42
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -858,6 +858,16 @@ typedef struct {
    * that appears once it is all over. */
   int (*update_apply_progress)(int os, void (*on_line)(void *ctx, const char *line),
                                void *ctx, char *out, size_t n);
+
+  /* ---- a guest firmware (API 42) ----
+   *
+   * Boot the ESP32-S3 app image at `path` as the console's `boot!` does:
+   * checked, copied into the OTA slot not running, and started, with a
+   * one-shot rollback home on the next reset. Does not return on success
+   * (the chip restarts, a few seconds after the call); otherwise -1 and
+   * the reason in `why`. Paint "booting" before calling: nothing is drawn
+   * while it copies. */
+  int (*firmware_boot)(const char *path, char *why, size_t n);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

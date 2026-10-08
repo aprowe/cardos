@@ -21,6 +21,7 @@ dashlink  Net
 edit      Make
 explorer  System
 files     System
+hub       System
 forklift  Games
 grep      -
 habits    Plan

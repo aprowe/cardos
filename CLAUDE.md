@@ -882,6 +882,17 @@ unlocks. Unread notifications are listed under the clock; one arriving at
 black shows the clock for 15 s. An app with no colour icon (made by Build,
 arrived by `update apps`) wears its 1bpp icon, coloured.
 
+**Hub: M5Launcher's firmware catalog** (2026-10-08, `apps/hub.c`, System).
+LauncherHub (api.launcherhub.net, ~700 Cardputer firmwares) through
+`server/m5hub.py`, which does the HTTPS and JSON and pages it 40 at a time
+(the kernel's HTTP buffer is 8 KB). The files are whole-flash images; each
+version gives its app's offset and size (`ao`, `as`), and the server fetches
+only that range from m5burner-cdn, so the device gets a bootable app image
+(490 KB of a 4 MB file) into /firmware/NAME.bin and, if asked, boots it
+through `api->firmware_boot` (API 42) -- the launcher's chain-boot, reset
+comes home. A version that also wants a SPIFFS/FAT partition is marked
+"+data": its app boots without that data.
+
 ## Hardware facts — measured on the actual device, not from a datasheet
 
 M5Stack Cardputer v1.1, ESP32-S3FN8 (Xtensa LX7 dual-core, 240 MHz).

@@ -7,6 +7,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "kernel/app/launcher.h"
 #include "kernel/ui/draw.h"
 #include "kernel/fs/fs.h"
 #include "kernel/net/http.h"
@@ -321,6 +322,18 @@ static void upd_say_progress(void *ctx, const char *line) {
   if (u->on_line) u->on_line(u->ctx, line);
 }
 
+static int api_firmware_boot(const char *path, char *why, size_t n) {
+  AppImageInfo info;
+  AppImageResult bad;
+  LaunchResult r;
+  if (!path || !*path) { if (why && n) snprintf(why, n, "no file"); return -1; }
+  r = launcher_check(path, &info, &bad);
+  if (r == LAUNCH_OK) r = launcher_boot(path, NULL, NULL);   /* returns only on failure */
+  if (why && n)
+    snprintf(why, n, "%s", r == LAUNCH_ERR_IMAGE ? appimage_strerror(bad) : launcher_strerror(r));
+  return -1;
+}
+
 static int api_update_apply_progress(int os, void (*on_line)(void *ctx, const char *line),
                                      void *ctx, char *out, size_t n) {
   UpdSayProgress say = { out, n, on_line, ctx };
@@ -547,6 +560,7 @@ static const CardApi API = {
   api_notify_at,
   api_notify_cancel,
   api_update_apply_progress,
+  api_firmware_boot,
 };
 
 const CardApi *cardos_api(void) { return &API; }
