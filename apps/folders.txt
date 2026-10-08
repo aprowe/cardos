@@ -48,3 +48,4 @@ todo      Plan
 toggl     Plan
 update    System
 web       Net
+tetris    Games
