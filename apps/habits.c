@@ -47,6 +47,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
@@ -117,12 +118,6 @@ static struct {
   int     f_ui, f_uib, f_num;
   CRect   content;
 } H;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
 
 /* ---- dates -------------------------------------------------------------------
  *
@@ -396,10 +391,8 @@ static int save_log(int i) {
 
 /* ---- changing things --------------------------------------------------------------- */
 
-static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
-
 static int same_name(const char *a, const char *b) {
-  while (*a && lower(*a) == lower(*b)) { a++; b++; }
+  while (*a && str_lower(*a) == str_lower(*b)) { a++; b++; }
   return !*a && !*b;
 }
 
@@ -504,13 +497,13 @@ static int toggle(int i, int32_t z) {
 /* ---- layout --------------------------------------------------------------------------- */
 
 static CRect body_rect(void) {
-  return rect(H.content.x, H.content.y + HEAD_H, H.content.w,
-              H.content.h - HEAD_H - FOOT_H);
+  return capp_rect(H.content.x, H.content.y + HEAD_H, H.content.w,
+                   H.content.h - HEAD_H - FOOT_H);
 }
 
 static CRect row_rect(int i) {
   CRect b = body_rect();
-  return rect(b.x, b.y + (i - H.top) * ROW_H, b.w, ROW_H);
+  return capp_rect(b.x, b.y + (i - H.top) * ROW_H, b.w, ROW_H);
 }
 
 static void clamp_sel(void) {
@@ -529,16 +522,16 @@ static int font_y(int f, int y, int h) { return y + (h - api->font_height(f)) / 
 /* ---- the day screen ---------------------------------------------------------------------- */
 
 static void paint_check(int x, int y, int on, uint16_t bg) {
-  api->fill(rect(x, y, 11, 11), on ? CLR_DONE : CLR_FAINT);
-  if (!on) { api->fill(rect(x + 1, y + 1, 9, 9), bg); return; }
+  api->fill(capp_rect(x, y, 11, 11), on ? CLR_DONE : CLR_FAINT);
+  if (!on) { api->fill(capp_rect(x + 1, y + 1, 9, 9), bg); return; }
   /* a tick: two strokes, two pixels thick */
-  api->fill(rect(x + 2, y + 5, 2, 2), CLR_BG);
-  api->fill(rect(x + 3, y + 6, 2, 2), CLR_BG);
-  api->fill(rect(x + 4, y + 7, 2, 2), CLR_BG);
-  api->fill(rect(x + 5, y + 6, 2, 2), CLR_BG);
-  api->fill(rect(x + 6, y + 5, 2, 2), CLR_BG);
-  api->fill(rect(x + 7, y + 4, 2, 2), CLR_BG);
-  api->fill(rect(x + 8, y + 3, 2, 2), CLR_BG);
+  api->fill(capp_rect(x + 2, y + 5, 2, 2), CLR_BG);
+  api->fill(capp_rect(x + 3, y + 6, 2, 2), CLR_BG);
+  api->fill(capp_rect(x + 4, y + 7, 2, 2), CLR_BG);
+  api->fill(capp_rect(x + 5, y + 6, 2, 2), CLR_BG);
+  api->fill(capp_rect(x + 6, y + 5, 2, 2), CLR_BG);
+  api->fill(capp_rect(x + 7, y + 4, 2, 2), CLR_BG);
+  api->fill(capp_rect(x + 8, y + 3, 2, 2), CLR_BG);
 }
 
 static void paint_row(int i) {
@@ -562,17 +555,17 @@ static void paint_row(int i) {
   for (k = 6; k >= 0; k--) {
     int32_t z = H.day - k;
     int on = is_done(i, z);
-    api->fill(rect(x, r.y + (ROW_H - 5) / 2, 5, 5),
+    api->fill(capp_rect(x, r.y + (ROW_H - 5) / 2, 5, 5),
               on ? (k ? CLR_DONE_DIM : CLR_DONE) : CLR_CELL);
     x += 7;
   }
 }
 
 static void paint_head(void) {
-  CRect h = rect(H.content.x, H.content.y, H.content.w, HEAD_H);
+  CRect h = capp_rect(H.content.x, H.content.y, H.content.w, HEAD_H);
   char label[24], frac[12];
   int done = done_on(H.day), w;
-  api->fill(rect(h.x, h.y, h.w, h.h - 2), CLR_BG);
+  api->fill(capp_rect(h.x, h.y, h.w, h.h - 2), CLR_BG);
   day_label(H.day, label, sizeof label);
   api->text_font(H.f_uib, (int16_t)(h.x + 8), (int16_t)font_y(H.f_uib, h.y, h.h - 2), label,
                  CLR_TEXT, CLR_BG);
@@ -584,8 +577,8 @@ static void paint_head(void) {
   api->text_font(H.f_uib, (int16_t)(h.x + h.w - 8 - w), (int16_t)font_y(H.f_uib, h.y, h.h - 2),
                  frac, H.n && done == H.n ? CLR_DONE : CLR_DIM, CLR_BG);
   /* the day's progress, a line under the header */
-  api->fill(rect(h.x, h.y + h.h - 2, h.w, 2), CLR_BARTRACK);
-  if (H.n) api->fill(rect(h.x, h.y + h.h - 2, h.w * done / H.n, 2), CLR_DONE);
+  api->fill(capp_rect(h.x, h.y + h.h - 2, h.w, 2), CLR_BARTRACK);
+  if (H.n) api->fill(capp_rect(h.x, h.y + h.h - 2, h.w * done / H.n, 2), CLR_DONE);
 }
 
 /* The shared hint bar (apps/footer.h), or the word an action left there --
@@ -608,7 +601,7 @@ static void paint_today(void) {
   } else {
     for (i = H.top; i < H.n && i < H.top + H.rows; i++) paint_row(i);
     y = b.y + (i - H.top) * ROW_H;
-    if (y < b.y + b.h) api->fill(rect(b.x, y, b.w, b.y + b.h - y), CLR_BG);
+    if (y < b.y + b.h) api->fill(capp_rect(b.x, y, b.w, b.y + b.h - y), CLR_BG);
   }
   if (H.ask == ASK_DELETE) {
     /* "delete " + a 24-character name + "? y/n" is 36: inside the bar. */
@@ -648,7 +641,7 @@ static uint16_t cell_colour(int32_t z) {
 
 static CRect grid_rect(void) {
   int w = HEAT_WEEKS * (CELL + GAP) - GAP, h = 7 * (CELL + GAP) - GAP;
-  return rect(H.content.x + H.content.w - 8 - w, H.content.y + HEAD_H + 4, w, h);
+  return capp_rect(H.content.x + H.content.w - 8 - w, H.content.y + HEAD_H + 4, w, h);
 }
 
 static void paint_cell(int32_t z) {
@@ -657,11 +650,11 @@ static void paint_cell(int32_t z) {
   int x = g.x + col * (CELL + GAP), y = g.y + row * (CELL + GAP);
   if (col < 0 || col >= HEAT_WEEKS) return;
   if (z == H.cursor) {
-    api->fill(rect(x - 1, y - 1, CELL + 2, CELL + 2), CLR_CURSOR);
-    api->fill(rect(x + 1, y + 1, CELL - 2, CELL - 2), cell_colour(z));
+    api->fill(capp_rect(x - 1, y - 1, CELL + 2, CELL + 2), CLR_CURSOR);
+    api->fill(capp_rect(x + 1, y + 1, CELL - 2, CELL - 2), cell_colour(z));
   } else {
-    api->fill(rect(x - 1, y - 1, CELL + 2, CELL + 2), CLR_BG);
-    api->fill(rect(x, y, CELL, CELL), cell_colour(z));
+    api->fill(capp_rect(x - 1, y - 1, CELL + 2, CELL + 2), CLR_BG);
+    api->fill(capp_rect(x, y, CELL, CELL), cell_colour(z));
   }
 }
 
@@ -675,7 +668,7 @@ static void paint_detail(void) {
   api->fill(c, CLR_BG);
   api->text_font(H.f_uib, (int16_t)x, (int16_t)font_y(H.f_uib, c.y, HEAD_H),
                  one ? H.habit[H.detail].name : "All habits", CLR_TEXT, CLR_BG);
-  api->fill(rect(c.x, c.y + HEAD_H - 2, c.w, 2), CLR_BARTRACK);
+  api->fill(capp_rect(c.x, c.y + HEAD_H - 2, c.w, 2), CLR_BARTRACK);
 
   y = c.y + HEAD_H + 4;
   if (one) {
@@ -733,7 +726,7 @@ static void paint_prompt(void) {
   api->text_font(H.f_uib, (int16_t)(c.x + 8), (int16_t)y,
                  H.prompt == PROMPT_ADD ? "New habit" : "Rename", CLR_TEXT, CLR_BG);
   y += api->font_height(H.f_uib) + 6;
-  api->fill(rect(c.x + 6, y, c.w - 12, 22), CLR_FIELD);
+  api->fill(capp_rect(c.x + 6, y, c.w - 12, 22), CLR_FIELD);
   api->fmt(shown, sizeof shown, "%s_", H.draft);
   api->text_font(H.f_ui, (int16_t)(c.x + 12), (int16_t)font_y(H.f_ui, y, 22), shown,
                  CLR_TEXT, CLR_FIELD);
@@ -843,22 +836,12 @@ static int do_action(int a) {
 
 static int app_action(void *st, int a) { (void)st; return do_action(a); }
 
-/* Case-blind: is `needle` in `hay`? */
-static int contains(const char *hay, const char *needle) {
-  int i, j;
-  for (i = 0; hay[i]; i++) {
-    for (j = 0; needle[j] && lower(hay[i + j]) == lower(needle[j]); j++) {}
-    if (!needle[j]) return 1;
-  }
-  return 0;
-}
-
 /* The one habit `word` picks out: an exact name first, else the only one
  * containing it. -1 with a reason. */
 static int find_habit(const char *word, char *out, size_t n) {
   int i, hit = -1, hits = 0;
   for (i = 0; i < H.n; i++) if (same_name(H.habit[i].name, word)) return i;
-  for (i = 0; i < H.n; i++) if (contains(H.habit[i].name, word)) { hit = i; hits++; }
+  for (i = 0; i < H.n; i++) if (str_contains(H.habit[i].name, word, 1)) { hit = i; hits++; }
   if (hits == 1) return hit;
   if (!hits) api->fmt(out, n, "no habit matches \"%s\"", word);
   else api->fmt(out, n, "%d habits match \"%s\"; say more", hits, word);
@@ -918,7 +901,7 @@ static void damage_row(int i) {
 }
 
 static void damage_head(void) {
-  api->damage(rect(H.content.x, H.content.y, H.content.w, HEAD_H));
+  api->damage(capp_rect(H.content.x, H.content.y, H.content.w, HEAD_H));
 }
 
 static int key_today(uint8_t k) {
@@ -972,7 +955,7 @@ static int key_today(uint8_t k) {
 static CRect cell_rect(int32_t z) {
   CRect g = grid_rect();
   int col = (int)((z - grid_start()) / 7), row = weekday(z);
-  return rect(g.x + col * (CELL + GAP) - 1, g.y + row * (CELL + GAP) - 1, CELL + 2, CELL + 2);
+  return capp_rect(g.x + col * (CELL + GAP) - 1, g.y + row * (CELL + GAP) - 1, CELL + 2, CELL + 2);
 }
 
 static void move_cursor(int32_t by) {
@@ -1018,8 +1001,8 @@ static int key_detail(uint8_t k) {
    * day, and is all that is left to repaint. */
   {
     CRect g = grid_rect();
-    api->damage(rect(g.x, g.y + g.h + 2, H.content.x + H.content.w - g.x,
-                     api->font_height(H.f_ui) + 4));
+    api->damage(capp_rect(g.x, g.y + g.h + 2, H.content.x + H.content.w - g.x,
+                          api->font_height(H.f_ui) + 4));
   }
   return 1;
 }
@@ -1059,7 +1042,7 @@ static int app_key(void *st, uint8_t k) {
    * because the key may repaint only a row and leave it there. */
   if (H.say) {
     H.say = NULL;
-    api->damage(rect(H.content.x, H.content.y + H.content.h - FOOT_H, H.content.w, FOOT_H));
+    api->damage(capp_rect(H.content.x, H.content.y + H.content.h - FOOT_H, H.content.w, FOOT_H));
   }
   if (a == TB_CONSUMED) return 1;
   if (a != TB_NONE) return do_action(a);

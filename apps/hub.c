@@ -15,6 +15,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/footer.h"
 #include "apps/confirm.h"
 
@@ -57,12 +58,6 @@ static struct {
   CRect area;
   char  reply[6000];
 } C;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
 
 static void say(int bad, const char *s) {
   api->fmt(C.msg, sizeof C.msg, "%s", s);
@@ -142,18 +137,6 @@ static void parse_info(void) {
 
 /* ---- requests --------------------------------------------------------------- */
 
-static void url_enc(char *out, size_t n, const char *s) {
-  static const char HEX[] = "0123456789ABCDEF";
-  size_t k = 0;
-  for (; *s && k + 4 < n; s++) {
-    unsigned char ch = (unsigned char)*s;
-    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'))
-      out[k++] = (char)ch;
-    else { out[k++] = '%'; out[k++] = HEX[ch >> 4]; out[k++] = HEX[ch & 15]; }
-  }
-  out[k] = 0;
-}
-
 static void ask_list(int page) {
   char url[200], q[100];
   url_enc(q, sizeof q, C.q);
@@ -180,12 +163,12 @@ static void ask_info(void) {
 
 static void paint_progress(void) {
   char s[40];
-  CRect r = rect(C.area.x, C.area.y + C.area.h - FOOT_H - 14, C.area.w, 12);
+  CRect r = capp_rect(C.area.x, C.area.y + C.area.h - FOOT_H - 14, C.area.w, 12);
   /* in KB, 32-bit: an app has no 64-bit division */
   int w = C.want > 0 ? (int)((uint32_t)(C.got / 1024) * (uint32_t)(r.w - 16) /
                              (uint32_t)(C.want / 1024 + 1)) : 0;
-  api->fill(rect(r.x + 8, r.y, r.w - 16, 4), CLR_BAR);
-  api->fill(rect(r.x + 8, r.y, w, 4), CLR_ACC);
+  api->fill(capp_rect(r.x + 8, r.y, r.w - 16, 4), CLR_BAR);
+  api->fill(capp_rect(r.x + 8, r.y, w, 4), CLR_ACC);
   api->fmt(s, sizeof s, "%d of %d KB  (any key stops)", C.got / 1024, C.want / 1024);
   api->text((int16_t)(r.x + 8), (int16_t)(r.y + 5), s, CLR_DIM, CLR_BG);
 }
@@ -256,7 +239,7 @@ static void download(void) {
 
 static void paint_top(CRect a, const char *left) {
   char right[32];
-  api->fill(rect(a.x, a.y, a.w, TOP_H), CLR_BAR);
+  api->fill(capp_rect(a.x, a.y, a.w, TOP_H), CLR_BAR);
   api->text((int16_t)(a.x + 4), (int16_t)(a.y + 2), left, CLR_TEXT, CLR_BAR);
   if (C.view == V_LIST || C.view == V_SEARCH) {
     api->fmt(right, sizeof right, "%s %d/%d", ORDER_SAY[C.order], C.page, C.pages);
@@ -272,16 +255,16 @@ static void paint_rows(CRect a) {
   for (i = C.top; i < C.n && i < C.top + rows; i++, y += ROW_H) {
     uint16_t bg = i == C.sel ? CLR_SEL : CLR_BG;
     char s[48];
-    api->fill(rect(a.x, y, a.w, ROW_H), bg);
+    api->fill(capp_rect(a.x, y, a.w, ROW_H), bg);
     api->fmt(s, sizeof s, "%s%.36s", C.it[i].star ? "* " : "", C.it[i].name);
     api->text((int16_t)(a.x + 4), (int16_t)(y + 1), s, C.it[i].star ? CLR_WARN : CLR_TEXT, bg);
   }
-  if (y < a.y + a.h - FOOT_H) api->fill(rect(a.x, y, a.w, a.y + a.h - FOOT_H - y), CLR_BG);
+  if (y < a.y + a.h - FOOT_H) api->fill(capp_rect(a.x, y, a.w, a.y + a.h - FOOT_H - y), CLR_BG);
 }
 
 static void paint_versions(CRect a) {
   int i, y = a.y + TOP_H + 2;
-  api->fill(rect(a.x, a.y + TOP_H, a.w, a.h - TOP_H - FOOT_H), CLR_BG);
+  api->fill(capp_rect(a.x, a.y + TOP_H, a.w, a.h - TOP_H - FOOT_H), CLR_BG);
   if (C.n) {
     char s[48];
     api->fmt(s, sizeof s, "by %s", C.it[C.sel].author);
@@ -291,7 +274,7 @@ static void paint_versions(CRect a) {
   for (i = 0; i < C.nv && y < a.y + a.h - FOOT_H - 22; i++, y += ROW_H) {
     uint16_t bg = i == C.vsel ? CLR_SEL : CLR_BG;
     char s[48];
-    api->fill(rect(a.x, y, a.w, ROW_H), bg);
+    api->fill(capp_rect(a.x, y, a.w, ROW_H), bg);
     api->fmt(s, sizeof s, "%-10.10s %s %4luK%s", C.v[i].ver, C.v[i].date,
              (unsigned long)(C.v[i].as / 1024), C.v[i].data ? " +data" : "");
     api->text((int16_t)(a.x + 4), (int16_t)(y + 1), s, C.v[i].data ? CLR_WARN : CLR_TEXT, bg);
@@ -305,7 +288,7 @@ static void paint_versions(CRect a) {
 }
 
 static void paint_center(CRect a, const char *l1, const char *l2, uint16_t c1) {
-  api->fill(rect(a.x, a.y + TOP_H, a.w, a.h - TOP_H - FOOT_H), CLR_BG);
+  api->fill(capp_rect(a.x, a.y + TOP_H, a.w, a.h - TOP_H - FOOT_H), CLR_BG);
   api->text((int16_t)(a.x + (a.w - (int)api->str_len(l1) * 6) / 2), (int16_t)(a.y + 50), l1, c1, CLR_BG);
   if (l2) api->text((int16_t)(a.x + (a.w - (int)api->str_len(l2) * 6) / 2), (int16_t)(a.y + 64), l2, CLR_DIM, CLR_BG);
 }

@@ -57,6 +57,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
@@ -211,12 +212,6 @@ enum { SYNC_IDLE = 0, SYNC_PUSH, SYNC_FETCH };
  * try again soon rather than in ten minutes. Opening the app during the few
  * seconds it takes WiFi to come up is the common case, not the rare one. */
 #define RETRY_MS      (15u * 1000u)
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
 
 static void say(const char *s) { api->fmt(C.status, sizeof C.status, "%s", s); }
 
@@ -661,17 +656,11 @@ static void schedule_reminders(void) {
   }
 }
 
-/* Two strings the same? The app links no libc. */
-static int same(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
-
 /* Is there a kept (still queued) event with this id among the first n? */
 static int kept_id(int n, const char *id) {
   int i;
   for (i = 0; i < n; i++)
-    if (C.ev[i].id[0] && same(C.ev[i].id, id)) return 1;
+    if (C.ev[i].id[0] && str_same(C.ev[i].id, id)) return 1;
   return 0;
 }
 
@@ -714,7 +703,7 @@ static int absorb(void) {
     if (e->id[0] && kept_id(keep, e->id)) e->id[0] = 0;     /* edited here */
     /* The form is open on this one: the flag lives on the struct, and the
      * struct was just made anew. */
-    if (e->id[0] && C.form_edit && C.edit_id[0] && same(e->id, C.edit_id))
+    if (e->id[0] && C.form_edit && C.edit_id[0] && str_same(e->id, C.edit_id))
       e->editing = 1;
     if (e->id[0] && e->start) { C.n++; added++; }
     }
@@ -1104,7 +1093,7 @@ static void paint_agenda(CRect c) {
   int32_t last = -999999;
   int rows = 0;
 
-  api->fill(rect(c.x, c.y, c.w, c.h - BAR_H), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, c.h - BAR_H), CLR_BG);
 
   if (!C.n) {
     api->text((short)(c.x + 8), (short)(c.y + 20), "Nothing in the diary.",
@@ -1141,7 +1130,7 @@ static void paint_agenda(CRect c) {
       last = d;
     }
 
-    api->fill(rect(c.x, y, c.w, ROW_H - 1), i == C.sel ? CLR_SEL : CLR_ROW);
+    api->fill(capp_rect(c.x, y, c.w, ROW_H - 1), i == C.sel ? CLR_SEL : CLR_ROW);
     if (e->all_day) api->fmt(when, sizeof when, "%s", "all");
     else {
       local_hm(e->start, &hh, &mm);
@@ -1178,12 +1167,12 @@ static void day_heading(int32_t day, char *out, int n) {
  * selection that moves can ask for those two rows back instead of the
  * window. Zero width when that row is not on screen. */
 static CRect day_row_rect(int nth) {
-  CRect r = rect(0, 0, 0, 0);
+  CRect r = capp_rect(0, 0, 0, 0);
   if (!C.day_rect.w || nth < C.day_top || nth >= C.day_top + C.day_rows)
     return r;
-  return rect(C.day_rect.x,
-              C.day_rect.y + DAY_HEAD_H + (nth - C.day_top) * ROW_H,
-              C.day_rect.w, ROW_H - 1);
+  return capp_rect(C.day_rect.x,
+                   C.day_rect.y + DAY_HEAD_H + (nth - C.day_top) * ROW_H,
+                   C.day_rect.w, ROW_H - 1);
 }
 
 static void paint_day(CRect c) {
@@ -1192,7 +1181,7 @@ static void paint_day(CRect c) {
   int i, y;
 
   C.day_rect = c;
-  api->fill(rect(c.x, c.y, c.w, c.h - BAR_H), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, c.h - BAR_H), CLR_BG);
   day_heading(C.day_shown, head, sizeof head);
   api->text((short)(c.x + 2), (short)(c.y + 2), head,
             (C.have_clock && C.day_shown == today_day()) ? CLR_TODAY : CLR_HEAD,
@@ -1223,7 +1212,7 @@ static void paint_day(CRect c) {
 
     if (idx < 0) break;
     e = &C.ev[idx];
-    api->fill(rect(c.x, y, c.w, ROW_H - 1), bg);
+    api->fill(capp_rect(c.x, y, c.w, ROW_H - 1), bg);
     if (e->all_day) api->fmt(when, sizeof when, "%s", "all");
     else {
       local_hm(e->start, &hh, &mm);
@@ -1247,7 +1236,7 @@ static void paint_month(CRect c) {
   int ch = (c.h - BAR_H - 22) / 6;
   char head[24];
 
-  api->fill(rect(c.x, c.y, c.w, c.h - BAR_H), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, c.h - BAR_H), CLR_BG);
   api->fmt(head, sizeof head, "%s %d", MON[C.cur_m - 1], C.cur_y);
   api->text((short)(c.x + 2), (short)(c.y + 1), head, CLR_HEAD, CLR_BG);
 
@@ -1270,11 +1259,11 @@ static void paint_month(CRect c) {
     if (i == C.cur_d) bg = CLR_SEL;
     if (C.have_clock && day == today_day()) fg = CLR_TODAY;
 
-    api->fill(rect(x, yy, cw - 1, ch - 1), bg);
+    api->fill(capp_rect(x, yy, cw - 1, ch - 1), bg);
     api->fmt(num, sizeof num, "%d", i);
     api->text((short)(x + 2), (short)(yy + 1), num, fg, bg);
     if (day_has_event(day))
-      api->fill(rect(x + cw - 6, yy + ch - 5, 3, 2), CLR_PEND);
+      api->fill(capp_rect(x + cw - 6, yy + ch - 5, 3, 2), CLR_PEND);
   }
   paint_bar(c);
 }
@@ -1286,14 +1275,14 @@ static void paint_add(CRect c) {
   static const char *LABEL[FIELD_COUNT] = { "what", "when", "time" };
 
   civil_from_days(C.draft_day, &y, &m, &d);
-  api->fill(rect(c.x, c.y, c.w, c.h - BAR_H), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, c.h - BAR_H), CLR_BG);
   api->text((short)(c.x + 4), (short)(c.y + 3),
             C.form_edit ? "Edit event" : "New event", CLR_HEAD, CLR_BG);
 
   for (i = 0; i < FIELD_COUNT; i++) {
     int yy = c.y + 20 + i * 18;
     uint16_t bg = (i == (int)C.field) ? CLR_SEL : CLR_ROW;
-    api->fill(rect(c.x + 4, yy, c.w - 8, 14), bg);
+    api->fill(capp_rect(c.x + 4, yy, c.w - 8, 14), bg);
     api->text((short)(c.x + 7), (short)(yy + 3), LABEL[i], CLR_DIM, bg);
     if (i == FIELD_TITLE)
       api->fmt(line, sizeof line, "%s%s", C.draft,
@@ -1483,7 +1472,7 @@ static void open_day(int32_t day, View back) {
   C.day_sel = (back == VIEW_AGENDA && C.sel >= 0 && C.sel < C.n)
             ? day_position_of(day, C.sel) : 0;
   C.day_top = 0;
-  C.day_rect = rect(0, 0, 0, 0);
+  C.day_rect = capp_rect(0, 0, 0, 0);
   C.view = VIEW_DAY;
 }
 
@@ -1804,10 +1793,8 @@ static int app_action(void *st, int a) {
 
 /* ---- commands: words for a day and a time --------------------------------- */
 
-static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
-
 static int starts_with(const char *s, const char *word) {
-  while (*word) if (lower(*s++) != *word++) return 0;
+  while (*word) if (str_lower(*s++) != *word++) return 0;
   return 1;
 }
 
@@ -1841,8 +1828,8 @@ static int parse_time(const char *s, int *hour, int *min) {
     if (!(*s >= '0' && *s <= '9')) return -1;
     while (*s >= '0' && *s <= '9') m = m * 10 + (*s++ - '0');
   }
-  if (lower(*s) == 'p') { if (h < 12) h += 12; s++; if (lower(*s) == 'm') s++; }
-  else if (lower(*s) == 'a') { if (h == 12) h = 0; s++; if (lower(*s) == 'm') s++; }
+  if (str_lower(*s) == 'p') { if (h < 12) h += 12; s++; if (str_lower(*s) == 'm') s++; }
+  else if (str_lower(*s) == 'a') { if (h == 12) h = 0; s++; if (str_lower(*s) == 'm') s++; }
   if (*s || h > 23 || m > 59) return -1;
   *hour = h;
   *min = m;
@@ -1988,11 +1975,11 @@ static int click_content(short y) {
 static void damage_footer(void) {
   CRect c = C.content;
   if (c.w <= 0 || c.h < BAR_H || !api->damage) return;
-  api->damage(rect(c.x, c.y + c.h - BAR_H, c.w, BAR_H));
+  api->damage(capp_rect(c.x, c.y + c.h - BAR_H, c.w, BAR_H));
 }
 
 static int status_changed(void) {
-  if (same(C.status, C.last_status)) return 0;
+  if (str_same(C.status, C.last_status)) return 0;
   api->fmt(C.last_status, sizeof C.last_status, "%s", C.status);
   return 1;
 }

@@ -31,6 +31,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/footer.h"
 
 static const CardApi *api;
@@ -105,31 +106,10 @@ static struct {
   char     reply[REPLY_MAX];
 } G;
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
-
-static int starts(const char *s, const char *p) {
-  while (*p) { if (*s != *p) return 0; s++; p++; }
-  return 1;
-}
-
-static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
-
 static long to_long(const char *s) {
   long v = 0;
   while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0');
   return v;
-}
-
-/* Field `i` of a tab-separated line into out. */
-static void field(const char *line, int i, char *out, int n) {
-  int k = 0;
-  while (i > 0 && *line && *line != '\n') { if (*line++ == '\t') i--; }
-  while (*line && *line != '\t' && *line != '\n' && k < n - 1) out[k++] = *line++;
-  out[k] = 0;
 }
 
 static void hms(uint32_t secs, char *out, int n) {
@@ -165,16 +145,16 @@ static uint16_t parse_colour(const char *s) {
 static void absorb_running(const char *line) {
   char num[16];
   G.running = 1;
-  field(line, 2, num, sizeof num);
+  tsv_field(line, 2, num, sizeof num);
   G.start = (uint32_t)to_long(num);
-  field(line, 3, G.desc, DESC_MAX);
-  field(line, 4, G.proj, PROJ_MAX);
-  field(line, 5, num, sizeof num);
+  tsv_field(line, 3, G.desc, DESC_MAX);
+  tsv_field(line, 4, G.proj, PROJ_MAX);
+  tsv_field(line, 5, num, sizeof num);
   G.colour = parse_colour(num);
   /* How long it has run, by the server's clock, and when we heard -- not the
    * device's clock, which can be minutes behind after a reboot. A server
    * from before this field: the device's clock, as before. */
-  field(line, 6, num, sizeof num);
+  tsv_field(line, 6, num, sizeof num);
   G.got_ms = api->ticks_ms();
   if (num[0]) G.elapsed0 = (uint32_t)to_long(num);
   else {
@@ -196,21 +176,21 @@ static void absorb_status(void) {
    * then what was done lately. */
   for (pass = 0; pass < 2; pass++)
     for (p = G.reply; *p; ) {
-      if (pass == 0 && starts(p, "running\t")) absorb_running(p);
+      if (pass == 0 && str_starts(p, "running\t")) absorb_running(p);
       else if (G.nrec < MAX_ROWS &&
-               ((pass == 0 && starts(p, "project\t")) || (pass == 1 && starts(p, "recent\t")))) {
+               ((pass == 0 && str_starts(p, "project\t")) || (pass == 1 && str_starts(p, "recent\t")))) {
         Recent *r = &G.rec[G.nrec++];
         r->kind = pass == 0 ? 'p' : 'r';
-        field(p, 1, r->proj_id, sizeof r->proj_id);
+        tsv_field(p, 1, r->proj_id, sizeof r->proj_id);
         char hex[12];
         if (pass == 0) {
           r->desc[0] = 0;
-          field(p, 2, r->proj, PROJ_MAX);
-          field(p, 3, hex, sizeof hex);
+          tsv_field(p, 2, r->proj, PROJ_MAX);
+          tsv_field(p, 3, hex, sizeof hex);
         } else {
-          field(p, 2, r->desc, DESC_MAX);
-          field(p, 3, r->proj, PROJ_MAX);
-          field(p, 4, hex, sizeof hex);
+          tsv_field(p, 2, r->desc, DESC_MAX);
+          tsv_field(p, 3, r->proj, PROJ_MAX);
+          tsv_field(p, 4, hex, sizeof hex);
         }
         r->colour = parse_colour(hex);
       }
@@ -227,18 +207,18 @@ static void absorb_targets(void) {
   char num[16];
   G.ntg = 0;
   for (p = G.reply; *p && G.ntg < MAX_TARGETS; ) {
-    if (starts(p, "target\t")) {
+    if (str_starts(p, "target\t")) {
       Target *g = &G.tg[G.ntg++];
-      field(p, 1, g->proj, PROJ_MAX);
-      field(p, 2, num, sizeof num);
+      tsv_field(p, 1, g->proj, PROJ_MAX);
+      tsv_field(p, 2, num, sizeof num);
       g->colour = parse_colour(num);
-      field(p, 3, num, sizeof num);
+      tsv_field(p, 3, num, sizeof num);
       g->week = num[0] == 'w';
-      field(p, 4, num, sizeof num);
+      tsv_field(p, 4, num, sizeof num);
       g->done = (uint32_t)to_long(num);
-      field(p, 5, num, sizeof num);
+      tsv_field(p, 5, num, sizeof num);
       g->want = (uint32_t)to_long(num);
-      field(p, 6, g->since, sizeof g->since);
+      tsv_field(p, 6, g->since, sizeof g->since);
     }
     while (*p && *p != '\n') p++;
     if (*p) p++;
@@ -276,7 +256,7 @@ static void ask_targets(void) {
 /* "error why" from the server, or a status code, as a line for the screen. */
 static void say_failure(int n) {
   G.bad = 1;
-  if (starts(G.reply, "error ")) api->fmt(G.status, sizeof G.status, "%s", G.reply + 6);
+  if (str_starts(G.reply, "error ")) api->fmt(G.status, sizeof G.status, "%s", G.reply + 6);
   else if (n == -401) api->fmt(G.status, sizeof G.status, "connect Toggl at /dash");
   else api->fmt(G.status, sizeof G.status, "cannot reach the server (%d)", n);
   {
@@ -349,7 +329,7 @@ static int poll(void) {
   } else {
     /* A start answers with its running line, a stop with what stopped;
      * either way the list may have changed, so ask again. */
-    if ((G.stage == ST_START || G.stage == ST_DESCRIBE) && starts(G.reply, "running\t")) {
+    if ((G.stage == ST_START || G.stage == ST_DESCRIBE) && str_starts(G.reply, "running\t")) {
       absorb_running(G.reply);
       G.list = 0;
     }
@@ -384,9 +364,9 @@ static CRect timer_rect(void) {
   CRect c = G.content;
   if (timer_screen()) {
     int h = height(G.f_big >= 0 ? G.f_big : G.f_num) + 4;
-    return rect(c.x, c.y + TOP_H + ROW_H + 2, c.w, h);
+    return capp_rect(c.x, c.y + TOP_H + ROW_H + 2, c.w, h);
   }
-  return rect(c.x, c.y + TOP_H, c.w, TIMER_H);
+  return capp_rect(c.x, c.y + TOP_H, c.w, TIMER_H);
 }
 
 /* The time, drawn over itself. It used to clear its strip and then draw:
@@ -412,10 +392,10 @@ static void paint_timer(void) {
   h = height(f);
   x = timer_screen() ? r.x + (r.w - w) / 2 : r.x + 8;
   y = r.y + (r.h - h) / 2;
-  if (x > r.x) api->fill(rect(r.x, r.y, x - r.x, r.h), CLR_BG);
-  if (x + w < r.x + r.w) api->fill(rect(x + w, r.y, r.x + r.w - x - w, r.h), CLR_BG);
-  if (y > r.y) api->fill(rect(x, r.y, w, y - r.y), CLR_BG);
-  if (y + h < r.y + r.h) api->fill(rect(x, y + h, w, r.y + r.h - y - h), CLR_BG);
+  if (x > r.x) api->fill(capp_rect(r.x, r.y, x - r.x, r.h), CLR_BG);
+  if (x + w < r.x + r.w) api->fill(capp_rect(x + w, r.y, r.x + r.w - x - w, r.h), CLR_BG);
+  if (y > r.y) api->fill(capp_rect(x, r.y, w, y - r.y), CLR_BG);
+  if (y + h < r.y + r.h) api->fill(capp_rect(x, y + h, w, r.y + r.h - y - h), CLR_BG);
   draw(f, x, y, t, proj_colour(G.colour), CLR_BG);
   G.shown_sec = secs;
   G.t_x = (int16_t)x; G.t_y = (int16_t)y; G.t_w = (int16_t)w; G.t_h = (int16_t)h;
@@ -436,7 +416,7 @@ static CRect timer_damage(uint32_t secs) {
   if (G.t_str[0] && n == (int)api->str_len(G.t_str) && n > 2) {
     int i;
     for (i = 0; i < n - 2 && t[i] == G.t_str[i]; i++) ;
-    if (i == n - 2) return rect(G.t_x + G.t_pre, G.t_y, G.t_w - G.t_pre, G.t_h);
+    if (i == n - 2) return capp_rect(G.t_x + G.t_pre, G.t_y, G.t_w - G.t_pre, G.t_h);
   }
   return timer_rect();
 }
@@ -445,7 +425,7 @@ static void paint_row(int i, int y) {
   CRect c = G.content;
   uint16_t bg = i == G.sel ? CLR_SEL : CLR_BG;
   char line[80];
-  api->fill(rect(c.x, y, c.w, ROW_H), bg);
+  api->fill(capp_rect(c.x, y, c.w, ROW_H), bg);
   if (i == 0) {
     if (G.typing == 1) api->fmt(line, sizeof line, "new: %s_", G.draft);
     else api->fmt(line, sizeof line, "+ new entry");
@@ -455,7 +435,7 @@ static void paint_row(int i, int y) {
   }
   if (G.rec[i - 1].kind == 'p') {
     Recent *r = &G.rec[i - 1];
-    api->fill(rect(c.x + 8, y + ROW_H / 2 - 3, 6, 6), proj_colour(r->colour));
+    api->fill(capp_rect(c.x + 8, y + ROW_H / 2 - 3, 6, 6), proj_colour(r->colour));
     draw(G.f_uib, c.x + 20, y + (ROW_H - height(G.f_uib)) / 2, r->proj,
          proj_colour(r->colour), bg);
     return;
@@ -476,7 +456,7 @@ static void paint_row(int i, int y) {
 static void paint_top(void) {
   CRect c = G.content;
   int w;
-  api->fill(rect(c.x, c.y, c.w, TOP_H), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, TOP_H), CLR_BG);
   draw(G.f_uib, c.x + 8, c.y + (TOP_H - height(G.f_uib)) / 2, "Toggl", CLR_DIM, CLR_BG);
   if (G.status[0]) {
     w = width(G.f_ui, G.status);
@@ -496,7 +476,7 @@ static void paint_running(void) {
   const char *proj = G.proj[0] ? G.proj : "no project";
   char line[72];
   int y = c.y + TOP_H;
-  api->fill(rect(c.x, y, c.w, c.h - TOP_H - FOOT_H), CLR_BG);
+  api->fill(capp_rect(c.x, y, c.w, c.h - TOP_H - FOOT_H), CLR_BG);
   draw(G.f_uib, c.x + (c.w - width(G.f_uib, proj)) / 2, y + (ROW_H - height(G.f_uib)) / 2,
        proj, G.proj[0] ? proj_colour(G.colour) : CLR_DIM, CLR_BG);
   paint_timer();
@@ -514,12 +494,12 @@ static void paint_list(void) {
   int y, i, rows, top = 0;
   paint_timer();
   y = c.y + TOP_H + TIMER_H;
-  api->fill(rect(c.x, y, c.w, 2), CLR_BG);
+  api->fill(capp_rect(c.x, y, c.w, 2), CLR_BG);
   y += 2;
   rows = (c.y + c.h - FOOT_H - y) / ROW_H;
   if (G.sel >= rows) top = G.sel - rows + 1;
   for (i = top; i <= G.nrec && i - top < rows; i++, y += ROW_H) paint_row(i, y);
-  if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
+  if (y < c.y + c.h - FOOT_H) api->fill(capp_rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
   paint_foot(G.typing == 1 ? "enter start  esc cancel" :
              G.running ? "enter start  space stop  l timer" :
                          "enter start  n new  g targets");
@@ -530,7 +510,7 @@ static void paint_goals(void) {
   CRect c = G.content;
   int y = c.y + TOP_H, i, rowh = 30;
   char words[48];
-  api->fill(rect(c.x, y, c.w, c.h - TOP_H - FOOT_H), CLR_BG);
+  api->fill(capp_rect(c.x, y, c.w, c.h - TOP_H - FOOT_H), CLR_BG);
   if (!G.ntg)
     draw(G.f_ui, c.x + 8, y + 6, G.stage == ST_TARGETS ? "adding up..." :
          "no targets: set them on the dashboard", CLR_DIM, CLR_BG);
@@ -541,8 +521,8 @@ static void paint_goals(void) {
     target_words(g, words, sizeof words);
     draw(G.f_uib, c.x + 8, y + 1, g->proj, col, CLR_BG);
     draw(G.f_ui, c.x + c.w - 8 - width(G.f_ui, words), y + 1, words, CLR_DIM, CLR_BG);
-    api->fill(rect(c.x + 8, y + 18, bw, 8), CLR_SEL);
-    if (fill > 0) api->fill(rect(c.x + 9, y + 19, fill, 6), col);
+    api->fill(capp_rect(c.x + 8, y + 18, bw, 8), CLR_SEL);
+    if (fill > 0) api->fill(capp_rect(c.x + 9, y + 19, fill, 6), col);
   }
   paint_foot("esc back  r refresh");
 }
@@ -711,7 +691,7 @@ static int fetch(const char *method, const char *rel, const char *body) {
 
 static int failed(int n, char *out, size_t sz) {
   if (n == -2) api->fmt(out, sz, "%s", api->net_status());
-  else if (starts(G.reply, "error ")) api->fmt(out, sz, "%s", G.reply + 6);
+  else if (str_starts(G.reply, "error ")) api->fmt(out, sz, "%s", G.reply + 6);
   else api->fmt(out, sz, "cannot reach the server (%d)", n);
   return -1;
 }
@@ -767,15 +747,15 @@ static int cmd_today(char *out, size_t n) {
   out[0] = 0;
   for (p = G.reply; *p; ) {
     char a[16], b[16], desc[DESC_MAX], proj[PROJ_MAX];
-    field(p, 0, a, sizeof a);
-    field(p, 1, b, sizeof b);
-    if (starts(p, "total\t")) {
+    tsv_field(p, 0, a, sizeof a);
+    tsv_field(p, 1, b, sizeof b);
+    if (str_starts(p, "total\t")) {
       hm((uint32_t)to_long(b), tbuf, sizeof tbuf);
       o += (size_t)api->fmt(out + o, n - o, "%stotal %s", any ? "" : "nothing tracked\n", tbuf);
     } else if (a[0] >= '0' && a[0] <= '9' && o + 100 < n) {
       long ls = (long)to_long(a) + off;
-      field(p, 2, desc, sizeof desc);
-      field(p, 3, proj, sizeof proj);
+      tsv_field(p, 2, desc, sizeof desc);
+      tsv_field(p, 3, proj, sizeof proj);
       hm((uint32_t)to_long(b), tbuf, sizeof tbuf);
       api->fmt(line, sizeof line, "%02ld:%02ld %s%s%s%s %s\n", ls / 3600 % 24, ls / 60 % 60,
                desc[0] ? desc : "(no description)", proj[0] ? " (" : "", proj,
@@ -794,7 +774,7 @@ static const char *project_for(const char *what) {
   int i, k;
   for (i = 0; i < G.nrec; i++) {
     if (G.rec[i].kind != 'r') continue;
-    for (k = 0; what[k] && lower(what[k]) == lower(G.rec[i].desc[k]); k++) {}
+    for (k = 0; what[k] && str_lower(what[k]) == str_lower(G.rec[i].desc[k]); k++) {}
     if (!what[k] && k > 0) return G.rec[i].proj_id;
   }
   return "";
@@ -805,7 +785,7 @@ static int find_project(const char *name) {
   int i, k;
   for (i = 0; i < G.nrec; i++) {
     if (G.rec[i].kind != 'p') continue;
-    for (k = 0; name[k] && lower(name[k]) == lower(G.rec[i].proj[k]); k++) {}
+    for (k = 0; name[k] && str_lower(name[k]) == str_lower(G.rec[i].proj[k]); k++) {}
     if (!name[k] && k > 0) return i;
   }
   return -1;
@@ -837,11 +817,11 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
     return 0;
   case ACT_STOP:
     if ((r = fetch("POST", "/toggl/stop", "")) < 0) return failed(r, out, n);
-    if (starts(G.reply, "idle")) { api->fmt(out, n, "nothing was running"); return 0; }
+    if (str_starts(G.reply, "idle")) { api->fmt(out, n, "nothing was running"); return 0; }
     {
       char secs[16], desc[DESC_MAX];
-      field(G.reply, 1, secs, sizeof secs);
-      field(G.reply, 2, desc, sizeof desc);
+      tsv_field(G.reply, 1, secs, sizeof secs);
+      tsv_field(G.reply, 2, desc, sizeof desc);
       hm((uint32_t)to_long(secs), t, sizeof t);
       api->fmt(out, n, "stopped %s after %s", desc[0] ? desc : "(no description)", t);
     }
@@ -858,7 +838,7 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
   case ACT_DESCRIBE:
     api->fmt(G.body, sizeof G.body, "description=%s", argv[0]);
     if ((r = fetch("POST", "/toggl/describe", G.body)) < 0) return failed(r, out, n);
-    if (starts(G.reply, "idle")) { api->fmt(out, n, "nothing is running"); return -1; }
+    if (str_starts(G.reply, "idle")) { api->fmt(out, n, "nothing is running"); return -1; }
     absorb_running(G.reply);
     api->fmt(out, n, "%s%s%s", G.proj, G.proj[0] ? ": " : "", G.desc);
     return 0;

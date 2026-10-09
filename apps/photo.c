@@ -22,6 +22,7 @@
  * should not.
  */
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/safefile.h"
 #include "apps/syncset.h"
 #include "apps/confirm.h"
@@ -79,11 +80,6 @@ static int ends_with(const char *s, const char *suffix) {
   return 1;
 }
 
-static int same(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
-
 static void say(int bad, const char *s) {
   api->fmt(P.status, sizeof P.status, "%s", s);
   P.bad = bad;
@@ -136,7 +132,7 @@ static int synced_at(const char *file) {
   for (i = 0; i < P.nsynced; i++) {
     char want[24];
     api->fmt(want, sizeof want, "%s.img", P.id[i]);
-    if (same(file, want)) return i;
+    if (str_same(file, want)) return i;
   }
   return -1;
 }
@@ -161,7 +157,7 @@ static void rescan(void) {
     P.count++;
   }
   P.cur = 0;
-  for (i = 0; i < P.count; i++) if (same(P.files[i], keep)) P.cur = i;
+  for (i = 0; i < P.count; i++) if (str_same(P.files[i], keep)) P.cur = i;
 }
 
 /* ---- sync ------------------------------------------------------------------------- */
@@ -529,7 +525,7 @@ static int app_tick(void *st, uint32_t now) {
     if (P.count) api->fmt(keep, sizeof keep, "%s", P.files[P.cur]);
     if (P.sync == SYNC_LIST) sync_list();
     else sync_get();
-    if (P.count != before || (P.count && !same(P.files[P.cur], keep))) return 1;
+    if (P.count != before || (P.count && !str_same(P.files[P.cur], keep))) return 1;
     return status_changed();
   }
   if (P.show && P.count > 1 && (int32_t)(now - P.next_slide) >= 0) {

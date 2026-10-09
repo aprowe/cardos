@@ -24,6 +24,7 @@
  *   "writing 70%"            the firmware, going into its slot
  */
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/footer.h"
 
 static const CardApi *api;
@@ -72,23 +73,12 @@ static struct {
   char  diff[512];
 } U;
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)(w > 0 ? w : 0); r.h = (int16_t)(h > 0 ? h : 0);
-  return r;
-}
-
 static void draw(int f, int x, int y, const char *s, uint16_t fg, uint16_t bg) {
   if (f >= 0) api->text_font(f, (int16_t)x, (int16_t)y, s, fg, bg);
   else api->text((int16_t)x, (int16_t)y, s, fg, bg);
 }
 static int width(int f, const char *s) { return f >= 0 ? api->text_width(f, s) : (int)api->str_len(s) * 6; }
 static int height(int f) { return f >= 0 ? api->font_height(f) : 8; }
-
-static int starts(const char *s, const char *p) {
-  while (*p) if (*s++ != *p++) return 0;
-  return 1;
-}
 
 static int num(const char *s) {
   int v = 0;
@@ -106,7 +96,7 @@ static void glyph(int x, int y, const char *const rows[9], uint16_t fg, uint16_t
     while (c < 9) {
       int on = rows[r][c] == '#', s = c;
       while (c < 9 && (rows[r][c] == '#') == on) c++;
-      api->fill(rect(x + s, y + r, c - s, 1), on ? fg : bg);
+      api->fill(capp_rect(x + s, y + r, c - s, 1), on ? fg : bg);
     }
   }
 }
@@ -131,19 +121,19 @@ static const char *const G_FAILED[9] = {
 /* A badge for the big states: a filled 26x26 rounded square with a mark. */
 static void badge(int x, int y, uint16_t colour, int kind) {
   int i;
-  api->fill(rect(x + 3, y, 20, 26), colour);
-  api->fill(rect(x, y + 3, 26, 20), colour);
-  api->fill(rect(x + 1, y + 1, 24, 24), colour);
+  api->fill(capp_rect(x + 3, y, 20, 26), colour);
+  api->fill(capp_rect(x, y + 3, 26, 20), colour);
+  api->fill(capp_rect(x + 1, y + 1, 24, 24), colour);
   if (kind == 0) {                           /* a tick */
-    for (i = 0; i < 5; i++) api->fill(rect(x + 6 + i, y + 12 + i, 3, 3), CLR_BG);
-    for (i = 0; i < 9; i++) api->fill(rect(x + 11 + i, y + 16 - i, 3, 3), CLR_BG);
+    for (i = 0; i < 5; i++) api->fill(capp_rect(x + 6 + i, y + 12 + i, 3, 3), CLR_BG);
+    for (i = 0; i < 9; i++) api->fill(capp_rect(x + 11 + i, y + 16 - i, 3, 3), CLR_BG);
   } else if (kind == 1) {                    /* a ! */
-    api->fill(rect(x + 11, y + 5, 4, 11), CLR_BG);
-    api->fill(rect(x + 11, y + 18, 4, 3), CLR_BG);
+    api->fill(capp_rect(x + 11, y + 5, 4, 11), CLR_BG);
+    api->fill(capp_rect(x + 11, y + 18, 4, 3), CLR_BG);
   } else {                                   /* an arrow down: an update */
-    api->fill(rect(x + 11, y + 4, 4, 12), CLR_BG);
-    for (i = 0; i < 6; i++) api->fill(rect(x + 7 + i, y + 13 + i, 12 - 2 * i, 1), CLR_BG);
-    api->fill(rect(x + 6, y + 21, 14, 2), CLR_BG);
+    api->fill(capp_rect(x + 11, y + 4, 4, 12), CLR_BG);
+    for (i = 0; i < 6; i++) api->fill(capp_rect(x + 7 + i, y + 13 + i, 12 - 2 * i, 1), CLR_BG);
+    api->fill(capp_rect(x + 6, y + 21, 14, 2), CLR_BG);
   }
 }
 
@@ -160,7 +150,7 @@ static void parse_diff(void) {
     while (*p && *p != ',') p++;             /* a name too long: cut */
     while (*p == ',' || *p == ' ') p++;
     if (!k) continue;
-    it->firmware = starts(it->name, "firmware") && !it->name[8];
+    it->firmware = str_starts(it->name, "firmware") && !it->name[8];
     it->state = I_WAIT;
     if (it->firmware) U.has_fw = 1; else U.napps++;
     U.n++;
@@ -194,8 +184,8 @@ static int list_rows(void) { int r = (list_bottom() - list_y()) / ROW_H; return 
 
 static void paint_head(void) {
   CRect c = U.c;
-  api->fill(rect(c.x, c.y, c.w, HEAD_H - 1), CLR_HEAD);
-  api->fill(rect(c.x, c.y + HEAD_H - 1, c.w, 1), CLR_LINE);
+  api->fill(capp_rect(c.x, c.y, c.w, HEAD_H - 1), CLR_HEAD);
+  api->fill(capp_rect(c.x, c.y + HEAD_H - 1, c.w, 1), CLR_LINE);
   draw(U.f_uib, c.x + 8, c.y + (HEAD_H - 1 - height(U.f_uib)) / 2, "Update", CLR_TEXT, CLR_HEAD);
   draw(U.f_ui, c.x + c.w - 8 - width(U.f_ui, U.host), c.y + (HEAD_H - 1 - height(U.f_ui)) / 2,
        U.host, CLR_FAINT, CLR_HEAD);
@@ -211,9 +201,9 @@ static void paint_row(int i) {
   char label[48];
   int ty = y + (ROW_H - height(U.f_ui)) / 2, w;
   if (i < U.top || i >= U.top + list_rows()) return;
-  api->fill(rect(U.c.x, y, 10, ROW_H), CLR_BG);
+  api->fill(capp_rect(U.c.x, y, 10, ROW_H), CLR_BG);
   glyph(x, y + (ROW_H - 9) / 2, g, gc, CLR_BG);
-  api->fill(rect(x + 9, y, 6, ROW_H), CLR_BG);
+  api->fill(capp_rect(x + 9, y, 6, ROW_H), CLR_BG);
   if (it->firmware) api->fmt(label, sizeof label, "CardOS firmware");
   else api->fmt(label, sizeof label, "%s", it->name);
   draw(U.f_ui, x + 15, ty, label, it->state == I_WAIT ? CLR_DIM : CLR_TEXT, CLR_BG);
@@ -222,19 +212,19 @@ static void paint_row(int i) {
   {
     const char *tag = it->firmware ? "system" : "app";
     int tw = width(U.f_ui, tag), tx = U.c.x + U.c.w - 10 - tw;
-    api->fill(rect(x + 15 + w, y, tx - (x + 15 + w), ROW_H), CLR_BG);
+    api->fill(capp_rect(x + 15 + w, y, tx - (x + 15 + w), ROW_H), CLR_BG);
     draw(U.f_ui, tx, ty, tag, it->firmware ? CLR_FW : CLR_FAINT, CLR_BG);
-    api->fill(rect(tx + tw, y, U.c.x + U.c.w - (tx + tw), ROW_H), CLR_BG);
+    api->fill(capp_rect(tx + tw, y, U.c.x + U.c.w - (tx + tw), ROW_H), CLR_BG);
   }
   /* a hair under each row but the last */
-  if (i < U.n - 1) api->fill(rect(x + 15, y + ROW_H - 1, U.c.w - 35, 1), CLR_HEAD);
+  if (i < U.n - 1) api->fill(capp_rect(x + 15, y + ROW_H - 1, U.c.w - 35, 1), CLR_HEAD);
 }
 
 static void paint_list(void) {
   int i, rows = list_rows(), y;
   for (i = U.top; i < U.n && i < U.top + rows; i++) paint_row(i);
   y = list_y() + (i - U.top) * ROW_H;
-  if (y < list_bottom()) api->fill(rect(U.c.x, y, U.c.w, list_bottom() - y), CLR_BG);
+  if (y < list_bottom()) api->fill(capp_rect(U.c.x, y, U.c.w, list_bottom() - y), CLR_BG);
   if (U.n > U.top + rows) {
     char more[24];
     api->fmt(more, sizeof more, "+%d more", U.n - U.top - rows);
@@ -245,7 +235,7 @@ static void paint_list(void) {
 
 static void paint_summary(const char *title, const char *sub, uint16_t sub_colour) {
   int y = U.c.y + HEAD_H + 4, x = U.c.x + 10;
-  api->fill(rect(U.c.x, U.c.y + HEAD_H, U.c.w, 22), CLR_BG);
+  api->fill(capp_rect(U.c.x, U.c.y + HEAD_H, U.c.w, 22), CLR_BG);
   draw(U.f_uib, x, y, title, CLR_TEXT, CLR_BG);
   if (sub) draw(U.f_ui, x + width(U.f_uib, title) + 8, y + height(U.f_uib) - height(U.f_ui), sub,
                 sub_colour, CLR_BG);
@@ -254,26 +244,26 @@ static void paint_summary(const char *title, const char *sub, uint16_t sub_colou
 static void paint_button(int x, int y, int w, const char *label, int selected) {
   uint16_t fill = selected ? CLR_ACCENT : CLR_BG, edge = selected ? CLR_ACCENT : CLR_LINE;
   int tw = width(U.f_uib, label);
-  api->fill(rect(x + 2, y, w - 4, 1), edge);
-  api->fill(rect(x + 2, y + BTN_H - 1, w - 4, 1), edge);
-  api->fill(rect(x, y + 2, 1, BTN_H - 4), edge);
-  api->fill(rect(x + w - 1, y + 2, 1, BTN_H - 4), edge);
-  api->fill(rect(x + 1, y + 1, 1, 1), edge);
-  api->fill(rect(x + w - 2, y + 1, 1, 1), edge);
-  api->fill(rect(x + 1, y + BTN_H - 2, 1, 1), edge);
-  api->fill(rect(x + w - 2, y + BTN_H - 2, 1, 1), edge);
-  api->fill(rect(x + 1, y + 1, (w - tw) / 2 - 1, BTN_H - 2), fill);
-  api->fill(rect(x + (w + tw) / 2, y + 1, w - 1 - (w + tw) / 2, BTN_H - 2), fill);
-  api->fill(rect(x + (w - tw) / 2, y + 1, tw, (BTN_H - height(U.f_uib)) / 2 - 1), fill);
+  api->fill(capp_rect(x + 2, y, w - 4, 1), edge);
+  api->fill(capp_rect(x + 2, y + BTN_H - 1, w - 4, 1), edge);
+  api->fill(capp_rect(x, y + 2, 1, BTN_H - 4), edge);
+  api->fill(capp_rect(x + w - 1, y + 2, 1, BTN_H - 4), edge);
+  api->fill(capp_rect(x + 1, y + 1, 1, 1), edge);
+  api->fill(capp_rect(x + w - 2, y + 1, 1, 1), edge);
+  api->fill(capp_rect(x + 1, y + BTN_H - 2, 1, 1), edge);
+  api->fill(capp_rect(x + w - 2, y + BTN_H - 2, 1, 1), edge);
+  api->fill(capp_rect(x + 1, y + 1, (w - tw) / 2 - 1, BTN_H - 2), fill);
+  api->fill(capp_rect(x + (w + tw) / 2, y + 1, w - 1 - (w + tw) / 2, BTN_H - 2), fill);
+  api->fill(capp_rect(x + (w - tw) / 2, y + 1, tw, (BTN_H - height(U.f_uib)) / 2 - 1), fill);
   draw(U.f_uib, x + (w - tw) / 2, y + (BTN_H - height(U.f_uib)) / 2, label,
        selected ? CLR_BG : CLR_DIM, fill);
-  api->fill(rect(x + (w - tw) / 2, y + (BTN_H + height(U.f_uib)) / 2, tw,
-                 BTN_H - 1 - (BTN_H + height(U.f_uib)) / 2), fill);
+  api->fill(capp_rect(x + (w - tw) / 2, y + (BTN_H + height(U.f_uib)) / 2, tw,
+                      BTN_H - 1 - (BTN_H + height(U.f_uib)) / 2), fill);
 }
 
 static void paint_buttons(void) {
   int y = U.c.y + U.c.h - FOOT_H - 4 - BTN_H, x = U.c.x + 10, w = U.c.w - 20;
-  api->fill(rect(U.c.x, y - 4, U.c.w, BTN_H + 8), CLR_BG);
+  api->fill(capp_rect(U.c.x, y - 4, U.c.w, BTN_H + 8), CLR_BG);
   if (!U.has_fw || !U.napps) {
     paint_button(x, y, w, U.has_fw ? "Install firmware" : "Install", 1);
     return;
@@ -299,16 +289,16 @@ static void paint_bar(void) {
     api->fmt(right, sizeof right, U.phase == PH_RESTART ? "" : "%d%%", U.pct);
   }
   if (fill > w) fill = w;
-  api->fill(rect(U.c.x, y - 2, U.c.w, 22), CLR_BG);
+  api->fill(capp_rect(U.c.x, y - 2, U.c.w, 22), CLR_BG);
   draw(U.f_ui, x, y, what, CLR_TEXT, CLR_BG);
   draw(U.f_ui, x + w - width(U.f_ui, right), y, right, CLR_DIM, CLR_BG);
-  api->fill(rect(x, y + 13, fill, 5), U.phase == PH_APPS ? CLR_ACCENT : CLR_FW);
-  api->fill(rect(x + fill, y + 13, w - fill, 5), CLR_TRACK);
+  api->fill(capp_rect(x, y + 13, fill, 5), U.phase == PH_APPS ? CLR_ACCENT : CLR_FW);
+  api->fill(capp_rect(x + fill, y + 13, w - fill, 5), CLR_TRACK);
 }
 
 static void paint_center(int kind, uint16_t colour, const char *title, const char *sub) {
   int y = U.c.y + HEAD_H + 22, x = U.c.x + (U.c.w - 26) / 2;
-  api->fill(rect(U.c.x, U.c.y + HEAD_H, U.c.w, U.c.h - HEAD_H - FOOT_H), CLR_BG);
+  api->fill(capp_rect(U.c.x, U.c.y + HEAD_H, U.c.w, U.c.h - HEAD_H - FOOT_H), CLR_BG);
   if (kind >= 0) badge(x, y, colour, kind);
   y += 34;
   draw(U.f_uib, U.c.x + (U.c.w - width(U.f_uib, title)) / 2, y, title, CLR_TEXT, CLR_BG);
@@ -370,7 +360,7 @@ static void app_paint(void *st, CRect c) {
     paint_list();
     if (U.failed && U.msg[0]) {
       int y = U.c.y + U.c.h - FOOT_H - 12;
-      api->fill(rect(U.c.x, y - 2, U.c.w, 12), CLR_BG);
+      api->fill(capp_rect(U.c.x, y - 2, U.c.w, 12), CLR_BG);
       draw(U.f_ui, U.c.x + 10, y, U.msg, CLR_BAD, CLR_BG);
     }
     footer_paint(api, c, "r check again");
@@ -421,13 +411,13 @@ static void fw_state(int s) {
 static void on_line(void *ctx, const char *line) {
   const char *colon = 0, *p;
   (void)ctx;
-  if (starts(line, "downloading ")) {
+  if (str_starts(line, "downloading ")) {
     if (U.phase == PH_APPS) { U.phase = PH_DOWNLOAD; fw_state(I_GOING); }
     U.pct = num(line + 12);
   } else if (line[0] >= '0' && line[0] <= '9') {
     U.phase = PH_VERIFY;                     /* "N KB on the card, flashing" */
     U.pct = 100;
-  } else if (starts(line, "writing ")) {
+  } else if (str_starts(line, "writing ")) {
     U.phase = PH_WRITE;
     U.pct = num(line + 8);
     if (U.pct >= 100) { U.phase = PH_RESTART; fw_state(I_DONE); }
@@ -486,15 +476,15 @@ static int app_key(void *st, uint8_t k) {
   case CAPP_KEY_LEFT: case CAPP_KEY_RIGHT: case '\t':
     /* Only what changed is drawn again: the buttons, or the list. */
     if (U.has_fw && U.napps) U.button ^= 1;
-    api->damage(rect(U.c.x, U.c.y + U.c.h - FOOT_H - 8 - BTN_H, U.c.w, BTN_H + 8));
+    api->damage(capp_rect(U.c.x, U.c.y + U.c.h - FOOT_H - 8 - BTN_H, U.c.w, BTN_H + 8));
     return 1;
   case CAPP_KEY_UP:
     if (U.top > 0) U.top--;
-    api->damage(rect(U.c.x, list_y(), U.c.w, list_bottom() - list_y()));
+    api->damage(capp_rect(U.c.x, list_y(), U.c.w, list_bottom() - list_y()));
     return 1;
   case CAPP_KEY_DOWN:
     if (U.top + list_rows() < U.n) U.top++;
-    api->damage(rect(U.c.x, list_y(), U.c.w, list_bottom() - list_y()));
+    api->damage(capp_rect(U.c.x, list_y(), U.c.w, list_bottom() - list_y()));
     return 1;
   case CAPP_KEY_ENTER: case ' ':
     run_install();
@@ -518,8 +508,8 @@ static int app_tick(void *st, uint32_t now) {
 static void set_host(void) {
   const char *p = api->proxy ? api->proxy() : "";
   int k = 0;
-  if (starts(p, "http://")) p += 7;
-  else if (starts(p, "https://")) p += 8;
+  if (str_starts(p, "http://")) p += 7;
+  else if (str_starts(p, "https://")) p += 8;
   while (*p && *p != '/' && k < (int)sizeof U.host - 1) U.host[k++] = *p++;
   U.host[k] = 0;
 }

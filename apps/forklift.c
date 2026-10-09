@@ -22,6 +22,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/forklang.h"
 #include "apps/safefile.h"
 
@@ -478,11 +479,6 @@ static int read_file(const char *path, char *buf, int size) {
   return got;
 }
 
-static int starts(const char *s, const char *w) {
-  while (*w) if (*s++ != *w++) return 0;
-  return 1;
-}
-
 static int num_after(const char *s) {
   int v = 0, neg = 0;
   if (*s == '-') { neg = 1; s++; }
@@ -496,14 +492,14 @@ static void load_all(void) {
   G.nbots = 1;
   if (read_file(STATE_PATH, buf, sizeof buf) > 0) {
     for (p = buf; *p; ) {
-      if (starts(p, "credits="))   G.credits = num_after(p + 8);
-      if (starts(p, "orders="))    G.orders = num_after(p + 7);
-      if (starts(p, "shipped="))   G.shipped = num_after(p + 8);
-      if (starts(p, "mistakes="))  G.mistakes = num_after(p + 9);
-      if (starts(p, "forks="))     G.cap_lv = num_after(p + 6);
-      if (starts(p, "motor="))     G.motor_lv = num_after(p + 6);
-      if (starts(p, "robots="))    G.nbots = num_after(p + 7);
-      if (starts(p, "warehouse=")) G.size_lv = num_after(p + 10);
+      if (str_starts(p, "credits="))   G.credits = num_after(p + 8);
+      if (str_starts(p, "orders="))    G.orders = num_after(p + 7);
+      if (str_starts(p, "shipped="))   G.shipped = num_after(p + 8);
+      if (str_starts(p, "mistakes="))  G.mistakes = num_after(p + 9);
+      if (str_starts(p, "forks="))     G.cap_lv = num_after(p + 6);
+      if (str_starts(p, "motor="))     G.motor_lv = num_after(p + 6);
+      if (str_starts(p, "robots="))    G.nbots = num_after(p + 7);
+      if (str_starts(p, "warehouse=")) G.size_lv = num_after(p + 10);
       while (*p && *p != '\n') p++;
       if (*p) p++;
     }
@@ -636,7 +632,7 @@ static void ed_complete(void) {
   list[0] = 0;
   for (i = 0; (name = fl_name_at(&G.prog, i)) != 0; i++) {
     int k;
-    if (!starts(name, pre)) continue;
+    if (!str_starts(name, pre)) continue;
     if (!first) { first = name; common = str_len(name); }
     else {
       for (k = 0; k < common && name[k] == first[k]; k++) { }

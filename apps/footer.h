@@ -13,6 +13,7 @@
 #define CARDOS_FOOTER_H
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 
 #define FOOT_H      11
 #define FOOT_BG     CAPP_RGB(30, 34, 44)
@@ -27,11 +28,8 @@
 #define FOOT_OPT
 #endif
 
-static FOOT_OPT CRect rect_of(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)(w > 0 ? w : 0); r.h = (int16_t)h;
-  return r;
-}
+/* The name this header always used; apps/str.h's capp_rect is the one. */
+static FOOT_OPT CRect rect_of(int x, int y, int w, int h) { return capp_rect(x, y, w, h); }
 
 /* The bar across the bottom of `c`, with `keys` in it. */
 static FOOT_OPT void

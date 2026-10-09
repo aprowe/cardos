@@ -10,6 +10,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 
 #define W 9
 #define H 9
@@ -62,12 +63,6 @@ static struct {
   int offx, offy;             /* the board inside that, centred */
 } S;
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
-
 static unsigned int rnd(void) {
   S.seed ^= S.seed << 13;
   S.seed ^= S.seed >> 17;
@@ -119,7 +114,7 @@ static void lay(int sx, int sy) {
 /* Where things are on screen, from the last paint. Before the first paint
  * nothing is marked and the shell repaints everything, which is right. */
 static CRect cell_rect(int x, int y) {
-  return rect(S.at.x + S.offx + x * CELL, S.at.y + S.offy + HEAD + y * CELL, CELL, CELL);
+  return capp_rect(S.at.x + S.offx + x * CELL, S.at.y + S.offy + HEAD + y * CELL, CELL, CELL);
 }
 
 static void mark(int x, int y) {
@@ -129,8 +124,8 @@ static void mark(int x, int y) {
 /* The two counters, each in its sunken box, content-relative to the board's
  * corner. A second that ticks marks only the timer's box: marking the whole
  * strip repainted the face and the mine counter every second for nothing. */
-static CRect mines_box(int ox, int oy) { return rect(ox + 1, oy + 2, 26, 12); }
-static CRect timer_box(int ox, int oy) { return rect(ox + BOARD_W - 27, oy + 2, 26, 12); }
+static CRect mines_box(int ox, int oy) { return capp_rect(ox + 1, oy + 2, 26, 12); }
+static CRect timer_box(int ox, int oy) { return capp_rect(ox + BOARD_W - 27, oy + 2, 26, 12); }
 
 static void mark_timer(void) {
   if (S.have_at) api->damage(timer_box(S.at.x + S.offx, S.at.y + S.offy));
@@ -191,39 +186,39 @@ static void toggle_flag(int x, int y) {
  * reads the same and leaves room for the digit. */
 static void raised(CRect r) {
   api->fill(r, CLR_FACE);
-  api->fill(rect(r.x, r.y, r.w, 1), CLR_LIGHT);
-  api->fill(rect(r.x, r.y, 1, r.h), CLR_LIGHT);
-  api->fill(rect(r.x, r.y + r.h - 1, r.w, 1), CLR_DARK);
-  api->fill(rect(r.x + r.w - 1, r.y, 1, r.h), CLR_DARK);
+  api->fill(capp_rect(r.x, r.y, r.w, 1), CLR_LIGHT);
+  api->fill(capp_rect(r.x, r.y, 1, r.h), CLR_LIGHT);
+  api->fill(capp_rect(r.x, r.y + r.h - 1, r.w, 1), CLR_DARK);
+  api->fill(capp_rect(r.x + r.w - 1, r.y, 1, r.h), CLR_DARK);
 }
 
 /* An opened cell is flat, with the grid line above and to its left -- which is
  * what gives the original its graph-paper field. */
 static void opened(CRect r) {
   api->fill(r, CLR_FACE);
-  api->fill(rect(r.x, r.y, r.w, 1), CLR_DARK);
-  api->fill(rect(r.x, r.y, 1, r.h), CLR_DARK);
+  api->fill(capp_rect(r.x, r.y, r.w, 1), CLR_DARK);
+  api->fill(capp_rect(r.x, r.y, 1, r.h), CLR_DARK);
 }
 
 static void draw_mine(CRect c) {
   short cx = (short)(c.x + c.w / 2), cy = (short)(c.y + c.h / 2);
-  api->fill(rect(cx - 2, cy - 1, 5, 3), CLR_BLACK);
-  api->fill(rect(cx - 1, cy - 2, 3, 5), CLR_BLACK);
-  api->fill(rect(cx - 3, cy, 7, 1), CLR_BLACK);      /* spikes */
-  api->fill(rect(cx, cy - 3, 1, 7), CLR_BLACK);
-  api->fill(rect(cx - 1, cy - 1, 1, 1), CLR_LIGHT);  /* the highlight */
+  api->fill(capp_rect(cx - 2, cy - 1, 5, 3), CLR_BLACK);
+  api->fill(capp_rect(cx - 1, cy - 2, 3, 5), CLR_BLACK);
+  api->fill(capp_rect(cx - 3, cy, 7, 1), CLR_BLACK);      /* spikes */
+  api->fill(capp_rect(cx, cy - 3, 1, 7), CLR_BLACK);
+  api->fill(capp_rect(cx - 1, cy - 1, 1, 1), CLR_LIGHT);  /* the highlight */
 }
 
 static void draw_flag(CRect c) {
   short x = (short)(c.x + 2), y = (short)(c.y + 2);
-  api->fill(rect(x + 3, y, 3, 3), CLR_RED);          /* the pennant */
-  api->fill(rect(x + 2, y + 1, 1, 2), CLR_RED);
-  api->fill(rect(x + 3, y + 3, 1, 3), CLR_BLACK);    /* the pole */
-  api->fill(rect(x + 1, y + 6, 5, 1), CLR_BLACK);    /* the base */
+  api->fill(capp_rect(x + 3, y, 3, 3), CLR_RED);          /* the pennant */
+  api->fill(capp_rect(x + 2, y + 1, 1, 2), CLR_RED);
+  api->fill(capp_rect(x + 3, y + 3, 1, 3), CLR_BLACK);    /* the pole */
+  api->fill(capp_rect(x + 1, y + 6, 5, 1), CLR_BLACK);    /* the base */
 }
 
 static void fill_if(int x, int y, int w, int h, uint16_t c) {
-  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), c);
+  if (w > 0 && h > 0) api->fill(capp_rect(x, y, w, h), c);
 }
 
 /* Red on black, as on the original's counters. The digits paint their own
@@ -246,43 +241,43 @@ static void draw_counter(CRect box, int value) {
 /* raised() turned over, and without its fill: the bevel round a counter,
  * whose box covers everything inside it, so nothing under it is cleared. */
 static void sunken_edge(CRect r) {
-  api->fill(rect(r.x, r.y, r.w, 1), CLR_DARK);
-  api->fill(rect(r.x, r.y, 1, r.h), CLR_DARK);
-  api->fill(rect(r.x, r.y + r.h - 1, r.w, 1), CLR_LIGHT);
-  api->fill(rect(r.x + r.w - 1, r.y, 1, r.h), CLR_LIGHT);
+  api->fill(capp_rect(r.x, r.y, r.w, 1), CLR_DARK);
+  api->fill(capp_rect(r.x, r.y, 1, r.h), CLR_DARK);
+  api->fill(capp_rect(r.x, r.y + r.h - 1, r.w, 1), CLR_LIGHT);
+  api->fill(capp_rect(r.x + r.w - 1, r.y, 1, r.h), CLR_LIGHT);
 }
 
 static void draw_face(CRect box) {
   short cx = (short)(box.x + box.w / 2), cy = (short)(box.y + box.h / 2);
   raised(box);
-  api->fill(rect(box.x + 2, box.y + 2, box.w - 4, box.h - 4), CLR_YELLOW);
-  api->fill(rect(box.x + 3, box.y + 1, box.w - 6, 1), CLR_BLACK);
-  api->fill(rect(box.x + 3, box.y + box.h - 2, box.w - 6, 1), CLR_BLACK);
-  api->fill(rect(box.x + 1, box.y + 3, 1, box.h - 6), CLR_BLACK);
-  api->fill(rect(box.x + box.w - 2, box.y + 3, 1, box.h - 6), CLR_BLACK);
+  api->fill(capp_rect(box.x + 2, box.y + 2, box.w - 4, box.h - 4), CLR_YELLOW);
+  api->fill(capp_rect(box.x + 3, box.y + 1, box.w - 6, 1), CLR_BLACK);
+  api->fill(capp_rect(box.x + 3, box.y + box.h - 2, box.w - 6, 1), CLR_BLACK);
+  api->fill(capp_rect(box.x + 1, box.y + 3, 1, box.h - 6), CLR_BLACK);
+  api->fill(capp_rect(box.x + box.w - 2, box.y + 3, 1, box.h - 6), CLR_BLACK);
 
   if (S.dead) {
-    api->fill(rect(cx - 3, cy - 2, 3, 1), CLR_BLACK);   /* crosses for eyes */
-    api->fill(rect(cx + 1, cy - 2, 3, 1), CLR_BLACK);
-    api->fill(rect(cx - 2, cy - 3, 1, 3), CLR_BLACK);
-    api->fill(rect(cx + 2, cy - 3, 1, 3), CLR_BLACK);
-    api->fill(rect(cx - 2, cy + 2, 5, 1), CLR_BLACK);   /* a flat mouth */
+    api->fill(capp_rect(cx - 3, cy - 2, 3, 1), CLR_BLACK);   /* crosses for eyes */
+    api->fill(capp_rect(cx + 1, cy - 2, 3, 1), CLR_BLACK);
+    api->fill(capp_rect(cx - 2, cy - 3, 1, 3), CLR_BLACK);
+    api->fill(capp_rect(cx + 2, cy - 3, 1, 3), CLR_BLACK);
+    api->fill(capp_rect(cx - 2, cy + 2, 5, 1), CLR_BLACK);   /* a flat mouth */
   } else {
-    api->fill(rect(cx - 3, cy - 2, 1, 2), CLR_BLACK);
-    api->fill(rect(cx + 2, cy - 2, 1, 2), CLR_BLACK);
+    api->fill(capp_rect(cx - 3, cy - 2, 1, 2), CLR_BLACK);
+    api->fill(capp_rect(cx + 2, cy - 2, 1, 2), CLR_BLACK);
     if (S.won) {
-      api->fill(rect(cx - 4, cy - 3, 3, 1), CLR_BLACK); /* sunglasses */
-      api->fill(rect(cx + 1, cy - 3, 3, 1), CLR_BLACK);
+      api->fill(capp_rect(cx - 4, cy - 3, 3, 1), CLR_BLACK); /* sunglasses */
+      api->fill(capp_rect(cx + 1, cy - 3, 3, 1), CLR_BLACK);
     }
-    api->fill(rect(cx - 2, cy + 2, 5, 1), CLR_BLACK);   /* a smile */
-    api->fill(rect(cx - 3, cy + 1, 1, 1), CLR_BLACK);
-    api->fill(rect(cx + 3, cy + 1, 1, 1), CLR_BLACK);
+    api->fill(capp_rect(cx - 2, cy + 2, 5, 1), CLR_BLACK);   /* a smile */
+    api->fill(capp_rect(cx - 3, cy + 1, 1, 1), CLR_BLACK);
+    api->fill(capp_rect(cx + 3, cy + 1, 1, 1), CLR_BLACK);
   }
 }
 
 /* Content-relative, so the same helper serves painting and hit testing. */
 static CRect face_box(short ox, short oy) {
-  return rect(ox + BOARD_W / 2 - 7, oy + 2, 14, 12);
+  return capp_rect(ox + BOARD_W / 2 - 7, oy + 2, 14, 12);
 }
 
 static int elapsed(void) {
@@ -292,7 +287,6 @@ static int elapsed(void) {
   return (int)((end - S.start_ms) / 1000u);
 }
 
-static int overlaps(CRect a, CRect b);
 
 /* The strip's grey is filled only between the counters and the face, never
  * under them, and each of the three is drawn only when the clip reaches it
@@ -307,23 +301,23 @@ static void paint_head(CRect c, CRect clip) {
   fill_if(mb.x + mb.w, my, fb.x - mb.x - mb.w, fb.h, CLR_FACE);
   fill_if(fb.x + fb.w, my, tb.x - fb.x - fb.w, mh, CLR_FACE);
   fill_if(tb.x + tb.w, my, c.x + BOARD_W - tb.x - tb.w, mh, CLR_FACE);
-  if (overlaps(clip, mb)) {
+  if (capp_overlaps(clip, mb)) {
     sunken_edge(mb);
-    draw_counter(rect(mb.x + 1, mb.y + 1, mb.w - 2, mb.h - 2), MINES - S.flags);
+    draw_counter(capp_rect(mb.x + 1, mb.y + 1, mb.w - 2, mb.h - 2), MINES - S.flags);
   }
-  if (overlaps(clip, tb)) {
+  if (capp_overlaps(clip, tb)) {
     sunken_edge(tb);
-    draw_counter(rect(tb.x + 1, tb.y + 1, tb.w - 2, tb.h - 2), elapsed());
+    draw_counter(capp_rect(tb.x + 1, tb.y + 1, tb.w - 2, tb.h - 2), elapsed());
     S.shown_time = elapsed();   /* only when it was drawn, or tick would wait */
   }
-  if (overlaps(clip, fb)) draw_face(fb);
+  if (capp_overlaps(clip, fb)) draw_face(fb);
 }
 
 static void paint_cell(CRect c, int x, int y) {
-  CRect board = rect(c.x, c.y + HEAD, BOARD_W, BOARD_H);
+  CRect board = capp_rect(c.x, c.y + HEAD, BOARD_W, BOARD_H);
   {
     {
-      CRect cell = rect(board.x + x * CELL, board.y + y * CELL, CELL, CELL);
+      CRect cell = capp_rect(board.x + x * CELL, board.y + y * CELL, CELL, CELL);
 
       if (!S.shown[y][x]) {
         /* A lost game shows the mines that were missed and crosses out the
@@ -336,8 +330,8 @@ static void paint_cell(CRect c, int x, int y) {
           raised(cell);
           if (S.flag[y][x]) draw_flag(cell);
           if (S.dead && !S.mine[y][x] && S.flag[y][x]) {
-            api->fill(rect(cell.x + 2, cell.y + 4, 6, 1), CLR_RED);
-            api->fill(rect(cell.x + 4, cell.y + 2, 1, 6), CLR_RED);
+            api->fill(capp_rect(cell.x + 2, cell.y + 4, 6, 1), CLR_RED);
+            api->fill(capp_rect(cell.x + 4, cell.y + 2, 1, 6), CLR_RED);
           }
         }
       } else if (S.mine[y][x]) {
@@ -363,10 +357,6 @@ static void paint_cell(CRect c, int x, int y) {
   }
 }
 
-static int overlaps(CRect a, CRect b) {
-  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-}
-
 /* Whatever the clip covers, and nothing else.
  *
  * A paint we did not ask for -- the help overlay closing, a window moving --
@@ -387,21 +377,21 @@ static void app_paint(void *st, CRect c) {
   S.have_at = 1;
   S.offx = c.w > BOARD_W ? (c.w - BOARD_W) / 2 : 0;
   S.offy = c.h > HEAD + BOARD_H ? (c.h - HEAD - BOARD_H) / 2 : 0;
-  b = rect(c.x + S.offx, c.y + S.offy, BOARD_W, HEAD + BOARD_H);
+  b = capp_rect(c.x + S.offx, c.y + S.offy, BOARD_W, HEAD + BOARD_H);
 
   if (S.offx || S.offy) {
     /* Four bands around the board, rather than the whole field and then the
      * board over it: that would be a flash of teal on every full repaint. */
-    api->fill(rect(c.x, c.y, c.w, S.offy), CLR_DESK);
-    api->fill(rect(c.x, b.y + b.h, c.w, c.y + c.h - b.y - b.h), CLR_DESK);
-    api->fill(rect(c.x, b.y, S.offx, b.h), CLR_DESK);
-    api->fill(rect(b.x + b.w, b.y, c.x + c.w - b.x - b.w, b.h), CLR_DESK);
+    api->fill(capp_rect(c.x, c.y, c.w, S.offy), CLR_DESK);
+    api->fill(capp_rect(c.x, b.y + b.h, c.w, c.y + c.h - b.y - b.h), CLR_DESK);
+    api->fill(capp_rect(c.x, b.y, S.offx, b.h), CLR_DESK);
+    api->fill(capp_rect(b.x + b.w, b.y, c.x + c.w - b.x - b.w, b.h), CLR_DESK);
   }
 
-  if (overlaps(clip, rect(b.x, b.y, BOARD_W, HEAD))) paint_head(b, clip);
+  if (capp_overlaps(clip, capp_rect(b.x, b.y, BOARD_W, HEAD))) paint_head(b, clip);
   for (y = 0; y < H; y++)
     for (x = 0; x < W; x++)
-      if (overlaps(clip, cell_rect(x, y))) paint_cell(b, x, y);
+      if (capp_overlaps(clip, cell_rect(x, y))) paint_cell(b, x, y);
 }
 
 /* Moving the cursor repaints two cells: the one it left and the one it

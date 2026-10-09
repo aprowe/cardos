@@ -20,6 +20,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
 #include "apps/confirm.h"
@@ -141,17 +142,6 @@ static struct {
   uint16_t box[BOX_W * BOX_H];
 } C;
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
-
-static int starts(const char *s, const char *p) {
-  while (*p) { if (*s++ != *p++) return 0; }
-  return 1;
-}
-
 static uint32_t num(const char *s) {
   uint32_t v = 0;
   while (*s >= '0' && *s <= '9') v = v * 10u + (uint32_t)(*s++ - '0');
@@ -172,13 +162,13 @@ static Field FIELDS[] = {
 
 static void apply_line(const char *line) {
   int i;
-  if (starts(line, "name=")) { api->fmt(C.name, sizeof C.name, "%s", line + 5); return; }
-  if (starts(line, "born=")) { C.p.born = num(line + 5); return; }
-  if (starts(line, "last=")) { C.p.last = num(line + 5); return; }
-  if (starts(line, "seed=")) { C.p.seed = num(line + 5); return; }
+  if (str_starts(line, "name=")) { api->fmt(C.name, sizeof C.name, "%s", line + 5); return; }
+  if (str_starts(line, "born=")) { C.p.born = num(line + 5); return; }
+  if (str_starts(line, "last=")) { C.p.last = num(line + 5); return; }
+  if (str_starts(line, "seed=")) { C.p.seed = num(line + 5); return; }
   for (i = 0; i < NFIELDS; i++) {
     size_t n = api->str_len(FIELDS[i].key);
-    if (starts(line, FIELDS[i].key) && line[n] == '=') { *FIELDS[i].v = (int)num(line + n + 1); return; }
+    if (str_starts(line, FIELDS[i].key) && line[n] == '=') { *FIELDS[i].v = (int)num(line + n + 1); return; }
   }
 }
 
@@ -260,15 +250,15 @@ static void paint_bar_stat(int x, char label, int v) {
   int w = v * 30 / 100;
   s[0] = label; s[1] = 0;
   api->text((int16_t)x, 2, s, CLR_DIM, CLR_BAR);
-  api->fill(rect(x + 7, 3, 32, 6), CLR_INK);
-  api->fill(rect(x + 8, 4, w, 4), c);
-  if (w < 30) api->fill(rect(x + 8 + w, 4, 30 - w, 4), CLR_INK);
+  api->fill(capp_rect(x + 7, 3, 32, 6), CLR_INK);
+  api->fill(capp_rect(x + 8, 4, w, 4), c);
+  if (w < 30) api->fill(capp_rect(x + 8 + w, 4, 30 - w, 4), CLR_INK);
 }
 
 static void paint_bar(void) {
   char s[20];
   int w;
-  api->fill(rect(0, 0, 240, BAR_H), CLR_BAR);
+  api->fill(capp_rect(0, 0, 240, BAR_H), CLR_BAR);
   if (C.p.stage == PET_GONE || C.p.stage == PET_EGG) {
     api->text(4, 2, C.p.stage == PET_EGG ? "an egg" : "the nest is empty", CLR_DIM, CLR_BAR);
     return;
@@ -321,23 +311,23 @@ static void paint_pet(void) {
           if (y >= 0 && y < BOX_H && x >= 0 && x < BOX_W) C.box[y * BOX_W + x] = v;
         }
     }
-  api->pixels(rect(C.x, PET_Y, BOX_W, BOX_H), C.box);
+  api->pixels(capp_rect(C.x, PET_Y, BOX_W, BOX_H), C.box);
 }
 
 static void paint_poop(int n) {
   int k;
   for (k = 0; k < n; k++) {
     int x = 196 + (k % 2) * 20, y = FLOOR_Y - 14 - (k / 2) * 14;
-    api->fill(rect(x + 4, y, 4, 3), CLR_POOP);
-    api->fill(rect(x + 2, y + 3, 8, 4), CLR_POOP);
-    api->fill(rect(x, y + 7, 12, 5), CLR_POOP);
+    api->fill(capp_rect(x + 4, y, 4, 3), CLR_POOP);
+    api->fill(capp_rect(x + 2, y + 3, 8, 4), CLR_POOP);
+    api->fill(capp_rect(x, y + 7, 12, 5), CLR_POOP);
   }
 }
 
 static void paint_room(void) {
   uint16_t bg = room_bg(), fl = floor_bg();
-  api->fill(rect(0, ROOM_Y, 240, FLOOR_Y - ROOM_Y), bg);
-  api->fill(rect(0, FLOOR_Y, 240, ROOM_Y + ROOM_H - FLOOR_Y), fl);
+  api->fill(capp_rect(0, ROOM_Y, 240, FLOOR_Y - ROOM_Y), bg);
+  api->fill(capp_rect(0, FLOOR_Y, 240, ROOM_Y + ROOM_H - FLOOR_Y), fl);
   if (C.p.stage == PET_GONE) {
     api->text(60, 50, "the nest is empty", CLR_INK, bg);
     {
@@ -369,7 +359,7 @@ static void paint_info(void) {
   uint32_t d = (uint32_t)C.p.age_min / 1440u, h = ((uint32_t)C.p.age_min / 60u) % 24u;
   static const char *const STAGE[] = { "egg", "baby", "child", "teen", "adult", "gone" };
   static const char *const FORM[] = { "bright", "plain", "scruffy" };
-  api->fill(rect(0, ROOM_Y, 240, ROOM_H), CLR_PANEL);
+  api->fill(capp_rect(0, ROOM_Y, 240, ROOM_H), CLR_PANEL);
   api->fmt(s, sizeof s, "%s, %s", C.name, C.p.stage == PET_ADULT ? FORM[C.p.form] : STAGE[C.p.stage]);
   api->text(10, (int16_t)y, s, CLR_TEXT, CLR_PANEL); y += 14;
   api->fmt(s, sizeof s, "age      %lud %luh", (unsigned long)d, (unsigned long)h);
@@ -387,7 +377,7 @@ static void paint_info(void) {
 static void paint_game(void) {
   char s[40];
   uint16_t bg = CLR_PANEL;
-  api->fill(rect(0, ROOM_Y, 240, ROOM_H), bg);
+  api->fill(capp_rect(0, ROOM_Y, 240, ROOM_H), bg);
   api->fmt(s, sizeof s, "round %d of 5   won %d", C.round + 1 > 5 ? 5 : C.round + 1, C.wins);
   api->text(10, ROOM_Y + 6, s, CLR_DIM, bg);
   if (C.round >= 5) {
@@ -526,7 +516,7 @@ static int app_tick(void *st, uint32_t now) {
     }
     /* Only the box moves: the room around it stays as it was. The 4 px
      * margin covers the step. Lettering above it is redrawn too. */
-    api->damage(rect(C.x - 8, PET_Y - 10, BOX_W + 16, BOX_H + 10));
+    api->damage(capp_rect(C.x - 8, PET_Y - 10, BOX_W + 16, BOX_H + 10));
     return 1;
   }
   return redraw;

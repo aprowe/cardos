@@ -13,6 +13,7 @@
  * before, padded to the width, nothing cleared first.
  */
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/safefile.h"
 
 #define CONF       "/config/chat.txt"
@@ -66,22 +67,11 @@ static struct {
 
 static char reply[REPLY_MAX];
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
-
 /* Marked, and remembered: tick says so, or a message that arrives while no
  * key is pressed waits for one to be drawn (2026-10-06). */
-static void damage_in(void)  { C.dirty = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
-static void damage_log(void) { C.dirty = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
-static void damage_bar(void) { C.dirty = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
-
-static int same(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
+static void damage_in(void)  { C.dirty = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
+static void damage_log(void) { C.dirty = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
+static void damage_bar(void) { C.dirty = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
 
 /* ---- the log ----------------------------------------------------------------- */
 
@@ -131,7 +121,7 @@ static void push_wrapped(const char *text, uint16_t colour) {
 
 static uint16_t colour_of(const char *name) {
   uint32_t h = 2166136261u;
-  if (same(name, C.name)) return CLR_ME;
+  if (str_same(name, C.name)) return CLR_ME;
   while (*name) h = (h ^ (uint8_t)*name++) * 16777619u;
   return WHO[h % 6];
 }
@@ -165,18 +155,6 @@ static void ask_name(void) {
 }
 
 /* ---- the server ------------------------------------------------------------------ */
-
-static void url_enc(char *out, int n, const char *s) {
-  static const char HEX[] = "0123456789ABCDEF";
-  int k = 0;
-  for (; *s && k < n - 4; s++) {
-    unsigned char ch = (unsigned char)*s;
-    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_')
-      out[k++] = (char)ch;
-    else { out[k++] = '%'; out[k++] = HEX[ch >> 4]; out[k++] = HEX[ch & 15]; }
-  }
-  out[k] = 0;
-}
 
 static void start_get(void) {
   char url[160];
@@ -275,7 +253,7 @@ static void poll_server(uint32_t now) {
 /* ---- painting ------------------------------------------------------------------- */
 
 static void fill_if(int x, int y, int w, int h, uint16_t c) {
-  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), c);
+  if (w > 0 && h > 0) api->fill(capp_rect(x, y, w, h), c);
 }
 
 static void text_cols(int x, int y, const char *s, int cols, uint16_t fg, uint16_t bg) {
@@ -335,7 +313,7 @@ static void paint_input(CRect c) {
   api->text((int16_t)(c.x + 2), (int16_t)(y + 2), C.naming ? "?" : ">", CLR_DIM, CLR_IN);
   fill_if(c.x + 8, y + 2, 2, 8, CLR_IN);
   api->text((int16_t)(c.x + 10), (int16_t)(y + 2), C.input + from, CLR_FG, CLR_IN);
-  api->fill(rect(cx, y + 2, 5, 8), CLR_FG);
+  api->fill(capp_rect(cx, y + 2, 5, 8), CLR_FG);
   text_cols(cx + 5, y + 2, "", vis - n, CLR_FG, CLR_IN);
   end = cx + 5 + (vis > n ? vis - n : 0) * 6;
   fill_if(end, y + 2, c.x + c.w - end, 8, CLR_IN);

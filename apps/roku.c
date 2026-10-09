@@ -25,6 +25,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
 
@@ -76,17 +77,6 @@ static struct {
   int   last_y, draft_y;
 } G;
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
-
-static int same(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
-
 /* ---- the buttons ----------------------------------------------------------------- */
 
 typedef struct { uint8_t key; const char *ecp; const char *label; } Button;
@@ -121,7 +111,7 @@ static const char *ecp_for_key(uint8_t k) {
 
 static const char *label_for_ecp(const char *ecp) {
   int i;
-  for (i = 0; i < NBUTTONS; i++) if (same(BUTTONS[i].ecp, ecp)) return BUTTONS[i].label;
+  for (i = 0; i < NBUTTONS; i++) if (str_same(BUTTONS[i].ecp, ecp)) return BUTTONS[i].label;
   return ecp;
 }
 
@@ -319,16 +309,16 @@ static void fill_round(CRect r, CRect hole, uint16_t colour) {
   int y1 = hole.y + hole.h < r.y + r.h ? hole.y + hole.h : r.y + r.h;
   if (r.w <= 0 || r.h <= 0) return;
   if (x0 >= x1 || y0 >= y1) { api->fill(r, colour); return; }
-  if (y0 > r.y) api->fill(rect(r.x, r.y, r.w, y0 - r.y), colour);
-  if (y1 < r.y + r.h) api->fill(rect(r.x, y1, r.w, r.y + r.h - y1), colour);
-  if (x0 > r.x) api->fill(rect(r.x, y0, x0 - r.x, y1 - y0), colour);
-  if (x1 < r.x + r.w) api->fill(rect(x1, y0, r.x + r.w - x1, y1 - y0), colour);
+  if (y0 > r.y) api->fill(capp_rect(r.x, r.y, r.w, y0 - r.y), colour);
+  if (y1 < r.y + r.h) api->fill(capp_rect(r.x, y1, r.w, r.y + r.h - y1), colour);
+  if (x0 > r.x) api->fill(capp_rect(r.x, y0, x0 - r.x, y1 - y0), colour);
+  if (x1 < r.x + r.w) api->fill(capp_rect(x1, y0, r.x + r.w - x1, y1 - y0), colour);
 }
 
 /* One line of text at x in font f, and the rest of the row [c.x, c.x+c.w)
  * in the background: a line that got shorter is covered, nothing blinks. */
 static void line_at(CRect c, int f, int x, int y, const char *s, uint16_t fg) {
-  fill_round(rect(c.x, y, c.w, height(f)), rect(x, y, s[0] ? width(f, s) : 0, height(f)), CLR_BG);
+  fill_round(capp_rect(c.x, y, c.w, height(f)), capp_rect(x, y, s[0] ? width(f, s) : 0, height(f)), CLR_BG);
   if (s[0]) draw(f, x, y, s, fg, CLR_BG);
 }
 
@@ -339,12 +329,12 @@ static int mark(CRect r) {
   return 1;
 }
 
-static int top_changed(void) { return mark(rect(G.at.x, G.at.y, G.at.w, TOP_H)); }
+static int top_changed(void) { return mark(capp_rect(G.at.x, G.at.y, G.at.w, TOP_H)); }
 
 /* A line in the big font at y. Its height is not asked before there has
  * been a paint: before one, nothing is marked anyway. */
 static int line_changed(int y) {
-  return G.at.w > 0 ? mark(rect(G.at.x, y, G.at.w, height(G.f_uib))) : 1;
+  return G.at.w > 0 ? mark(capp_rect(G.at.x, y, G.at.w, height(G.f_uib))) : 1;
 }
 
 /* The draft line: a typed key changes it and nothing else. */
@@ -356,7 +346,7 @@ static int draft_changed(void) {
 /* A key in a box, then what it does; returns the x after it. */
 static int hint(int x, int y, const char *key, const char *what) {
   int kw = width(-1, key) + 6, ty = y + (ROW_H - 8) / 2;
-  fill_round(rect(x, y + 1, kw, ROW_H - 2), rect(x + 3, ty, width(-1, key), 8), CLR_CHIP);
+  fill_round(capp_rect(x, y + 1, kw, ROW_H - 2), capp_rect(x + 3, ty, width(-1, key), 8), CLR_CHIP);
   api->text((int16_t)(x + 3), (int16_t)ty, key, CLR_TEXT, CLR_CHIP);
   x += kw + 4;
   draw(G.f_ui, x, y + (ROW_H - height(G.f_ui)) / 2, what, CLR_DIM, CLR_BG);
@@ -374,8 +364,8 @@ static void paint_top(CRect c) {
   int ty = c.y + (TOP_H - th) / 2, ry = c.y + (TOP_H - rh) / 2;
   if (mid < c.x) mid = c.x;
   if (mid > c.x + c.w) mid = c.x + c.w;
-  fill_round(rect(c.x, c.y, mid - c.x, TOP_H), rect(tx, ty, tw, th), CLR_BG);
-  fill_round(rect(mid, c.y, c.x + c.w - mid, TOP_H), rect(rx, ry, rw, rh), CLR_BG);
+  fill_round(capp_rect(c.x, c.y, mid - c.x, TOP_H), capp_rect(tx, ty, tw, th), CLR_BG);
+  fill_round(capp_rect(mid, c.y, c.x + c.w - mid, TOP_H), capp_rect(rx, ry, rw, rh), CLR_BG);
   draw(G.f_uib, tx, ty, "Roku", CLR_ROKU, CLR_BG);
   if (right[0]) draw(G.f_ui, rx, ry, right, G.bad ? CLR_BAD : CLR_DIM, CLR_BG);
 }
@@ -587,11 +577,11 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
   (void)st; (void)argc;
   switch (action) {
   case ACT_POWER:
-    if (same(argv[0], "on")) return send_now("PowerOn", "TV on", out, n);
-    if (same(argv[0], "off")) return send_now("PowerOff", "TV off", out, n);
+    if (str_same(argv[0], "on")) return send_now("PowerOn", "TV on", out, n);
+    if (str_same(argv[0], "off")) return send_now("PowerOff", "TV off", out, n);
     return send_now("Power", "power pressed", out, n);
   case ACT_VOLUME:
-    return same(argv[0], "up") ? send_now("VolumeUp", "volume up", out, n)
+    return str_same(argv[0], "up") ? send_now("VolumeUp", "volume up", out, n)
                                : send_now("VolumeDown", "volume down", out, n);
   case ACT_MUTE:
     return send_now("VolumeMute", "mute pressed", out, n);
@@ -603,7 +593,7 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
     };
     int i;
     for (i = 0; i < 6; i++)
-      if (same(argv[0], IN[i][0])) return send_now(IN[i][1], IN[i][2], out, n);
+      if (str_same(argv[0], IN[i][0])) return send_now(IN[i][1], IN[i][2], out, n);
     api->fmt(out, n, "no input %s", argv[0]);
     return -1;
   }

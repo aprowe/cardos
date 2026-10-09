@@ -27,6 +27,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/safefile.h"
 
 #define COLS        40
@@ -80,12 +81,6 @@ static struct {
 #define REPLY_MAX  3072
 
 static char reply[REPLY_MAX];
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
 
 /* ---- the log, rebuilt from the agent's transcript ------------------------ */
 
@@ -165,7 +160,7 @@ static uint16_t colour_of(int who) {
 }
 
 static void fill_if(int x, int y, int w, int h, uint16_t c) {
-  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), c);
+  if (w > 0 && h > 0) api->fill(capp_rect(x, y, w, h), c);
 }
 
 /* `s` padded with spaces to `cols` characters, so a line writes over the
@@ -246,7 +241,7 @@ static void paint_input(CRect c) {
   api->text((short)(c.x + 2), (short)(y + 2), ">", CLR_DIM, CLR_IN);
   fill_if(c.x + 8, y + 2, 2, 8, CLR_IN);
   api->text((short)(c.x + 10), (short)(y + 2), C.input + from, CLR_FG, CLR_IN);
-  api->fill(rect(cx, y + 2, 5, 8), CLR_FG);
+  api->fill(capp_rect(cx, y + 2, 5, 8), CLR_FG);
   text_cols(cx + 5, y + 2, "", vis - n, CLR_FG, CLR_IN);
   end = cx + 5 + (vis > n ? vis - n : 0) * 6;
   fill_if(end, y + 2, c.x + c.w - end, 8, CLR_IN);
@@ -264,25 +259,12 @@ static void app_paint(void *st, CRect c) {
   if (clip.y + clip.h > c.y + c.h - IN_H) paint_input(c);
 }
 
-static void damage_in(void)  { if (C.have_at) api->damage(rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
-static void damage_log(void) { if (C.have_at) api->damage(rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
-static void damage_bar(void) { if (C.have_at) api->damage(rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
+static void damage_in(void)  { if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
+static void damage_log(void) { if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
+static void damage_bar(void) { if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
 
 
 /* ---- about a document ---------------------------------------------------------- */
-
-/* A file name as a query value: letters, digits and . - _ as they are. */
-static void url_enc(char *out, int n, const char *s) {
-  static const char HEX[] = "0123456789ABCDEF";
-  int k = 0;
-  for (; *s && k < n - 4; s++) {
-    unsigned char ch = (unsigned char)*s;
-    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
-        ch == '.' || ch == '-' || ch == '_') out[k++] = (char)ch;
-    else { out[k++] = '%'; out[k++] = HEX[ch >> 4]; out[k++] = HEX[ch & 15]; }
-  }
-  out[k] = 0;
-}
 
 static void say_line(const char *s, int who) {
   while (*s) s = push_wrapped(s, who);

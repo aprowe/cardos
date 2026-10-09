@@ -23,6 +23,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
 #include "apps/confirm.h"
@@ -82,17 +83,6 @@ static struct {
 
 /* ---- helpers -------------------------------------------------------------- */
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
-
-static int str_eq(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
-
 static void join(char *out, size_t n, const char *dir, const char *name) {
   if (api->str_len(dir) == 1 && dir[0] == '/') api->fmt(out, n, "/%s", name);
   else api->fmt(out, n, "%s/%s", dir, name);
@@ -104,11 +94,9 @@ static const char *leaf(const char *path) {
   return last;
 }
 
-static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
-
 static int ext_is(const char *ext, const char *want) {
   for (;;) {
-    if (lower(*ext) != *want) return 0;
+    if (str_lower(*ext) != *want) return 0;
     if (!*want) return 1;
     ext++; want++;
   }
@@ -153,28 +141,28 @@ static int body_h(void) { return X.at.h - TOOL_H - FOOT_H; }
 static void damage_all(void) { if (X.have_at) api->damage(X.at); }
 
 static void damage_footer(void) {
-  if (X.have_at) api->damage(rect(X.at.x, X.at.y + X.at.h - FOOT_H, X.at.w, FOOT_H));
+  if (X.have_at) api->damage(capp_rect(X.at.x, X.at.y + X.at.h - FOOT_H, X.at.w, FOOT_H));
 }
 
 static void damage_tools(void) {
-  if (X.have_at) api->damage(rect(X.at.x, X.at.y, X.at.w, TOOL_H));
+  if (X.have_at) api->damage(capp_rect(X.at.x, X.at.y, X.at.w, TOOL_H));
 }
 
 /* The folder pane: a selected folder is highlighted there too. */
 static void damage_tree(void) {
-  if (X.have_at) api->damage(rect(X.at.x + 2, body_y(), TREE_W, body_h()));
+  if (X.have_at) api->damage(capp_rect(X.at.x + 2, body_y(), TREE_W, body_h()));
 }
 
 /* The list pane, headers and all. */
 static void damage_list(void) {
   if (X.have_at)
-    api->damage(rect(X.at.x + TREE_W + 6, body_y(), X.at.w - TREE_W - 9, body_h()));
+    api->damage(capp_rect(X.at.x + TREE_W + 6, body_y(), X.at.w - TREE_W - 9, body_h()));
 }
 
 static void damage_row(int idx) {
   if (!X.have_at || idx < X.top || idx >= X.top + X.rows) return;
-  api->damage(rect(X.at.x + TREE_W + 6, body_y() + HEAD_H + 1 + (idx - X.top) * ROW_H,
-                   X.at.w - TREE_W - 9, ROW_H));
+  api->damage(capp_rect(X.at.x + TREE_W + 6, body_y() + HEAD_H + 1 + (idx - X.top) * ROW_H,
+                        X.at.w - TREE_W - 9, ROW_H));
 }
 
 static void say(const char *s) {
@@ -195,7 +183,7 @@ static int before(const CappEntry *a, const CappEntry *b) {
   const char *p = a->name, *q = b->name;
   if (a->is_dir != b->is_dir) return a->is_dir;
   for (;;) {
-    char x = lower(*p), y = lower(*q);
+    char x = str_lower(*p), y = str_lower(*q);
     if (x != y) return x < y;
     if (!x) return 0;
     p++; q++;
@@ -234,7 +222,7 @@ static void go_to(const char *path) {
 
 static void go_up(void) {
   int i, cut = 0;
-  if (str_eq(X.cwd, "/")) return;
+  if (str_same(X.cwd, "/")) return;
   for (i = 0; X.cwd[i]; i++) if (X.cwd[i] == '/') cut = i;
   X.cwd[cut ? cut : 1] = 0;
   reload();
@@ -414,38 +402,38 @@ static void raised(CRect r) { api->bevel(r, C_FACE, C_HI, C_DK); }
 static void sunken(CRect r) { api->bevel(r, C_WELL, C_DK, C_HI); }
 
 static void folder_icon(int x, int y, int open) {
-  api->fill(rect(x, y + 2, 8, 5), C_FOLDER);
-  api->fill(rect(x, y + 1, 4, 1), C_FOLDER);
-  api->fill(rect(x, y + 6, 8, 1), C_FOLDTB);
-  if (open) api->fill(rect(x + 1, y + 3, 6, 1), C_HI);
+  api->fill(capp_rect(x, y + 2, 8, 5), C_FOLDER);
+  api->fill(capp_rect(x, y + 1, 4, 1), C_FOLDER);
+  api->fill(capp_rect(x, y + 6, 8, 1), C_FOLDTB);
+  if (open) api->fill(capp_rect(x + 1, y + 3, 6, 1), C_HI);
 }
 
 static void file_icon(int x, int y) {
-  api->fill(rect(x + 1, y + 1, 6, 6), C_PAPER);
-  api->frame(rect(x + 1, y + 1, 6, 6), C_LO);
-  api->fill(rect(x + 2, y + 3, 4, 1), C_LO);
-  api->fill(rect(x + 2, y + 5, 3, 1), C_LO);
+  api->fill(capp_rect(x + 1, y + 1, 6, 6), C_PAPER);
+  api->frame(capp_rect(x + 1, y + 1, 6, 6), C_LO);
+  api->fill(capp_rect(x + 2, y + 3, 4, 1), C_LO);
+  api->fill(capp_rect(x + 2, y + 5, 3, 1), C_LO);
 }
 
 #define TOOLS 5
 static const char *TOOL[TOOLS] = { "Up", "New", "Ren", "Cut", "Del" };
 
 static CRect tool_box(CRect c, int i) {
-  return rect(c.x + 3 + i * 37, c.y + 2, 34, TOOL_H - 4);
+  return capp_rect(c.x + 3 + i * 37, c.y + 2, 34, TOOL_H - 4);
 }
 
 /* ---- painting --------------------------------------------------------------- */
 
 static void paint_tree(CRect c, int y0, int h) {
-  CRect pane = rect(c.x + 2, y0, TREE_W, h);
+  CRect pane = capp_rect(c.x + 2, y0, TREE_W, h);
   int i, row = 0;
 
   sunken(pane);
-  api->fill(rect(pane.x + 1, pane.y + 1, pane.w - 2, pane.h - 2), C_WELL);
+  api->fill(capp_rect(pane.x + 1, pane.y + 1, pane.w - 2, pane.h - 2), C_WELL);
 
   /* The parent, then the folders here. One level either side is all that fits
    * and all anyone needs to navigate with: up, or down into one of these. */
-  if (!str_eq(X.cwd, "/")) {
+  if (!str_same(X.cwd, "/")) {
     folder_icon(pane.x + 3, pane.y + 2 + row * ROW_H, 0);
     api->text((short)(pane.x + 13), (short)(pane.y + 2 + row * ROW_H), "..",
               C_TEXT, C_WELL);
@@ -457,7 +445,7 @@ static void paint_tree(CRect c, int y0, int h) {
     if (!e->is_dir) continue;
     ry = (short)(pane.y + 2 + row * ROW_H);
     if (i == X.sel) {
-      api->fill(rect(pane.x + 1, ry - 1, pane.w - 2, ROW_H), C_SEL);
+      api->fill(capp_rect(pane.x + 1, ry - 1, pane.w - 2, ROW_H), C_SEL);
       folder_icon(pane.x + 3, ry, 1);
       api->text((short)(pane.x + 13), ry, e->name, C_SEL_TX, C_SEL);
     } else {
@@ -473,19 +461,19 @@ static void paint_tree(CRect c, int y0, int h) {
 static void paint_list(CRect c, int y0, int h) {
   int lx = c.x + TREE_W + 6;
   int lw = c.w - TREE_W - 9;
-  CRect pane = rect(lx, y0 + HEAD_H, lw, h - HEAD_H);
+  CRect pane = capp_rect(lx, y0 + HEAD_H, lw, h - HEAD_H);
   int i, most;
 
   /* Column headers, which are buttons in the original and are drawn as
    * buttons here even though sorting is not offered -- a header that looks
    * like a label would leave the columns unexplained. */
-  raised(rect(lx, y0, lw - 40, HEAD_H));
-  raised(rect(lx + lw - 40, y0, 40, HEAD_H));
+  raised(capp_rect(lx, y0, lw - 40, HEAD_H));
+  raised(capp_rect(lx + lw - 40, y0, 40, HEAD_H));
   api->text((short)(lx + 3), (short)(y0 + 1), "Name", C_TEXT, C_FACE);
   api->text((short)(lx + lw - 37), (short)(y0 + 1), "Size", C_TEXT, C_FACE);
 
   sunken(pane);
-  api->fill(rect(pane.x + 1, pane.y + 1, pane.w - 2, pane.h - 2), C_WELL);
+  api->fill(capp_rect(pane.x + 1, pane.y + 1, pane.w - 2, pane.h - 2), C_WELL);
 
   X.rows = (pane.h - 2) / ROW_H;
   if (X.rows < 1) X.rows = 1;
@@ -508,7 +496,7 @@ static void paint_list(CRect c, int y0, int h) {
     e = at(idx);
 
     if (idx == X.sel) {
-      api->fill(rect(pane.x + 1, ry - 1, pane.w - 2, ROW_H), C_SEL);
+      api->fill(capp_rect(pane.x + 1, ry - 1, pane.w - 2, ROW_H), C_SEL);
       fg = C_SEL_TX;
       bg = C_SEL;
     }
@@ -540,7 +528,7 @@ static void paint_footer(CRect c) {
     short x = (short)(c.x + 4 + lw * 6);
     footer_paint(api, c, label);
     api->text(x, y, X.buf + from, C_TYPED, FOOT_BG);
-    api->fill(rect(x + (X.buf_len - from) * 6, y, 5, 8), C_TYPED);
+    api->fill(capp_rect(x + (X.buf_len - from) * 6, y, 5, 8), C_TYPED);
   } else if (X.ask == ASK_DELETE) {
     /* The name cut short enough that the question still fits. */
     char t[24];
@@ -574,7 +562,7 @@ static void app_paint(void *st, CRect full) {
   X.at = c;
   X.have_at = 1;
 
-  api->fill(rect(c.x, c.y, c.w, TOOL_H), C_FACE);
+  api->fill(capp_rect(c.x, c.y, c.w, TOOL_H), C_FACE);
   for (i = 0; i < TOOLS; i++) {
     CRect b = tool_box(c, i);
     raised(b);
@@ -593,7 +581,7 @@ static void app_paint(void *st, CRect full) {
     }
   }
 
-  api->fill(rect(c.x, body_y(), c.w, body_h()), C_FACE);
+  api->fill(capp_rect(c.x, body_y(), c.w, body_h()), C_FACE);
   paint_tree(c, body_y(), body_h());
   paint_list(c, body_y(), body_h());
   paint_footer(c);
@@ -617,7 +605,7 @@ static void do_tool(int i) {
 /* Which entry the nth row of the tree pane is, or -1. */
 static int tree_index(int row) {
   int i, r = 0;
-  if (!str_eq(X.cwd, "/")) {
+  if (!str_same(X.cwd, "/")) {
     if (row == 0) return -2;              /* the ".." row */
     r = 1;
   }

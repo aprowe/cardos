@@ -25,6 +25,7 @@
  * height the screen has above the footer.
  */
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/quoridor.h"
 #include "apps/footer.h"
 
@@ -83,12 +84,6 @@ static struct {
   char     note[48];               /* "they left", "Sam said no" ... */
   uint32_t lobby_at;
 } G;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
 
 static int bx(void) { return G.area.x + 6; }
 static int by(void) { return G.area.y + (G.area.h - FOOT_H - BOARD) / 2; }
@@ -150,16 +145,16 @@ static void new_game(void) {
 
 static void paint_title(CRect c) {
   int i, y = c.y + 34;
-  api->fill(rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
   api->text_font(G.f_big, (int16_t)(c.x + 12), (int16_t)(c.y + 8), "Quoridor", CLR_TEXT, CLR_BG);
   /* A pawn each, by the title, and a wall. */
-  api->fill(rect(c.x + c.w - 40, c.y + 10, 9, 9), PAWN[0]);
-  api->fill(rect(c.x + c.w - 26, c.y + 10, 9, 9), PAWN[1]);
-  api->fill(rect(c.x + c.w - 41, c.y + 22, 33, 3), WALL[0]);
+  api->fill(capp_rect(c.x + c.w - 40, c.y + 10, 9, 9), PAWN[0]);
+  api->fill(capp_rect(c.x + c.w - 26, c.y + 10, 9, 9), PAWN[1]);
+  api->fill(capp_rect(c.x + c.w - 41, c.y + 22, 33, 3), WALL[0]);
   for (i = 0; i < PICKS; i++) {
     uint16_t bg = i == G.pick ? CLR_SEL : CLR_BG;
     if (i == PICK_RESUME && !G.playing) continue;
-    api->fill(rect(c.x + 8, y, c.w - 16, 16), bg);
+    api->fill(capp_rect(c.x + 8, y, c.w - 16, 16), bg);
     api->text_font(G.f_ui, (int16_t)(c.x + 14), (int16_t)(y + 1), PICK_TEXT[i],
                    i == G.pick ? CLR_TEXT : CLR_DIM, bg);
     y += 17;
@@ -174,7 +169,7 @@ static void text(int x, int y, const char *s, uint16_t fg);
 static void paint_lobby(CRect c) {
   int i, y = c.y + 30, st = G.L ? G.L->state() : CAPP_LINK_OFF;
   char line[48];
-  api->fill(rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
   api->text_font(G.f_big, (int16_t)(c.x + 12), (int16_t)(c.y + 8), "Play nearby", CLR_TEXT, CLR_BG);
   G.lstate = st;
   G.lpeers = G.L ? G.L->peers() : 0;
@@ -197,7 +192,7 @@ static void paint_lobby(CRect c) {
   if (G.lsel >= G.lpeers) G.lsel = G.lpeers ? G.lpeers - 1 : 0;
   for (i = 0; i < G.lpeers && i < 5; i++) {
     uint16_t bg = i == G.lsel ? CLR_SEL : CLR_BG;
-    api->fill(rect(c.x + 8, y, c.w - 16, 16), bg);
+    api->fill(capp_rect(c.x + 8, y, c.w - 16, 16), bg);
     api->text_font(G.f_ui, (int16_t)(c.x + 14), (int16_t)(y + 1), G.L->peer_name(i),
                    i == G.lsel ? CLR_TEXT : CLR_DIM, bg);
     y += 17;
@@ -209,17 +204,17 @@ static void paint_lobby(CRect c) {
 /* ---- paint: the game -------------------------------------------------------------- */
 
 static void paint_wall(int r, int c, int vert, uint16_t colour) {
-  if (vert) api->fill(rect(bx() + c * PITCH + CELL, by() + r * PITCH, GAP, CELL * 2 + GAP), colour);
-  else api->fill(rect(bx() + c * PITCH, by() + r * PITCH + CELL, CELL * 2 + GAP, GAP), colour);
+  if (vert) api->fill(capp_rect(bx() + c * PITCH + CELL, by() + r * PITCH, GAP, CELL * 2 + GAP), colour);
+  else api->fill(capp_rect(bx() + c * PITCH, by() + r * PITCH + CELL, CELL * 2 + GAP, GAP), colour);
 }
 
 static void paint_board(void) {
   int r, c, i, n, who = G.q.turn;
   int8_t sr[5], sc[5];
-  api->fill(rect(bx() - 2, by() - 2, BOARD + 4, BOARD + 4), CLR_GROOVE);
+  api->fill(capp_rect(bx() - 2, by() - 2, BOARD + 4, BOARD + 4), CLR_GROOVE);
   for (r = 0; r < Q_N; r++)
     for (c = 0; c < Q_N; c++)
-      api->fill(rect(bx() + c * PITCH, by() + r * PITCH, CELL, CELL),
+      api->fill(capp_rect(bx() + c * PITCH, by() + r * PITCH, CELL, CELL),
                 r == q_goal(0) ? GOAL[0] : r == q_goal(1) ? GOAL[1] : CLR_CELL);
   for (r = 0; r < Q_G; r++)
     for (c = 0; c < Q_G; c++) {
@@ -228,21 +223,21 @@ static void paint_board(void) {
     }
   for (i = 0; i < 2; i++) {                  /* pawns, corners cut */
     int x = bx() + G.q.c[i] * PITCH, y = by() + G.q.r[i] * PITCH;
-    api->fill(rect(x + 2, y + 1, CELL - 4, CELL - 2), PAWN[i]);
-    api->fill(rect(x + 1, y + 2, CELL - 2, CELL - 4), PAWN[i]);
+    api->fill(capp_rect(x + 2, y + 1, CELL - 4, CELL - 2), PAWN[i]);
+    api->fill(capp_rect(x + 1, y + 2, CELL - 2, CELL - 4), PAWN[i]);
   }
   if (G.q.winner >= 0 || !humans_turn()) return;
   if (G.mode == MODE_MOVE) {
     n = q_steps(&G.q, who, sr, sc);
     for (i = 0; i < n; i++)
-      api->fill(rect(bx() + sc[i] * PITCH + CELL / 2 - 1, by() + sr[i] * PITCH + CELL / 2 - 1, 3, 3),
+      api->fill(capp_rect(bx() + sc[i] * PITCH + CELL / 2 - 1, by() + sr[i] * PITCH + CELL / 2 - 1, 3, 3),
                 PAWN[who]);
     {
       int x = bx() + G.cc * PITCH - 1, y = by() + G.cr * PITCH - 1;
-      api->fill(rect(x, y, CELL + 2, 1), CLR_CURSOR);
-      api->fill(rect(x, y + CELL + 1, CELL + 2, 1), CLR_CURSOR);
-      api->fill(rect(x, y, 1, CELL + 2), CLR_CURSOR);
-      api->fill(rect(x + CELL + 1, y, 1, CELL + 2), CLR_CURSOR);
+      api->fill(capp_rect(x, y, CELL + 2, 1), CLR_CURSOR);
+      api->fill(capp_rect(x, y + CELL + 1, CELL + 2, 1), CLR_CURSOR);
+      api->fill(capp_rect(x, y, 1, CELL + 2), CLR_CURSOR);
+      api->fill(capp_rect(x + CELL + 1, y, 1, CELL + 2), CLR_CURSOR);
     }
   } else {
     paint_wall(G.wr, G.wc, G.wv, q_wall_ok(&G.q, who, G.wr, G.wc, G.wv) ? WALL[who] : CLR_NO);
@@ -269,7 +264,7 @@ static void paint_side(void) {
                            "vs cpu: medium" : "vs cpu: hard") : "2 players", CLR_DIM);
   y += 14;
   for (i = 0; i < 2; i++, y += 12) {
-    api->fill(rect(x, y, 7, 7), PAWN[i]);
+    api->fill(capp_rect(x, y, 7, 7), PAWN[i]);
     api->fmt(line, sizeof line, "%-4.6s %d walls", label[i], G.q.left[i]);
     text(x + 11, y, line, G.q.winner < 0 && G.q.turn == i ? CLR_TEXT : CLR_DIM);
   }
@@ -307,7 +302,7 @@ static void app_paint(void *st, CRect c) {
   G.area = c;
   if (G.screen == SCREEN_TITLE) { paint_title(c); return; }
   if (G.screen == SCREEN_LOBBY) { paint_lobby(c); return; }
-  api->fill(rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
   paint_board();
   paint_side();
   footer_paint(api, c, net_game() && !net_live() ? "enter find another  esc title" :

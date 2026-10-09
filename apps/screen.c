@@ -31,6 +31,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/footer.h"
 
 #define W        240
@@ -67,12 +68,6 @@ static struct {
   int  running;
   char status[64];
 } S;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
 
 static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 
@@ -159,7 +154,7 @@ static int on_data(void *ctx, const uint8_t *d, int n) {
       if (S.have < S.need) return 0;
 
       if (decode_row(S.need) && S.y < H)
-        api->pixels(rect(0, S.y, W, 1), S.row);
+        api->pixels(capp_rect(0, S.y, W, 1), S.row);
 
       S.have = 0;
       S.state = WANT_ROWHDR;

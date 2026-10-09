@@ -31,6 +31,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 
 #define COLS        40            /* 240 pixels at six a character */
 #define LINES      140            /* about eight screens of scrollback */
@@ -91,21 +92,15 @@ static struct {
   int   marked;                   /* something was marked since tick began */
 } C;
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
-
 /* What the next paint has to redraw, said to the shell. A typed character is
  * the input line and nothing else; without this every keystroke redrew the
  * whole window, log and all, which on a 40x12 terminal is visible as a
  * flicker. These were three flags and an expect_paint guess; api->damage
  * says it outright, as apps/claude.c does. Before the first paint there is
  * nowhere to mark, and the shell paints everything anyway. */
-static void mark_bar(void) { C.marked = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
-static void mark_log(void) { C.marked = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
-static void mark_in(void)  { C.marked = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
+static void mark_bar(void) { C.marked = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
+static void mark_log(void) { C.marked = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
+static void mark_in(void)  { C.marked = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
 
 /* ---- the log -------------------------------------------------------------- */
 
@@ -415,7 +410,7 @@ static uint16_t colour_of(int who) {
 }
 
 static void fill_if(int x, int y, int w, int h, uint16_t c) {
-  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), c);
+  if (w > 0 && h > 0) api->fill(capp_rect(x, y, w, h), c);
 }
 
 /* `s` padded with spaces to `cols` characters, so a line writes over the
@@ -506,7 +501,7 @@ static void paint_input(CRect c) {
   api->text((short)(c.x + 2), (short)(y + 2), ">", CLR_DIM, CLR_IN);
   fill_if(c.x + 8, y + 2, 2, 8, CLR_IN);
   api->text((short)(c.x + 10), (short)(y + 2), C.input + from, CLR_FG, CLR_IN);
-  api->fill(rect(cx, y + 2, 5, 8), CLR_FG);
+  api->fill(capp_rect(cx, y + 2, 5, 8), CLR_FG);
   text_cols(cx + 5, y + 2, "", vis - n, CLR_FG, CLR_IN);
   end = cx + 5 + (vis > n ? vis - n : 0) * 6;
   fill_if(end, y + 2, c.x + c.w - end, 8, CLR_IN);

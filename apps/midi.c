@@ -32,6 +32,7 @@
 #define MS_MAX_EV     768
 #define MS_MAX_NOTES  384
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/midiseq.h"
 #include "apps/footer.h"
 #include "apps/confirm.h"
@@ -130,12 +131,6 @@ static struct {
   int      have_c;
   char     text[TEXT_MAX];
 } M;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)(w > 0 ? w : 0); r.h = (int16_t)(h > 0 ? h : 0);
-  return r;
-}
 
 static void say(int bad, const char *s) { api->fmt(M.status, sizeof M.status, "%s", s); M.bad = bad; }
 static void mark_all(void) { if (M.have_c) api->damage(M.c); }
@@ -509,7 +504,7 @@ static void ask_poll(void) {
     M.next_poll = api->ticks_ms() + 3000;
     api->fmt(M.status, sizeof M.status, "Claude is writing it... %lus",
              (unsigned long)((api->ticks_ms() - M.asked_at) / 1000));
-    if (M.have_c) api->damage(rect(M.c.x, M.c.y, M.c.w, TOP_H));
+    if (M.have_c) api->damage(capp_rect(M.c.x, M.c.y, M.c.w, TOP_H));
     return;
   }
   M.job[0] = 0;
@@ -580,7 +575,7 @@ static void delete_sel(void) {
 static int in_song(void) { return M.view == V_SONG || (M.view == V_ASK && M.ask_back == V_SONG); }
 
 static void paint_top(void) {
-  CRect r = rect(M.c.x, M.c.y, M.c.w, TOP_H);
+  CRect r = capp_rect(M.c.x, M.c.y, M.c.w, TOP_H);
   int w = (int)api->str_len(M.status) * 6, room, tw;
   char title[NAMEL];
   /* The song's title, cut to leave a space before the status. */
@@ -591,12 +586,12 @@ static void paint_top(void) {
   title[room] = 0;
   tw = (int)api->str_len(title) * 6;
   api->text((int16_t)(r.x + 6), (int16_t)(r.y + 3), title, CLR_ACC, CLR_BG);
-  api->fill(rect(r.x, r.y, r.w, 3), CLR_BG);
-  api->fill(rect(r.x, r.y + 11, r.w, 3), CLR_BG);
-  api->fill(rect(r.x, r.y + 3, 6, 8), CLR_BG);
-  api->fill(rect(r.x + 6 + tw, r.y + 3, r.w - 12 - w - tw, 8), CLR_BG);
+  api->fill(capp_rect(r.x, r.y, r.w, 3), CLR_BG);
+  api->fill(capp_rect(r.x, r.y + 11, r.w, 3), CLR_BG);
+  api->fill(capp_rect(r.x, r.y + 3, 6, 8), CLR_BG);
+  api->fill(capp_rect(r.x + 6 + tw, r.y + 3, r.w - 12 - w - tw, 8), CLR_BG);
   api->text((int16_t)(r.x + r.w - 6 - w), (int16_t)(r.y + 3), M.status, M.bad ? CLR_BAD : CLR_DIM, CLR_BG);
-  api->fill(rect(r.x + r.w - 6, r.y + 3, 6, 8), CLR_BG);
+  api->fill(capp_rect(r.x + r.w - 6, r.y + 3, 6, 8), CLR_BG);
 }
 
 static void paint_list(void) {
@@ -608,19 +603,19 @@ static void paint_list(void) {
     uint16_t bg = i == M.sel ? CLR_SEL : CLR_BG;
     api->fmt(line, sizeof line, " %-37.37s", M.title[i]);
     api->text((int16_t)M.c.x, (int16_t)(y + 2), line, CLR_TEXT, bg);
-    api->fill(rect(M.c.x, y, M.c.w, 2), bg);
-    api->fill(rect(M.c.x, y + 10, M.c.w, ROW_H - 10), bg);
-    api->fill(rect(M.c.x + 38 * 6, y + 2, M.c.w - 38 * 6, 8), bg);
+    api->fill(capp_rect(M.c.x, y, M.c.w, 2), bg);
+    api->fill(capp_rect(M.c.x, y + 10, M.c.w, ROW_H - 10), bg);
+    api->fill(capp_rect(M.c.x + 38 * 6, y + 2, M.c.w - 38 * 6, 8), bg);
   }
   if (!M.n) {
     api->text((int16_t)(M.c.x + 8), (int16_t)(y + 4), "no songs: n asks Claude for one", CLR_DIM, CLR_BG);
-    api->fill(rect(M.c.x, y, M.c.w, 4), CLR_BG);
+    api->fill(capp_rect(M.c.x, y, M.c.w, 4), CLR_BG);
     y += 12;
   }
-  api->fill(rect(M.c.x, y, M.c.w, M.c.y + M.c.h - FOOT_H - y), CLR_BG);
+  api->fill(capp_rect(M.c.x, y, M.c.w, M.c.y + M.c.h - FOOT_H - y), CLR_BG);
 }
 
-static CRect roll_rect(void) { return rect(M.c.x + 4, M.c.y + TOP_H + 2, M.c.w - 8, M.c.h - TOP_H - FOOT_H - 4); }
+static CRect roll_rect(void) { return capp_rect(M.c.x + 4, M.c.y + TOP_H + 2, M.c.w - 8, M.c.h - TOP_H - FOOT_H - 4); }
 
 static int roll_x(uint32_t ms) {
   CRect r = roll_rect();
@@ -640,9 +635,9 @@ static void paint_roll(void) {
     int y = r.y + r.h - (nt->pitch - M.lo + 1) * r.h / (span ? span : 1);
     if (x1 < a.x || x0 > a.x + a.w) continue;
     if (x1 <= x0) x1 = x0 + 1;
-    api->fill(rect(x0, y, x1 - x0 - (x1 - x0 > 2), rowh), CHAN[nt->ch & 7]);
+    api->fill(capp_rect(x0, y, x1 - x0 - (x1 - x0 > 2), rowh), CHAN[nt->ch & 7]);
   }
-  if (M.head_x >= r.x) api->fill(rect(M.head_x, r.y, 1, r.h), CLR_HEAD);
+  if (M.head_x >= r.x) api->fill(capp_rect(M.head_x, r.y, 1, r.h), CLR_HEAD);
 }
 
 static void app_paint(void *st, CRect c) {
@@ -654,10 +649,10 @@ static void app_paint(void *st, CRect c) {
   if (M.view == V_SONG && a.w <= 4 && a.y >= roll_rect().y) { paint_roll(); return; }
   paint_top();
   if (in_song()) {
-    api->fill(rect(c.x, c.y + TOP_H, c.w, 2), CLR_BG);
-    api->fill(rect(c.x, c.y + TOP_H + 2, 4, roll_rect().h), CLR_BG);
-    api->fill(rect(c.x + c.w - 4, c.y + TOP_H + 2, 4, roll_rect().h), CLR_BG);
-    api->fill(rect(c.x, c.y + c.h - FOOT_H - 2, c.w, 2), CLR_BG);
+    api->fill(capp_rect(c.x, c.y + TOP_H, c.w, 2), CLR_BG);
+    api->fill(capp_rect(c.x, c.y + TOP_H + 2, 4, roll_rect().h), CLR_BG);
+    api->fill(capp_rect(c.x + c.w - 4, c.y + TOP_H + 2, 4, roll_rect().h), CLR_BG);
+    api->fill(capp_rect(c.x, c.y + c.h - FOOT_H - 2, c.w, 2), CLR_BG);
     paint_roll();
   } else paint_list();
   if (M.view == V_ASK) {
@@ -806,9 +801,9 @@ static int app_tick(void *st, uint32_t now) {
     x = roll_x(pos % (M.len_ms ? M.len_ms : 1));
     if (x != M.head_x && M.have_c && M.view == V_SONG) {
       CRect r = roll_rect();
-      if (M.head_x >= r.x) api->damage(rect(M.head_x, r.y, 1, r.h));
+      if (M.head_x >= r.x) api->damage(capp_rect(M.head_x, r.y, 1, r.h));
       M.head_x = x;
-      api->damage(rect(x, r.y, 1, r.h));
+      api->damage(capp_rect(x, r.y, 1, r.h));
       return 1;
     }
   }

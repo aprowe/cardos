@@ -22,6 +22,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
 #include "apps/confirm.h"
@@ -73,24 +74,11 @@ static struct {
 
 /* ---- small helpers -------------------------------------------------------- */
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
-
-static int str_eq(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
-
-static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
-
 /* Case-insensitive, because a camera writes PHOTO.JPG and a person writing
  * this table thinks in lower case. */
 static int ext_is(const char *ext, const char *want) {
   for (;;) {
-    if (lower(*ext) != *want) return 0;
+    if (str_lower(*ext) != *want) return 0;
     if (!*want) return 1;
     ext++; want++;
   }
@@ -108,13 +96,13 @@ static int list_top(void) { return F.at.y + BAR_H; }
 
 static void damage_row(int idx) {
   if (!F.have_at || idx < F.top || idx >= F.top + F.rows) return;
-  api->damage(rect(F.at.x, list_top() + (idx - F.top) * ROW_H, F.at.w, ROW_H));
+  api->damage(capp_rect(F.at.x, list_top() + (idx - F.top) * ROW_H, F.at.w, ROW_H));
 }
 
 /* The footer, which is also the prompt and the status line. */
 static void damage_footer(void) {
   if (!F.have_at) return;
-  api->damage(rect(F.at.x, F.at.y + F.at.h - FOOT_H, F.at.w, FOOT_H));
+  api->damage(capp_rect(F.at.x, F.at.y + F.at.h - FOOT_H, F.at.w, FOOT_H));
 }
 
 static void damage_all(void) {
@@ -215,7 +203,7 @@ static void go_to(const char *path) {
 
 static void go_up(void) {
   int i, cut = 0;
-  if (str_eq(F.cwd, "/")) return;
+  if (str_same(F.cwd, "/")) return;
   for (i = 0; F.cwd[i]; i++) if (F.cwd[i] == '/') cut = i;
   F.cwd[cut ? cut : 1] = 0;
   F.sel = 0;
@@ -403,7 +391,7 @@ static void paint_footer(CRect c) {
     short x = (short)(c.x + 4 + lw * 6);
     footer_paint(api, c, label);
     api->text(x, y, F.buf + from, CLR_FG, FOOT_BG);
-    api->fill(rect(x + (F.buf_len - from) * 6, y, 5, 8), CLR_FG);
+    api->fill(capp_rect(x + (F.buf_len - from) * 6, y, 5, 8), CLR_FG);
   } else if (F.ask == ASK_DELETE) {
     /* The name cut short enough that the question still fits. */
     char t[24];
@@ -449,10 +437,10 @@ static void app_paint(void *st, CRect full) {
   if (F.sel >= F.top + F.rows) F.top = F.sel - F.rows + 1;
 
   /* The path, always. Knowing where you are is most of a file manager. */
-  api->fill(rect(c.x, c.y, c.w, BAR_H), CLR_BAR);
+  api->fill(capp_rect(c.x, c.y, c.w, BAR_H), CLR_BAR);
   api->text((short)(c.x + 2), (short)(c.y + 1), F.cwd, CLR_FG, CLR_BAR);
 
-  api->fill(rect(c.x, top, c.w, list_h), CLR_BG);
+  api->fill(capp_rect(c.x, top, c.w, list_h), CLR_BG);
   for (i = 0; i < F.rows; i++) {
     int idx = F.top + i;
     short y = (short)(top + i * ROW_H);
@@ -463,7 +451,7 @@ static void app_paint(void *st, CRect full) {
     e = at(idx);
 
     bg = idx == F.sel ? CLR_SEL : CLR_BG;
-    if (idx == F.sel) api->fill(rect(c.x, y, c.w, ROW_H), CLR_SEL);
+    if (idx == F.sel) api->fill(capp_rect(c.x, y, c.w, ROW_H), CLR_SEL);
     fg = e->is_dir ? CLR_DIR : CLR_FG;
 
     /* A folder gets a slash rather than an icon: at nine pixels a row, one

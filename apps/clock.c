@@ -24,6 +24,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "kernel/sys/alarmfmt.h"
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
@@ -65,12 +66,6 @@ static struct {
   int     f_big, f_mid, f_ui, f_uib;
   CRect   content;
 } K;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
 
 /* ---- the file ------------------------------------------------------------- */
 
@@ -173,7 +168,7 @@ static void paint_foot(const char *s) {
 /* The hours and minutes, and the seconds after them, as one line centred:
  * the part that changes every second, so tick damages only this. */
 static CRect time_rect(void) {
-  return rect(K.content.x, K.content.y + 10, K.content.w, api->font_height(K.f_big));
+  return capp_rect(K.content.x, K.content.y + 10, K.content.w, api->font_height(K.f_big));
 }
 
 static void paint_time(const CappTime *t) {
@@ -186,12 +181,12 @@ static void paint_time(const CappTime *t) {
   ws = api->text_width(K.f_mid, ss);
   x = r.x + (r.w - (wb + 6 + ws)) / 2;
   sy = r.y + r.h - api->font_height(K.f_mid);           /* on the baseline */
-  api->fill(rect(r.x, r.y, x - r.x, r.h), CLR_BG);
+  api->fill(capp_rect(r.x, r.y, x - r.x, r.h), CLR_BG);
   api->text_font(K.f_big, (int16_t)x, (int16_t)r.y, hm, CLR_TEXT, CLR_BG);
-  api->fill(rect(x + wb, r.y, 6, r.h), CLR_BG);
-  api->fill(rect(x + wb + 6, r.y, ws, sy - r.y), CLR_BG);
+  api->fill(capp_rect(x + wb, r.y, 6, r.h), CLR_BG);
+  api->fill(capp_rect(x + wb + 6, r.y, ws, sy - r.y), CLR_BG);
   api->text_font(K.f_mid, (int16_t)(x + wb + 6), (int16_t)sy, ss, CLR_ACCENT, CLR_BG);
-  api->fill(rect(x + wb + 6 + ws, r.y, r.x + r.w - (x + wb + 6 + ws), r.h), CLR_BG);
+  api->fill(capp_rect(x + wb + 6 + ws, r.y, r.x + r.w - (x + wb + 6 + ws), r.h), CLR_BG);
 }
 
 static void paint_face(void) {
@@ -200,9 +195,9 @@ static void paint_face(void) {
   char s[64];
   int y, w;
   api->now(&t);
-  api->fill(rect(c.x, c.y, c.w, 10), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, 10), CLR_BG);
   if (!t.synced) {
-    api->fill(rect(c.x, c.y + 10, c.w, c.h - 10 - FOOT_H), CLR_BG);
+    api->fill(capp_rect(c.x, c.y + 10, c.w, c.h - 10 - FOOT_H), CLR_BG);
     api->text_font(K.f_uib, (int16_t)(c.x + 12), (int16_t)(c.y + 30), "The clock is not set",
                    CLR_TEXT, CLR_BG);
     api->text_font(K.f_ui, (int16_t)(c.x + 12), (int16_t)(c.y + 50),
@@ -210,8 +205,8 @@ static void paint_face(void) {
   } else {
     paint_time(&t);
     y = time_rect().y + time_rect().h + 6;
-    api->fill(rect(c.x, time_rect().y + time_rect().h, c.w, c.y + c.h - FOOT_H -
-                   (time_rect().y + time_rect().h)), CLR_BG);
+    api->fill(capp_rect(c.x, time_rect().y + time_rect().h, c.w, c.y + c.h - FOOT_H -
+                        (time_rect().y + time_rect().h)), CLR_BG);
     api->fmt(s, sizeof s, "%s %u %s", WDAY[t.wday % 7], t.day, MON[(t.month + 11) % 12]);
     w = api->text_width(K.f_uib, s);
     api->text_font(K.f_uib, (int16_t)(c.x + (c.w - w) / 2), (int16_t)y, s, CLR_TEXT, CLR_BG);
@@ -227,10 +222,10 @@ static void paint_face(void) {
 }
 
 static void paint_switch(int x, int y, int on, uint16_t bg) {
-  api->fill(rect(x, y, 22, 12), on ? CLR_ON : CLR_OFF);
-  api->fill(rect(x, y, 1, 1), bg); api->fill(rect(x + 21, y, 1, 1), bg);
-  api->fill(rect(x, y + 11, 1, 1), bg); api->fill(rect(x + 21, y + 11, 1, 1), bg);
-  api->fill(rect(on ? x + 12 : x + 2, y + 2, 8, 8), CLR_TEXT);
+  api->fill(capp_rect(x, y, 22, 12), on ? CLR_ON : CLR_OFF);
+  api->fill(capp_rect(x, y, 1, 1), bg); api->fill(capp_rect(x + 21, y, 1, 1), bg);
+  api->fill(capp_rect(x, y + 11, 1, 1), bg); api->fill(capp_rect(x + 21, y + 11, 1, 1), bg);
+  api->fill(capp_rect(on ? x + 12 : x + 2, y + 2, 8, 8), CLR_TEXT);
 }
 
 static void paint_list(void) {
@@ -241,7 +236,7 @@ static void paint_list(void) {
   clamp_sel();
   y = c.y;
   if (!K.n) {
-    api->fill(rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
+    api->fill(capp_rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
     api->text_font(K.f_uib, (int16_t)(c.x + 12), (int16_t)(c.y + 12), "No alarms", CLR_TEXT, CLR_BG);
     api->text_font(K.f_ui, (int16_t)(c.x + 12), (int16_t)(c.y + 32), "n makes one", CLR_DIM, CLR_BG);
   } else {
@@ -249,7 +244,7 @@ static void paint_list(void) {
       const Alarm *a = &K.list[i];
       uint16_t bg = i == K.sel ? CLR_SEL : CLR_BG;
       int x;
-      api->fill(rect(c.x, y, c.w, ROW_H), bg);
+      api->fill(capp_rect(c.x, y, c.w, ROW_H), bg);
       api->fmt(t, sizeof t, "%02u:%02u", a->hour, a->min);
       api->text_font(K.f_uib, (int16_t)(c.x + 10), (int16_t)font_y(K.f_uib, y, ROW_H), t,
                      a->on ? CLR_TEXT : CLR_DIM, bg);
@@ -262,7 +257,7 @@ static void paint_list(void) {
                        a->on ? CLR_ACCENT : CLR_FAINT, bg);
       paint_switch(c.x + c.w - 32, y + (ROW_H - 12) / 2, a->on, bg);
     }
-    if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
+    if (y < c.y + c.h - FOOT_H) api->fill(capp_rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
   }
   if (K.ask_delete) {
     /* The time names it; a label could run the question off the bar. */
@@ -283,11 +278,11 @@ static void paint_edit(void) {
   int wc = api->text_width(K.f_big, ":"), x0 = c.x + (c.w - (2 * wd + wc)) / 2;
   int y = c.y + 6, i, dx, bw = 26;
 
-  api->fill(rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_BG);
   api->fmt(hh, sizeof hh, "%02u", K.edit.hour);
   api->fmt(mm, sizeof mm, "%02u", K.edit.min);
-  if (K.field == F_HOUR) api->fill(rect(x0 - 3, y - 2, wd + 6, hb + 4), CLR_FIELD);
-  if (K.field == F_MIN) api->fill(rect(x0 + wd + wc - 3, y - 2, wd + 6, hb + 4), CLR_FIELD);
+  if (K.field == F_HOUR) api->fill(capp_rect(x0 - 3, y - 2, wd + 6, hb + 4), CLR_FIELD);
+  if (K.field == F_MIN) api->fill(capp_rect(x0 + wd + wc - 3, y - 2, wd + 6, hb + 4), CLR_FIELD);
   api->text_font(K.f_big, (int16_t)x0, (int16_t)y, hh, CLR_TEXT,
                  K.field == F_HOUR ? CLR_FIELD : CLR_BG);
   api->text_font(K.f_big, (int16_t)(x0 + wd), (int16_t)y, ":", CLR_DIM, CLR_BG);
@@ -299,14 +294,14 @@ static void paint_edit(void) {
   for (i = 0; i < 7; i++) {
     int on = (K.edit.days >> i) & 1, sel = K.field == F_DAY0 + i;
     uint16_t bg = on ? CLR_ON : CLR_OFF;
-    api->fill(rect(dx + i * bw + 1, y, bw - 3, 18), bg);
-    if (sel) api->frame(rect(dx + i * bw, y - 1, bw - 1, 20), CLR_TEXT);
+    api->fill(capp_rect(dx + i * bw + 1, y, bw - 3, 18), bg);
+    if (sel) api->frame(capp_rect(dx + i * bw, y - 1, bw - 1, 20), CLR_TEXT);
     api->text_font(K.f_uib, (int16_t)(dx + i * bw + (bw - 3 - api->text_width(K.f_uib, L[i])) / 2 + 1),
                    (int16_t)font_y(K.f_uib, y, 18), L[i], CLR_TEXT, bg);
   }
   y += 24;
 
-  api->fill(rect(c.x + 8, y, c.w - 16, 20), K.field == F_LABEL ? CLR_FIELD : CLR_SEL);
+  api->fill(capp_rect(c.x + 8, y, c.w - 16, 20), K.field == F_LABEL ? CLR_FIELD : CLR_SEL);
   api->fmt(shown, sizeof shown, "%s%s", K.edit.label, K.field == F_LABEL ? "_" : "");
   api->text_font(K.f_ui, (int16_t)(c.x + 14), (int16_t)font_y(K.f_ui, y, 20),
                  shown[0] ? shown : "label", shown[0] ? CLR_TEXT : CLR_FAINT,

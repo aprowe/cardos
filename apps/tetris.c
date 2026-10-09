@@ -15,6 +15,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/tetris_data.h"
 #include "apps/safefile.h"
 
@@ -69,12 +70,6 @@ static struct {
   CRect    area, board_r, panel_r;
   int      have_area;
 } G;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
 
 static void mark_board(void) { if (G.have_area) api->damage(G.board_r); }
 static void mark_panel(void) { if (G.have_area) api->damage(G.panel_r); }
@@ -261,11 +256,11 @@ static uint32_t drop_ms(void) {
 /* ---- drawing -------------------------------------------------------------- */
 
 static void draw_block(int x, int y, uint16_t colour) {
-  api->fill(rect(x, y, CELL, CELL), colour);
-  api->fill(rect(x, y, CELL, 1), CAPP_WHITE);
-  api->fill(rect(x, y, 1, CELL), CAPP_WHITE);
-  api->fill(rect(x, y + CELL - 1, CELL, 1), CAPP_BLACK);
-  api->fill(rect(x + CELL - 1, y, 1, CELL), CAPP_BLACK);
+  api->fill(capp_rect(x, y, CELL, CELL), colour);
+  api->fill(capp_rect(x, y, CELL, 1), CAPP_WHITE);
+  api->fill(capp_rect(x, y, 1, CELL), CAPP_WHITE);
+  api->fill(capp_rect(x, y + CELL - 1, CELL, 1), CAPP_BLACK);
+  api->fill(capp_rect(x + CELL - 1, y, 1, CELL), CAPP_BLACK);
 }
 
 static void draw_shape_px(int type, int rot, int px, int py, int ghost) {
@@ -275,7 +270,7 @@ static void draw_shape_px(int type, int rot, int px, int py, int ghost) {
     for (c = 0; c < TT_BOX; c++)
       if (mask & (uint16_t)(1u << (r * 4 + c))) {
         int x = px + c * CELL, y = py + r * CELL;
-        if (ghost) api->frame(rect(x, y, CELL, CELL), CLR_DIM);
+        if (ghost) api->frame(capp_rect(x, y, CELL, CELL), CLR_DIM);
         else draw_block(x, y, PIECE_COLOUR[type]);
       }
 }
@@ -285,8 +280,8 @@ static void layout(CRect c) {
   int ox = c.x + (c.w > total_w ? (c.w - total_w) / 2 : 0);
   int oy = c.y + (c.h > BOARD_PX_H ? (c.h - BOARD_PX_H) / 2 : 0);
   G.area = c;
-  G.board_r = rect(ox, oy, BOARD_PX_W, BOARD_PX_H);
-  G.panel_r = rect(ox + BOARD_PX_W + GAP, oy, PANEL_W, BOARD_PX_H);
+  G.board_r = capp_rect(ox, oy, BOARD_PX_W, BOARD_PX_H);
+  G.panel_r = capp_rect(ox + BOARD_PX_W + GAP, oy, PANEL_W, BOARD_PX_H);
   G.have_area = 1;
 }
 
@@ -296,7 +291,7 @@ static void paint_board(void) {
     for (c = 0; c < BOARD_W_CELLS; c++) {
       int x = G.board_r.x + c * CELL, y = G.board_r.y + r * CELL;
       if (G.board[r][c]) draw_block(x, y, PIECE_COLOUR[G.board[r][c] - 1]);
-      else api->fill(rect(x, y, CELL, CELL), CLR_BOARD_BG);
+      else api->fill(capp_rect(x, y, CELL, CELL), CLR_BOARD_BG);
     }
   gr = G.row;
   while (!collides(G.type, G.rot, G.col, gr + 1)) gr++;
@@ -312,7 +307,7 @@ static void paint_panel(void) {
   api->fill(p, CLR_BG);
   api->text((int16_t)p.x, (int16_t)y, "TETRIS", CLR_ACCENT, CLR_BG); y += 10;
   api->text((int16_t)p.x, (int16_t)y, "next", CLR_DIM, CLR_BG); y += 9;
-  api->fill(rect(p.x, y, TT_BOX * CELL, TT_BOX * CELL), CLR_BOARD_BG);
+  api->fill(capp_rect(p.x, y, TT_BOX * CELL, TT_BOX * CELL), CLR_BOARD_BG);
   draw_shape_px(G.next_type, TT_SPAWN, p.x, y, 0);
   y += TT_BOX * CELL + 3;
   api->text((int16_t)p.x, (int16_t)y, "score", CLR_DIM, CLR_BG); y += 9;
@@ -331,12 +326,12 @@ static void paint_panel(void) {
 
 static void paint_play(void) {
   CRect b = G.board_r, p = G.panel_r, a = G.area;
-  if (b.x > a.x) api->fill(rect(a.x, a.y, b.x - a.x, a.h), CLR_BG);
-  if (b.y > a.y) api->fill(rect(a.x, a.y, a.w, b.y - a.y), CLR_BG);
+  if (b.x > a.x) api->fill(capp_rect(a.x, a.y, b.x - a.x, a.h), CLR_BG);
+  if (b.y > a.y) api->fill(capp_rect(a.x, a.y, a.w, b.y - a.y), CLR_BG);
   if (b.y + b.h < a.y + a.h)
-    api->fill(rect(a.x, b.y + b.h, a.w, a.y + a.h - (b.y + b.h)), CLR_BG);
+    api->fill(capp_rect(a.x, b.y + b.h, a.w, a.y + a.h - (b.y + b.h)), CLR_BG);
   if (p.x + p.w < a.x + a.w)
-    api->fill(rect(p.x + p.w, b.y, a.x + a.w - (p.x + p.w), b.h), CLR_BG);
+    api->fill(capp_rect(p.x + p.w, b.y, a.x + a.w - (p.x + p.w), b.h), CLR_BG);
   paint_board();
   paint_panel();
 }

@@ -15,6 +15,7 @@
  * the app lets the track that is playing finish; nothing follows it.
  */
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/footer.h"
 #include "apps/confirm.h"
 #include "apps/safefile.h"
@@ -66,17 +67,6 @@ static struct {
   int      fd, got, want, last_drawn, cancelled;
 } M;
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)(w > 0 ? w : 0); r.h = (int16_t)h;
-  return r;
-}
-
-static int same(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
-
 static void path_of(int i, char *out, int n) { api->fmt(out, (size_t)n, DIR "/%s.wav", M.id[i]); }
 
 static void say(int bad, const char *s) {
@@ -90,19 +80,6 @@ static long to_num(const char *s) {
   return v;
 }
 
-/* Field `k` of a tab-separated line into out. */
-static void field(const char *line, int k, char *out, int n) {
-  int i = 0;
-  while (k > 0 && *line && *line != '\n') { if (*line++ == '\t') k--; }
-  while (*line && *line != '\t' && *line != '\n' && i < n - 1) out[i++] = *line++;
-  out[i] = 0;
-}
-
-static const char *next_line(const char *p) {
-  while (*p && *p != '\n') p++;
-  return *p ? p + 1 : p;
-}
-
 /* ---- the index, and what is on the card ------------------------------------------ */
 
 static void index_load(void) {
@@ -114,12 +91,12 @@ static void index_load(void) {
   api->close(fd);
   if (n <= 0) return;
   M.reply[n] = 0;
-  for (p = M.reply; *p && M.n < MAXT; p = next_line(p)) {
+  for (p = M.reply; *p && M.n < MAXT; p = tsv_next_line(p)) {
     char ms[12], path[64];
     CappStat st;
-    field(p, 0, M.id[M.n], sizeof M.id[M.n]);
-    field(p, 1, M.title[M.n], TITLE);
-    field(p, 2, ms, sizeof ms);
+    tsv_field(p, 0, M.id[M.n], sizeof M.id[M.n]);
+    tsv_field(p, 1, M.title[M.n], TITLE);
+    tsv_field(p, 2, ms, sizeof ms);
     M.ms[M.n] = (uint32_t)to_num(ms);
     path_of(M.n, path, sizeof path);
     M.local[M.n] = 0;
@@ -154,9 +131,9 @@ static void add_local(void) {
     CappStat st;
     int len = (int)api->str_len(names[i]);
     if (len < 5 || len - 4 >= IDL || names[i][0] == '.') continue;
-    if (!same(names[i] + len - 4, ".wav") && !same(names[i] + len - 4, ".WAV")) continue;
+    if (!str_same(names[i] + len - 4, ".wav") && !str_same(names[i] + len - 4, ".WAV")) continue;
     names[i][len - 4] = 0;
-    for (j = 0; j < M.n; j++) if (same(M.id[j], names[i])) break;
+    for (j = 0; j < M.n; j++) if (str_same(M.id[j], names[i])) break;
     if (j < M.n) continue;
     /* FAT ignores case, so NAME.WAV opens as NAME.wav too. */
     api->fmt(path, sizeof path, DIR "/%s.wav", names[i]);
@@ -186,8 +163,8 @@ static void index_save(void) {
 
 static int list_rows(void) { return (M.c.h - TOP_H - NOW_H - FOOT_H) / ROW_H; }
 
-static CRect now_rect(void) { return rect(M.c.x, M.c.y + M.c.h - FOOT_H - NOW_H, M.c.w, NOW_H); }
-static CRect top_rect(void) { return rect(M.c.x, M.c.y, M.c.w, TOP_H); }
+static CRect now_rect(void) { return capp_rect(M.c.x, M.c.y + M.c.h - FOOT_H - NOW_H, M.c.w, NOW_H); }
+static CRect top_rect(void) { return capp_rect(M.c.x, M.c.y, M.c.w, TOP_H); }
 
 static void mmss(uint32_t ms, char *out, int n) {
   uint32_t s = ms / 1000;
@@ -203,11 +180,11 @@ static void paint_top(void) {
   /* Written over itself, padded: nothing is cleared under text. */
   api->text((int16_t)(r.x + 6), (int16_t)(r.y + 3), "Music", CLR_ACC, CLR_BG);
   w = (int)api->str_len(line) * 6;
-  api->fill(rect(r.x + 36, r.y, r.w - 42 - w, TOP_H), CLR_BG);
+  api->fill(capp_rect(r.x + 36, r.y, r.w - 42 - w, TOP_H), CLR_BG);
   api->text((int16_t)(r.x + r.w - 6 - w), (int16_t)(r.y + 3), line, M.bad ? CLR_BAD : CLR_DIM, CLR_BG);
-  api->fill(rect(r.x, r.y, 6, TOP_H), CLR_BG);
-  api->fill(rect(r.x, r.y, r.w, 3), CLR_BG);
-  api->fill(rect(r.x, r.y + 11, r.w, TOP_H - 11), CLR_BG);
+  api->fill(capp_rect(r.x, r.y, 6, TOP_H), CLR_BG);
+  api->fill(capp_rect(r.x, r.y, r.w, 3), CLR_BG);
+  api->fill(capp_rect(r.x, r.y + 11, r.w, TOP_H - 11), CLR_BG);
 }
 
 static void paint_row(int i, int y) {
@@ -220,11 +197,11 @@ static void paint_row(int i, int y) {
   w = (int)api->str_len(len) * 6;
   api->text((int16_t)(M.c.x + M.c.w - 6 - w), (int16_t)(y + 2), len, CLR_DIM, bg);
   /* Round the text, not under it. */
-  api->fill(rect(M.c.x, y, 4, ROW_H), bg);
-  api->fill(rect(M.c.x, y, M.c.w, 2), bg);
-  api->fill(rect(M.c.x, y + 10, M.c.w, ROW_H - 10), bg);
-  api->fill(rect(M.c.x + 4 + 32 * 6, y + 2, M.c.w - 10 - w - 32 * 6, 8), bg);
-  api->fill(rect(M.c.x + M.c.w - 6, y + 2, 6, 8), bg);
+  api->fill(capp_rect(M.c.x, y, 4, ROW_H), bg);
+  api->fill(capp_rect(M.c.x, y, M.c.w, 2), bg);
+  api->fill(capp_rect(M.c.x, y + 10, M.c.w, ROW_H - 10), bg);
+  api->fill(capp_rect(M.c.x + 4 + 32 * 6, y + 2, M.c.w - 10 - w - 32 * 6, 8), bg);
+  api->fill(capp_rect(M.c.x + M.c.w - 6, y + 2, 6, 8), bg);
 }
 
 static void paint_list(void) {
@@ -232,10 +209,10 @@ static void paint_list(void) {
   if (M.sel < M.top) M.top = M.sel;
   if (M.sel >= M.top + rows) M.top = M.sel - rows + 1;
   for (i = M.top; i < M.n && i - M.top < rows; i++, y += ROW_H) paint_row(i, y);
-  if (y < M.c.y + TOP_H + rows * ROW_H) api->fill(rect(M.c.x, y, M.c.w, M.c.y + TOP_H + rows * ROW_H - y), CLR_BG);
+  if (y < M.c.y + TOP_H + rows * ROW_H) api->fill(capp_rect(M.c.x, y, M.c.w, M.c.y + TOP_H + rows * ROW_H - y), CLR_BG);
   /* What the rows do not reach above the strip. */
   y = M.c.y + TOP_H + rows * ROW_H;
-  api->fill(rect(M.c.x, y, M.c.w, now_rect().y - y), CLR_BG);
+  api->fill(capp_rect(M.c.x, y, M.c.w, now_rect().y - y), CLR_BG);
 }
 
 static void paint_now(void) {
@@ -262,13 +239,13 @@ static void paint_now(void) {
            M.shuffle ? "  shuffle" : "", au ? au->volume() : 0);
   w = (int)api->str_len(line) * 6;
   api->text((int16_t)(r.x + 6), (int16_t)(r.y + 13), line, CLR_DIM, CLR_NOW);
-  api->fill(rect(r.x + 6 + w, r.y + 13, r.w - 6 - w, 8), CLR_NOW);
-  api->fill(rect(r.x + 6, r.y + 22, fill, 2), CLR_ACC);              /* the bar: the */
-  api->fill(rect(r.x + 6 + fill, r.y + 22, barw - fill, 2), CLR_BAR); /* two parts, once */
-  api->fill(rect(r.x, r.y, 6, NOW_H), CLR_NOW);
-  api->fill(rect(r.x, r.y, r.w, 3), CLR_NOW);
-  api->fill(rect(r.x, r.y + 11, r.w, 2), CLR_NOW);
-  api->fill(rect(r.x + r.w - 6, r.y, 6, NOW_H), CLR_NOW);
+  api->fill(capp_rect(r.x + 6 + w, r.y + 13, r.w - 6 - w, 8), CLR_NOW);
+  api->fill(capp_rect(r.x + 6, r.y + 22, fill, 2), CLR_ACC);              /* the bar: the */
+  api->fill(capp_rect(r.x + 6 + fill, r.y + 22, barw - fill, 2), CLR_BAR); /* two parts, once */
+  api->fill(capp_rect(r.x, r.y, 6, NOW_H), CLR_NOW);
+  api->fill(capp_rect(r.x, r.y, r.w, 3), CLR_NOW);
+  api->fill(capp_rect(r.x, r.y + 11, r.w, 2), CLR_NOW);
+  api->fill(capp_rect(r.x + r.w - 6, r.y, 6, NOW_H), CLR_NOW);
   M.shown_s = pos / 1000;
 }
 
@@ -354,12 +331,12 @@ static void sync_run(void) {
   r = api->http("GET", url, 0, 0, "", M.reply, sizeof M.reply, 15000);
   if (r < 0 || (M.reply[0] == 'e' && M.reply[1] == 'r')) { say(1, "the server did not answer"); mark_all(); return; }
   whole = sync_reply(M.reply, r, (int)sizeof M.reply);
-  for (p = M.reply; *p && n < MAXT; p = next_line(p)) {
+  for (p = M.reply; *p && n < MAXT; p = tsv_next_line(p)) {
     char num[16];
-    field(p, 0, ids[n], sizeof ids[n]);
-    field(p, 1, titles[n], TITLE);
-    field(p, 2, num, sizeof num); ms[n] = (uint32_t)to_num(num);
-    field(p, 3, num, sizeof num); bytes[n] = (uint32_t)to_num(num);
+    tsv_field(p, 0, ids[n], sizeof ids[n]);
+    tsv_field(p, 1, titles[n], TITLE);
+    tsv_field(p, 2, num, sizeof num); ms[n] = (uint32_t)to_num(num);
+    tsv_field(p, 3, num, sizeof num); bytes[n] = (uint32_t)to_num(num);
     if (ids[n][0]) n++;
   }
   /* Gone from the server: gone from here (not the one playing) -- but only
@@ -432,7 +409,7 @@ static void sync_run(void) {
   if (M.sel >= M.n) M.sel = M.n ? M.n - 1 : 0;
   if (M.playing >= 0) {
     M.playing = -1;
-    for (i = 0; i < M.n && was[0]; i++) if (same(M.id[i], was)) { M.playing = i; break; }
+    for (i = 0; i < M.n && was[0]; i++) if (str_same(M.id[i], was)) { M.playing = i; break; }
   }
   if (M.cancelled) say(0, "sync stopped: r to go on");
   else if (!M.bad) say(0, fetched ? (fetched == 1 ? "1 new track" : "new tracks") : "");

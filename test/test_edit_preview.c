@@ -111,7 +111,7 @@ static void add_line(const char *s) {
 }
 
 /* The page: 240 wide, the margins take 8, so a text row has 232. */
-#define PAGE rect(0, 0, 240, 400)
+#define PAGE capp_rect(0, 0, 240, 400)
 #define AVAIL (240 - PG_LEFT * 2)
 
 /* Joined back with single spaces, the rows must be the line again. */
@@ -250,7 +250,7 @@ void test_preview_nothing_is_drawn_past_the_bottom(void) {
   setup(1);
   for (i = 0; i < 30; i++) add_line("a line of text");
   BOTTOM = 100;
-  md_render(rect(0, 0, 240, 100), 0);
+  md_render(capp_rect(0, 0, 240, 100), 0);
   CHECK_EQ(0, DRAWN_BELOW);
   CHECK_EQ(1, E.pmore);
   CHECK_EQ(30, NROWS);                            /* all laid out, some drawn */
@@ -261,7 +261,7 @@ void test_preview_the_last_screen_says_there_is_no_more(void) {
   add_line("one");
   add_line("two");
   BOTTOM = 100;
-  md_render(rect(0, 0, 240, 100), 0);
+  md_render(capp_rect(0, 0, 240, 100), 0);
   CHECK_EQ(0, E.pmore);
 }
 

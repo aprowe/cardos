@@ -21,6 +21,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
 
@@ -69,12 +70,6 @@ static struct {
   CRect at;
   int   list_y, list_rows;
 } S;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
 
 /* ---- the list ------------------------------------------------------------ */
 
@@ -292,9 +287,9 @@ static void refresh(void) {
 static int landed(int i) {
   CRect c = S.at;
   if (c.w <= 0 || i == S.sel) return 1;
-  api->damage(rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H));
-  api->damage(rect(c.x, c.y, c.w, 13));
-  if (i >= 0 && i < S.list_rows) api->damage(rect(c.x, S.list_y + i * 9, c.w, 9));
+  api->damage(capp_rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H));
+  api->damage(capp_rect(c.x, c.y, c.w, 13));
+  if (i >= 0 && i < S.list_rows) api->damage(capp_rect(c.x, S.list_y + i * 9, c.w, 9));
   return 1;
 }
 
@@ -363,13 +358,13 @@ static void money(char *buf, size_t n, long cents, int with_cents) {
 static void seg(int x0, int x1, int y, const char *s, uint16_t fg, uint16_t bg) {
   char line[48];
   int n = (x1 - x0) / 6, i = 0;
-  if (n <= 0) { if (x1 > x0) api->fill(rect(x0, y, x1 - x0, 8), bg); return; }
+  if (n <= 0) { if (x1 > x0) api->fill(capp_rect(x0, y, x1 - x0, 8), bg); return; }
   if (n > (int)sizeof line - 1) n = sizeof line - 1;
   while (s[i] && i < n) { line[i] = s[i]; i++; }
   while (i < n) line[i++] = ' ';
   line[n] = 0;
   api->text((short)x0, (short)y, line, fg, bg);
-  if (x0 + n * 6 < x1) api->fill(rect(x0 + n * 6, y, x1 - x0 - n * 6, 8), bg);
+  if (x0 + n * 6 < x1) api->fill(capp_rect(x0 + n * 6, y, x1 - x0 - n * 6, 8), bg);
 }
 
 /* The week, as a line, blitted a row at a time: each row's pixels are
@@ -390,8 +385,8 @@ static void paint_graph(CRect g, const Quote *q) {
 
   if (q->nhist < 2) {
     int ty = g.h / 2 - 4;
-    api->fill(rect(g.x, g.y, g.w, ty), CLR_PANEL);
-    api->fill(rect(g.x, g.y + ty + 8, g.w, g.h - ty - 8), CLR_PANEL);
+    api->fill(capp_rect(g.x, g.y, g.w, ty), CLR_PANEL);
+    api->fill(capp_rect(g.x, g.y + ty + 8, g.w, g.h - ty - 8), CLR_PANEL);
     seg(g.x, g.x + 6, g.y + ty, "", CLR_DIM, CLR_PANEL);
     seg(g.x + 6, g.x + g.w, g.y + ty, "no history", CLR_DIM, CLR_PANEL);
     return;
@@ -446,8 +441,8 @@ static void paint_graph(CRect g, const Quote *q) {
       else if (r == ref && (i % 4) < 2) s_row[i] = CLR_GRID;
       else s_row[i] = CLR_PANEL;
     }
-    if (from > 0) api->fill(rect(g.x, g.y + r, 2, 1), CLR_PANEL);
-    api->pixels(rect(g.x + from, g.y + r, w - from, 1), s_row + from);
+    if (from > 0) api->fill(capp_rect(g.x, g.y + r, 2, 1), CLR_PANEL);
+    api->pixels(capp_rect(g.x + from, g.y + r, w - from, 1), s_row + from);
   }
   api->text((short)(g.x + 2), (short)(g.y + 1), hs, CLR_DIM, CLR_PANEL);
   api->text((short)(g.x + 2), (short)(g.y + g.h - 9), ls, CLR_DIM, CLR_PANEL);
@@ -464,15 +459,15 @@ static void paint_body(CRect c) {
   S.list_rows = 0;
   /* What it is doing, or what the keys are when it is doing nothing. */
   footer_paint(api, c, S.note[0] ? S.note : "r refresh  e edit list  arrows symbol");
-  if (S.n == 0) { api->fill(rect(c.x, c.y, c.w, end - c.y), CLR_BG); return; }
+  if (S.n == 0) { api->fill(capp_rect(c.x, c.y, c.w, end - c.y), CLR_BG); return; }
   q = &S.q[S.sel];
   d = q->price - q->prev;
   tone = d < 0 ? CLR_DOWN : CLR_UP;
 
   /* The symbol and what it is, and how long ago: rows 2..9 of a band of 13. */
-  api->fill(rect(c.x, c.y, c.w, 2), CLR_BG);
-  api->fill(rect(c.x, c.y + 10, c.w, 3), CLR_BG);
-  api->fill(rect(c.x, c.y + 2, 3, 8), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, 2), CLR_BG);
+  api->fill(capp_rect(c.x, c.y + 10, c.w, 3), CLR_BG);
+  api->fill(capp_rect(c.x, c.y + 2, 3, 8), CLR_BG);
   api->fmt(buf, sizeof buf, "%s ", q->sym);
   seg(c.x + 3, c.x + 3 + (int)api->str_len(buf) * 6, c.y + 2, buf, CLR_TEXT, CLR_BG);
   seg(c.x + 3 + (int)api->str_len(buf) * 6, x1 - 30, c.y + 2, q->label, CLR_DIM, CLR_BG);
@@ -482,8 +477,8 @@ static void paint_body(CRect c) {
   seg(x1 - 30, x1, c.y + 2, buf, CLR_DIM, CLR_BG);
 
   /* The price, large, with the change beside it: rows 13..20 of 13..24. */
-  api->fill(rect(c.x, c.y + 13, 3, 8), CLR_BG);
-  api->fill(rect(c.x, c.y + 21, c.w, 3), CLR_BG);
+  api->fill(capp_rect(c.x, c.y + 13, 3, 8), CLR_BG);
+  api->fill(capp_rect(c.x, c.y + 21, c.w, 3), CLR_BG);
   if (!q->have) {
     seg(c.x + 3, x1, c.y + 13, "--", CLR_DIM, CLR_BG);
   } else {
@@ -501,15 +496,15 @@ static void paint_body(CRect c) {
   }
 
   /* The graph, its margins, and the three rows under it. */
-  api->fill(rect(c.x, c.y + 24, 2, 46), CLR_BG);
-  api->fill(rect(x1 - 2, c.y + 24, 2, 46), CLR_BG);
-  api->fill(rect(c.x, c.y + 70, c.w, 3), CLR_BG);
-  paint_graph(rect(c.x + 2, c.y + 24, c.w - 4, 46), q);
+  api->fill(capp_rect(c.x, c.y + 24, 2, 46), CLR_BG);
+  api->fill(capp_rect(x1 - 2, c.y + 24, 2, 46), CLR_BG);
+  api->fill(capp_rect(c.x, c.y + 70, c.w, 3), CLR_BG);
+  paint_graph(capp_rect(c.x + 2, c.y + 24, c.w - 4, 46), q);
 
   /* What the holding is worth. The number the price is a means to. */
   y = c.y + 73;
   if (q->shares > 0 && q->have) {
-    api->fill(rect(c.x, y, 3, 8), CLR_BG);
+    api->fill(capp_rect(c.x, y, 3, 8), CLR_BG);
     money(buf2, sizeof buf2, q->shares * 100, 0);
     api->fmt(buf, sizeof buf, "%s sh", buf2);
     seg(c.x + 3, c.x + 60, y, buf, CLR_DIM, CLR_BG);
@@ -518,15 +513,15 @@ static void paint_body(CRect c) {
     api->fmt(buf, sizeof buf, "$%s", buf2);
     seg(c.x + 60, x1, y, buf, CLR_HOLD, CLR_BG);
 
-    api->fill(rect(c.x, y + 8, c.w, 2), CLR_BG);
-    api->fill(rect(c.x, y + 10, 3, 8), CLR_BG);
+    api->fill(capp_rect(c.x, y + 8, c.w, 2), CLR_BG);
+    api->fill(capp_rect(c.x, y + 10, 3, 8), CLR_BG);
     money(buf2, sizeof buf2, (q->shares * d < 0) ? -(q->shares * d) : q->shares * d, 0);
     api->fmt(buf, sizeof buf, "%c$%s today", d < 0 ? '-' : '+', buf2);
     seg(c.x + 3, x1, y + 10, buf, tone, CLR_BG);
-    api->fill(rect(c.x, y + 18, c.w, 2), CLR_BG);
+    api->fill(capp_rect(c.x, y + 18, c.w, 2), CLR_BG);
     y += 20;
   } else {
-    api->fill(rect(c.x, y, c.w, 2), CLR_BG);
+    api->fill(capp_rect(c.x, y, c.w, 2), CLR_BG);
     y += 2;
   }
 
@@ -540,8 +535,8 @@ static void paint_body(CRect c) {
     uint16_t bg = sel ? CLR_SEL : CLR_BG;
     long dd = S.q[i].price - S.q[i].prev;
 
-    api->fill(rect(c.x, ry, 3, 8), bg);
-    api->fill(rect(c.x, ry + 8, c.w, 1), bg);
+    api->fill(capp_rect(c.x, ry, 3, 8), bg);
+    api->fill(capp_rect(c.x, ry + 8, c.w, 1), bg);
     seg(c.x + 3, c.x + 48, ry, S.q[i].sym, CLR_TEXT, bg);
     if (!S.q[i].have) {
       seg(c.x + 48, x1, ry, "--", CLR_DIM, bg);
@@ -563,7 +558,7 @@ static void paint_body(CRect c) {
     seg(c.x + 160, x1, ry, buf2, CLR_HOLD, bg);
   }
   y += i * 9;
-  if (y < end) api->fill(rect(c.x, y, c.w, end - y), CLR_BG);
+  if (y < end) api->fill(capp_rect(c.x, y, c.w, end - y), CLR_BG);
 }
 
 static void app_paint(void *st, CRect full) {

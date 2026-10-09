@@ -32,6 +32,7 @@
 
 #include "kernel/app/capp.h"
 #include "apps/footer.h"
+#include "apps/str.h"
 
 #define PAGE_PATH  "/cache/page.cpx"
 #define MAXW       240
@@ -273,7 +274,7 @@ static void app_paint(void *st, CRect c) {
 /* ---- fetching ------------------------------------------------------------ */
 
 static void fetch(const char *what) {
-  char url[280];
+  char url[480], enc[400];
   int n;
 
   if (!api->net_ready()) {
@@ -282,7 +283,10 @@ static void fetch(const char *what) {
   }
 
   /* A .cpx is already rendered, so it is fetched as given. Anything else is a
-   * page, and the proxy is what turns one into the other. */
+   * page, and the proxy is what turns one into the other -- the address
+   * escaped, or the server reads an & in it as the end of `url` and a space
+   * breaks the request line. */
+  url_enc(enc, (int)sizeof enc, what);
   {
     size_t l = api->str_len(what);
     if (l > 4 && what[l-4] == '.' && what[l-3] == 'c' &&
@@ -291,9 +295,9 @@ static void fetch(const char *what) {
     else if (W.photo)
       /* 480: a desktop page at half size. 720 fits more of the page but the
        * text stops being readable, and a page you cannot read is a picture. */
-      api->fmt(url, sizeof url, "%s/render?px=0&w=480&url=%s", W.proxy, what);
+      api->fmt(url, sizeof url, "%s/render?px=0&w=480&url=%s", W.proxy, enc);
     else
-      api->fmt(url, sizeof url, "%s/render?url=%s", W.proxy, what);
+      api->fmt(url, sizeof url, "%s/render?url=%s", W.proxy, enc);
   }
 
   close_page();
