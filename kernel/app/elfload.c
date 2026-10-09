@@ -2,6 +2,7 @@
 
 #include "kernel/app/elfload.h"
 #include "kernel/fs/fs.h"
+#include "kernel/sys/applog.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -116,6 +117,14 @@ static void code_free(void *p, uint32_t cap) {
   heap_caps_free(p);
 }
 
+/* See capp_last_shortfall. */
+static uint32_t s_short_want, s_short_largest;
+
+void capp_last_shortfall(uint32_t *want, uint32_t *largest) {
+  if (want) *want = s_short_want;
+  if (largest) *largest = s_short_largest;
+}
+
 uint32_t capp_exec_free(void) {
   return (uint32_t)heap_caps_get_free_size(MALLOC_CAP_EXEC);
 }
@@ -198,11 +207,15 @@ CappResult capp_load(const char *path, LoadedApp *out) {
     goto done;
   }
 
+  s_short_want = s_short_largest = 0;
   code = code_alloc(code_size, &code_cap);
   if (!code) {
+    s_short_want = code_size;
+    s_short_largest = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_EXEC);
     ESP_LOGE(TAG, "want %u bytes of exec RAM, %u free (largest block %u)",
-             (unsigned)code_size, (unsigned)capp_exec_free(),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_EXEC));
+             (unsigned)code_size, (unsigned)capp_exec_free(), (unsigned)s_short_largest);
+    applogf("load", "%s: code wants %u, exec free %u, largest %u", path,
+            (unsigned)code_size, (unsigned)capp_exec_free(), (unsigned)s_short_largest);
     rc = CAPP_ERR_NO_MEMORY;
     goto done;
   }
@@ -211,7 +224,21 @@ CappResult capp_load(const char *path, LoadedApp *out) {
 
   if (data_size) {
     data = heap_caps_malloc(data_size, MALLOC_CAP_8BIT);
-    if (!data) { rc = CAPP_ERR_NO_MEMORY; goto done; }
+    if (!data) {
+      /* The block that fails after hours of use: one piece of the 8-bit
+       * heap, while the total says there is plenty. Said where it can be
+       * read later, because nothing else records it. */
+      s_short_want = data_size;
+      s_short_largest = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+      ESP_LOGE(TAG, "want %u bytes of data, largest block %u",
+               (unsigned)data_size, (unsigned)s_short_largest);
+      applogf("load", "%s: data wants %u, free %u, largest %u", path,
+              (unsigned)data_size,
+              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+              (unsigned)s_short_largest);
+      rc = CAPP_ERR_NO_MEMORY;
+      goto done;
+    }
     memset(data, 0, data_size);
   }
 

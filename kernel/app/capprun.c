@@ -18,6 +18,7 @@
 #include "kernel/net/link.h"
 #include "kernel/sys/printq.h"
 #include "kernel/drv/bthid.h"
+#include "kernel/sys/applog.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -682,11 +683,19 @@ const char *capprun_start_error(void) { return s_start_error; }
  * or a mouse (bt_radio_down keeps a claimed link). */
 static void make_room(void) {
   size_t before = heap_caps_get_largest_free_block(MALLOC_CAP_EXEC);
+  size_t before8 = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  size_t after, after8;
   if (s_hold_owner == NULL) capp_hold_code(0);
   if (!printq_busy()) bt_radio_down();
   if (!httpq_active() && !share_running()) wifi_release();
-  ESP_LOGW(TAG, "made room: largest block %u -> %u", (unsigned)before,
-           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_EXEC));
+  /* Both pools: code wants one piece of executable RAM, data one piece of
+   * the 8-bit heap, and either can be the one that failed. */
+  after = heap_caps_get_largest_free_block(MALLOC_CAP_EXEC);
+  after8 = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  ESP_LOGW(TAG, "made room: largest exec %u -> %u, 8bit %u -> %u", (unsigned)before,
+           (unsigned)after, (unsigned)before8, (unsigned)after8);
+  applogf("load", "made room: largest exec %u -> %u, 8bit %u -> %u", (unsigned)before,
+          (unsigned)after, (unsigned)before8, (unsigned)after8);
 }
 
 static int ensure_loaded(Run *s) {
@@ -698,9 +707,19 @@ static int ensure_loaded(Run *s) {
     r = capp_load(s->entry->path, &s->la);
   }
   if (r != CAPP_OK) {
+    uint32_t want = 0, largest = 0;
     ESP_LOGE(TAG, "%s: %s", s->entry->path, capp_strerror(r));
-    snprintf(s_start_error, sizeof s_start_error, "%s",
-             r == CAPP_ERR_NO_MEMORY ? "not enough memory" : capp_strerror(r));
+    if (r == CAPP_ERR_NO_MEMORY) capp_last_shortfall(&want, &largest);
+    /* The numbers, when there are some: "not enough memory" with 60 KB
+     * free reads as a lie, and "needs 31 KB in one piece, largest 24"
+     * says what is actually wrong. */
+    if (want)
+      snprintf(s_start_error, sizeof s_start_error,
+               "needs %u KB in one piece, largest %u",
+               (unsigned)((want + 1023) / 1024), (unsigned)(largest / 1024));
+    else
+      snprintf(s_start_error, sizeof s_start_error, "%s",
+               r == CAPP_ERR_NO_MEMORY ? "not enough memory" : capp_strerror(r));
     return -1;
   }
   s->loaded = 1;

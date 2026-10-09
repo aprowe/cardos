@@ -45,6 +45,7 @@ idf_component_register(
     "../kernel/sys/kvtext.c"
     "../kernel/net/wifilist.c"
     "../kernel/sys/prefs.c"
+    "../kernel/sys/memreport.c"
     "../kernel/sys/alarm.c"
     "../kernel/sys/env.c"
     "../kernel/sys/sio.c"

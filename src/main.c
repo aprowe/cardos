@@ -66,6 +66,7 @@
 #include "kernel/sys/power.h"
 #include "kernel/drv/battery.h"
 #include "kernel/sys/hotkeys.h"
+#include "kernel/sys/memreport.h"
 
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -193,17 +194,12 @@ static void cmd_mem_map(void) {
   if (s_map_more) con_printf("  (%d more)\n", s_map_more);
 }
 
+static void mem_line(const char *line, void *ctx) { (void)ctx; con_printf("%s\n", line); }
+
+/* The same lines the Memory app shows (kernel/sys/memreport.c), and then
+ * the handle arena, which only the console reports. */
 static void cmd_mem(void) {
-  con_printf("heap free        %6u B  (largest block %u)\n",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-  /* With the largest block: an app's code has to fit in one piece, and the
-   * total said 44 KB free the day Calendar could not load in 13.9. */
-  con_printf("exec free        %6u B  (largest block %u)\n",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_EXEC),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_EXEC));
-  con_printf("low water        %6u B\n",
-             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
+  mem_report(mem_line, NULL);
   /* Reported as what it is. "reserved at boot" was true and was also the
    * bug: the reader had no way to see that the reservation was the thing
    * standing between a TLS handshake and a contiguous block. */
@@ -212,19 +208,6 @@ static void cmd_mem(void) {
   else
     con_printf("handle arena          0 B  reserved on first use (%u KB)\n",
                (unsigned)(CARDOS_HEAP_BYTES / 1024));
-  con_printf("bluetooth        %6u B%s\n", bthid_radio_on() ? (unsigned)bthid_heap_cost() : 0u,
-             bthid_radio_on() ? "" : "  (radio off)");
-  con_printf("wifi             %6u B\n", (unsigned)wifi_heap_cost());
-  /* The settings store, because when it fills up the next boot erases it
-   * and every credential with it -- which looks like Google forgetting you
-   * for no reason. Entries are 32 bytes; a page holds 126 of them. */
-  {
-    nvs_stats_t st;
-    if (nvs_get_stats(NULL, &st) == ESP_OK)
-      con_printf("nvs              %6u of %u entries used, %u free\n",
-                 (unsigned)st.used_entries, (unsigned)st.total_entries,
-                 (unsigned)st.free_entries);
-  }
 }
 
 static const char *state_name(TaskState st) {

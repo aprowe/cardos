@@ -75,4 +75,10 @@ void capp_hold_code(int on);
  * is a different pool from the general heap and much smaller. */
 uint32_t capp_exec_free(void);
 
+/* What the last CAPP_ERR_NO_MEMORY wanted in one piece, and the largest
+ * piece there was (executable RAM for code, the 8-bit heap for data) -- the
+ * numbers that say "fragmented" rather than "full". Zero when the last load
+ * did not fail for memory. */
+void capp_last_shortfall(uint32_t *want, uint32_t *largest);
+
 #endif /* CARDOS_ELFLOAD_H */

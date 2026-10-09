@@ -11,7 +11,7 @@
 #include "kernel/ui/settings.h"
 #include "kernel/ui/draw.h"
 #include "kernel/fs/fs.h"
-#include "kernel/mem/mem.h"
+#include "kernel/sys/memreport.h"
 #include "esp_system.h"
 #include "esp_app_desc.h"
 #include "esp_timer.h"
@@ -51,23 +51,23 @@ static void about_paint(void *state, Rect c) {
 
 /* ------------------------------------------------------------ Memory ---- */
 
+/* What `mem` shows, from the same function, so the two cannot disagree. It
+ * used to show the handle arena's own statistics -- a subsystem nothing
+ * allocates from -- and so said 0K while the heap was what ran out. */
+typedef struct { Rect c; int n; } MemPaint;
+
+static void mem_line(const char *s, void *ctx) {
+  MemPaint *m = (MemPaint *)ctx;
+  line(m->c, m->n++, s);
+}
+
 static void mem_paint(void *state, Rect c) {
-  MemStats st;
-  char buf[40];
+  MemPaint m;
   (void)state;
   draw_rect(c, C_WHITE);
-  kmem_stats(&st);
-  snprintf(buf, sizeof buf, "heap   %uK", (unsigned)(st.heap_size / 1024));
-  line(c, 0, buf);
-  snprintf(buf, sizeof buf, "used   %u", (unsigned)(st.movable_used + st.fixed_used));
-  line(c, 1, buf);
-  snprintf(buf, sizeof buf, "handles %u/%u", (unsigned)st.handles_used,
-           (unsigned)MEM_MAX_HANDLES);
-  line(c, 2, buf);
-  snprintf(buf, sizeof buf, "compact %u", (unsigned)st.compactions);
-  line(c, 3, buf);
-  snprintf(buf, sizeof buf, "evict   %u", (unsigned)st.evictions);
-  line(c, 4, buf);
+  m.c = c;
+  m.n = 0;
+  mem_report(mem_line, &m);
 }
 
 /* ---------------------------------------------------------- registry ---- */
