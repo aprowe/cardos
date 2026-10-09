@@ -293,14 +293,6 @@ class PerPerson(Server):
             with self.assertRaises(google.GoogleError):
                 google.access_token()
 
-    def test_pushed_google_creds_drop_the_access_token(self):
-        google, _ = self.google()
-        self.as_me()
-        google.save_creds("cid", "csec", "r-a")
-        self.assertEqual(google.access_token(), "AT1")
-        google.save_creds("cid", "csec", "r-b")
-        self.assertEqual(google.access_token(), "AT2")
-
     def test_a_new_toggl_token_keeps_the_targets(self):
         from server import toggl
         self.as_me()

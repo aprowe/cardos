@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 from http.server import ThreadingHTTPServer
-from server import app, google
+from server import app, dash, google
 from server import chat as chatmod
 
 
@@ -70,6 +70,12 @@ class FakeGoogle:
         return 404, {"error": {"message": "no such thing"}}
 
 
+def sign_in(refresh):
+    """What the dashboard's sign-in leaves (dash.get_google_callback)."""
+    dash.save_creds({"client_id": "cid", "client_secret": "secret", "refresh_token": refresh})
+    google.forget_access()
+
+
 class Routes(unittest.TestCase):
 
     def setUp(self):
@@ -77,7 +83,7 @@ class Routes(unittest.TestCase):
         os.environ["CARDOS_STATE"] = self.dir
         google._access.update(token=None, until=0)
         google._ids = None
-        google.save_creds("cid", "secret", "good")
+        sign_in("good")
         self.g = FakeGoogle()
         google.http = self.g
         app.Handler.chat = chatmod.ChatService(claude="stub")
@@ -171,18 +177,10 @@ class Routes(unittest.TestCase):
         self.assertEqual(self.g.refreshes, 1)
 
     def test_a_bad_login_says_what_fixes_it(self):
-        google.save_creds("cid", "secret", "bad")
+        sign_in("bad")
         s, text = self.req("GET", "/todo/lists")
         self.assertEqual(s, 401)
         self.assertIn("/dash", text)
-
-    def test_credentials_from_the_device(self):
-        s, text = self.req("POST", "/google/credentials", "cid2\nsecret2\ngood\n")
-        self.assertEqual((s, text), (200, "ok google signed in\n"))
-        with open(os.path.join(self.dir, "google.json")) as f:
-            self.assertEqual(json.load(f)["client_id"], "cid2")
-        s, _ = self.req("POST", "/google/credentials", "only one line")
-        self.assertEqual(s, 400)
 
     def test_missing_arguments_are_a_400(self):
         self.assertEqual(self.req("GET", "/calendar/events?from=x")[0], 400)

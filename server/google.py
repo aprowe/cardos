@@ -20,8 +20,6 @@ lines over the plain HTTP it already speaks to this server.
     POST /todo/task?list=ID        body: the title   -> the new task's id
     PATCH /todo/task?list=ID&id=ID body: done=0|1 and/or title=..
     DELETE /todo/task?list=ID&id=ID
-    POST /google/credentials       body: client id, secret, refresh token
-    GET  /google/status
 
 Calendar ids are short. Google's run to 200 characters (a recurring
 event's instance is its series id plus a timestamp) and the device keeps 16,
@@ -37,10 +35,10 @@ status passes through -- a 404 here is a 404 there -- so the apps' handling
 of a task deleted in a browser still works. All behind the server's token.
 
 The login is the dashboard's (server/dash.py): signing in to Google at /dash
-leaves google.json in CARDOS_STATE, and this reads the same file -- one login
-on the server, used here for the device's data and handed out by
-/google/creds as before. /google/credentials is the other way in, for a
-login that already exists on a device (`google push` in its console).
+leaves google.json in the person's state directory, and this reads the same
+file -- one login on the server, used here for the device's data and never
+handed out. (/google/creds, /google/credentials and /google/status, the
+device's `google pull` and `google push`, were removed on 2026-10-09.)
 """
 import base64
 import hashlib
@@ -179,14 +177,6 @@ def http(method, url, body=None, headers=None, form=False):
 def load_creds():
     c = dash.load_creds()
     return c if c and c.get("refresh_token") else None
-
-
-def save_creds(client_id, secret, refresh):
-    """The dashboard's file, owner-only and written whole (dash.save_creds)."""
-    dash.save_creds({"client_id": client_id, "client_secret": secret,
-                     "refresh_token": refresh, "issued_at": int(time.time()),
-                     "email": "", "scope": "pushed from the device"})
-    forget_access()
 
 
 def access_token():
@@ -410,24 +400,6 @@ def delete_task(h, args):
     return "ok\n"
 
 
-@_route
-def post_credentials(h, args):
-    """the Google login, from the device"""
-    lines = [l.strip() for l in h.body(4096).decode("utf-8", "replace").splitlines()]
-    if len(lines) < 3 or not all(lines[:3]):
-        raise ValueError("three lines: client id, client secret, refresh token")
-    save_creds(lines[0], lines[1], lines[2])
-    access_token()                          # proves it, now, rather than at the first sync
-    return "ok google signed in\n"
-
-
-@_route
-def get_google_status(h, args):
-    """whether the server can reach Google"""
-    access_token()
-    return "ok\n"
-
-
 ROUTES = [
     ("GET", "/calendar/events", get_events),
     ("POST", "/calendar/event", post_event),
@@ -437,6 +409,4 @@ ROUTES = [
     ("POST", "/todo/task", post_task),
     ("PATCH", "/todo/task", patch_task),
     ("DELETE", "/todo/task", delete_task),
-    ("POST", "/google/credentials", post_credentials),
-    ("GET", "/google/status", get_google_status),
 ]

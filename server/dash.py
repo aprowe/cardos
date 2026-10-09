@@ -2,22 +2,19 @@
 login, the server -- and the way to the card's files (server/files.py).
 
 The device has no browser, so Google's consent screen happens here, at
-https://cardos.arowe.net/dash. The login stays on the server: Calendar and
-Todo get their Google data through server/google.py with it. /google/creds
-still hands it to a device that asks (`google pull`), which nothing needs
-since 2026-09-29.
+https://cardos.arowe.net/dash. The login stays on the server and never
+leaves it: Calendar and Todo get their Google data through server/google.py
+with it. (/google/creds once handed it to a device that asked -- `google
+pull` -- and was removed on 2026-10-09, with the device's half.)
 
-Two doors, and neither opens the other:
-
-  /dash...        a browser, with a session cookie. The password is
-                  DASH_PASSWORD from the environment; there is no user list.
-  /google/creds   the device, with its bearer token (/config/claude.token),
-                  as for every other route. A cookie does not open it and
-                  the bearer does not open /dash.
+/dash... is a browser's, with a session cookie; the device's bearer does
+not open it, and the cookie opens none of the device's routes. The
+password is DASH_PASSWORD from the environment, or, with accounts, each
+person's own (server/accounts.py).
 
 The cookie is an expiry and an HMAC of it keyed by the token and the
 password: a restart keeps you logged in, and changing either logs everyone
-out. The server still needs --token: it is what keeps /google/creds shut.
+out. The server needs --token: the cookie is keyed by it.
 
 Google will only redirect a web sign-in to HTTPS on a real domain, which is
 why this lives behind nginx and certbot rather than on :8080. The Web client
@@ -29,9 +26,7 @@ droplet), never in the repository:
   DASH_URL        https://cardos.arowe.net (the redirect is DASH_URL + CALLBACK)
   CARDOS_STATE    where google.json is kept; ~/.cardos by default
 
-A refresh token works only with the client that issued it, so the device is
-handed all three values, not just the token. Design:
-docs/superpowers/specs/2026-09-24-dashboard-google-design.md.
+Design: docs/superpowers/specs/2026-09-24-dashboard-google-design.md.
 """
 import base64
 import hashlib
@@ -458,8 +453,7 @@ def get_google_callback(h, path, args):
         return
     save_creds({"client_id": cid, "client_secret": csec, "refresh_token": refresh,
                 "email": email_from_id_token(tok.get("id_token", "")),
-                "scope": tok.get("scope", ""), "issued_at": int(time.time()),
-                "pulled_at": None})
+                "scope": tok.get("scope", ""), "issued_at": int(time.time())})
     # The login it replaces is NOT revoked. Google's revoke ends the app's
     # whole grant -- every token for this client and account -- so revoking
     # the old one here killed the one just issued, and each fresh sign-in
@@ -493,23 +487,6 @@ def post_google_forget(h, path, args):
     h.redirect("/dash?msg=" + urllib.parse.quote(msg))
 
 
-def get_creds(h, path, args):
-    """Google client id, secret, refresh token, a line each"""
-    # Every other route is open when there is no token; this one never is.
-    if not _server_token(h):
-        h.text("error the server has no --token; it will not hand out credentials\n", 503)
-        return
-    c = load_creds()
-    if not c:
-        h.text("error not signed in: sign in at %s/dash\n" % base_url(), 404)
-        return
-    with _lock:
-        c["pulled_at"] = int(time.time())
-        save_creds(c)
-    h.text("%s\n%s\n%s\n" % (c["client_id"], c["client_secret"], c["refresh_token"]))
-    sys.stderr.write("dash: device pulled google credentials\n")
-
-
 ROUTES = [
     ("GET", "/dash", get_dash, "open"),
     ("POST", "/dash/login", post_login, "open"),
@@ -517,5 +494,4 @@ ROUTES = [
     ("GET", "/dash/google/start", get_google_start, "open"),
     ("GET", CALLBACK, get_google_callback, "open"),
     ("POST", "/dash/google/forget", post_google_forget, "open"),
-    ("GET", "/google/creds", get_creds),
 ]

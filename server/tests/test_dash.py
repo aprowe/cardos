@@ -145,9 +145,10 @@ class Doors(Server):
         _, _, body = self.req("/dash", bearer=TOKEN)
         self.assertIn("name=password", body)
 
-    def test_cookie_does_not_open_creds(self):
-        code, _, _ = self.req("/google/creds", cookie=self.login())
-        self.assertEqual(code, 403)
+    def test_the_login_is_not_handed_out(self):
+        self.signed_in(self.login())
+        for bearer in (TOKEN, None):
+            self.assertEqual(self.req("/google/creds", bearer=bearer)[0], 404)
 
     def test_google_start_needs_login(self):
         code, hdrs, _ = self.req("/dash/google/start")
@@ -166,7 +167,7 @@ class Google(Server):
         self.assertEqual(q["prompt"], ["consent"])
         self.assertIn("https://www.googleapis.com/auth/tasks", q["scope"][0])
 
-    def test_sign_in_then_the_device_pulls(self):
+    def test_sign_in(self):
         cookie = self.login()
         code, hdrs, _ = self.signed_in(cookie)
         self.assertEqual(code, 303)
@@ -181,20 +182,7 @@ class Google(Server):
         _, _, state = self.req("/dash/api/state", cookie=cookie)
         g = json.loads(state)["google"]
         self.assertEqual((g["email"], g["ok"], g["tasks"]), ("me@example.com", True, False))
-
-        code, _, body = self.req("/google/creds", bearer=TOKEN)
-        self.assertEqual((code, body), (200, "cid.apps\ncsec\nr-abc\n"))
-        self.assertIsNotNone(dash.load_creds()["pulled_at"])
-
-    def test_creds_without_bearer(self):
-        self.signed_in(self.login())
-        code, _, _ = self.req("/google/creds")
-        self.assertEqual(code, 403)
-
-    def test_creds_before_sign_in(self):
-        code, _, body = self.req("/google/creds", bearer=TOKEN)
-        self.assertEqual(code, 404)
-        self.assertTrue(body.startswith("error "))
+        self.assertEqual(dash.load_creds()["refresh_token"], "r-abc")
 
     def test_bad_state_is_refused(self):
         code, hdrs, _ = self.req("/dash/google/callback?state=made-up&code=abc",
@@ -322,12 +310,6 @@ class NoToken(Server):
     def test_dashboard_refuses_to_run(self):
         code, _, _ = self.req("/dash")
         self.assertEqual(code, 503)
-
-    def test_creds_are_never_open(self):
-        dash.save_creds({"client_id": "a", "client_secret": "b", "refresh_token": "c"})
-        code, _, body = self.req("/google/creds")
-        self.assertEqual(code, 503)
-        self.assertNotIn("c\n", body.split(":")[0])
 
 
 if __name__ == "__main__":
