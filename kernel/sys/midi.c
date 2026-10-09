@@ -9,7 +9,6 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #define PORT      UART_NUM_1
@@ -22,12 +21,14 @@ static const char *TAG = "midi";
 
 static int        s_open = 0;
 static int        s_pin = -1;
-static SemaphoreHandle_t s_lock;
-static TaskHandle_t s_task;
 static MidiEvent *s_ev;
 static int        s_n;
 static uint32_t   s_loop_ms;
 static volatile int s_stop;
+/* Set before the task is made, cleared by the task as its last act: the
+ * task's own word for "I am running". There is no handle -- it used to be
+ * written by xTaskCreate after an empty song's task could already have
+ * cleared it and gone, leaving a stale one that every stop waited on. */
 static volatile int s_playing;
 static volatile int64_t s_start_us;      /* this round's start */
 static const void *s_owner;
@@ -51,7 +52,6 @@ int midi_open(int tx_pin) {
     uart_driver_delete(PORT);
     return -1;
   }
-  if (!s_lock) s_lock = xSemaphoreCreateMutex();
   s_open = 1;
   s_pin = tx_pin;
   s_owner = capprun_caller();           /* closed with the app that opened it */
@@ -118,23 +118,29 @@ static void play_task(void *arg) {
   }
   silence();
   s_playing = 0;
-  s_task = NULL;
   vTaskDelete(NULL);
 }
 
-void midi_stop(void) {
+/* 1 if the player is still running afterwards: it checks s_stop between
+ * events, and spins at most a millisecond and a half for one, so this is
+ * not expected -- but a second task over the same s_ev would be worse. */
+static int stop_wait(int ms) {
   int waited = 0;
-  if (!s_task) return;
+  if (!s_playing) return 0;
   s_stop = 1;
-  while (s_task && waited < 200) { vTaskDelay(pdMS_TO_TICKS(2)); waited += 2; }
+  while (s_playing && waited < ms) { vTaskDelay(pdMS_TO_TICKS(2)); waited += 2; }
+  if (s_playing) ESP_LOGW(TAG, "the player did not stop in %d ms", ms);
+  return s_playing;
 }
+
+void midi_stop(void) { stop_wait(200); }
 
 int midi_play(const MidiEvent *ev, int n, uint32_t loop_ms) {
   MidiEvent *copy;
   if (!s_open) return -1;
   if (n < 0) n = 0;
   if (n > MAX_EV) n = MAX_EV;
-  midi_stop();
+  if (stop_wait(200)) return -1;
   copy = (MidiEvent *)malloc((size_t)(n ? n : 1) * sizeof *copy);
   if (!copy) return -2;
   if (n) memcpy(copy, ev, (size_t)n * sizeof *copy);
@@ -145,9 +151,8 @@ int midi_play(const MidiEvent *ev, int n, uint32_t loop_ms) {
   s_stop = 0;
   s_playing = 1;
   s_owner = capprun_caller();
-  if (xTaskCreatePinnedToCore(play_task, "midi", T_STACK, NULL, T_PRIO, &s_task, 1) != pdPASS) {
+  if (xTaskCreatePinnedToCore(play_task, "midi", T_STACK, NULL, T_PRIO, NULL, 1) != pdPASS) {
     s_playing = 0;
-    s_task = NULL;
     return -2;
   }
   return 0;
@@ -161,7 +166,8 @@ uint32_t midi_pos_ms(void) {
 }
 
 void midi_close(void) {
-  midi_stop();
+  /* Longer than a stop: the port and the song go next, under the task. */
+  if (stop_wait(1000)) return;
   if (!s_open) return;
   silence();
   uart_wait_tx_done(PORT, pdMS_TO_TICKS(100));

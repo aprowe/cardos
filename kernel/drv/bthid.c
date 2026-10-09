@@ -130,10 +130,17 @@ static Link *s_pending;
 /* --------------------------------------------------------------- queues -- */
 
 /* Decoded reports. Filled from the NimBLE host task and drained by the main
- * loop, which is the only reason these are rings rather than variables. */
+ * loop, which is the only reason these are rings rather than variables.
+ *
+ * The mouse ring is not single-producer/single-consumer: the producer merges
+ * into the newest entry, which may be the one the shell is copying, and
+ * drops the oldest when full by moving the consumer's index. So both ends
+ * take s_mmux -- a few instructions each, on two cores. The key ring keeps
+ * the SPSC rule (each index has one writer) and needs no lock. */
 #define RING 16
 static MouseReport s_mring[RING];
 static volatile uint8_t s_mhead, s_mtail;
+static portMUX_TYPE s_mmux = portMUX_INITIALIZER_UNLOCKED;
 
 #define KRING 32
 static uint8_t s_kring[KRING];
@@ -153,8 +160,10 @@ static KbdHid s_kbd;
  * A report that changes the buttons starts a new entry, so a click is never
  * merged into a drag or lost. */
 static void mouse_push(const MouseReport *r) {
-  uint8_t next = (uint8_t)((s_mhead + 1) % RING);
+  uint8_t next;
 
+  portENTER_CRITICAL(&s_mmux);
+  next = (uint8_t)((s_mhead + 1) % RING);
   if (s_mhead != s_mtail) {
     uint8_t last = (uint8_t)((s_mhead + RING - 1) % RING);
     MouseReport *m = &s_mring[last];
@@ -165,6 +174,7 @@ static void mouse_push(const MouseReport *r) {
         m->dx = (int8_t)dx;
         m->dy = (int8_t)dy;
         m->wheel = (int8_t)w;
+        portEXIT_CRITICAL(&s_mmux);
         return;
       }
     }
@@ -177,6 +187,7 @@ static void mouse_push(const MouseReport *r) {
   }
   s_mring[s_mhead] = *r;
   s_mhead = next;
+  portEXIT_CRITICAL(&s_mmux);
 }
 
 /* Keystrokes are the opposite case: they must not be merged and must not be
@@ -192,10 +203,15 @@ static void key_push(uint8_t c, int repeat) {
 }
 
 int bthid_poll_mouse(MouseReport *out) {
-  if (s_mtail == s_mhead) return 0;
-  *out = s_mring[s_mtail];
-  s_mtail = (uint8_t)((s_mtail + 1) % RING);
-  return 1;
+  int have = 0;
+  portENTER_CRITICAL(&s_mmux);
+  if (s_mtail != s_mhead) {
+    *out = s_mring[s_mtail];
+    s_mtail = (uint8_t)((s_mtail + 1) % RING);
+    have = 1;
+  }
+  portEXIT_CRITICAL(&s_mmux);
+  return have;
 }
 
 int bthid_poll_key(uint8_t *out) {
