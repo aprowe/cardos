@@ -83,22 +83,16 @@ static void banner_body(void) {
   draw_text_ellipsis(8, 13, DISPLAY_W - 12, it->text, C_FG, C_BG);
 }
 
-/* Off the panel and sent whole, so drawing it again over an app that keeps
- * repainting does not flicker; straight to the panel if there is no room. */
+/* Off the panel and sent whole, through draw_offscreen's strip -- it used to
+ * malloc 11.5 KB of its own every time it was drawn. */
+static void banner_strip(void *ctx) { (void)ctx; banner_body(); }
+
 static void banner_paint(void) {
-  uint16_t *buf;
   Rect was = draw_clip();
   if (!s_banner || !s_q.n) return;
-  buf = (uint16_t *)malloc((size_t)DISPLAY_W * BANNER_H * 2);
   draw_reserve_top(0);                         /* the one thing allowed there */
   draw_set_clip(R(0, 0, DISPLAY_W, BANNER_H));
-  if (buf) {
-    display_target(buf, 0, 0, DISPLAY_W, BANNER_H);
-    banner_body();
-    display_target(NULL, 0, 0, 0, 0);
-    display_blit(0, 0, DISPLAY_W, BANNER_H, buf);
-    free(buf);
-  } else banner_body();
+  draw_offscreen(R(0, 0, DISPLAY_W, BANNER_H), C_BG, banner_strip, NULL);
   draw_reserve_top(BANNER_H);                  /* and nothing else */
   draw_set_clip(was);
   s_banner_drawn = s_now;
@@ -509,7 +503,14 @@ void notify_tick(uint32_t now) {
       s_banner = 0;
       draw_reserve_top(0);
       if (s_repaint && !s_center) s_repaint();  /* what the banner covered */
-    } else if ((int32_t)(now - s_banner_drawn) >= 150) banner_paint();
+    } else if (ui_shell() == UI_NONE && (int32_t)(now - s_banner_drawn) >= 150) {
+      /* Only over the console, which writes its cells to the panel without
+       * a clip. Everything the shells draw keeps out of the reserved rows,
+       * so over them the banner stays put once drawn; a repaint of
+       * everything (a screenshot) puts it back through notify_paint_over.
+       * Redrawing it every 150 ms regardless was 11.5 KB of malloc a time. */
+      banner_paint();
+    }
   }
   chat_tick(now);
   sched_tick(now);

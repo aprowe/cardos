@@ -214,17 +214,25 @@ static uint32_t bar_state(void) {
 }
 static uint32_t s_bar_shown;
 
-/* Composed off the panel and sent whole, like the carousel. */
+/* Rows y0..y1, composed off the panel a strip at a time by `body` -- which
+ * draws everything and is clipped to each strip in turn (draw_offscreen).
+ * Without the memory for a strip it draws straight to the panel, as it
+ * always used to. */
+static void (*s_off_body)(void);
+static void off_body(void *ctx) { (void)ctx; s_off_body(); }
+static void paint_offscreen(int y0, int y1, uint16_t prefill, void (*body)(void)) {
+  s_off_body = body;
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  draw_offscreen(R(0, y0, DISPLAY_W, y1 - y0), prefill, off_body, NULL);
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+}
+
+/* Composed off the panel and sent whole, like the carousel. It had a 5.6 KB
+ * buffer of its own, held for the uptime; draw_offscreen's strip is shared. */
 static void paint_bar(void) {
-  static uint16_t strip[DISPLAY_W * BAR_H];      /* 5.6 KB, for good: it is drawn every minute */
   if (notify_covers()) return;                   /* under a banner; repainted when it goes */
   s_bar_shown = bar_state();
-  display_target(strip, 0, 0, DISPLAY_W, BAR_H);
-  draw_set_clip(R(0, 0, DISPLAY_W, BAR_H));
-  paint_bar_body();
-  display_target(NULL, 0, 0, 0, 0);
-  display_blit(0, 0, DISPLAY_W, BAR_H, strip);
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  paint_offscreen(0, BAR_H, C_TITLE, paint_bar_body);
 }
 
 /* Colour if the card has one, the app's own 1bpp shape otherwise. The colour
@@ -267,12 +275,12 @@ static void paint_pips(int n) {
  * its size and its x following from where that puts it. 64 px in the middle,
  * 32 one slot out, and further out it runs off the edge.
  *
- * Drawn off the panel, a strip at a time (display_target), and each strip
+ * Drawn off the panel, a strip at a time (draw_offscreen), and each strip
  * sent whole. The old way filled the area teal and then drew over it, and
  * the teal showed: that was the launcher's flicker. */
 #define ANIM_MS   170
 #define SLOT_X    (BIG / 2 + SIDE_GAP + SMALL / 2)    /* 60: centre to neighbour */
-#define STRIP_H   20
+
 
 static int      s_anim;           /* slots still to travel, x256; 0 at rest */
 static int      s_anim_from;
@@ -366,31 +374,13 @@ static void paint_carousel_body(void) {
   paint_pips(n);
 }
 
-/* Rows y0..y1, composed off the panel a strip at a time by `body` -- which
- * draws everything and is clipped to each strip in turn. Without the memory
- * for a strip it draws straight to the panel, as it always used to. */
-static void paint_offscreen(int y0, int y1, void (*body)(void)) {
-  uint16_t *strip = (uint16_t *)malloc((size_t)DISPLAY_W * STRIP_H * 2);
-  int y;
-  if (!strip) {
-    draw_set_clip(R(0, y0, DISPLAY_W, y1 - y0));
-    body();
-    draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-    return;
-  }
-  for (y = y0; y < y1; y += STRIP_H) {
-    int h = y1 - y < STRIP_H ? y1 - y : STRIP_H;
-    display_target(strip, 0, y, DISPLAY_W, h);
-    draw_set_clip(R(0, y, DISPLAY_W, h));
-    body();
-    display_target(NULL, 0, 0, 0, 0);
-    display_blit(0, y, DISPLAY_W, h, strip);
-  }
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-  free(strip);
+/* The carousel's rows, through the same strip as everything else. It
+ * mallocked 9.6 KB a frame of its own, 20 rows at a time, and a frame of
+ * the slide that found no 9.6 KB block was drawn straight to the panel --
+ * memory pressure showing up as flicker. */
+static void paint_carousel_rows(int y0, int y1) {
+  paint_offscreen(y0, y1, C_DESKTOP, paint_carousel_body);
 }
-
-static void paint_carousel_rows(int y0, int y1) { paint_offscreen(y0, y1, paint_carousel_body); }
 static void paint_carousel(void) {
   int top = notify_covers() > BAR_H ? notify_covers() : BAR_H;   /* not under a banner */
   paint_carousel_rows(top, DISPLAY_H);
@@ -736,7 +726,7 @@ static void search_open(void) {
 static void paint_search_body(void);
 static void paint_search(void) {
   int top = notify_covers() > BAR_H ? notify_covers() : BAR_H;
-  paint_offscreen(top, DISPLAY_H, paint_search_body);
+  paint_offscreen(top, DISPLAY_H, C_DESKTOP, paint_search_body);
 }
 
 static void paint_search_body(void) {
