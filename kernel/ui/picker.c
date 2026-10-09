@@ -4,7 +4,10 @@
 #include "kernel/fs/fs.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#include "esp_log.h"
 
 /* Layout, top to bottom, on 240x135: a title bar, the folder, nine rows, and
  * two lines at the bottom -- the field or the question, then the keys. */
@@ -32,7 +35,12 @@
 #define P_FIELDBG C_WHITE
 #define P_WARN    C_RED
 
-static PickModel s_m;
+/* The model -- 64 entries of names, the folder, the field: 5 KB -- exists
+ * from pick() until the picker answers, not for the uptime. It was static,
+ * 5160 bytes of .bss held by a dialog that is up a few seconds a day. The
+ * answer outlives it, in s_result, until the app polls. */
+static PickModel *s_m;
+static char       s_result[PM_PATH_MAX];
 static int       s_active;
 static int       s_answer;      /* 1 chosen, 0 cancelled: waiting to be polled */
 static int       s_has_answer;
@@ -82,27 +90,27 @@ static void size_text(uint32_t n, char *out, size_t size) {
 }
 
 static void paint_title(void) {
-  const char *mode = s_m.mode == PM_SAVE ? "save" : s_m.mode == PM_FOLDER ? "folder" : "open";
+  const char *mode = s_m->mode == PM_SAVE ? "save" : s_m->mode == PM_FOLDER ? "folder" : "open";
   draw_rect(R(0, 0, DISPLAY_W, TITLE_H), P_TITLE);
-  draw_text(PAD, 2, s_m.title, P_TITLEFG, P_TITLE);
+  draw_text(PAD, 2, s_m->title, P_TITLEFG, P_TITLE);
   draw_text((int16_t)(DISPLAY_W - PAD - draw_text_width(mode)), 2, mode, C_DESK_DIM, P_TITLE);
 }
 
 static void paint_path(void) {
   char count[12];
   draw_rect(R(0, PATH_Y, DISPLAY_W, PATH_H), P_PATHBG);
-  snprintf(count, sizeof count, "%d%s", s_m.n - (s_m.mode == PM_FOLDER ? 1 : 0),
-           s_m.truncated ? "+" : "");
-  draw_text_ellipsis(PAD, PATH_Y + 1, (int16_t)(DISPLAY_W - 2 * PAD - 30), s_m.dir, P_TEXT, P_PATHBG);
+  snprintf(count, sizeof count, "%d%s", s_m->n - (s_m->mode == PM_FOLDER ? 1 : 0),
+           s_m->truncated ? "+" : "");
+  draw_text_ellipsis(PAD, PATH_Y + 1, (int16_t)(DISPLAY_W - 2 * PAD - 30), s_m->dir, P_TEXT, P_PATHBG);
   draw_text((int16_t)(DISPLAY_W - PAD - draw_text_width(count)), PATH_Y + 1, count, P_DIM, P_PATHBG);
 }
 
 static void paint_row(int i) {
-  int y = LIST_Y + (i - s_m.top) * ROW_H;
-  int selected = i == s_m.sel && s_m.ask != PM_ASK_NAME;
+  int y = LIST_Y + (i - s_m->top) * ROW_H;
+  int selected = i == s_m->sel && s_m->ask != PM_ASK_NAME;
   uint16_t bg = selected ? P_SEL : P_BG;
   uint16_t fg = selected ? P_SELFG : P_TEXT;
-  const PmEntry *e = &s_m.ent[i];
+  const PmEntry *e = &s_m->ent[i];
   Rect r = R(0, y, DISPLAY_W, ROW_H);
 
   draw_rect(r, bg);
@@ -127,34 +135,34 @@ static void paint_row(int i) {
 static void paint_list(void) {
   int i;
   draw_rect(R(0, LIST_Y, DISPLAY_W, LIST_H), P_BG);
-  if (!s_m.n) {
+  if (!s_m->n) {
     draw_text(PAD + 12, LIST_Y + 2, "(empty)", P_DIM, P_BG);
     return;
   }
-  for (i = s_m.top; i < s_m.n && i < s_m.top + ROWS; i++) paint_row(i);
+  for (i = s_m->top; i < s_m->n && i < s_m->top + ROWS; i++) paint_row(i);
 }
 
 static const char *keys_line(void) {
   /* A refusal while a field is open ("that name is taken") has nowhere else
    * to go: the field has the prompt line. */
-  if (s_m.note[0] && s_m.ask != PM_ASK_NONE) return s_m.note;
-  switch (s_m.ask) {
+  if (s_m->note[0] && s_m->ask != PM_ASK_NONE) return s_m->note;
+  switch (s_m->ask) {
   case PM_ASK_NAME:      return "enter save  tab list  esc cancel";
   case PM_ASK_MKDIR:
   case PM_ASK_RENAME:    return "enter ok  esc back";
   case PM_ASK_DELETE:
   case PM_ASK_OVERWRITE: return "y yes  n no";
   default:
-    if (s_m.mode == PM_SAVE) return "enter open  bksp up  tab name  ^n ^r del";
+    if (s_m->mode == PM_SAVE) return "enter open  bksp up  tab name  ^n ^r del";
     return "enter open  bksp up  ^n new  ^r ren  del";
   }
 }
 
 static void paint_foot(void) {
-  const char *label = "", *text = pm_prompt(&s_m, &label);
+  const char *label = "", *text = pm_prompt(s_m, &label);
   int y = FOOT_Y + 2;
-  int asking = s_m.ask != PM_ASK_NONE;
-  int typing = s_m.ask == PM_ASK_NAME || s_m.ask == PM_ASK_MKDIR || s_m.ask == PM_ASK_RENAME;
+  int asking = s_m->ask != PM_ASK_NONE;
+  int typing = s_m->ask == PM_ASK_NAME || s_m->ask == PM_ASK_MKDIR || s_m->ask == PM_ASK_RENAME;
 
   draw_rect(R(0, FOOT_Y, DISPLAY_W, FOOT_H), P_FOOTBG);
   if (asking) {
@@ -174,25 +182,33 @@ static void paint_foot(void) {
     draw_text_ellipsis(PAD, (int16_t)y, (int16_t)(DISPLAY_W - 2 * PAD), text, P_WARN, P_FOOTBG);
   } else {
     draw_text_ellipsis(PAD, (int16_t)y, (int16_t)(DISPLAY_W - 2 * PAD),
-                       s_m.mode == PM_FOLDER ? "enter on the top row picks this folder"
+                       s_m->mode == PM_FOLDER ? "enter on the top row picks this folder"
                                              : "type a name to jump to it", P_DIM, P_FOOTBG);
   }
   draw_text_ellipsis(PAD, (int16_t)(FOOT_Y + 13), (int16_t)(DISPLAY_W - 2 * PAD), keys_line(),
-                     (s_m.note[0] && s_m.ask != PM_ASK_NONE) ? P_WARN : P_DIM, P_FOOTBG);
+                     (s_m->note[0] && s_m->ask != PM_ASK_NONE) ? P_WARN : P_DIM, P_FOOTBG);
 }
 
-void picker_paint_now(void) {
-  if (!s_active) return;
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+static void paint_all(void *ctx) {
+  (void)ctx;
   paint_title();
   paint_path();
   paint_list();
   paint_foot();
-  s_m.dirty = 0;
+}
+
+/* Off the panel, a strip at a time: every key used to repaint the title,
+ * the path, the whole list and the footer, each a fill and then text over
+ * it, and typing one letter of a name blinked the list. */
+void picker_paint_now(void) {
+  if (!s_active) return;
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  draw_offscreen(R(0, 0, DISPLAY_W, DISPLAY_H), P_BG, paint_all, NULL);
+  s_m->dirty = 0;
 }
 
 void picker_paint(void) {
-  if (s_active && s_m.dirty) picker_paint_now();
+  if (s_active && s_m->dirty) picker_paint_now();
 }
 
 /* ---- the API ------------------------------------------------------------- */
@@ -200,11 +216,16 @@ void picker_paint(void) {
 int picker_open(int mode, const char *title, const char *dir,
                 const char *filter, const char *name) {
   if (s_active) return -1;
-  pm_begin(&s_m, &CARD, mode, title, dir, filter, name);
-  s_m.rows = ROWS;
+  s_m = (PickModel *)calloc(1, sizeof *s_m);
+  if (!s_m) {
+    ESP_LOGW("picker", "no memory for the picker (%u bytes)", (unsigned)sizeof *s_m);
+    return -1;
+  }
+  pm_begin(s_m, &CARD, mode, title, dir, filter, name);
+  s_m->rows = ROWS;
   s_active = 1;
   s_has_answer = 0;
-  s_m.dirty = 1;
+  s_m->dirty = 1;
   picker_paint_now();
   return 0;
 }
@@ -212,42 +233,45 @@ int picker_open(int mode, const char *title, const char *dir,
 int picker_active(void) { return s_active; }
 
 static int finished(void) {
-  if (!s_m.done) return 0;
+  if (!s_m->done) return 0;
   s_active = 0;
-  s_answer = s_m.done == 1;
+  s_answer = s_m->done == 1;
   s_has_answer = 1;
+  snprintf(s_result, sizeof s_result, "%s", s_answer ? s_m->result : "");
+  free(s_m);
+  s_m = NULL;
   return 1;
 }
 
 int picker_poll(char *out, size_t n) {
   if (!s_has_answer) return PICKER_PENDING;
   s_has_answer = 0;
-  if (s_answer && out && n) snprintf(out, n, "%s", s_m.result);
+  if (s_answer && out && n) snprintf(out, n, "%s", s_result);
   return s_answer;
 }
 
 int picker_key(uint8_t k, uint32_t now_ms) {
   if (!s_active) return 0;
-  pm_key(&s_m, k, now_ms);
+  pm_key(s_m, k, now_ms);
   if (finished()) return 1;
   picker_paint();
   return 0;
 }
 
 int picker_wants_text(void) {
-  return s_active && (s_m.ask == PM_ASK_NAME || s_m.ask == PM_ASK_MKDIR ||
-                      s_m.ask == PM_ASK_RENAME);
+  return s_active && (s_m->ask == PM_ASK_NAME || s_m->ask == PM_ASK_MKDIR ||
+                      s_m->ask == PM_ASK_RENAME);
 }
 
 int picker_click(int16_t x, int16_t y, int button) {
   (void)x; (void)button;
   if (!s_active) return 0;
   if (y >= LIST_Y && y < FOOT_Y) {
-    pm_click(&s_m, (y - LIST_Y) / ROW_H);
+    pm_click(s_m, (y - LIST_Y) / ROW_H);
     if (finished()) return 1;
     picker_paint();
-  } else if (y >= FOOT_Y && s_m.mode == PM_SAVE && s_m.ask == PM_ASK_NONE) {
-    pm_key(&s_m, 0x09, 0);                    /* tab: into the name field */
+  } else if (y >= FOOT_Y && s_m->mode == PM_SAVE && s_m->ask == PM_ASK_NONE) {
+    pm_key(s_m, 0x09, 0);                    /* tab: into the name field */
     picker_paint();
   }
   return 0;
@@ -255,13 +279,13 @@ int picker_click(int16_t x, int16_t y, int button) {
 
 void picker_wheel(int dy) {
   if (!s_active) return;
-  pm_scroll(&s_m, dy);
+  pm_scroll(s_m, dy);
   picker_paint();
 }
 
 void picker_close(void) {
   if (!s_active) return;
-  s_m.done = -1;
+  s_m->done = -1;
   finished();
 }
 
