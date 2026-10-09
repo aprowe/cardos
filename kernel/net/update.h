@@ -46,8 +46,19 @@ int update_flavor_valid(const char *flavor);
 int update_check(UpdateCheck *out);
 
 /* The same, against another flavor's firmware -- `update all debug` on a
- * release device. The apps are the same whichever it is. */
+ * release device. The apps are the same whichever it is. -4 if there was no
+ * memory for the check. */
 int update_check_as(UpdateCheck *out, const char *flavor);
+
+/* One UpdateCheck (3 KB with 48 apps) for the console and the API, where
+ * each used to keep its own in .bss. update_check_shared runs a check into
+ * it -- NULL on failure, update_error() says why; `flavor` NULL is this
+ * build's. update_last_check is the last successful check of this build's
+ * own flavor, kept so an apply need not ask the server twice, or NULL;
+ * update_forget_check drops that (an apply uses it up). Shell task only. */
+UpdateCheck *update_check_shared(const char *flavor);
+UpdateCheck *update_last_check(void);
+void         update_forget_check(void);
 
 /* One line of progress at a time -- "pinball.capp 19672 bytes" -- for
  * whichever screen is listening. */

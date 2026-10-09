@@ -10,6 +10,7 @@
 #include "kernel/app/launcher.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_app_desc.h"
@@ -72,23 +73,28 @@ static const char *bearer(void) {
   return *t ? t : NULL;
 }
 
-/* FNV-1a over a file on the card, 1 KB at a time. -1 if it cannot be read. */
-/* Four kilobytes a read, not one.
+/* FNV-1a over a file on the card. -1 if it cannot be read.
  *
- * Every check hashes every .capp on the card, and the apps have grown: 204 KB
- * across twelve of them became 345 KB across fifteen, with one at 65 KB. At a
- * kilobyte a read that is 345 SPI round trips to the card before the first
- * byte is downloaded, and it is what made `update` feel like it had hung. The
- * buffer is static and shared with nothing, so the cost is 3 KB of .bss
- * against roughly a quarter of the transactions. */
+ * Four kilobytes a read, not one. Every check hashes every .capp on the
+ * card, and the apps have grown: 204 KB across twelve of them became 345 KB
+ * across fifteen, with one at 65 KB. At a kilobyte a read that is 345 SPI
+ * round trips to the card before the first byte is downloaded, and it is
+ * what made `update` feel like it had hung. The 4 KB is borrowed for the
+ * file, not held in .bss for the uptime as it was; with no heap for it, a
+ * small buffer on the stack still gets the right answer, slowly -- a hash
+ * that failed would call the app stale and reinstall it. */
+#define HASH_BUF 4096
 static int hash_file(const char *path, uint32_t *out) {
-  static uint8_t buf[4096];
+  uint8_t small[256], *buf = (uint8_t *)malloc(HASH_BUF);
+  size_t cap = buf ? HASH_BUF : sizeof small;
   uint32_t h = MANIFEST_FNV_INIT;
   int fd = fs_open(path, FS_O_READ), n;
-  if (fd < 0) return -1;
-  while ((n = fs_read(fd, buf, sizeof buf)) > 0)
+  if (!buf) buf = small;
+  if (fd < 0) { if (buf != small) free(buf); return -1; }
+  while ((n = fs_read(fd, buf, cap)) > 0)
     h = manifest_fnv1a(h, buf, (size_t)n);
   fs_close(fd);
+  if (buf != small) free(buf);
   if (n < 0) return -1;
   *out = h;
   return 0;
@@ -132,11 +138,14 @@ static void capp_path(const char *name, char *out, size_t size) {
 int update_check(UpdateCheck *out) { return update_check_as(out, OWN_FLAVOR); }
 
 int update_check_as(UpdateCheck *out, const char *flavor) {
-  static char text[MANIFEST_MAX];
-  static ManifestLocal local;          /* 48 apps' hashes: not on a task's stack */
+  /* The manifest's text and 48 apps' hashes, 4.5 KB: from the heap for the
+   * check, where they were .bss for the uptime -- and not on the caller's
+   * stack, which is the shell's. */
+  typedef struct { char text[MANIFEST_MAX]; ManifestLocal local; } Work;
+  Work *w;
   char url[160];
   const esp_app_desc_t *self;
-  int n, i;
+  int n, i, rc = 0;
 
   memset(out, 0, sizeof *out);
   s_error[0] = 0;
@@ -145,35 +154,59 @@ int update_check_as(UpdateCheck *out, const char *flavor) {
     snprintf(s_error, sizeof s_error, "no network: %s", wifi_status());
     return -1;
   }
+  if ((w = (Work *)calloc(1, sizeof *w)) == NULL) {
+    snprintf(s_error, sizeof s_error, "not enough memory to check (%u bytes)", (unsigned)sizeof *w);
+    return -4;
+  }
 
   if (!update_flavor_valid(flavor)) flavor = OWN_FLAVOR;
   snprintf(url, sizeof url, "%s/update?flavor=%s", update_base(), flavor);
-  n = http_request("GET", url, NULL, NULL, bearer(), text, sizeof text, 15000);
+  n = http_request("GET", url, NULL, NULL, bearer(), w->text, sizeof w->text, 15000);
   if (n < 0) {
     if (n == -403)
       snprintf(s_error, sizeof s_error, "the proxy wants a token (/claude.token)");
     else
       snprintf(s_error, sizeof s_error, "cannot reach %s (%d)", update_base(), n);
-    return -2;
+    rc = -2;
+    goto out;
   }
-  if (manifest_parse(text, &out->m) < 0) {
+  if (manifest_parse(w->text, &out->m) < 0) {
     snprintf(s_error, sizeof s_error, "that is not a manifest -- is the server current?");
-    return -3;
+    rc = -3;
+    goto out;
   }
 
   self = esp_app_get_description();
-  memset(&local, 0, sizeof local);
-  local.own_sha = self ? self->app_elf_sha256 : NULL;
+  w->local.own_sha = self ? self->app_elf_sha256 : NULL;
   for (i = 0; i < out->m.napps; i++) {
     char path[80];
     capp_path(out->m.app[i].name, path, sizeof path);
-    if (hash_file(path, &local.app_hash[i]) == 0) local.have_app[i] = 1;
+    if (hash_file(path, &w->local.app_hash[i]) == 0) w->local.have_app[i] = 1;
   }
 
-  out->firmware_stale = manifest_diff(&out->m, &local, out->stale);
+  out->firmware_stale = manifest_diff(&out->m, &w->local, out->stale);
   for (i = 0; i < out->m.napps; i++) out->nstale_apps += out->stale[i] != 0;
-  return 0;
+out:
+  free(w);
+  return rc;
 }
+
+/* ---- the one check everybody shares ---------------------------------------- */
+
+static UpdateCheck s_check;
+static int         s_check_valid;          /* s_check is this build's own flavor's */
+
+UpdateCheck *update_check_shared(const char *flavor) {
+  int own = !flavor || !strcmp(flavor, OWN_FLAVOR) || !update_flavor_valid(flavor);
+  s_check_valid = 0;
+  if (update_check_as(&s_check, own ? OWN_FLAVOR : flavor) != 0) return NULL;
+  s_check_valid = own;
+  return &s_check;
+}
+
+UpdateCheck *update_last_check(void) { return s_check_valid ? &s_check : NULL; }
+
+void update_forget_check(void) { s_check_valid = 0; }
 
 /* ---- apps ----------------------------------------------------------------- */
 

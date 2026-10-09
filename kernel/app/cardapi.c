@@ -251,29 +251,26 @@ static CRect api_paint_area(void) {
 }
 
 /* The check's answer and the last thing the installer said, fitted to a
- * line an app can print. The UpdateCheck is kept between the two calls so
- * apply does not ask the proxy twice. */
-static UpdateCheck s_upd;
-static int s_upd_valid;
-
+ * line an app can print. The check is update.c's shared one (the console
+ * uses it too), kept between the two calls so apply does not ask the proxy
+ * twice. */
 static int api_update_check(char *out, size_t n) {
   int i, count = 0;
   size_t len = 0;
+  const UpdateCheck *c;
   if (!out || n == 0) return -1;
-  s_upd_valid = 0;
-  if (update_check(&s_upd) != 0) {
+  if ((c = update_check_shared(NULL)) == NULL) {
     snprintf(out, n, "%s", update_error());
     return -1;
   }
-  s_upd_valid = 1;
   out[0] = 0;
-  for (i = 0; i < s_upd.m.napps; i++) {
-    if (!s_upd.stale[i]) continue;
+  for (i = 0; i < c->m.napps; i++) {
+    if (!c->stale[i]) continue;
     len += (size_t)snprintf(out + len, n > len ? n - len : 0, "%s%s",
-                            count ? ", " : "", s_upd.m.app[i].name);
+                            count ? ", " : "", c->m.app[i].name);
     count++;
   }
-  if (s_upd.firmware_stale) {
+  if (c->firmware_stale) {
     snprintf(out + (len < n ? len : n - 1), n > len ? n - len : 1, "%sfirmware",
              count ? ", " : "");
     count++;
@@ -291,18 +288,27 @@ static void upd_say(void *ctx, const char *line) {
   snprintf(u->out, u->n, "%s", line);
 }
 
+/* The last check, or a fresh one; used up either way. NULL with the reason
+ * in `out`. */
+static const UpdateCheck *check_for_apply(char *out, size_t n) {
+  const UpdateCheck *c = update_last_check();
+  if (!c && (c = update_check_shared(NULL)) == NULL) {
+    snprintf(out, n, "%s", update_error());
+    return NULL;
+  }
+  update_forget_check();
+  return c;
+}
+
 static int api_update_apply(int os, char *out, size_t n) {
   UpdSay say = { out, n };
+  const UpdateCheck *c;
   int done;
   if (!out || n == 0) return -1;
-  if (!s_upd_valid && update_check(&s_upd) != 0) {
-    snprintf(out, n, "%s", update_error());
-    return -1;
-  }
-  s_upd_valid = 0;
+  if ((c = check_for_apply(out, n)) == NULL) return -1;
   out[0] = 0;
-  done = update_apps(&s_upd, upd_say, &say);
-  if (os && s_upd.firmware_stale) {
+  done = update_apps(c, upd_say, &say);
+  if (os && c->firmware_stale) {
     update_firmware(upd_say, &say);          /* only returns on failure */
     snprintf(out, n, "%s", update_error());
     return -1;
@@ -344,16 +350,13 @@ static int api_firmware_boot(const char *path, char *why, size_t n) {
 static int api_update_apply_progress(int os, void (*on_line)(void *ctx, const char *line),
                                      void *ctx, char *out, size_t n) {
   UpdSayProgress say = { out, n, on_line, ctx };
+  const UpdateCheck *c;
   int done;
   if (!out || n == 0) return -1;
-  if (!s_upd_valid && update_check(&s_upd) != 0) {
-    snprintf(out, n, "%s", update_error());
-    return -1;
-  }
-  s_upd_valid = 0;
+  if ((c = check_for_apply(out, n)) == NULL) return -1;
   out[0] = 0;
-  done = update_apps(&s_upd, upd_say_progress, &say);
-  if (os && s_upd.firmware_stale) {
+  done = update_apps(c, upd_say_progress, &say);
+  if (os && c->firmware_stale) {
     update_firmware(upd_say_progress, &say);   /* only returns on failure */
     snprintf(out, n, "%s", update_error());
     return -1;

@@ -491,7 +491,7 @@ static void update_say(void *ctx, const char *line) {
  * update os     -- install the firmware (restarts)
  * update all    -- both, apps first so they survive if the restart does not */
 void cmd_update(const char *arg) {
-  static UpdateCheck c;                 /* ~3 KB with 48 apps: not on main's stack */
+  const UpdateCheck *c;                 /* update.c's one, shared with the API */
   char what[8] = "", flavor[8] = "";
   int i, apps = 0, os = 0;
 
@@ -516,40 +516,40 @@ void cmd_update(const char *arg) {
   con_printf("asking %s\n", update_base());
   if (strcmp(flavor, update_flavor()))
     con_printf("running %s, comparing with %s\n", update_flavor(), flavor);
-  if (update_check_as(&c, flavor) != 0) { err("update", update_error()); return; }
+  if ((c = update_check_shared(flavor)) == NULL) { err("update", update_error()); return; }
   /* Never silent again: apps past the table were not compared at all. */
-  if (c.m.dropped)
-    con_printf("%d more apps than this firmware can check: update os first\n", c.m.dropped);
+  if (c->m.dropped)
+    con_printf("%d more apps than this firmware can check: update os first\n", c->m.dropped);
 
-  if (!c.nstale_apps && !c.firmware_stale) {
+  if (!c->nstale_apps && !c->firmware_stale) {
     con_write("everything is current\n");
     return;
   }
   {
     char text[64];
-    if (c.nstale_apps && c.firmware_stale)
-      snprintf(text, sizeof text, "%d app%s and the firmware", c.nstale_apps,
-               c.nstale_apps == 1 ? "" : "s");
-    else if (c.nstale_apps)
-      snprintf(text, sizeof text, "%d app%s", c.nstale_apps, c.nstale_apps == 1 ? "" : "s");
+    if (c->nstale_apps && c->firmware_stale)
+      snprintf(text, sizeof text, "%d app%s and the firmware", c->nstale_apps,
+               c->nstale_apps == 1 ? "" : "s");
+    else if (c->nstale_apps)
+      snprintf(text, sizeof text, "%d app%s", c->nstale_apps, c->nstale_apps == 1 ? "" : "s");
     else
       snprintf(text, sizeof text, "the firmware (%s)", flavor);
     notify_post("Update", "Update available", text);
   }
-  for (i = 0; i < c.m.napps; i++)
-    if (c.stale[i]) con_printf("  app %s\n", c.m.app[i].name);
-  if (c.firmware_stale)
-    con_printf("  firmware (%s) %uK\n", flavor, (unsigned)(c.m.firmware_size / 1024));
+  for (i = 0; i < c->m.napps; i++)
+    if (c->stale[i]) con_printf("  app %s\n", c->m.app[i].name);
+  if (c->firmware_stale)
+    con_printf("  firmware (%s) %uK\n", flavor, (unsigned)(c->m.firmware_size / 1024));
 
   if (!apps && !os) {
     con_write("update apps | os | all installs; add debug or release\n");
     return;
   }
-  if (apps && c.nstale_apps) {
-    int n = update_apps(&c, update_say, NULL);
-    con_printf("%d of %d apps installed\n", n, c.nstale_apps);
+  if (apps && c->nstale_apps) {
+    int n = update_apps(c, update_say, NULL);
+    con_printf("%d of %d apps installed\n", n, c->nstale_apps);
   }
-  if (os && c.firmware_stale) {
+  if (os && c->firmware_stale) {
     con_set_color(COLOR_AMBER);
     con_write("this restarts when it is done\n");
     con_set_color(COLOR_GREEN);

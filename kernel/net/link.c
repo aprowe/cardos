@@ -25,6 +25,7 @@
 #include "kernel/fs/fs.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -44,10 +45,16 @@ static const char *TAG = "link";
 
 typedef struct { uint8_t mac[6]; uint8_t len; uint8_t f[LP_FRAME]; } RxFrame;
 
-static LinkProto   s_lp;
+/* The protocol's state and the ring, about 7 KB together: from the heap
+ * while a link is open, not held in .bss for the uptime by a feature one
+ * game uses. One block, so one allocation to fail or succeed. */
+typedef struct { LinkProto lp; RxFrame ring[RING]; } LinkMem;
+static LinkMem    *s_mem;
+static LinkProto  *s_lp;           /* &s_mem->lp while open */
+static RxFrame    *s_ring;         /* s_mem->ring while open; NULL otherwise */
 static int         s_open;
 static const void *s_owner;
-static RxFrame     s_ring[RING];
+static int         s_role;         /* the last link's, kept past its close */
 static volatile int s_head, s_tail;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static int         s_fixed;       /* on a router's channel */
@@ -65,7 +72,7 @@ static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int le
   if (!info || !info->src_addr || len <= 0 || len > LP_FRAME) return;
   portENTER_CRITICAL(&s_mux);
   next = (s_head + 1) % RING;
-  if (next != s_tail) {                        /* full: dropped, and resent */
+  if (s_ring && next != s_tail) {              /* full: dropped, and resent */
     memcpy(s_ring[s_head].mac, info->src_addr, 6);
     s_ring[s_head].len = (uint8_t)len;
     memcpy(s_ring[s_head].f, data, (size_t)len);
@@ -112,12 +119,12 @@ static void tune(uint32_t now) {
   s_fixed = wifi_is_connected();
   if (s_fixed) {
     if (esp_wifi_get_channel(&primary, &second) == ESP_OK) s_ch = primary;
-    s_lp.flags = LP_F_FIXED;
+    s_lp->flags = LP_F_FIXED;
     return;
   }
-  s_lp.flags = 0;
+  s_lp->flags = 0;
   /* Someone heard, or a game on: stay put. */
-  if (s_lp.state != LP_LOOKING || s_lp.npeers > 0) { s_hop_at = now + HOME_MS; return; }
+  if (s_lp->state != LP_LOOKING || s_lp->npeers > 0) { s_hop_at = now + HOME_MS; return; }
   if ((int32_t)(now - s_hop_at) < 0) return;
   /* home for a while, then 2, 3 ... 13 briefly each, then home again */
   if (s_ch >= 13) { set_channel(HOME_CH); s_hop_at = now + HOME_MS; }
@@ -149,31 +156,43 @@ static void my_name(char *out, size_t n) {
 int link_open(const char *game, const char *me) {
   uint8_t mac[6];
   char name[LP_NAME_MAX];
+  LinkMem *m;
   if (s_open) link_close();
   s_why[0] = 0;
+  if ((m = (LinkMem *)calloc(1, sizeof *m)) == NULL) {
+    snprintf(s_why, sizeof s_why, "not enough memory (%u bytes)", (unsigned)sizeof *m);
+    return -1;
+  }
   wifi_use();                                  /* before start: no release between */
   if (wifi_start() != 0) {
     snprintf(s_why, sizeof s_why, "the radio would not start (%s)", wifi_status());
     wifi_unuse();
+    free(m);
     return -1;
   }
   if (esp_now_init() != ESP_OK) {
     snprintf(s_why, sizeof s_why, "ESP-NOW would not start");
     wifi_unuse();
+    free(m);
     return -1;
   }
+  portENTER_CRITICAL(&s_mux);
+  s_mem = m;
+  s_lp = &m->lp;
+  s_ring = m->ring;
+  s_head = s_tail = 0;
+  portEXIT_CRITICAL(&s_mux);
   esp_now_register_recv_cb(on_recv);
   wifi_fast(1);
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  lp_init(&s_lp, mac, tx, NULL, (uint32_t)esp_timer_get_time() ^ mac[5]);
-  s_head = s_tail = 0;
+  lp_init(s_lp, mac, tx, NULL, (uint32_t)esp_timer_get_time() ^ mac[5]);
   s_ch = 0;
   if (!wifi_is_connected()) set_channel(HOME_CH);
   s_hop_at = now_ms() + HOME_MS;
   if (me && *me) snprintf(name, sizeof name, "%s", me);
   else my_name(name, sizeof name);
   tune(now_ms());
-  lp_open(&s_lp, game ? game : "", name, now_ms());
+  lp_open(s_lp, game ? game : "", name, now_ms());
   s_open = 1;
   s_owner = capprun_caller();
   ESP_LOGI(TAG, "open: %s as %s, channel %u%s", game, name, s_ch, s_fixed ? " (router's)" : "");
@@ -182,14 +201,23 @@ int link_open(const char *game, const char *me) {
 
 void link_close(void) {
   if (!s_open) return;
-  lp_close(&s_lp);
+  lp_close(s_lp);
   vTaskDelay(pdMS_TO_TICKS(20));               /* let the goodbyes leave */
   esp_now_unregister_recv_cb();
   esp_now_deinit();
   wifi_fast(0);
   wifi_unuse();
+  /* What an app may still ask after the close, kept; then the memory goes. */
+  s_role = s_lp->role;
+  if (!s_why[0]) snprintf(s_why, sizeof s_why, "%s", s_lp->why);
   s_open = 0;
   s_owner = NULL;
+  portENTER_CRITICAL(&s_mux);
+  s_ring = NULL;                               /* a late frame finds no ring */
+  s_lp = NULL;
+  portEXIT_CRITICAL(&s_mux);
+  free(s_mem);
+  s_mem = NULL;
 }
 
 void link_release_owner(const void *owner) {
@@ -213,31 +241,31 @@ void link_tick(void) {
     }
     portEXIT_CRITICAL(&s_mux);
     if (!have) break;
-    lp_rx(&s_lp, fr.mac, fr.f, fr.len, now);
+    lp_rx(s_lp, fr.mac, fr.f, fr.len, now);
   }
   tune(now);
-  lp_tick(&s_lp, now);
+  lp_tick(s_lp, now);
 }
 
-int link_state(void) { return s_open ? s_lp.state : LP_OFF; }
-int link_peer_count(void) { return s_open && s_lp.state == LP_LOOKING ? s_lp.npeers : 0; }
+int link_state(void) { return s_open ? s_lp->state : LP_OFF; }
+int link_peer_count(void) { return s_open && s_lp->state == LP_LOOKING ? s_lp->npeers : 0; }
 
 const char *link_peer_name(int i) {
   if (!s_open) return "";
-  if (i < 0) return s_lp.peer_name;
-  return i < s_lp.npeers ? s_lp.peers[i].name : "";
+  if (i < 0) return s_lp->peer_name;
+  return i < s_lp->npeers ? s_lp->peers[i].name : "";
 }
 
-int link_invite(int i) { return s_open ? lp_invite(&s_lp, i, now_ms()) : -1; }
-int link_answer(int yes) { return s_open ? lp_answer(&s_lp, yes, now_ms()) : -1; }
-int link_role(void) { return s_lp.role; }
-int link_send(const void *buf, int len) { return s_open ? lp_send(&s_lp, buf, len, now_ms()) : -1; }
-int link_recv(void *buf, int max) { return s_open ? lp_recv(&s_lp, buf, max) : 0; }
-void link_look(void) { if (s_open) lp_look(&s_lp, now_ms()); }
+int link_invite(int i) { return s_open ? lp_invite(s_lp, i, now_ms()) : -1; }
+int link_answer(int yes) { return s_open ? lp_answer(s_lp, yes, now_ms()) : -1; }
+int link_role(void) { return s_open ? s_lp->role : s_role; }
+int link_send(const void *buf, int len) { return s_open ? lp_send(s_lp, buf, len, now_ms()) : -1; }
+int link_recv(void *buf, int max) { return s_open ? lp_recv(s_lp, buf, max) : 0; }
+void link_look(void) { if (s_open) lp_look(s_lp, now_ms()); }
 
 const char *link_why(void) {
   if (s_why[0]) return s_why;
-  return s_lp.why;
+  return s_open ? s_lp->why : "";
 }
 
 int link_channel(void) { return s_ch; }
