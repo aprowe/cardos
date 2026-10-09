@@ -178,10 +178,8 @@ int httpq_poll(char *out, size_t out_size) {
   if (s_slot.state == HTTPSLOT_RUNNING) return HTTPQ_PENDING;
 
   xSemaphoreTake(s_lock, portMAX_DELAY);
-  r = s_result;
-  if (out && out_size) {
-    snprintf(out, out_size, "%s", s_reply ? s_reply : "");
-  }
+  /* What was copied, not what came: see httpslot_deliver. */
+  r = httpslot_deliver(s_result, s_reply, out, out_size);
   free(s_reply);
   s_reply = NULL;
   httpslot_collect(&s_slot);

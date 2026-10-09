@@ -324,6 +324,15 @@ typedef struct {
 /* http_poll while the request is still running. */
 #define CAPP_HTTP_PENDING (-1000)
 
+/* A reply that filled the buffer. http, http_get and http_poll return the
+ * bytes PUT IN `out` -- at most out_size - 1, with the NUL after them, so
+ * buf[n] = 0 is always in bounds -- and a reply longer than the buffer is
+ * cut to fit rather than refused. A return of exactly out_size - 1 is the
+ * sign: the reply may have been longer. Ask for less (fields=, a page at a
+ * time) or pass a bigger buffer; never delete things on the strength of a
+ * list that filled it. A macro, not a table entry: no API change. */
+#define CAPP_HTTP_FILLED(n, out_size) ((n) >= 0 && (size_t)(n) + 1 >= (size_t)(out_size))
+
 #define CAPP_O_READ   0x01
 #define CAPP_O_WRITE  0x02
 #define CAPP_O_CREATE 0x04
@@ -686,8 +695,12 @@ typedef struct {
    *
    * http_poll returns CAPP_HTTP_PENDING while it runs, and otherwise exactly
    * what `http` would have: BYTES on success, negative on failure, an HTTP
-   * status negated into it so -403 is a 403. Collecting the answer frees it,
-   * so poll until it is not pending and then stop asking. */
+   * status negated into it so -403 is a 403. The bytes are those copied into
+   * `out` -- never more than out_size - 1, whatever the server sent; up to
+   * 8 KB is fetched, and a return of out_size - 1 means it was cut to fit
+   * (CAPP_HTTP_FILLED). Firmware before 2026-10-09 returned the bytes
+   * fetched, which could be past the end of a small buffer. Collecting the
+   * answer frees it, so poll until it is not pending and then stop asking. */
   int (*http_start)(const char *method, const char *url, const char *body,
                     const char *content_type, const char *bearer,
                     int timeout_ms);

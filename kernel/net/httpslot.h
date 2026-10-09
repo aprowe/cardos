@@ -15,6 +15,8 @@
 #ifndef CARDOS_HTTPSLOT_H
 #define CARDOS_HTTPSLOT_H
 
+#include <stddef.h>
+
 enum { HTTPSLOT_IDLE = 0, HTTPSLOT_RUNNING, HTTPSLOT_DONE };
 
 typedef struct {
@@ -39,5 +41,20 @@ void httpslot_collect(HttpSlot *s);
 /* `owner` is going away. Returns 1 if a waiting reply should be freed now,
  * 0 otherwise (nothing of theirs here, or it will be dropped on finish). */
 int  httpslot_abandon(HttpSlot *s, const void *owner);
+
+/* Hand a finished reply to its owner: copy `reply` into `out` (NUL-ended,
+ * cut to fit) and say what the caller may index. `result` is what the
+ * transfer returned -- bytes received, or negative.
+ *
+ *   negative     returned as it is (the reply, an error document, is still
+ *                copied: it explains itself)
+ *   bytes        the bytes COPIED, never more than out_size - 1. It used to
+ *                be the bytes received, up to 8191, and Stocks, Chat and Hub
+ *                wrote their NUL at buf[n] -- past a 2600-byte buffer.
+ *   no `out`     (NULL or size 0, the file mode) `result` as it is
+ *
+ * A return of out_size - 1 therefore means the buffer was filled and the
+ * reply may have been longer (CAPP_HTTP_FILLED in capp.h). */
+int  httpslot_deliver(int result, const char *reply, char *out, size_t out_size);
 
 #endif /* CARDOS_HTTPSLOT_H */

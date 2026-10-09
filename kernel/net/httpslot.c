@@ -33,3 +33,18 @@ int httpslot_abandon(HttpSlot *s, const void *owner) {
   httpslot_init(s);                    /* DONE: the reply is nobody's now */
   return 1;
 }
+
+int httpslot_deliver(int result, const char *reply, char *out, size_t out_size) {
+  size_t n = 0;
+  if (!out || !out_size) return result;
+  if (reply && reply != out) {
+    while (reply[n] && n < out_size - 1) { out[n] = reply[n]; n++; }
+    out[n] = 0;
+  } else if (reply) {                  /* already in place: httpq_start_into */
+    while (n < out_size - 1 && out[n]) n++;
+    out[n] = 0;
+  } else {
+    out[0] = 0;
+  }
+  return result < 0 ? result : (int)n;
+}
