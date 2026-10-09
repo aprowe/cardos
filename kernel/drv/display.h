@@ -50,8 +50,24 @@ void display_blit(int x, int y, int w, int h, const uint16_t *pixels);
 
 /* Blits go into `buf` (w*h pixels, the screen rectangle x,y,w,h) instead of
  * the panel until it is set to NULL. For composing a strip off screen and
- * sending it whole: see display.c. */
+ * sending it whole: see disptarget.c. Use draw_offscreen rather than this
+ * directly -- it saves and restores the target, so it nests. */
+typedef struct {
+  uint16_t *buf;
+  int x, y, w, h;
+} DispTarget;
 void display_target(uint16_t *buf, int x, int y, int w, int h);
+void display_target_get(DispTarget *out);
+void display_target_set(const DispTarget *t);   /* NULL: none */
+
+/* The target's half of display_blit: 1 if a target is set and the blit was
+ * taken (copied, or dropped outside it), 0 if it is for the panel. */
+int  disptarget_take(int x, int y, int w, int h, const uint16_t *pixels);
+
+/* Straight to the panel whatever target the drawing task has set: for the
+ * busy badge, which draws from its own task while the shell is blocked --
+ * possibly part way through composing a strip. */
+void display_blit_panel(int x, int y, int w, int h, const uint16_t *pixels);
 
 /* While frozen, blits to the panel are dropped: the sleep clock has it. */
 void display_freeze(int on);

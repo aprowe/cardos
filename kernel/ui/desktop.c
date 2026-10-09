@@ -14,6 +14,7 @@
 #include "kernel/ui/shell.h"
 #include "kernel/ui/help.h"
 #include "kernel/ui/picker.h"
+#include "kernel/ui/apphost.h"
 #include "kernel/drv/bthid.h"
 #include "kernel/sys/clock.h"
 #include "esp_timer.h"
@@ -59,7 +60,9 @@ static int   s_nwin;
  * picture viewer worth having on a 240x135 screen. */
 static const AppDef *s_full;
 static int s_full_dirty;
-static int s_full_clear;     /* the desktop is still on the panel underneath */
+/* How the fullscreen app's next paint came about (AH_* in apphost.h): it
+ * opened over the desktop, or help or the picker covered it. */
+static int s_full_how;
 static Rect s_full_rect;
 
 /* The pointer can also ask to leave for the console, and a mouse handler has
@@ -368,6 +371,10 @@ static void paint_window(WinId w, Rect clip) {
 static Rect s_tb_clip;
 static void tb_clip(Rect r) { draw_set_clip(rect_intersect(r, s_tb_clip)); }
 
+/* What the taskbar's clock last said: the once-a-second tick repaints it
+ * only when the minute has changed, not every second. */
+static char s_clock_shown[8];
+
 static void paint_taskbar(Rect clip) {
   Rect bar = R(0, DESK_H, DISPLAY_W, TASKBAR_H);
   Rect start = R(2, DESK_H + 2, 34, TASKBAR_H - 4);
@@ -410,6 +417,8 @@ static void paint_taskbar(Rect clip) {
   {
     Rect c = R(DISPLAY_W - 30, DESK_H + 2, 28, TASKBAR_H - 4);
     clock_hm(clock, sizeof clock);
+    if (rect_equals(rect_intersect(c, s_tb_clip), c))   /* all of it was drawn */
+      snprintf(s_clock_shown, sizeof s_clock_shown, "%s", clock);
     draw_bevel(c, C_FACE, C_SHADOW, C_LIGHT);
     draw_text((int16_t)(c.x + 2), (int16_t)(c.y + 1), clock, C_TEXT, C_FACE);
   }
@@ -608,9 +617,13 @@ static WinId s_drag_win;
 
 /* ------------------------------------------------------------ paint ----- */
 
-static void paint_job(void *ctx, WinId w, Rect r) {
+static WinId s_job_win;
+static Rect  s_job_rect;
+
+static void job_body(void *ctx) {
+  WinId w = s_job_win;
+  Rect r = s_job_rect;
   (void)ctx;
-  if (s_start_open && rect_overlaps(r, s_menu_rect)) s_menu_hit = 1;
   if (w == WIN_NONE) {
     draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
     draw_rect(rect_intersect(r, R(0, 0, DISPLAY_W, DESK_H)), C_DESKTOP);
@@ -624,41 +637,42 @@ static void paint_job(void *ctx, WinId w, Rect r) {
   }
 }
 
+/* Each piece the compositor hands out is composed off the panel and sent
+ * whole (draw_offscreen): a window is an outer bevel, a title bar, a white
+ * well and then the app, every one a fill drawn over by the next, and on
+ * the panel an app that ticked showed a white frame each time. A window
+ * whose app paints direct (CAPP_PAINT_DIRECT: Web reads the card in paint)
+ * is drawn as before. */
+static void paint_job(void *ctx, WinId w, Rect r) {
+  (void)ctx;
+  if (s_start_open && rect_overlaps(r, s_menu_rect)) s_menu_hit = 1;
+  s_job_win = w;
+  s_job_rect = r;
+  if (w != WIN_NONE && capprun_paint_direct(app_of(w))) { job_body(NULL); return; }
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  draw_offscreen(r, w == WIN_NONE ? C_DESKTOP : C_FACE, job_body, NULL);
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+}
+
 /* A fullscreen app gets the panel and nothing else: no desktop, no chrome, no
  * taskbar, no pointer. The compositor is not involved, so there is no damage
  * to merge and no window to clip against -- the render loop is one call into
  * the app's paint with the screen as its rectangle. */
+/* A rectangle the shell must repaint for reasons of its own -- the busy
+ * badge went -- kept apart from the fullscreen app's damage. */
+static Rect s_extra;
+static int  s_has_extra;
+
 static void paint_fullscreen(void) {
-  int cleared;
-  if (!s_full_dirty) return;
+  int asked = s_full_dirty, how;
+  if (!asked && !s_has_extra) return;
   s_full_dirty = 0;
-  cleared = s_full_clear;
-
-  /* The desktop is still on the panel when an app takes it over, and an app
-   * that does not cover every pixel would otherwise be drawn on top of it.
-   * Once on entry, not per frame: per frame would flicker. */
-  if (s_full_clear) {
-    s_full_clear = 0;
-    draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-    draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
-    draw_rect(s_full_rect, C_WHITE);
-    if (s_full_rect.w < DISPLAY_W || s_full_rect.h < DISPLAY_H)
-      draw_frame(rect_inset(s_full_rect, -1), C_SHADOW);
-  }
-
-  /* Narrowed to what the app says changed, when it says. The same mechanism
-   * the launcher uses; see AppDef.take_damage. */
-  {
-    Rect area = s_full_rect, want;
-    if (!cleared && s_full->take_damage &&
-        s_full->take_damage(s_full->state, &want)) {
-      Rect vis = rect_intersect(want, s_full_rect);
-      if (!rect_is_empty(vis)) area = vis;
-    }
-    draw_set_clip(area);
-  }
-  if (s_full->paint) s_full->paint(s_full->state, s_full_rect);
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  how = s_full_how | (asked ? AH_ASKED : 0);
+  s_full_how = 0;
+  /* The same function the launcher paints its app with: a full repaint
+   * off the panel, damage direct, the surround outside a smaller app. */
+  apphost_paint(s_full, s_full_rect, how, s_has_extra ? &s_extra : NULL);
+  s_has_extra = 0;
 }
 
 void desktop_flush(void) {
@@ -700,8 +714,25 @@ void desktop_flush(void) {
   draw_pointer();      /* always last: the pointer is above everything */
 }
 
+void desktop_damage(Rect r) {
+  if (s_full && !picker_active()) {
+    s_extra = s_has_extra ? rect_union(s_extra, r) : r;
+    s_has_extra = 1;
+  } else if (s_full) {
+    s_full_dirty = 1;
+  } else {
+    wm_damage(r);
+  }
+  desktop_flush();
+}
+
 void desktop_repaint(void) {
-  if (s_full) { s_full_dirty = 1; desktop_flush(); return; }
+  if (s_full) {
+    s_full_dirty = 1;
+    s_full_how |= AH_FULL | AH_SURROUND;   /* help, the picker, a panel: over all of it */
+    desktop_flush();
+    return;
+  }
   wm_damage(R(0, 0, DISPLAY_W, DISPLAY_H));
   desktop_flush();
 }
@@ -799,7 +830,7 @@ static void launch_icon_index(int idx) {
     if (a->pref_h > 0 && a->pref_h < h) h = a->pref_h;
     s_full = a;
     s_full_rect = R((DISPLAY_W - w) / 2, (DISPLAY_H - h) / 2, w, h);
-    s_full_clear = 1;
+    s_full_how = AH_FULL | AH_SURROUND | AH_OPENED;
     s_full_dirty = 1;
     desktop_flush();
     return;
@@ -951,7 +982,7 @@ static void toggle_fullscreen(void) {
     if (a->pref_h > 0 && a->pref_h < h) h = a->pref_h;
     s_full = a;
     s_full_rect = R((DISPLAY_W - w) / 2, (DISPLAY_H - h) / 2, w, h);
-    s_full_clear = 1;
+    s_full_how = AH_FULL | AH_SURROUND | AH_OPENED;
     s_full_dirty = 1;
     desktop_flush();
   }
@@ -1198,7 +1229,14 @@ int desktop_key(uint8_t key) {
     if (f != WIN_NONE) {
       const AppDef *a = app_of(f);
       if (a->key && a->key(a->state, key)) {
-        wm_damage(wm_frame(f));
+        /* What the app says changed, as the tick does -- not the whole
+         * frame, which repainted the bevel, the title and the well under
+         * every keystroke. */
+        Rect want;
+        if (a->take_damage && a->take_damage(a->state, &want))
+          wm_damage(rect_intersect(want, wm_content(f)));
+        else
+          wm_damage(wm_content(f));
         desktop_flush();
         return 0;
       }
@@ -1327,8 +1365,14 @@ void desktop_tick(uint32_t ms) {
       bthid_state(BTHID_MOUSE) != BTH_CONNECTING && (s_now_ms / 1000u) % 15 == 0 &&
       bg_idle_ms() > 2000)
     bg_submit(BG_BT_RECONNECT);
-  wm_damage(R(DISPLAY_W - 30, DESK_H + 2, 28, TASKBAR_H - 4));
-  desktop_flush();
+  {
+    char now[8];
+    clock_hm(now, sizeof now);
+    if (strcmp(now, s_clock_shown) != 0) {
+      wm_damage(R(DISPLAY_W - 30, DESK_H + 2, 28, TASKBAR_H - 4));
+      desktop_flush();
+    }
+  }
 }
 
 /* Bring a band of the focused window's content into view. An app calls this

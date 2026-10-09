@@ -78,6 +78,17 @@ typedef struct {
 #define CAPP_NEEDS_NET   0x0004  /* the internet, over WiFi */
 #define CAPP_NEEDS_PROXY 0x0008  /* the CardOS server (server/); implies NET */
 
+/* Paint straight to the panel, as every app did before the OS composed
+ * repaints off it. A full repaint -- the app just opened, or whatever covered
+ * it went away, or it asked without marking damage -- is otherwise drawn a
+ * strip at a time into a buffer and sent whole (kernel/ui/apphost.c), so a
+ * fill under text never reaches the screen; that means paint runs once per
+ * strip, about nine times for a full screen. An app that composes its own
+ * buffers already (Kart, Noodle, Calc's graph), or does I/O or heavy work in
+ * paint (Photo and Web read the card), sets this and is called once, as
+ * before. A flag, not an API change: older apps simply do not have it. */
+#define CAPP_PAINT_DIRECT 0x0020
+
 /* What caps_ok() returns: the same bits, set when that need was met. */
 #define CAPP_CAP_NET     CAPP_NEEDS_NET
 #define CAPP_CAP_PROXY   CAPP_NEEDS_PROXY

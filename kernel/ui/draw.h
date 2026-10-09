@@ -39,11 +39,29 @@ void draw_set_clip(Rect r);
 void draw_reserve_top(int rows);
 int  draw_reserved_top(void);
 
+/* Nothing but its owner may draw inside `r` until it is set back to an empty
+ * rect: every clip that reaches into it is cut to the largest piece outside.
+ * For a panel over everything (the ringing alarm, kernel/sys/alarm.c), which
+ * clears it while it paints itself. */
+void draw_occlude(Rect r);
+Rect draw_occluder(void);
+
 /* Paint `area` by calling `body` once per strip of rows, composed off the
- * panel and each strip sent whole: a screen that clears and redraws itself
- * this way does not flicker. Within the current clip; restores it. */
-void draw_offscreen(Rect area, void (*body)(void *ctx), void *ctx);
+ * panel -- each strip starts as `prefill` -- and each strip sent whole: a
+ * screen that clears and redraws itself this way does not flicker. Within
+ * the current clip; restores it and the display target. Nests: inside
+ * another draw_offscreen it draws into that one's strip. `body` may be
+ * called several times, so it must draw the same thing each time and not
+ * change what it draws from. */
+void draw_offscreen(Rect area, uint16_t prefill, void (*body)(void *ctx), void *ctx);
+int  draw_composing(void);        /* inside a draw_offscreen right now */
 Rect draw_clip(void);
+
+/* The clip as the caller asked for it, before draw_offscreen narrowed it to
+ * the strip being composed: api->paint_area. An app compares it with its
+ * rectangle to tell a full repaint from its own damage coming back, and
+ * that must not change because the OS composes the repaint in strips. */
+Rect draw_paint_area(void);
 
 void draw_rect(Rect r, uint16_t color);            /* filled */
 void draw_frame(Rect r, uint16_t color);           /* 1px outline */

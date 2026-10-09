@@ -509,7 +509,7 @@ static void paint_body(void *ctx) {
 static void settings_paint(void *state, Rect c) {
   s_paint_st = (SettingsState *)state;
   s_paint_c = c;
-  draw_offscreen(c, paint_body, NULL);
+  draw_offscreen(c, S_BG, paint_body, NULL);
 }
 
 /* The list is as tall as it needs to be and the window scrolls it, rather than

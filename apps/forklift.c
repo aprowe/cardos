@@ -1309,7 +1309,7 @@ static int app_wants_text(void *st) {
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
-  CAPP_FULLSCREEN,
+  CAPP_FULLSCREEN | CAPP_PAINT_DIRECT,   /* paint settles U.full: once a paint */
   "Forklift",
   /* 16x16: a forklift with a crate on its forks. */
   { 0x00, 0x00, 0x00, 0x00, 0x70, 0x00, 0x50, 0x00,

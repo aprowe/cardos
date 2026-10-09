@@ -395,10 +395,18 @@ static CRect timer_rect(void) {
  * digits are never cleared -- only the margins round them, which were
  * background already. And app_tick marks only the seconds when only they
  * changed, so the shell clips this paint to them. */
+/* The second a paint shows, read once a pass in app_tick rather than in
+ * paint: the OS paints a full repaint a strip at a time, calling paint once
+ * per strip, and a second turning over between two strips drew the top of
+ * the digits at one time and the bottom at the next -- and the time saved
+ * from the last strip then told the next tick the top was right. */
+static uint32_t s_draw_sec;
+static int      s_draw_set;
+
 static void paint_timer(void) {
   CRect r = timer_rect();
   char t[16], pre[16];
-  uint32_t secs = elapsed();
+  uint32_t secs = s_draw_set ? s_draw_sec : elapsed();
   int big = timer_screen() && G.f_big >= 0, f = big ? G.f_big : G.f_num;
   int x, y, w, h, k;
   if (!G.running) {
@@ -644,11 +652,13 @@ static int app_tick(void *st, uint32_t now_ms) {
   int changed;
   (void)st; (void)now_ms;
   changed = poll();
+  s_draw_sec = elapsed();
+  s_draw_set = 1;
   /* The timer is the only thing that moves: a second's change repaints
    * just its strip. Not under the targets, which draw no timer: there
    * shown_sec never caught up, so every tick asked for a repaint. */
-  if (!changed && G.running && !G.goals && elapsed() != G.shown_sec) {
-    api->damage(timer_damage(elapsed()));
+  if (!changed && G.running && !G.goals && s_draw_sec != G.shown_sec) {
+    api->damage(timer_damage(s_draw_sec));
     return 1;
   }
   return changed;

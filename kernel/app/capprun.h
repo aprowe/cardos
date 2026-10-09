@@ -139,6 +139,10 @@ void           capprun_release(const AppDef *a);
 /* Valid only after a run that installed an interface. */
 const AppDef *capprun_def(int slot);
 
+/* Does the app behind this AppDef paint straight to the panel (its flags
+ * carry CAPP_PAINT_DIRECT)? 0 for a built-in. kernel/ui/apphost.c. */
+int capprun_paint_direct(const AppDef *a);
+
 /* Executable RAM still free, for the Settings app to report. */
 uint32_t capprun_exec_free(void);
 

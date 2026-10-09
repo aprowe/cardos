@@ -10,6 +10,7 @@
 #include "kernel/fs/fs.h"
 #include "kernel/ui/draw.h"
 #include "kernel/ui/fontres.h"
+#include "kernel/ui/shell.h"
 #include "kernel/drv/display.h"
 
 #include <stdio.h>
@@ -185,19 +186,22 @@ static Rect R(int x, int y, int w, int h) {
 #define PX ((DISPLAY_W - PW) / 2)
 #define PY ((DISPLAY_H - PH) / 2)
 
-static void paint(void) {
-  Rect was = draw_clip();
-  const CFont *big = fontres_get(s_font_big), *ui = fontres_get(s_font_ui);
-  char t[12];
+/* The flashing edge, on its own: all a flash changes. */
+static void paint_edge(void) {
   uint16_t edge = s_flash ? A_HOT : A_EDGE;
-  int y = PY + 10, w;
-
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-  draw_rect(R(PX, PY, PW, PH), A_BACK);
   draw_rect(R(PX, PY, PW, 3), edge);
   draw_rect(R(PX, PY + PH - 3, PW, 3), edge);
-  draw_rect(R(PX, PY, 3, PH), edge);
-  draw_rect(R(PX + PW - 3, PY, 3, PH), edge);
+  draw_rect(R(PX, PY + 3, 3, PH - 6), edge);
+  draw_rect(R(PX + PW - 3, PY + 3, 3, PH - 6), edge);
+}
+
+static void panel_body(void *ctx) {
+  const CFont *big = fontres_get(s_font_big), *ui = fontres_get(s_font_ui);
+  char t[12];
+  int y = PY + 10, w;
+  (void)ctx;
+
+  paint_edge();
 
   snprintf(t, sizeof t, "%02u:%02u", s_alarm.hour, s_alarm.min);
   if (big) {
@@ -221,8 +225,24 @@ static void paint(void) {
   }
   draw_text((int16_t)(PX + (PW - 30 * 6) / 2), (int16_t)(PY + PH - 14),
             "any key stops    s snoozes 9m", A_SUB, A_BACK);
+}
+
+/* While it rings the panel is the occluder (draw_occlude): every clip is
+ * kept out of it, so an app ticking underneath -- Timer, Music, a game --
+ * cannot paint over it between flashes, and a flash need only redraw the
+ * edge. The panel itself is composed off the panel and sent whole. `whole`
+ * is 0 for a flash. */
+static void paint_ex(int whole) {
+  Rect was = draw_clip(), panel = R(PX, PY, PW, PH);
+  draw_occlude(R(0, 0, 0, 0));                   /* the one thing allowed in it */
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  if (whole) draw_offscreen(panel, A_BACK, panel_body, NULL);
+  else paint_edge();
+  draw_occlude(panel);
   draw_set_clip(was);
 }
+
+static void paint(void) { paint_ex(1); }
 
 /* ---- ringing ---------------------------------------------------------------- */
 
@@ -262,6 +282,7 @@ static void stop(int snooze) {
     sm = m % 60;
   }
   rewrite_after(&s_alarm, sh, sm);
+  draw_occlude(R(0, 0, 0, 0));                   /* the app may have it back */
   fontres_release_owner(&s_owner);
   s_font_big = s_font_ui = -1;
   power_hold(&s_owner, 0);
@@ -315,11 +336,14 @@ void alarm_tick(void) {
     if (t - s_ring_at > RING_MAX_MS) { applogf("alarm", "unanswered"); stop(0); return; }
     if (t - s_beep_at > BEEP_EVERY_MS && audio_state() == AUDIO_IDLE) beep();
     if (t - s_flash_at > FLASH_MS) {
-      /* Redrawn whole, not just the edge: an app underneath may have painted
-       * over part of it in the meantime. */
+      /* Just the edge: nothing else on the panel changes, and nothing but
+       * the panel can draw there (the occluder). It used to refill the whole
+       * panel and redraw the digits over it, and the time blinked twice a
+       * second. Over the console, whose cells go to the panel without a
+       * clip, it is still redrawn whole -- composed, so that does not blink. */
       s_flash = !s_flash;
       s_flash_at = t;
-      paint();
+      paint_ex(ui_shell() == UI_NONE);
     }
     return;
   }

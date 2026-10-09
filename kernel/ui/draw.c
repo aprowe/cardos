@@ -36,6 +36,43 @@ static uint16_t s_text[DISPLAY_W * FONT_H];
 static int  s_reserve;
 static Rect s_asked = { 0, 0, DISPLAY_W, DISPLAY_H };
 
+/* Somewhere nothing may draw but its owner: the ringing alarm's panel
+ * (kernel/sys/alarm.c). A clip that reaches into it is cut back to the
+ * largest piece of it outside, which for a panel in the middle of the
+ * screen leaves an app a band above or below to draw in -- most of it is
+ * hidden anyway, and what matters is that it cannot paint over the panel
+ * between the panel's own repaints. Empty when there is none. */
+static Rect s_occl;
+
+/* The strip draw_offscreen is composing, or the whole screen. Every clip is
+ * narrowed to it, so drawing outside the strip costs a clip test rather
+ * than a copy -- and a body that sets its own clip (a window's chrome, a
+ * nested draw_offscreen) still cannot reach past it. */
+static Rect s_bound = { 0, 0, DISPLAY_W, DISPLAY_H };
+
+/* The clip as it would be without the strip: what api->paint_area answers,
+ * so an app comparing it with its rectangle still sees a full repaint as
+ * one, whichever strip it is being asked to draw. */
+static Rect s_logical = { 0, 0, DISPLAY_W, DISPLAY_H };
+
+static Rect cut_occluder(Rect r) {
+  Rect o = s_occl, best, c;
+  long a, ba;
+  if (rect_is_empty(o) || !rect_overlaps(r, o)) return r;
+  /* Above, below, left, right of it: whichever leaves the most. */
+  best = r; best.h = (int16_t)(o.y > r.y ? o.y - r.y : 0); ba = (long)best.w * best.h;
+  c = r; c.y = (int16_t)(o.y + o.h);
+  c.h = (int16_t)(r.y + r.h > c.y ? r.y + r.h - c.y : 0);
+  if (c.h > 0 && (a = (long)c.w * c.h) > ba) { best = c; ba = a; }
+  c = r; c.w = (int16_t)(o.x > r.x ? o.x - r.x : 0);
+  if (c.w > 0 && (a = (long)c.w * c.h) > ba) { best = c; ba = a; }
+  c = r; c.x = (int16_t)(o.x + o.w);
+  c.w = (int16_t)(r.x + r.w > c.x ? r.x + r.w - c.x : 0);
+  if (c.w > 0 && (a = (long)c.w * c.h) > ba) { best = c; ba = a; }
+  if (ba <= 0) { best.w = 0; best.h = 0; }
+  return best;
+}
+
 static void apply_clip(void) {
   Rect r = rect_clip(s_asked, DISPLAY_W, DISPLAY_H);
   if (s_reserve > 0 && r.y < s_reserve) {
@@ -43,7 +80,10 @@ static void apply_clip(void) {
     r.h = (int16_t)(r.h > cut ? r.h - cut : 0);
     r.y = (int16_t)s_reserve;
   }
-  s_clip = r;
+  r = cut_occluder(r);
+  if (rect_is_empty(r)) { r.w = 0; r.h = 0; }
+  s_logical = r;
+  s_clip = rect_intersect(r, s_bound);
 }
 
 void draw_set_clip(Rect r) {
@@ -58,34 +98,95 @@ void draw_reserve_top(int rows) {
 
 int draw_reserved_top(void) { return s_reserve; }
 
+void draw_occlude(Rect r) {
+  s_occl = r;
+  apply_clip();
+}
+
+Rect draw_occluder(void) { return s_occl; }
+
 /* `area` painted by `body` off the panel, a strip of rows at a time, each
- * strip sent whole. Only the part inside the current clip, so a damage rect
- * still limits the work, and never under a banner's reserved rows. Without
- * the memory for a strip, `body` draws straight to the panel as it would
- * have. The clip is put back afterwards. */
+ * strip prefilled with `prefill` and sent whole. Only the part inside the
+ * current clip, so a damage rect still limits the work, and never under a
+ * banner's reserved rows.
+ *
+ * Nested -- called while something is already being composed, Settings
+ * inside a shell's app paint -- it draws straight into that: the outer
+ * strip is already off the panel, and a second buffer would only cost
+ * memory. One static strip serves the outermost call; a second outermost
+ * one while it is busy (nothing does that today) mallocs, and without the
+ * memory for that `body` draws straight to the panel as it would have.
+ * The clip and the target are put back afterwards. */
 #define OFF_STRIP 16
-void draw_offscreen(Rect area, void (*body)(void *ctx), void *ctx) {
-  Rect asked = s_asked, vis = rect_intersect(area, s_clip);
+#define OFF_PX    (DISPLAY_W * OFF_STRIP)
+static uint16_t s_strip[OFF_PX];               /* 7.5 KB, instead of a malloc a frame */
+static int      s_strip_busy;
+
+static void fill_px(uint16_t *p, size_t n, uint16_t c) {
+  size_t i;
+  for (i = 0; i < n; i++) p[i] = c;
+}
+
+void draw_offscreen(Rect area, uint16_t prefill, void (*body)(void *ctx), void *ctx) {
+  Rect asked = s_asked, bound = s_bound, vis = rect_intersect(area, s_clip);
+  DispTarget outer;
   uint16_t *buf;
+  int rows, own = 0;
   int16_t y;
-  if (rect_is_empty(vis)) return;
-  buf = (uint16_t *)malloc((size_t)vis.w * OFF_STRIP * 2);
-  if (!buf) { body(ctx); return; }
-  for (y = vis.y; y < vis.y + vis.h; y = (int16_t)(y + OFF_STRIP)) {
-    int16_t h = (int16_t)(vis.y + vis.h - y < OFF_STRIP ? vis.y + vis.h - y : OFF_STRIP);
+
+  if (rect_is_empty(vis) || !body) return;
+  display_target_get(&outer);
+
+  if (outer.buf) {                             /* nested: already off the panel */
+    draw_set_clip(vis);
+    draw_rect(vis, prefill);
+    body(ctx);
+    draw_set_clip(asked);
+    return;
+  }
+
+  if (!s_strip_busy) {
+    buf = s_strip;
+    s_strip_busy = 1;
+    rows = OFF_PX / vis.w;
+  } else {
+    buf = (uint16_t *)malloc((size_t)vis.w * OFF_STRIP * 2);
+    own = 1;
+    rows = OFF_STRIP;
+  }
+  if (!buf) {
+    draw_set_clip(vis);
+    body(ctx);
+    draw_set_clip(asked);
+    return;
+  }
+
+  for (y = vis.y; y < vis.y + vis.h; y = (int16_t)(y + rows)) {
+    int16_t h = (int16_t)(vis.y + vis.h - y < rows ? vis.y + vis.h - y : rows);
     Rect strip;
     strip.x = vis.x; strip.y = y; strip.w = vis.w; strip.h = h;
+    fill_px(buf, (size_t)vis.w * (size_t)h, prefill);
     display_target(buf, vis.x, y, vis.w, h);
-    draw_set_clip(strip);
+    s_bound = strip;
+    draw_set_clip(vis);
     body(ctx);
-    display_target(NULL, 0, 0, 0, 0);
+    display_target_set(&outer);
+    s_bound = bound;
     display_blit(vis.x, y, vis.w, h, buf);
   }
-  free(buf);
+  if (own) free(buf);
+  else s_strip_busy = 0;
   draw_set_clip(asked);
 }
 
+int draw_composing(void) {
+  DispTarget t;
+  display_target_get(&t);
+  return t.buf != NULL;
+}
+
 Rect draw_clip(void) { return s_clip; }
+Rect draw_paint_area(void) { return s_logical; }
 
 void draw_rect(Rect r, uint16_t color) {
   Rect v = rect_intersect(r, s_clip);

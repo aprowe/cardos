@@ -28,6 +28,10 @@ void desktop_flush(void);
  * expressed as damage. */
 void desktop_repaint(void);
 
+/* Repaint just `r`, now: what something drawn over the shell left behind
+ * (the busy badge). */
+void desktop_damage(Rect r);
+
 /* Set when something other than a keypress asked to leave -- the Console entry
  * in the Start menu, clicked rather than typed. Clears on read. */
 int  desktop_take_leave(void);

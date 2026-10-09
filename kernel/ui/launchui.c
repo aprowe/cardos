@@ -31,6 +31,7 @@
 #include "kernel/ui/help.h"
 #include "kernel/ui/appsearch.h"
 #include "kernel/ui/picker.h"
+#include "kernel/ui/apphost.h"
 #include "kernel/ui/icons_builtin.h"
 #include "kernel/sys/hotkeys.h"
 #include "kernel/sys/clock.h"
@@ -76,7 +77,12 @@ static char     s_note[48];
 /* The app currently running fullscreen, or NULL for the carousel. */
 static const AppDef *s_app;
 static int            s_app_dirty;
-static int            s_app_clear;    /* the screen still has the carousel on it */
+/* How the next paint of it came about: AH_FULL and friends (apphost.h). The
+ * carousel is still on the panel when an app opens, and help or the picker
+ * was over it when they close: a whole repaint, composed off the panel, and
+ * the surround outside a smaller app's rect. Never a white fill of the app's
+ * rect first -- that was the white frame between the carousel and the app. */
+static int            s_app_how;
 static int            s_help;         /* the key list is over everything */
 static int            s_binding;      /* k was pressed: the next letter binds */
 static int            s_pointer_on;   /* a mouse has moved: there is a cursor */
@@ -214,17 +220,25 @@ static uint32_t bar_state(void) {
 }
 static uint32_t s_bar_shown;
 
-/* Composed off the panel and sent whole, like the carousel. */
+/* Rows y0..y1, composed off the panel a strip at a time by `body` -- which
+ * draws everything and is clipped to each strip in turn (draw_offscreen).
+ * Without the memory for a strip it draws straight to the panel, as it
+ * always used to. */
+static void (*s_off_body)(void);
+static void off_body(void *ctx) { (void)ctx; s_off_body(); }
+static void paint_offscreen(int y0, int y1, uint16_t prefill, void (*body)(void)) {
+  s_off_body = body;
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  draw_offscreen(R(0, y0, DISPLAY_W, y1 - y0), prefill, off_body, NULL);
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+}
+
+/* Composed off the panel and sent whole, like the carousel. It had a 5.6 KB
+ * buffer of its own, held for the uptime; draw_offscreen's strip is shared. */
 static void paint_bar(void) {
-  static uint16_t strip[DISPLAY_W * BAR_H];      /* 5.6 KB, for good: it is drawn every minute */
   if (notify_covers()) return;                   /* under a banner; repainted when it goes */
   s_bar_shown = bar_state();
-  display_target(strip, 0, 0, DISPLAY_W, BAR_H);
-  draw_set_clip(R(0, 0, DISPLAY_W, BAR_H));
-  paint_bar_body();
-  display_target(NULL, 0, 0, 0, 0);
-  display_blit(0, 0, DISPLAY_W, BAR_H, strip);
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  paint_offscreen(0, BAR_H, C_TITLE, paint_bar_body);
 }
 
 /* Colour if the card has one, the app's own 1bpp shape otherwise. The colour
@@ -267,12 +281,12 @@ static void paint_pips(int n) {
  * its size and its x following from where that puts it. 64 px in the middle,
  * 32 one slot out, and further out it runs off the edge.
  *
- * Drawn off the panel, a strip at a time (display_target), and each strip
+ * Drawn off the panel, a strip at a time (draw_offscreen), and each strip
  * sent whole. The old way filled the area teal and then drew over it, and
  * the teal showed: that was the launcher's flicker. */
 #define ANIM_MS   170
 #define SLOT_X    (BIG / 2 + SIDE_GAP + SMALL / 2)    /* 60: centre to neighbour */
-#define STRIP_H   20
+
 
 static int      s_anim;           /* slots still to travel, x256; 0 at rest */
 static int      s_anim_from;
@@ -366,31 +380,13 @@ static void paint_carousel_body(void) {
   paint_pips(n);
 }
 
-/* Rows y0..y1, composed off the panel a strip at a time by `body` -- which
- * draws everything and is clipped to each strip in turn. Without the memory
- * for a strip it draws straight to the panel, as it always used to. */
-static void paint_offscreen(int y0, int y1, void (*body)(void)) {
-  uint16_t *strip = (uint16_t *)malloc((size_t)DISPLAY_W * STRIP_H * 2);
-  int y;
-  if (!strip) {
-    draw_set_clip(R(0, y0, DISPLAY_W, y1 - y0));
-    body();
-    draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-    return;
-  }
-  for (y = y0; y < y1; y += STRIP_H) {
-    int h = y1 - y < STRIP_H ? y1 - y : STRIP_H;
-    display_target(strip, 0, y, DISPLAY_W, h);
-    draw_set_clip(R(0, y, DISPLAY_W, h));
-    body();
-    display_target(NULL, 0, 0, 0, 0);
-    display_blit(0, y, DISPLAY_W, h, strip);
-  }
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-  free(strip);
+/* The carousel's rows, through the same strip as everything else. It
+ * mallocked 9.6 KB a frame of its own, 20 rows at a time, and a frame of
+ * the slide that found no 9.6 KB block was drawn straight to the panel --
+ * memory pressure showing up as flicker. */
+static void paint_carousel_rows(int y0, int y1) {
+  paint_offscreen(y0, y1, C_DESKTOP, paint_carousel_body);
 }
-
-static void paint_carousel_rows(int y0, int y1) { paint_offscreen(y0, y1, paint_carousel_body); }
 static void paint_carousel(void) {
   int top = notify_covers() > BAR_H ? notify_covers() : BAR_H;   /* not under a banner */
   paint_carousel_rows(top, DISPLAY_H);
@@ -423,46 +419,16 @@ static Rect app_rect(const AppDef *a) {
   return R((DISPLAY_W - w) / 2, (DISPLAY_H - h) / 2, w, h);
 }
 
-static void paint_app(void) {
-  /* Read before the clearing below resets it: a frame that clears the screen
-   * has to be a whole repaint, whatever the app thinks changed. */
-  int cleared = s_app_clear;
+/* A rectangle the shell must repaint for reasons of its own -- the busy
+ * badge went -- kept apart from the app's damage. */
+static Rect s_extra;
+static int  s_has_extra;
 
-  /* The carousel is still on the panel when an app opens, and an app that does
-   * not cover every pixel would otherwise be drawn on top of it. Clearing is
-   * done once on entry rather than every frame: doing it per frame would make
-   * anything that repaints itself flicker. */
-  if (s_app_clear) {
-    s_app_clear = 0;
-    draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-    draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
-    draw_rect(s_app_rect, C_WHITE);
-    if (s_app_rect.w < DISPLAY_W || s_app_rect.h < DISPLAY_H)
-      draw_frame(rect_inset(s_app_rect, -1), C_SHADOW);
-  }
-
-  /* Clipped to its own rectangle, so an app that draws past its declared size
-   * cannot scribble over the surround it does not own -- and narrowed further
-   * to whatever the app says actually changed.
-   *
-   * This is what stops a keypress redrawing a whole screen. Until an app
-   * marks damage it gets its full rectangle, exactly as before, so nothing
-   * written before this notices; an app that marks a row gets a row, and the
-   * drawing it does outside that row costs a clip test each rather than a
-   * blit. A full clear is still available to the shell -- s_app_clear -- for
-   * the cases where the app genuinely cannot know what is underneath. */
-  {
-    Rect area = s_app_rect;
-    Rect want;
-    if (!cleared && s_app->take_damage &&
-        s_app->take_damage(s_app->state, &want)) {
-      Rect vis = rect_intersect(want, s_app_rect);
-      if (!rect_is_empty(vis)) area = vis;
-    }
-    draw_set_clip(area);
-  }
-  if (s_app->paint) s_app->paint(s_app->state, s_app_rect);
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+static void paint_app(int asked) {
+  int how = s_app_how | (asked ? AH_ASKED : 0);
+  s_app_how = 0;
+  apphost_paint(s_app, s_app_rect, how, s_has_extra ? &s_extra : NULL);
+  s_has_extra = 0;
 }
 
 /* The shell's own keys, appended under the app's. Two lists rather than one so
@@ -515,9 +481,10 @@ static void flush(void) {
     return;
   }
   if (s_app) {
-    if (!s_app_dirty) return;
+    int asked = s_app_dirty;
+    if (!asked && !s_has_extra) return;
     s_app_dirty = 0;
-    paint_app();
+    paint_app(asked);
     /* Last, and every time: an app that animates repaints over the pointer
      * otherwise, and a cursor that blinks out whenever the ball moves is
      * worse than no cursor at all. */
@@ -568,8 +535,19 @@ static void paint_spinner(uint32_t ms) {
  * it without a finger -- see capprun_actions. */
 const AppDef *launchui_running(void) { return s_app; }
 
+void launchui_damage(Rect r) {
+  if (!s_app) { s_dirty = 1; flush(); return; }
+  /* Help and the picker are over the app, and are repainted whole. */
+  if (s_help || picker_active()) { s_app_dirty = 1; flush(); return; }
+  s_extra = s_has_extra ? rect_union(s_extra, r) : r;
+  s_has_extra = 1;
+  flush();
+}
+
 void launchui_repaint(void) {
-  if (s_app) s_app_dirty = 1;
+  /* All of it: whatever asked (a banner going, an alarm, a panel) was over
+   * the app, and the app's own damage knows nothing about it. */
+  if (s_app) { s_app_dirty = 1; s_app_how |= AH_FULL | AH_SURROUND; }
   else s_dirty = 1;
   flush();
 }
@@ -672,10 +650,10 @@ static void launch_with(int i, const char *args) {
     start_app(ic->slot, ic->name, args);
     if (!capprun_is_app(ic->slot)) { said_why(ic->name); return; }
     a = capprun_def(ic->slot);
-    if (!a) return;
+    if (!a) { flush(); return; }
   } else {
     a = icon_app(i);
-    if (!a) return;
+    if (!a) { flush(); return; }
     if (a->open) a->open(a->state);
     if (args && *args && a->set_args) a->set_args(a->state, args);
   }
@@ -684,7 +662,7 @@ static void launch_with(int i, const char *args) {
    * desktop behind it for a window to sit on. */
   s_app = a;
   s_app_rect = app_rect(a);
-  s_app_clear = 1;
+  s_app_how = AH_FULL | AH_SURROUND | AH_OPENED;
   s_app_dirty = 1;
   flush();
 }
@@ -736,7 +714,7 @@ static void search_open(void) {
 static void paint_search_body(void);
 static void paint_search(void) {
   int top = notify_covers() > BAR_H ? notify_covers() : BAR_H;
-  paint_offscreen(top, DISPLAY_H, paint_search_body);
+  paint_offscreen(top, DISPLAY_H, C_DESKTOP, paint_search_body);
 }
 
 static void paint_search_body(void) {
@@ -816,16 +794,15 @@ static void move(int delta) {
  * at should still be there afterwards. Conflating the two meant the line after
  * "cat foo" was typed into the carousel. */
 static void enter(void) {
-  int here = ui_shell() == UI_LAUNCHER;
   ui_set_shell(UI_LAUNCHER);
   mouse_init(DISPLAY_W, DISPLAY_H);
   s_note[0] = 0;
   s_binding = 0;
   s_dirty = 1;
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-  /* From another shell the screen is someone else's; from the launcher the
-   * app about to paint covers it, and a fill first is a flash. */
-  if (!here) draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
+  /* No fill, from another shell either: what paints next covers the whole
+   * panel -- the carousel and its bar, or an app with its surround, both
+   * composed off the panel -- and a fill first was a teal flash. */
 }
 
 /* The icon list, loaded if it is not already. Not reloaded on every run: a
@@ -876,7 +853,7 @@ static void host(const AppDef *a) {
   if (s_app && s_app != a) capprun_release(s_app);
   s_app = a;
   s_app_rect = app_rect(a);
-  s_app_clear = 1;
+  s_app_how = AH_FULL | AH_SURROUND | AH_OPENED;
   s_app_dirty = 1;
   flush();
 }
@@ -1034,7 +1011,7 @@ int launchui_key(uint8_t key) {
    * one specific key is a panel you fight. */
   if (s_help) {
     s_help = 0;
-    if (s_app) { s_app_dirty = 1; s_app_clear = 1; }
+    if (s_app) { s_app_dirty = 1; s_app_how |= AH_FULL | AH_SURROUND; }
     else s_dirty = 1;
     flush();
     return 0;
@@ -1052,7 +1029,7 @@ int launchui_key(uint8_t key) {
       uint8_t arrow = keyboard_arrow_for(key);
       if (arrow) key = arrow;
     }
-    if (picker_key(key, s_now_ms)) { s_app_dirty = 1; s_app_clear = 1; }
+    if (picker_key(key, s_now_ms)) { s_app_dirty = 1; s_app_how |= AH_FULL | AH_SURROUND; }
     flush();
     return 0;
   }
@@ -1266,7 +1243,7 @@ void launchui_mouse_apply(const MouseReport *r) {
   if (s_app && picker_active()) {
     s_pointer_on = 1;
     if (btn && picker_click((int16_t)mouse_x(), (int16_t)mouse_y(), btn)) {
-      s_app_dirty = 1; s_app_clear = 1;
+      s_app_dirty = 1; s_app_how |= AH_FULL | AH_SURROUND;
     }
     if (wheel) picker_wheel(wheel > 0 ? -1 : 1);
     flush();

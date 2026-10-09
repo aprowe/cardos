@@ -56,6 +56,9 @@ static void panel(const char *title, uint16_t accent) {
   draw_set_clip(was);
 }
 
+/* The filled part and the rest side by side, each pixel drawn once, inside
+ * the frame -- as overlay_volume does. It cleared the whole bar and then
+ * filled over it at the meter's rate, and the level flickered. */
 static void bar(int pct, uint16_t colour) {
   Rect was = draw_clip();
   int w = PW - 20;
@@ -64,11 +67,11 @@ static void bar(int pct, uint16_t colour) {
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
   if (pct < 0) pct = 0;
   if (pct > 100) pct = 100;
-  fill = w * pct / 100;
+  fill = (w - 2) * pct / 100;
 
-  draw_rect(R(PX + 10, PY + 24, w, 10), C_BAR_BACK);
-  if (fill > 0) draw_rect(R(PX + 10, PY + 24, fill, 10), colour);
   draw_frame(R(PX + 10, PY + 24, w, 10), C_EDGE);
+  if (fill > 0) draw_rect(R(PX + 11, PY + 25, fill, 8), colour);
+  if (fill < w - 2) draw_rect(R(PX + 11 + fill, PY + 25, w - 2 - fill, 8), C_BAR_BACK);
   draw_set_clip(was);
 }
 

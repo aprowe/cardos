@@ -83,6 +83,6 @@ static void body(void *ctx) {
 void sleepclock_paint(void) {
   display_freeze(0);
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-  draw_offscreen(R(0, 0, DISPLAY_W, DISPLAY_H), body, NULL);
+  draw_offscreen(R(0, 0, DISPLAY_W, DISPLAY_H), C_BLACK, body, NULL);
   display_freeze(1);
 }

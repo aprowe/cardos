@@ -546,7 +546,7 @@ static const CappAction ACTIONS[] = {
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
-  CAPP_FULLSCREEN,
+  CAPP_FULLSCREEN | CAPP_PAINT_DIRECT,   /* paint reads the picture off the card */
   "Photos",
   /* 16x16: a framed landscape -- hill, sun. */
   { 0x00, 0x00, 0x7F, 0xFE, 0x40, 0x02, 0x41, 0x82,

@@ -225,7 +225,7 @@ static int app_key(void *st, uint8_t k) {
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
-  CAPP_FULLSCREEN,
+  CAPP_FULLSCREEN | CAPP_PAINT_DIRECT,   /* paint moves the bubble it draws */
   "Level",
   /* 16x16: a round vial with a bubble. */
   { 0x07, 0xE0, 0x18, 0x18, 0x20, 0x04, 0x40, 0x02,

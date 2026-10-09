@@ -310,7 +310,7 @@ static int app_button(void *st, int event, const char *text) {
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
-  CAPP_FULLSCREEN,
+  CAPP_FULLSCREEN | CAPP_PAINT_DIRECT,   /* composes its own strips */
   "Kart",
   /* 16x16: a kart from behind. */
   { 0x07, 0xE0, 0x08, 0x10, 0x08, 0x10, 0x07, 0xE0,
