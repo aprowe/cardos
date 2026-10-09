@@ -19,7 +19,8 @@
  * buffer, because the obvious design -- fill the app's array -- writes into
  * an app that lazy loading may have unloaded while the request was in flight.
  * The buffer is allocated here, filled here, copied out on collection and
- * freed. An app that walks away leaks nothing -- and, since ownership, wedges
+ * freed. (httpq_start_into is the kernel's exception, for a buffer that is
+ * never unloaded.) An app that walks away leaks nothing -- and, since ownership, wedges
  * nothing either. Every request names its owner; the app loader calls
  * httpq_abandon for a slot it unloads, and a reply that owner never collected
  * is dropped instead of sitting here answering "busy" to everyone else until
@@ -39,13 +40,27 @@
 void httpq_init(void);
 
 /* Start one. Returns 0 if accepted, -1 if a request is already in flight,
- * -2 if there was no memory for the reply. The strings are copied, so the
+ * -2 if there was no memory for the request or the reply, -3 if the URL is
+ * 384 characters or more (refused, not cut: a cut URL is another request).
+ * The strings are copied -- the body whole, whatever its length -- so the
  * caller may reuse or free them the moment this returns. `owner` is any
  * address that identifies the caller -- an app's slot, a module's static --
- * and is what httpq_abandon matches on. */
+ * and is what httpq_abandon matches on. The reply is up to 8 KB, allocated
+ * here until it is collected. */
 int httpq_start(const void *owner, const char *method, const char *url,
                 const char *body, const char *content_type, const char *bearer,
                 int timeout_ms);
+
+/* The same, with the reply written straight into `buf` (at most cap - 1
+ * bytes and a NUL) instead of 8 KB allocated here: for a small reply asked
+ * for often, which is the notification poll every 30 s. `buf` must outlive
+ * the request whatever happens -- a module's static, never an app's array,
+ * since an app can be unloaded mid-request and the task would write on.
+ * Poll with the same buffer (or another; it is copied then). */
+int httpq_start_into(const void *owner, char *buf, size_t cap,
+                     const char *method, const char *url,
+                     const char *body, const char *content_type, const char *bearer,
+                     int timeout_ms);
 
 /* The same, with the body read from a file on the card and the reply
  * written to one: for a request too large to hold, which is what a
@@ -57,10 +72,12 @@ int httpq_start_files(const void *owner, const char *url,
                       int timeout_ms);
 
 /* HTTPQ_PENDING while it runs. Otherwise whatever http_request would have
- * returned -- bytes on success, negative on failure, an HTTP status negated
- * into it -- and the body is copied into `out`, truncated to fit. Collecting
- * frees the reply and readies the next request, so poll until it is not
- * pending and then stop. */
+ * returned -- negative on failure, an HTTP status negated into it -- and
+ * the body is copied into `out`, truncated to fit. On success the bytes
+ * COPIED, at most out_size - 1 (httpslot_deliver); out_size - 1 means the
+ * reply filled `out` and may have been longer. With no `out` (the file
+ * mode), the bytes written to the card. Collecting frees the reply and
+ * readies the next request, so poll until it is not pending and then stop. */
 int httpq_poll(char *out, size_t out_size);
 
 /* The same, but only the request `owner` started: -1 if the slot is busy

@@ -689,9 +689,11 @@ typedef struct {
    *   if (n != CAPP_HTTP_PENDING) { waiting = 0; ... }
    *
    * http_start returns 0 if accepted, -1 if a request is already in flight --
-   * there is only one, because two TLS sessions do not fit in this heap -- and
-   * -2 if there was no memory for the reply. Every string is copied, so none
-   * of them need outlive the call.
+   * there is only one, because two TLS sessions do not fit in this heap --
+   * -2 if there was no memory for the request or the reply, and -3 if the URL
+   * is 384 characters or more (refused rather than cut). Every string is
+   * copied, the body whole however long, so none of them need outlive the
+   * call. (Before 2026-10-09 a body was cut at 511 bytes without a word.)
    *
    * http_poll returns CAPP_HTTP_PENDING while it runs, and otherwise exactly
    * what `http` would have: BYTES on success, negative on failure, an HTTP

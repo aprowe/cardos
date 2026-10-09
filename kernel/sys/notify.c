@@ -275,7 +275,11 @@ static void chat_tick(uint32_t now) {
     url_enc(me, sizeof me, name);
     snprintf(url, sizeof url, "%s/notify/poll?chat=%d&me=%s&note=%d", base,
              notify_chat_on() ? s_chat_seen : -1, me, s_note_seen);
-    if (httpq_start(&s_owner, "GET", url, NULL, NULL, tok[0] ? tok : NULL, 10000) == 0)
+    /* Into s_reply itself: every 30 s, so not 8 KB allocated and freed
+     * each time in a heap that breaks up (s_reply is a static, so it
+     * outlives any request, as httpq_start_into requires). */
+    if (httpq_start_into(&s_owner, s_reply, sizeof s_reply, "GET", url, NULL, NULL,
+                         tok[0] ? tok : NULL, 10000) == 0)
       s_chat_busy = 1;
   }
 }
