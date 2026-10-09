@@ -40,10 +40,12 @@ form, and tab completes commands and paths. PATH and a few other variables live
 in NVS -- see `env` and `set`. The launcher's app list is searched last, after
 PATH, so `edit` works even when nothing on PATH is called that.
 
-**Claude runs on the device**, in the only sense it can: `apps/claude.c` is a
-terminal, and the CardOS server — one process, one port, the same one that
-renders web pages — hands what you type to Claude Code running **in this
-repository, with permission to edit it**. Asking the device to change an app
+**Claude runs on the device**, in the only sense it can: `apps/build.c` (Build)
+is a terminal, and the CardOS server — one process, one port, the same one
+that renders web pages — hands what you type to Claude Code running **in this
+repository, with permission to edit it**. (`apps/claude.c` is the other
+Claude: a chat with the kernel's agent, through `/agent/messages` -- see
+"The Claude app goes through the server" below.) Asking the device to change an app
 changes the source on the PC. Three short calls rather than one long one
 (`POST /chat` → id, `GET /chat?id=N` → pending or the answer, `GET /chat/new`),
 because the shell is a single cooperative loop and a two-minute request is a
@@ -68,8 +70,8 @@ dev-time scripts only. A Build request is **planned, then run a step at a
 time** (`server/chat.py`): a quick no-tools call splits it into at most six
 steps, each is its own resumed turn, and each is streamed, so a poll answers
 `pending` plus "step 2/3: writing timer.c" and a turn is stopped when it goes
-quiet for 240 s rather than at a wall clock -- the old 300 s limit killed a
-new-app request that was still thinking. The device still calls it the proxy (`env PROXY`,
+quiet for 420 s (with a 1500 s backstop per step) rather than at a wall clock
+-- the old 300 s limit killed a new-app request that was still thinking. The device still calls it the proxy (`env PROXY`,
 `CAPP_PROXY_DEFAULT`), because renaming a setting stored on every device is
 not worth a word.
 
@@ -201,8 +203,26 @@ so anything stacked above still wins). `api->paint_area()` returns the clip, so
 an app can skip expensive work outside it — and comparing it with the rect
 paint was handed answers what `expect_paint` was guessing at. **An app that
 marks nothing gets its whole rectangle exactly as before**, so this cost the
-existing apps nothing; `apps/files.c` shows the pattern, and Mines, Claude and
+existing apps nothing; `apps/files.c` shows the pattern, and Build, Mines and
 Pinball can drop their hand-rolled versions whenever someone is in there.
+
+**Flicker is fixed by drawing off the panel, by the OS** (2026-10-09). There
+is no framebuffer (65 KB), so anything filled and then drawn over reached the
+panel as a visible frame -- and every char of the console was its own SPI
+transaction. `draw_offscreen(area, prefill, body, ctx)` (`kernel/ui/draw.c`,
+host-tested in `test/test_draw.c` against a fake panel that counts writes per
+pixel) runs a paint into one static 240x16 strip at a time and sends each
+strip whole; it nests (an inner call draws into the outer strip). A full app
+repaint goes through `kernel/ui/apphost.c` (`apphost_paint`, both shells)
+inside it, so an app paints the way it always did and the screen never sees
+the in-between; a damage-clipped paint stays direct. An app that composes its
+own strips or does I/O in paint sets `CAPP_PAINT_DIRECT` in its flags (Kart,
+Noodle, Calc, Photo, Pinball, Level, Forklift, Web). **Paint now runs once
+per strip**: a paint must not change state or read the clock mid-way (Toggl
+and Pet were fixed for exactly that). The launcher's carousel and bar, the
+banner, the picker, the desktop's pieces and the alarm's panel use the same
+strip; the busy badge shows only after 350 ms and repaints only its corner.
+Do not call `display_target` directly any more.
 
 **The dashboard is a page and an API** (2026-10-01).
 `server/dashboard.html` is one file of HTML and script, served whole at
@@ -648,7 +668,7 @@ time: only the current list's tasks are in memory, each list caches to
 `/todo/<id>.cache`, and `/todo/lists` remembers the names and the choice so
 Left/Right work offline. `l` is the picker. Switching mid-pull drops that
 reply; switching mid-push waits, because a dropped push reply means the item
-is sent twice. Lists are made and named elsewhere, on purpose.
+is sent twice. A new list can be made from the list picker (`n`).
 
 **One HTTP request at a time, and it has an owner.** `kernel/net/httpq.c`
 runs a single request off the shell's loop; `api->http_start` refuses a
@@ -664,7 +684,7 @@ paint used to clear the active slot for the rest of the tick — so `damage()`
 marks were dropped and the request had no owner. Apps now say "busy" when a
 start is refused instead of returning silently.
 
-**API version 36** (`CAPP_API_VERSION` in `capp.h` is the truth; this
+**API version 43** (`CAPP_API_VERSION` in `capp.h` is the truth; this
 paragraph is history). It moved six times in one day — 11 to 17 — and has
 kept moving since; each move means every `.capp` must be rebuilt, because the
 loader refuses a binary built against a different table. `python
@@ -677,7 +697,7 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36).
+`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36), `motion` (37), `midi` (38), `notify` (39), `notify_at`/`notify_cancel` (40), `update_apply_progress` (41), `firmware_boot` (42) and `link` (43). A new capp_info flag bit (`CAPP_PAINT_DIRECT`) is not an API change; neither is clamping what `http_poll` returns.
 
 **Fonts are files an app asks for** (2026-09-23). The 6x8 console font is
 still compiled in and still the default; anything nicer is a `.cfnt` in
@@ -758,45 +778,24 @@ code block (`capp_hold_code`, elfload.c) and loads the next app into it;
 capprun lets it go when that app closes or a second passes without a
 command (2026-09-30).
 
-**Credentials survive a reflash** (2026-09-19). WiFi and Google credentials
-live in NVS at runtime, and a full-table flash wipes NVS -- one day it cost the
-network, the hotkeys and the Google login in a row. Each is now mirrored to a
-file on the card, written whenever it is set: `/config/wifi.txt` (SSID, then
-password) and `/config/google.txt` (client id, secret, refresh token), one
-value per line. At boot, after the card mounts, a file is read back only when
-NVS has nothing, so NVS wins where both exist and `wifi forget` / `google
-forget` delete the file too. A hand-written `/config/wifi.txt` is also the
-way to give a fresh device its network without a keyboard. `kernel/sys/conf.c`
-holds the line format (host-tested); `conf_file.c` is the fs glue.
+**WiFi credentials survive a reflash** (2026-09-19). They live in NVS at
+runtime, and a full-table flash wipes NVS, so they are mirrored to
+`/config/wifi.txt` (SSID, then password), written whenever they are set and
+read back at boot only when NVS has nothing; `wifi forget` deletes the file
+too. A hand-written `/config/wifi.txt` is also the way to give a fresh device
+its network without a keyboard. `kernel/sys/conf.c` holds the line format
+(host-tested); `conf_file.c` is the fs glue.
 
-**Google sign-in is on the dashboard now** (2026-09-24).
-`https://cardos.arowe.net/dash` (`server/dash.py`; the password is
-`DASH_PASSWORD` in `/etc/cardos/env`, and the server still needs `--token`) signs in with a Google *Web* client, and the device runs
-`google pull`, which fetches client id, secret and refresh token from
-`/google/creds` over HTTPS with its bearer, `env DASH` overriding the address.
-Only `/dash*` and `/google/creds` are exposed on that name;
-`tools/deploy_droplet.sh dash` sets up nginx, the certificate and the client.
-`tools/google_auth.py` remains the offline fallback. Refresh tokens expiring
-after 7 days is the consent screen being in Testing, not a bug here -- publish
-it. Design in `docs/superpowers/specs/2026-09-24-dashboard-google-design.md`.
-
-**"Google: not configured" came back over and over** (2026-09-20), and the
-cause was the push, not the device. `tools/google_auth.py` typed the three
-`google` commands with a fixed 1.5 s wait after each -- but the console takes
-one character per pass of its loop, so the hundred-character refresh token
-is still being read when the wait ends, and the tool declared the push
-failed, printed nothing useful, and was run again, and again. (It also
-reached the console by Escape, which was never reliable and now does
-nothing.) The tool now checks for a prompt before typing, waits for the
-prompt after each command, sends opt-3 rather than Escape, and on failure
-prints what the device said with the values redacted. Two more guards on the
-device: boot writes `/config/google.txt` whenever NVS has credentials and
-the card does not (a login older than the mirror had no file, so the day NVS
-went it was gone for good), and a boot that erases NVS
-(`ESP_ERR_NVS_NO_FREE_PAGES`, or a version change) says so in red and puts a
-line in `log`. `mem` shows NVS entries used; 142 of 630 after a WiFi join.
-Opening the port with pyserial does not reset this board (checked), so that
-was not it.
+**Google lives on the server only** (2026-10-09). The dashboard
+(`https://cardos.arowe.net/dash`, `server/dash.py`; the password is
+`DASH_PASSWORD` in `/etc/cardos/env`) signs in with a Google *Web* client, and
+Calendar and Todo reach Google through the server (below). The device no
+longer holds Google credentials at all: `google pull`, `kernel/net/gauth.c`,
+`/google/creds` and `tools/google_auth.py` are gone, `api->google_token`
+answers NULL (the table did not change), and boot deletes a leftover
+`/config/google.txt` -- a plaintext refresh token on a removable card.
+Refresh tokens expiring after 7 days is the consent screen being in Testing,
+not a bug here -- publish it.
 
 **`CAPP_PROXY_DEFAULT` in `capp.h` is the one place the PC's address is
 written.** Kernel and apps both include that header; the kernel prefers
@@ -808,9 +807,9 @@ waiting for the laptop's address to change.
 Half the image is radio and TLS (net80211 158 KB,
 mbedTLS + PSA crypto 228 KB, Bluetooth 177 KB, lwIP 103 KB), which is not
 shrinkable by writing tighter kernel code — CardOS's own code is about 178 KB.
-**Only three apps are embedded** (2026-10-01): Dashboard Link, Files and
-Edit (`EMBED` in `tools/build_apps.py`) -- enough for a blank card to be
-linked and repaired. All of them used to be, 948 KB by then, and the image
+**Only four apps are embedded** (2026-10-01): Dashboard Link, Files, Edit and
+Update (`EMBED` in `tools/build_apps.py`) -- enough for a blank card to be
+linked, repaired and brought up to date. All of them used to be, 948 KB by then, and the image
 outgrew the 2304 KB OTA slots: `update os` downloaded it and refused it as
 "not a bootable image". The rest arrive with `update apps`. Run
 `python tools/mapsize.py` before deciding anything about size.
@@ -825,16 +824,20 @@ executable heap piece by piece. Two answers: a load that fails for memory
 lets go of what can come back -- the held code block, Bluetooth (unless a
 mouse or keyboard holds it), WiFi (unless a request or the share needs
 it) -- and tries again (`make_room` in capprun.c); and no app should need
-a block near 40 KB. Notes' data was 39.7 KB, 16 of it one buffer for a
-note's text; it is 8 KB now (Notes 31.6 KB), and a note fetched cut short
-is caught by its hash and left on the server. Check an app's sizes with
-`xtensa-esp32s3-elf-size -A build/apps/NAME.capp` (.code and .data).
+a block near 40 KB. **`tools/build_apps.py` enforces it** (2026-10-09): it
+prints every app's `.code` and `.data` (and writes `build/apps/sizes.txt`),
+and fails an app over 28 KB of data or 44 KB of code and data unless it is
+in `OVER_BUDGET` with a reason (Forklift, for its code). A load that fails
+now logs the block it wanted and the largest one there was, and says so on
+the row ("needs 31 KB in one piece, largest 24"); the Memory app shows what
+`mem` shows. Colour icons share 16 fixed slots instead of a malloc each.
 
-**Measured memory, with both radios up: 120 KB of heap free**, low water 95 KB.
-It was 79 KB until the memory manager's arena came down from 48 KB to 16 —
-grep says nothing outside `kernel/mem` ever allocated from it, and holding a
-third of the free heap for that was why WiFi and TLS could not both fit while
-Bluetooth was connected. See `tools/mapsize.py` and the `mem` command. Every
+**Measured memory, with both radios up: 120 KB of heap free**, low water 95 KB
+(before 2026-10-09; re-measure). It was 79 KB until the memory manager's
+arena came down from 48 KB to 16 -- nothing outside `kernel/mem` ever
+allocated from it -- and since 2026-10-09 the memory manager, the swapper and
+the scheduler are not in the firmware at all (their portable sources and
+host tests stay). See `tools/mapsize.py` and the `mem` command. Every
 number here moved during bring-up — do not trust one you have not re-measured.
 
 **One firmware for the original Cardputer and the Cardputer ADV** (2026-10-06,
@@ -911,6 +914,44 @@ is the first user (the inviter is blue; a move is 5 bytes);
 The USB serial link's hooks in main.c are `ser_open`/`ser_state` now: "link"
 is this.
 
+**Releases are git tags** (2026-10-09): `vMAJOR.MINOR.PATCH`, annotated, with
+a section in `CHANGELOG.md`. ESP-IDF stamps the image with `git describe`, and
+the boot banner, `bootinfo` and About show it; `tools/deploy_droplet.sh sync`
+pushes tags to GitHub and the droplet. `CAPP_API_VERSION` is a separate number.
+
+**The network has rules now** (2026-10-09, `kernel/net/http.h`). Every
+transfer returns -1 no network, -2 bad arguments, -3 transport (and
+`http_last_error()` says which step), -4 out of memory, -NNN an HTTP status.
+`http_poll` returns the bytes it copied -- never more than the buffer less
+one; `CAPP_HTTP_FILLED(n, size)` says the reply did not fit. A request body is
+sent whole (it was cut at 511 bytes), a URL too long is refused, and
+`httpq_start_into` fills the caller's buffer with no 8 KB malloc (the notify
+poll uses it). `wifi_use`/`wifi_unuse` hold the radio up: `wifi_release`
+refuses while it is in use, and joins and scans are serialised.
+
+**G43 has one owner** (2026-10-09). `audio_claim`/`audio_release`
+(`kernel/sys/audio.c`) and the speaker's pin lock: the mic and the speaker
+refuse rather than taking the pins from each other. Holding G0 while music
+plays stops the music, then records; holding it during an app's recording
+(Memo, Noodle) is refused with a message.
+
+**One record of which shell is up, one path for a key** (2026-10-09).
+`ui_shell()` is the shell; `src/main.c` changes it only through `go()`. Every
+key -- the keyboards, voice, the agent, `shell_feed_key` -- goes through
+`dispatch_key`: a ringing alarm, a ringing notification, the centre, the
+global chords, then the shell. What an app is given to own is released by a
+`capprun_on_release(fn)` hook registered at boot, keyed by
+`capprun_executing()`.
+
+**Apps share small headers** (2026-10-09): `apps/str.h` (strings, tab fields,
+`url_enc`, `capp_rect`), `apps/confirm.h` (y is yes; n, Esc and Bksp are no;
+everything else, Enter included, leaves the question up), `apps/syncset.h` (a
+sync deletes nothing against a list that did not fit), `apps/dirmodel.h`
+(Files and Explorer, and what opens what), `apps/termlog.h` (Build, Claude and
+Chat's wrapping), `apps/datetime.h`. App tests start from `test/fakeapi.h`, a
+whole default CardApi with in-memory and host-file cards. `test/test_main.c`
+is generated: `python tools/gen_test_main.py`.
+
 ## Hardware facts — measured on the actual device, not from a datasheet
 
 M5Stack Cardputer v1.1, ESP32-S3FN8 (Xtensa LX7 dual-core, 240 MHz).
@@ -981,8 +1022,9 @@ hardware-specific. What it cost to learn:
   memory number in the spec above was measured on this device. CardOS then made
   the same mistake in miniature: the memory manager's arena was fixed at 128 KB
   before either radio existed, and with WiFi and Bluetooth both up that left
-  1156 bytes free and the WiFi driver failing buffer allocations in a loop. It
-  is 48 KB now. Run `mem` after adding anything that allocates.
+  1156 bytes free and the WiFi driver failing buffer allocations in a loop.
+  It is gone from the firmware now. Run `mem` after adding anything that
+  allocates.
 - **A firmware that seems dead is usually a serial problem**, not a crash —
   check whether the device is still doing its job by some other channel first.
 
@@ -1008,7 +1050,7 @@ hardware-specific. What it cost to learn:
   | Esc | back one level -- out of every prompt, form, confirm and subview; never leaves the app (fn-` does, and is the OS's) |
   | n | new (`a` stays as an alias where it was add: Todo, Calendar, Habits) |
   | e | edit, rename, describe |
-  | d / Del | delete, always confirmed: y yes, n / Esc / Bksp no |
+  | d / Del | delete, always confirmed (apps/confirm.h): y yes, n / Esc / Bksp no, anything else waits |
   | r | refresh, sync, re-read (`s` stays an alias for sync in Todo, Calendar, Notes) |
   | p / fn-p | print; never anything else |
   | o | open in another app (Files: in the editor) |
