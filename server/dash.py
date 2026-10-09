@@ -242,63 +242,24 @@ main{max-width:720px;margin:0 auto;padding:24px 16px}
 h1{font-size:20px;margin:0 0 20px;display:flex;justify-content:space-between;align-items:center}
 h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:0 0 12px}
 section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px}
-dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:0 0 14px}
-dt{color:var(--dim)}dd{margin:0;overflow-wrap:anywhere}
-pre{margin:0;font:12px/1.5 ui-monospace,Consolas,monospace;overflow-x:auto;white-space:pre}
 button,.btn{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);
 border-radius:6px;padding:6px 14px;cursor:pointer;text-decoration:none;display:inline-block}
 .primary{background:var(--acc);border-color:var(--acc);color:#fff}
 input{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:6px;
 background:var(--bg);color:var(--ink);width:100%;margin:8px 0 12px}
-.ok{color:var(--ok)}.bad{color:var(--bad)}.dim{color:var(--dim)}
+.bad{color:var(--bad)}
 form{display:inline}.msg{margin:0 0 16px;padding:10px 14px;border-radius:6px;border:1px solid var(--line)}
-header{background:var(--card);border-bottom:1px solid var(--line)}
-header .in{max-width:960px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
-header .brand{font-weight:700;font-size:17px;margin-right:6px}
-header nav{display:flex;gap:4px;flex:1}
-header nav a{color:var(--dim);text-decoration:none;padding:6px 12px;border-radius:6px}
-header nav a.on{color:var(--ink);background:var(--bg);font-weight:600}
-header nav a:hover{color:var(--ink)}
-main.wide{max-width:960px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;align-items:start}
-.grid section{margin:0}
-.card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.card-head h2{margin:0}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px;background:var(--dim)}
-.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}
-.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
-.big{font-size:17px;font-weight:600;margin:0 0 4px}
-details summary{cursor:pointer;margin-top:4px}
-table.apps{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
-table.apps td{padding:4px 6px;border-top:1px solid var(--line)}
 """
 
 
-PAGES = [("/dash", "Dashboard"), ("/dash/files", "Files")]
-
-
-def _page(title, body, here=None):
-    """A page; `here` (a path in PAGES) gives it the bar with the pages and
-    log out, which only a signed-in page should have."""
-    bar = ""
-    if here:
-        links = "".join("<a href=%s%s>%s</a>" % (u, " class=on" if u == here else "",
-                                                  html.escape(n)) for u, n in PAGES)
-        bar = ("<header><div class=in><span class=brand>CardOS</span><nav>%s</nav>"
-               "<form method=post action=/dash/logout><button>Log out</button></form>"
-               "</div></header>" % links)
+def _page(title, body):
+    """The sign-in page, and the dashboard's few error pages: the dashboard
+    itself is server/dashboard.html."""
     return ("<!doctype html><html lang=en><head><meta charset=utf-8>"
             "<meta name=viewport content='width=device-width,initial-scale=1'>"
             "<meta name=robots content=noindex><link rel=icon href='data:,'>"
             "<title>%s</title><style>%s</style></head>"
-            "<body>%s<main%s>%s</main></body></html>"
-            % (html.escape(title), STYLE, bar, " class=wide" if here else "", body))
-
-
-def _when(t):
-    if not t:
-        return "never"
-    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(t))
+            "<body><main>%s</main></body></html>" % (html.escape(title), STYLE, body))
 
 
 def login_page(msg=""):
@@ -319,24 +280,11 @@ def _name_field():
             "autofocus></label>")
 
 
-def _google_check():
-    """(ok, words): whether the server's login works right now. Uses the
-    cached access token when there is one, so a page load is not a Google
-    round trip every time."""
-    from . import google                  # it imports this module
-    try:
-        google.access_token()
-        return True, "working"
-    except google.GoogleError as e:
-        return False, e.why
-    except Exception as e:                # the network, mostly
-        return False, "could not check: %s" % e
-
-
 # ---- routes -----------------------------------------------------------------
 #
-# The /dash routes are "open" to the bearer check and do their own, with the
-# cookie: a browser has no bearer and the device has no cookie.
+# These are "open" and check the cookie themselves, because a signed-out
+# browser here gets the sign-in page or a redirect, not the JSON 403 that the
+# page's own calls get ("dash", server/dashapi.py).
 
 def _need_token(h):
     if _server_token(h) and password():
@@ -465,33 +413,10 @@ def get_google_callback(h, path, args):
     back("Signed in to Google. Calendar and Todo use this login.")
 
 
-def post_google_forget(h, path, args):
-    """sign out of Google and revoke"""
-    if not _need_token(h):
-        return
-    if not logged_in(h):
-        h.redirect("/dash")
-        return
-    from . import google
-    c = load_creds()
-    forget_creds()
-    google.forget_access()
-    msg = "Signed out."
-    if c and c.get("refresh_token"):
-        try:
-            revoke(c["refresh_token"])
-            msg = "Signed out of Google and revoked. Calendar and Todo stop syncing."
-        except Exception as e:
-            msg = "Signed out here, but revoking failed (%s); revoke it at " \
-                  "myaccount.google.com/permissions." % e
-    h.redirect("/dash?msg=" + urllib.parse.quote(msg))
-
-
 ROUTES = [
     ("GET", "/dash", get_dash, "open"),
     ("POST", "/dash/login", post_login, "open"),
     ("POST", "/dash/logout", post_logout, "open"),
     ("GET", "/dash/google/start", get_google_start, "open"),
     ("GET", CALLBACK, get_google_callback, "open"),
-    ("POST", "/dash/google/forget", post_google_forget, "open"),
 ]

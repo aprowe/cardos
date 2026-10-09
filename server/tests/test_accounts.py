@@ -283,7 +283,7 @@ class PerPerson(Server):
     def test_signing_out_of_google_drops_the_access_token(self):
         google, _ = self.google()
         mine = self.login("alex", PASSWORD)
-        for route in ("/dash/api/google/forget", "/dash/google/forget"):
+        for route in ("/dash/api/google/forget",):
             self.sign_in(mine, "x")
             self.as_me()
             google.access_token()

@@ -213,12 +213,9 @@ class Google(Server):
         self.assertEqual(self.revoked, [])
         self.assertEqual(dash.load_creds()["refresh_token"], "r-two")
 
-    def test_forget_revokes_and_deletes(self):
-        cookie = self.login()
-        self.signed_in(cookie)
-        self.req("/dash/google/forget", {}, cookie=cookie)
-        self.assertEqual(self.revoked, ["r-abc"])
-        self.assertIsNone(dash.load_creds())
+    def test_the_old_pages_sign_out_is_gone(self):
+        # The page signs out at /dash/api/google/forget (Api, below).
+        self.assertEqual(self.req("/dash/google/forget", {}, cookie=self.login())[0], 404)
 
 
 class Api(Server):
