@@ -14,10 +14,8 @@ What comes back is checked by check() below, a reading of the same format
 as midiseq.h; a song with a mistake goes back to Claude once with the line
 and the reason, rather than to the device to fail there.
 """
-import json
 import re
 import secrets
-import subprocess
 import sys
 import threading
 
@@ -106,16 +104,8 @@ def extract(text):
 
 
 def _claude(chat, prompt):
-    if not chat or not chat.claude:
-        raise RuntimeError("this server runs without Claude")
-    cmd = [chat.claude, "-p", prompt, "--output-format", "json",
-           "--allowed-tools", "", "--permission-mode", "dontAsk"]
-    r = subprocess.run(cmd, cwd=chat.cwd, capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=240, env=chat._child_env())
-    j = json.loads(r.stdout or "{}")
-    if j.get("is_error") or not j.get("result"):
-        raise RuntimeError((j.get("result") or r.stderr or "Claude did not answer")[:160])
-    return j["result"]
+    from .chat import ask_once
+    return ask_once(chat, prompt, 240)[0]
 
 
 SONG_MARK = "---song---"
@@ -146,7 +136,7 @@ def _run(jid, chat, request):
     try:
         song = compose(chat, request)
         result = ("ok", song)
-    except Exception as e:                      # subprocess, JSON, the check
+    except Exception as e:                      # Claude, the check
         result = ("error", str(e))
     _jobs.replace(jid, result)
     sys.stderr.write("midi: %s %s\n" % (jid, result[0]))

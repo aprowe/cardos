@@ -21,7 +21,6 @@ import json
 import os
 import re
 import select
-import subprocess
 import sys
 import threading
 import time
@@ -111,21 +110,16 @@ def status(chat, fresh=False):
             v = dict(_status_cache["value"])
             v["source"] = source
             return v
+    from .chat import ClaudeError, ask_once
     ok, why = None, ""
-    cli = chat.claude if chat else None
-    if not cli:
+    if not (chat and chat.claude):
         why = "this server runs without Claude"
     else:
         try:
-            r = subprocess.run([cli, "-p", "Reply with the word OK.", "--output-format", "json",
-                                "--allowed-tools", "", "--permission-mode", "dontAsk"],
-                               cwd=chat.cwd, capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=90, env=chat._child_env())
-            j = json.loads(r.stdout or "{}")
-            ok = not j.get("is_error") and bool(j.get("result"))
-            why = "" if ok else (j.get("result") or r.stderr.strip() or "no answer")[:200]
-        except (OSError, subprocess.TimeoutExpired, ValueError) as e:
-            ok, why = False, str(e)[:200]
+            ask_once(chat, "Reply with the word OK.", 90)
+            ok = True
+        except ClaudeError as e:
+            ok, why = False, e.why[:200]
     v = {"source": source, "ok": ok, "why": why, "since": since(), "checked": int(now)}
     with _lock:
         _status_cache.update(at=now, value=v)

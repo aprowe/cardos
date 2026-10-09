@@ -20,10 +20,8 @@ else is text.
 Short calls, as everywhere the device is concerned: the shell is one loop,
 and a minute's wait is a frozen screen.
 """
-import json
 import re
 import secrets
-import subprocess
 import sys
 import threading
 
@@ -69,18 +67,8 @@ class Session:
 
 
 def _claude(chat, prompt, sid):
-    if not chat or not chat.claude:
-        raise RuntimeError("this server runs without Claude")
-    cmd = [chat.claude, "-p", prompt, "--output-format", "json",
-           "--allowed-tools", "", "--permission-mode", "dontAsk"]
-    if sid:
-        cmd += ["--resume", sid]
-    r = subprocess.run(cmd, cwd=chat.cwd, capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=300, env=chat._child_env())
-    j = json.loads(r.stdout or "{}")
-    if j.get("is_error") or not j.get("result"):
-        raise RuntimeError((j.get("result") or r.stderr or "Claude did not answer")[:160])
-    return j["result"], j.get("session_id") or sid
+    from .chat import ask_once
+    return ask_once(chat, prompt, 300, resume=sid)
 
 
 def split(answer):
@@ -123,7 +111,7 @@ def _run(chat, s, said):
             s.rev_new = rev is not None
             s.answer = words or ("(revised)" if rev else "(no answer)")
             s.state = "reply"
-    except Exception as e:                         # subprocess, JSON
+    except Exception as e:                         # Claude (ClaudeError), mostly
         with _lock:
             s.answer = str(e)
             s.state = "error"

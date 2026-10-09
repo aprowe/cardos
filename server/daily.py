@@ -8,9 +8,7 @@ page shows the same two all day however often it is gathered. The device
 sends its own date, so "the day" is its day, not the server's. Without
 Claude (or if the call fails) a few written here stand in, chosen by date.
 """
-import json
 import os
-import subprocess
 import sys
 import time
 import zlib
@@ -64,20 +62,12 @@ def fallback(date):
 
 def generate(date, chat):
     """Ask Claude for the day's two lines; the fallback if it cannot."""
-    cli = chat.claude if chat else None
-    if not cli:
+    from .chat import ClaudeError, ask_once
+    if not (chat and chat.claude):
         return fallback(date)
-    cmd = [cli, "-p", PROMPT % date, "--output-format", "json",
-           "--allowed-tools", "", "--permission-mode", "dontAsk"]
     try:
-        r = subprocess.run(cmd, cwd=chat.cwd, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=90,
-                           env=chat._child_env())
-        j = json.loads(r.stdout or "{}")
-        if j.get("is_error"):
-            raise ValueError(j.get("result") or "claude failed")
-        out = j.get("result") or ""
-    except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+        out, _ = ask_once(chat, PROMPT % date, 90)
+    except ClaudeError as e:
         sys.stderr.write("daily: %s\n" % e)
         return fallback(date)
     got = {}

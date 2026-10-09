@@ -262,6 +262,57 @@ def parse_plan(text, request):
     return steps[:MAX_STEPS] or [request]
 
 
+class ClaudeError(RuntimeError):
+    """A one-shot call that gave no answer; why, in a line. timed_out says
+    whether it was the clock."""
+
+    def __init__(self, why, timed_out=False):
+        RuntimeError.__init__(self, why)
+        self.why = why
+        self.timed_out = timed_out
+
+
+def ask_once(chat, prompt, timeout, resume=None, system=None, model=False):
+    """One question to the CLI with no tools, outside Build's conversation:
+    (answer, session id). The daily lines, a MIDI song, a talk about a
+    document, a voice command, the dashboard's "does Claude answer" check.
+
+    `system` is appended to the system prompt; `resume` continues a session
+    of these (talk's); `model` passes the server's --model, which only the
+    voice translator has ever done -- the rest use the CLI's default, and
+    which model a call uses is not changed here. Raises ClaudeError."""
+    cli = chat.claude if chat else None
+    if not cli:
+        raise ClaudeError("this server runs without Claude")
+    cmd = [cli, "-p", prompt]
+    if system:
+        cmd += ["--append-system-prompt", system]
+    cmd += ["--output-format", "json", "--allowed-tools", "", "--permission-mode", "dontAsk"]
+    if model and chat.model:
+        cmd += ["--model", chat.model]
+    if resume:
+        cmd += ["--resume", resume]
+    try:
+        r = subprocess.run(cmd, cwd=chat.cwd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=timeout,
+                           env=chat._child_env())
+    except subprocess.TimeoutExpired:
+        raise ClaudeError("no answer in %d s" % timeout, timed_out=True)
+    except OSError as e:
+        raise ClaudeError(str(e))
+    try:
+        j = json.loads(r.stdout or "{}")
+    except ValueError:
+        raise ClaudeError(((r.stdout or "").strip() or (r.stderr or "").strip()
+                           or "Claude did not answer")[:200])
+    if not isinstance(j, dict):
+        j = {}
+    text = j.get("result")
+    if j.get("is_error") or not (isinstance(text, str) and text):
+        raise ClaudeError((text or (r.stderr or "").strip() or "Claude did not answer")[:200])
+    return text, j.get("session_id") or resume
+
+
 def _find_claude():
     for name in ("claude", "claude.cmd", "claude.exe"):
         p = shutil.which(name)
