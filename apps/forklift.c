@@ -443,7 +443,6 @@ static int ed_check(void) {
 static void save_all(void) {
   SafeFile f;
   char line[48];
-  if (!api->mkdir || !api->open) return;
   api->mkdir(DIR);
   if (safe_begin(&f, api, STATE_PATH) == 0) {
     api->fmt(line, sizeof line, "credits=%ld\n", (long)G.credits);      safe_line(&f, line);

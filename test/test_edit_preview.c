@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info edit_capp_info
 #define capp_main edit_capp_main
@@ -23,17 +24,6 @@
 static CardApi FAKE;
 static int FONTS_ON;
 
-static int f_fmt(char *buf, size_t n, const char *fmt, ...) {
-  va_list ap;
-  int r;
-  va_start(ap, fmt);
-  r = vsnprintf(buf, n, fmt, ap);
-  va_end(ap);
-  return r;
-}
-static void *f_memset(void *d, int c, size_t n)         { return memset(d, c, n); }
-static void *f_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
-static size_t f_strlen(const char *s)                   { return strlen(s); }
 static void f_fill(CRect r, uint16_t c)                 { (void)r; (void)c; }
 static void f_text(int16_t x, int16_t y, const char *s, uint16_t fg, uint16_t bg) {
   (void)x; (void)y; (void)s; (void)fg; (void)bg;
@@ -82,11 +72,7 @@ static void grab(int line, int from, int to) {
 }
 
 static void setup(int fonts) {
-  memset(&FAKE, 0, sizeof FAKE);
-  FAKE.fmt = f_fmt;
-  FAKE.mem_set = f_memset;
-  FAKE.mem_cpy = f_memcpy;
-  FAKE.str_len = f_strlen;
+  fakeapi_init(&FAKE);
   FAKE.fill = f_fill;
   FAKE.text = f_text;
   FAKE.font_load = f_font_load;

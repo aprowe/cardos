@@ -103,12 +103,11 @@ static void net_close(void) {
 }
 
 static void lobby_open(void) {
-  G.L = api->link ? api->link() : 0;
+  G.L = api->link();
   G.screen = SCREEN_LOBBY;
   G.lsel = 0;
   G.lstate = -1;
   G.note[0] = 0;
-  if (!G.L) { api->fmt(G.note, sizeof G.note, "this firmware has no link"); return; }
   if (G.L->state() == CAPP_LINK_OFF && G.L->open("quoridor", 0) != 0)
     api->fmt(G.note, sizeof G.note, "%.46s", G.L->why());
 }

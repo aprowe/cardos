@@ -33,7 +33,6 @@
 
 /* ---- a CardApi that does just enough ------------------------------------- */
 
-
 static CardApi FAKE;
 
 /* The day view marks the rows that changed instead of the window, so a fake

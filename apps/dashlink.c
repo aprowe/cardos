@@ -255,8 +255,7 @@ static int handle_job(void) {
     data[k] = 0;
     note("$", data, -1);
     R.u.sh[0] = 0;
-    if (!api->shell) fail("this firmware has no console for apps: update os");
-    else {
+    {
       int rc = api->shell(data, R.u.sh, SH_MAX);
       api->fmt(R.answer, ANS_MAX, "%s\n%s", rc == 0 ? "ok" : "ok refused", R.u.sh);
     }
@@ -391,7 +390,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   (void)argc; (void)argv;
   api = a;
   api->mem_set(&R, 0, sizeof R);
-  if (api->keep_awake) api->keep_awake(1);    /* it is working while it is open */
+  api->keep_awake(1);                         /* it is working while it is open */
   R.next_try = api->ticks_ms();
   UI.paint = app_paint;
   UI.tick = app_tick;

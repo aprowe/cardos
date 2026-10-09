@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 /* Every app exports these two names; the pinball test already has them. */
 #define capp_info claude_capp_info
@@ -25,24 +26,12 @@ static void fake_text(int16_t x, int16_t y, const char *s, uint16_t f, uint16_t 
   (void)x; (void)y; (void)s; (void)f; (void)b;
   TEXTS++;
 }
-static void *fake_memset(void *d, int c, size_t n) { return memset(d, c, n); }
-static void *fake_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
-static size_t fake_strlen(const char *s) { return strlen(s); }
 static uint32_t fake_ticks(void) { return NOW; }
 static int fake_open(const char *p, int f) { (void)p; (void)f; return -1; }
 static void fake_ui(const CappUi *ui) { INST = *ui; }
 /* Somewhere that is not CAPP_PROXY_DEFAULT, as `env PROXY` is on a device
  * pointed at the droplet. */
 static const char *fake_proxy(void) { return "http://arowe.example:8080"; }
-
-static int fake_fmt(char *buf, size_t n, const char *fmt, ...) {
-  va_list ap;
-  int r;
-  va_start(ap, fmt);
-  r = vsnprintf(buf, n, fmt, ap);
-  va_end(ap);
-  return r;
-}
 
 static CardApi API;
 static CRect   WIN;
@@ -80,14 +69,10 @@ static void boot(void) {
   char *argv[1];
   argv[0] = arg0;
 
-  memset(&API, 0, sizeof API);
+  fakeapi_init(&API);
   API.version = CAPP_API_VERSION;
   API.fill = fake_fill;
   API.text = fake_text;
-  API.mem_set = fake_memset;
-  API.mem_cpy = fake_memcpy;
-  API.str_len = fake_strlen;
-  API.fmt = fake_fmt;
   API.ticks_ms = fake_ticks;
   API.open = fake_open;
   API.remove = fake_remove;     /* job_clear: the saved job is gone */

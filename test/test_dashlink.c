@@ -12,19 +12,13 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info dashlink_capp_info
 #define capp_main dashlink_capp_main
 #include "apps/dashlink.c"
 #undef capp_info
 #undef capp_main
-
-static int r_fmt(char *b, size_t n, const char *f, ...) {
-  va_list ap; int r;
-  va_start(ap, f); r = vsnprintf(b, n, f, ap); va_end(ap);
-  return r;
-}
-static void *r_memmove(void *d, const void *s, size_t n) { return memmove(d, s, n); }
 
 static void rn(const char *path, char *out, size_t n) {
   size_t j = 0, i;
@@ -82,8 +76,7 @@ static int r_list(const char *dir, CappEntry *out, int max) {
 static CardApi RF;
 
 static void ropen(void) {
-  memset(&RF, 0, sizeof RF);
-  RF.fmt = r_fmt; RF.mem_move = r_memmove;
+  fakeapi_init(&RF);
   RF.open = r_open; RF.read = r_read; RF.write = r_write; RF.seek = r_seek;
   RF.close = r_close; RF.remove = r_remove; RF.rename = r_rename; RF.stat = r_stat;
   RF.list_ex = r_list;
@@ -183,9 +176,6 @@ void test_dashlink_runs_a_console_line(void) {
   CHECK(!strcmp(R.answer, "ok\nheap free 120000\n"));
   job("10\tsh\t/\t\nlaunch\n");
   CHECK(!strcmp(R.answer, "ok refused\nlaunch takes over\n"));
-  RF.shell = NULL;                       /* firmware older than API 34 */
-  job("11\tsh\t/\t\nmem\n");
-  CHECK(!strncmp(R.answer, "error this firmware", 19));
 }
 
 void test_dashlink_idle_is_no_job(void) {

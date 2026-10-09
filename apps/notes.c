@@ -605,7 +605,6 @@ static int words_note(const char *kind, const char *words, char *file_out, int n
 static int memo_to_note(const char *path, char *out, int n) {
   char url[128];
   int r;
-  if (!api->http_upload) { api->fmt(out, (size_t)n, "this firmware cannot send files: update os"); return -1; }
   if (!api->net_ready() && api->net_connect(15000) != 0) { api->fmt(out, (size_t)n, "offline"); return -1; }
   {
     /* Its name -- MMDD-HHMMSS.wav, Memo's clock -- titles the note. */

@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info forklift_capp_info
 #define capp_main forklift_capp_main
@@ -24,17 +25,6 @@ static uint32_t NOW;
 static struct { char path[96]; char data[4096]; int len, used; } FILES[NFILES];
 static struct { int file, pos, write; } FDS[4];
 
-static int k_fmt(char *buf, size_t n, const char *fmt, ...) {
-  va_list ap;
-  int r;
-  va_start(ap, fmt);
-  r = vsnprintf(buf, n, fmt, ap);
-  va_end(ap);
-  return r;
-}
-static void *k_memset(void *d, int c, size_t n) { return memset(d, c, n); }
-static void *k_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
-static size_t k_strlen(const char *s) { return strlen(s); }
 static uint32_t k_ticks(void) { return NOW; }
 static void k_fill(CRect r, uint16_t c) { (void)r; (void)c; }
 static void k_text(int16_t x, int16_t y, const char *s, uint16_t fg, uint16_t bg) {
@@ -102,11 +92,7 @@ static void fresh_card(void) {
 }
 
 static void boot(void) {
-  memset(&FAKE, 0, sizeof FAKE);
-  FAKE.fmt = k_fmt;
-  FAKE.mem_set = k_memset;
-  FAKE.mem_cpy = k_memcpy;
-  FAKE.str_len = k_strlen;
+  fakeapi_init(&FAKE);
   FAKE.ticks_ms = k_ticks;
   FAKE.fill = k_fill;
   FAKE.frame = k_fill;

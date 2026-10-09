@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info toggl_capp_info
 #define capp_main toggl_capp_main
@@ -14,12 +15,6 @@
 #undef capp_info
 #undef capp_main
 
-static int t_fmt(char *b, size_t n, const char *f, ...) {
-  va_list ap; int r;
-  va_start(ap, f); r = vsnprintf(b, n, f, ap); va_end(ap);
-  return r;
-}
-static size_t t_strlen(const char *s) { return strlen(s); }
 static const char *t_proxy(void) { return "http://srv"; }
 static int t_ready(void) { return 1; }
 
@@ -48,8 +43,8 @@ static uint32_t t_no_clock(void) { return 0; }
 static CardApi TF;
 
 static void topen(void) {
-  memset(&TF, 0, sizeof TF);
-  TF.fmt = t_fmt; TF.str_len = t_strlen; TF.proxy = t_proxy; TF.net_ready = t_ready;
+  fakeapi_init(&TF);
+  TF.proxy = t_proxy; TF.net_ready = t_ready;
   TF.epoch = t_epoch; TF.now = t_now; TF.http = t_http; TF.ticks_ms = t_ticks;
   s_ticks = 5000;
   api = &TF;

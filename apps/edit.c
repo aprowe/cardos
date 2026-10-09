@@ -431,10 +431,10 @@ static void md_fonts(void) {
   int hb, hbb;
   if (M.loaded) return;
   M.loaded = 1;
-  M.body = api->font_load ? api->font_load("ui13") : -1;
-  M.bold = api->font_load ? api->font_load("ui13b") : -1;
-  hb = api->font_height ? api->font_height(M.body) : 8;
-  hbb = api->font_height ? api->font_height(M.bold) : 8;
+  M.body = api->font_load("ui13");
+  M.bold = api->font_load("ui13b");
+  hb = api->font_height(M.body);
+  hbb = api->font_height(M.bold);
   M.line_h = (hb > hbb ? hb : hbb) + 2;
 }
 
@@ -786,7 +786,7 @@ static void paint_edit(CRect c) {
   else scroll_to_cursor(rows, cols);
   shown_rows = rows;
   shown_edit = c;
-  area = api->paint_area ? api->paint_area() : c;
+  area = api->paint_area();
 
   /* No clear, not even of a row. The panel has no framebuffer, so a fill
    * that text then writes over is a blink you can see -- and every visible
@@ -888,7 +888,7 @@ static void paint_edit(CRect c) {
 static void damage_after_key(int top0, int left0, int cy0, int n0, int view0) {
   CRect c = shown_edit;
   int a, b;
-  if (!api->damage || c.w == 0 || E.wrap || view0 != VIEW_EDIT || E.view != VIEW_EDIT)
+  if (c.w == 0 || E.wrap || view0 != VIEW_EDIT || E.view != VIEW_EDIT)
     return;
   scroll_to_cursor(shown_rows, shown_cols);   /* what the paint would do */
   if (E.top != top0 || E.leftcol != left0 || E.nlines != n0) return;

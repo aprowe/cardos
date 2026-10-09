@@ -776,7 +776,7 @@ static void sync_begin(void) {
     T.online = 0;
     say("offline -- showing the cache");
     T.next_auto = api->ticks_ms() + RETRY_MS;
-    logf("offline: %s", api->net_status ? api->net_status() : "no radio");
+    logf("offline: %s", api->net_status());
     return;
   }
   /* No Google token here any more: the server holds the login, and the
@@ -1506,7 +1506,7 @@ static int key_all(unsigned char k) {
  * through the footer's clip and never seen. A handled key says "all of it"
  * out loud instead of relying on having marked nothing. */
 static void damage_all(void) {
-  if (T.full.w > 0 && api->damage) api->damage(T.full);
+  if (T.full.w > 0) api->damage(T.full);
 }
 
 /* The bar first, and it answers for every key while it has them. fn-b puts

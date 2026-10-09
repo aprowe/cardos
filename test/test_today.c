@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info today_capp_info
 #define capp_main today_capp_main
@@ -14,14 +15,6 @@
 #undef capp_info
 #undef capp_main
 
-static int d_fmt(char *b, size_t n, const char *f, ...) {
-  va_list ap; int r;
-  va_start(ap, f); r = vsnprintf(b, n, f, ap); va_end(ap);
-  return r;
-}
-static void *d_memset(void *d, int c, size_t n) { return memset(d, c, n); }
-static void *d_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
-static size_t d_strlen(const char *s) { return strlen(s); }
 static int s_day = 29, s_wday = 2;
 static void d_now(CappTime *t) {
   memset(t, 0, sizeof *t);
@@ -43,8 +36,7 @@ static int d_run(const char *app, const char *line, char *out, size_t n) {
 static CardApi DF;
 
 static void dopen(void) {
-  memset(&DF, 0, sizeof DF);
-  DF.fmt = d_fmt; DF.mem_set = d_memset; DF.mem_cpy = d_memcpy; DF.str_len = d_strlen;
+  fakeapi_init(&DF);
   DF.now = d_now; DF.run_command = d_run;
   api = &DF;
   memset(&D, 0, sizeof D);

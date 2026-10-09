@@ -223,7 +223,7 @@ static void say(const char *s) { api->fmt(C.status, sizeof C.status, "%s", s); }
  * afford to leave on. It exists because a sync that fails now and then leaves
  * nothing to read afterwards -- the status bar holds one sentence, and by the
  * time anyone looks it says something else. */
-static void logline(const char *s) { if (api->log) api->log(s); }
+static void logline(const char *s) { api->log(s); }
 
 static const char *WDAY[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 static const char *MON[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -1700,7 +1700,7 @@ static int menu_key(unsigned char k, int *handled) {
  * changed the view after such a tick, and marked nothing itself, would be
  * painted through the footer's clip and never seen. */
 static void damage_all(void) {
-  if (C.full.w > 0 && api->damage) api->damage(C.full);
+  if (C.full.w > 0) api->damage(C.full);
 }
 
 /* The answer to "delete this?": y yes; n, Escape or Backspace no. Anything
@@ -1924,7 +1924,7 @@ static int click_content(short y) {
  * thing on screen that changes. */
 static void damage_footer(void) {
   CRect c = C.content;
-  if (c.w <= 0 || c.h < BAR_H || !api->damage) return;
+  if (c.w <= 0 || c.h < BAR_H) return;
   api->damage(capp_rect(c.x, c.y + c.h - BAR_H, c.w, BAR_H));
 }
 

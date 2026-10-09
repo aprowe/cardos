@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info notes_capp_info
 #define capp_main notes_capp_main
@@ -154,15 +155,6 @@ static int n_http(const char *m, const char *url, const char *body, const char *
 
 /* ---- the app over both ----------------------------------------------------------- */
 
-static int n_fmt(char *b, size_t n, const char *f, ...) {
-  va_list ap; int r;
-  va_start(ap, f); r = vsnprintf(b, n, f, ap); va_end(ap);
-  return r;
-}
-static void *n_memset(void *d, int c, size_t n) { return memset(d, c, n); }
-static void *n_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
-static void *n_memmove(void *d, const void *s, size_t n) { return memmove(d, s, n); }
-static size_t n_strlen(const char *s) { return strlen(s); }
 static int n_ready(void) { return 1; }
 static const char *n_proxy(void) { return "http://srv"; }
 
@@ -174,9 +166,8 @@ static void fresh(void) {
   memset(S, 0, sizeof S);
   for (i = 0; i < 4; i++) FD[i].f = -1;
   s_next = 1;
-  memset(&NF, 0, sizeof NF);
-  NF.fmt = n_fmt; NF.mem_set = n_memset; NF.mem_cpy = n_memcpy; NF.mem_move = n_memmove;
-  NF.str_len = n_strlen; NF.open = n_open; NF.read = n_read; NF.write = n_write;
+  fakeapi_init(&NF);
+  NF.open = n_open; NF.read = n_read; NF.write = n_write;
   NF.close = n_close; NF.remove = n_remove; NF.rename = n_rename; NF.stat = n_stat;
   NF.mkdir = n_mkdir; NF.list_ex = n_list; NF.http = n_http; NF.net_ready = n_ready;
   NF.proxy = n_proxy;

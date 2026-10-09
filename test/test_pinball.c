@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 /* The app itself, statics and all: its internals are the thing under test. */
 #include "apps/pinball.c"
@@ -34,18 +35,7 @@ static void fake_text(int16_t x, int16_t y, const char *s, uint16_t f, uint16_t 
     OUT_OF_BOUNDS++;
 }
 
-static void *fake_memset(void *d, int c, size_t n) { return memset(d, c, n); }
-static size_t fake_strlen(const char *s) { return strlen(s); }
 static uint32_t fake_ticks(void) { return NOW; }
-
-static int fake_fmt(char *buf, size_t n, const char *fmt, ...) {
-  va_list ap;
-  int r;
-  va_start(ap, fmt);
-  r = vsnprintf(buf, n, fmt, ap);
-  va_end(ap);
-  return r;
-}
 
 static void fake_ui(const CappUi *ui) { INST = *ui; }
 
@@ -85,13 +75,10 @@ static void boot(void) {
   char *argv[1];
   argv[0] = arg0;
 
-  memset(&API, 0, sizeof API);
+  fakeapi_init(&API);
   API.version = CAPP_API_VERSION;
   API.fill = fake_fill;
   API.text = fake_text;
-  API.mem_set = fake_memset;
-  API.str_len = fake_strlen;
-  API.fmt = fake_fmt;
   API.ticks_ms = fake_ticks;
   API.ui = fake_ui;
   API.damage = fake_damage;

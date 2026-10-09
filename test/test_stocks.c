@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info stocks_capp_info
 #define capp_main stocks_capp_main
@@ -19,22 +20,10 @@
 #undef capp_info
 #undef capp_main
 
-static int fake_fmt(char *buf, size_t n, const char *fmt, ...) {
-  va_list ap;
-  int r;
-  va_start(ap, fmt);
-  r = vsnprintf(buf, n, fmt, ap);
-  va_end(ap);
-  return r;
-}
-static void *fake_memset(void *d, int c, size_t n) { return memset(d, c, n); }
-
 static CardApi FAKE;
 
 static void use_fake_api(void) {
-  memset(&FAKE, 0, sizeof FAKE);
-  FAKE.fmt = fake_fmt;
-  FAKE.mem_set = fake_memset;
+  fakeapi_init(&FAKE);
   api = &FAKE;
   memset(&S, 0, sizeof S);
 }

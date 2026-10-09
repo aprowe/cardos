@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info clock_capp_info
 #define capp_main clock_capp_main
@@ -14,14 +15,6 @@
 #undef capp_info
 #undef capp_main
 
-static int k_fmt(char *b, size_t n, const char *f, ...) {
-  va_list ap; int r;
-  va_start(ap, f); r = vsnprintf(b, n, f, ap); va_end(ap);
-  return r;
-}
-static void *k_memset(void *d, int c, size_t n) { return memset(d, c, n); }
-static void *k_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
-static size_t k_strlen(const char *s) { return strlen(s); }
 static FILE *s_kf;
 static void kn(const char *p, char *o, size_t n) {
   size_t j = 0, i;
@@ -66,8 +59,7 @@ static void kget(char *out, size_t n) {
 }
 
 static void kopen(void) {
-  memset(&KF, 0, sizeof KF);
-  KF.fmt = k_fmt; KF.mem_set = k_memset; KF.mem_cpy = k_memcpy; KF.str_len = k_strlen;
+  fakeapi_init(&KF);
   KF.open = k_open; KF.read = k_read; KF.write = k_write; KF.close = k_close;
   KF.mkdir = k_mkdir; KF.remove = k_remove; KF.rename = k_rename; KF.stat = k_stat;
   KF.now = k_now; KF.headless = k_headless;

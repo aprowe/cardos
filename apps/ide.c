@@ -751,7 +751,7 @@ static void paint_edit(CRect c) {
   shown_rows = rows;
   shown_cols = cols;
   shown_edit = c;
-  area = api->paint_area ? api->paint_area() : c;
+  area = api->paint_area();
 
   /* No clear, not even of a row. The panel has no framebuffer, so a fill
    * that text then writes over is a blink you can see -- and every visible
@@ -835,7 +835,7 @@ static void paint_edit(CRect c) {
 static void damage_after_key(int top0, int left0, int cy0, int n0) {
   CRect c = shown_edit;
   int a, b;
-  if (!api->damage || c.w == 0 || E.view != VIEW_EDIT) return;
+  if (c.w == 0 || E.view != VIEW_EDIT) return;
   scroll_to_cursor(shown_rows, shown_cols);   /* what the paint would do */
   if (E.top != top0 || E.leftcol != left0 || E.nlines != n0) return;
   a = (cy0 < E.cy ? cy0 : E.cy) - E.top;

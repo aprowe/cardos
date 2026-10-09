@@ -506,7 +506,7 @@ static int app_tick(void *st, uint32_t now) {
 }
 
 static void set_host(void) {
-  const char *p = api->proxy ? api->proxy() : "";
+  const char *p = api->proxy();
   int k = 0;
   if (str_starts(p, "http://")) p += 7;
   else if (str_starts(p, "https://")) p += 8;

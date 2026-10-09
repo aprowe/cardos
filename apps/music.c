@@ -216,7 +216,7 @@ static void paint_now(void) {
   char line[64], a[12], b[12];
   int barw = r.w - 12, fill = 0, w;
   uint32_t pos = 0, tot = 0;
-  int paused = M.playing >= 0 && au && au->paused && au->paused();
+  int paused = M.playing >= 0 && au && au->paused();
   if (M.playing >= 0 && au && au->state() == CAPP_AUDIO_PLAYING) {
     pos = au->pos_ms();
     tot = au->total_ms();
@@ -272,7 +272,7 @@ static void play(int i) {
   path_of(i, path, sizeof path);
   rc = au->play(path);
   if (rc != 0) {
-    say(1, au->error && au->error()[0] ? au->error() : "would not play");
+    say(1, au->error()[0] ? au->error() : "would not play");
     M.playing = -1;
     return;
   }
