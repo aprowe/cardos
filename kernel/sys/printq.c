@@ -83,7 +83,11 @@ static void job_task(void *param) {
    * 1508 bytes (2026-10-02). Below this, WiFi -- 50 KB nobody needs while
    * paper comes out -- goes first; the next thing that wants the network
    * builds it again. */
-  if (!bthid_radio_on() && !httpq_active() && esp_get_free_heap_size() < PRINT_ROOM) {
+  /* Never under a transfer: wifi_release refuses while anything uses the
+   * radio -- a blocking request on the shell, a Music stream, a voice
+   * upload, ESP-NOW -- where this used to look only at httpq. */
+  if (!bthid_radio_on() && !httpq_active() && !wifi_in_use() &&
+      esp_get_free_heap_size() < PRINT_ROOM) {
     set_status("making room");
     wifi_release();
   }
@@ -97,9 +101,9 @@ static void job_task(void *param) {
      * would fit a moment later. */
     int waited = 0;
     if (bthid_radio_on()) { why = btprint_error(); goto out; }
-    if (httpq_active()) {
+    if (httpq_active() || wifi_in_use()) {
       set_status("waiting for the network");
-      while (httpq_active() && waited < 30000) {
+      while ((httpq_active() || wifi_in_use()) && waited < 30000) {
         vTaskDelay(pdMS_TO_TICKS(100));
         waited += 100;
       }
@@ -112,7 +116,7 @@ static void job_task(void *param) {
      * go, and the next thing that wants the network builds it again. */
     if (httpq_active()) { why = btprint_error(); goto out; }
     set_status("making room");
-    wifi_release();
+    if (wifi_release() != 0) { why = "no room: the network is in use"; goto out; }
     set_status("connecting");
     if (btprint_connect(addr, type, CONNECT_MS) != 0) { why = btprint_error(); goto out; }
   }

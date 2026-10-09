@@ -38,15 +38,24 @@ int wifi_start(void);
 void wifi_stop(void);
 /* Stop and tear the driver down, giving back the ~50 KB it holds; the next
  * wifi_start (any connect) builds it again. For Bluetooth, which will not
- * start beside it when an app is open. */
-void wifi_release(void);
-/* Held up: wifi_release does nothing while pinned (ESP-NOW is on). Counted. */
-void wifi_pin(int on);
+ * start beside it when an app is open. 0 if released (or there was nothing
+ * to release), -1 if refused: someone is using it, or a join is running. */
+int wifi_release(void);
 
-/* Blocking, up to `timeout_ms`. Saves the credentials on success. */
+/* "I need the radio up until I say so": every http.c transfer, ESP-NOW
+ * while it is open. Counted; wifi_release refuses while any use is held.
+ * Never blocks, except for the moment a release already under way takes. */
+void wifi_use(void);
+void wifi_unuse(void);
+int  wifi_in_use(void);
+
+/* Blocking, up to `timeout_ms`. Saves the credentials on success. One join
+ * at a time: a second caller waits (within its timeout) for the first. */
 int wifi_connect(const char *ssid, const char *pass, int timeout_ms);
 
-/* Connect using whatever was saved. Returns -1 if nothing was. */
+/* Connect using whatever was saved. Returns -1 if nothing was. Called while
+ * another task is joining, it waits for that join and returns 0 if it
+ * succeeded, rather than scanning and joining over it. */
 int wifi_connect_saved(int timeout_ms);
 
 /* When NVS has no networks but /config/wifi.txt (SSID, then password, on

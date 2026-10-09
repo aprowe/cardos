@@ -16,7 +16,7 @@
  * link_tick, the same task every app call comes from, so linkproto needs no
  * lock of its own. The link is the app's that opened it and closes with it
  * (capprun -> link_release_owner). While open, the radio stays up
- * (wifi_pin) and awake (wifi_fast): modem sleep would sleep through frames.
+ * (wifi_use) and awake (wifi_fast): modem sleep would sleep through frames.
  */
 #include "kernel/net/link.h"
 #include "kernel/net/linkproto.h"
@@ -151,16 +151,18 @@ int link_open(const char *game, const char *me) {
   char name[LP_NAME_MAX];
   if (s_open) link_close();
   s_why[0] = 0;
+  wifi_use();                                  /* before start: no release between */
   if (wifi_start() != 0) {
     snprintf(s_why, sizeof s_why, "the radio would not start (%s)", wifi_status());
+    wifi_unuse();
     return -1;
   }
   if (esp_now_init() != ESP_OK) {
     snprintf(s_why, sizeof s_why, "ESP-NOW would not start");
+    wifi_unuse();
     return -1;
   }
   esp_now_register_recv_cb(on_recv);
-  wifi_pin(1);
   wifi_fast(1);
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   lp_init(&s_lp, mac, tx, NULL, (uint32_t)esp_timer_get_time() ^ mac[5]);
@@ -185,7 +187,7 @@ void link_close(void) {
   esp_now_unregister_recv_cb();
   esp_now_deinit();
   wifi_fast(0);
-  wifi_pin(0);
+  wifi_unuse();
   s_open = 0;
   s_owner = NULL;
 }

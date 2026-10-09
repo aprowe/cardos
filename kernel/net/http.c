@@ -174,7 +174,8 @@ typedef struct {
  * and the radio's cost is still only paid when something asks), the
  * memory a handshake needs, the client, the headers, and the handshake.
  * `body_len` is the Content-Length to send, 0 for none. 0, or the code;
- * on failure there is nothing to close. */
+ * on failure there is nothing to close. Holds a wifi_use from here to
+ * req_close. */
 static int req_open(Req *r, esp_http_client_method_t method, const char *url,
                     const char *auth, const char *content_type, int body_len,
                     int timeout_ms, int buffer_size) {
@@ -183,12 +184,16 @@ static int req_open(Req *r, esp_http_client_method_t method, const char *url,
 
   r->cli = NULL;
   if (!url || !*url) return fail(-2, "no URL");
+  /* Held until req_close: a print making room cannot take the driver down
+   * under this socket (wifi_release refuses while it is used). */
+  wifi_use();
   if (!wifi_is_connected() && wifi_connect_saved(20000) != 0) {
     char what[sizeof s_why];
     snprintf(what, sizeof what, "no network: %s", wifi_status());
+    wifi_unuse();
     return fail(-1, what);
   }
-  if (!enough_memory(url)) return -4;
+  if (!enough_memory(url)) { wifi_unuse(); return -4; }
 
   memset(&cfg, 0, sizeof cfg);
   cfg.url = url;
@@ -202,7 +207,7 @@ static int req_open(Req *r, esp_http_client_method_t method, const char *url,
   cfg.buffer_size = buffer_size;
 
   r->cli = esp_http_client_init(&cfg);
-  if (!r->cli) return fail(-2, "the client would not start: is the URL right?");
+  if (!r->cli) { wifi_unuse(); return fail(-2, "the client would not start: is the URL right?"); }
   set_auth(r->cli, auth);
   if (content_type && *content_type)
     esp_http_client_set_header(r->cli, "Content-Type", content_type);
@@ -212,6 +217,7 @@ static int req_open(Req *r, esp_http_client_method_t method, const char *url,
     why_failed("could not connect", e);
     esp_http_client_cleanup(r->cli);
     r->cli = NULL;
+    wifi_unuse();
     return -3;
   }
   return 0;
@@ -222,6 +228,7 @@ static void req_close(Req *r) {
   esp_http_client_close(r->cli);
   esp_http_client_cleanup(r->cli);
   r->cli = NULL;
+  wifi_unuse();
 }
 
 static int send_buf(Req *r, const char *body, int len) {

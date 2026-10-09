@@ -20,6 +20,8 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 
 static const char *TAG = "wifi";
 
@@ -183,17 +185,81 @@ int wifi_start(void) {
   return 0;
 }
 
+/* ---- who is using it, and one join at a time ----
+ *
+ * wifi_release used to be guarded only by "is httpq running", which a
+ * print's task checked -- and then tore the driver down under the shell's
+ * blocking requests, a Music stream, a voice upload or the time sync, with
+ * their sockets open. Now everything that needs the radio up says so:
+ * http.c around every transfer, link.c while ESP-NOW is open. The count is
+ * under a spinlock and never blocks; s_releasing makes a use that arrives
+ * mid-teardown wait the few milliseconds until it is over, and then find
+ * the radio down and build it again, rather than talk through a netif being
+ * destroyed.
+ *
+ * Joins are serialised by s_join (recursive: connect_saved calls connect).
+ * Two tasks used to run wifi_start and wifi_scan at once and clear each
+ * other's event bits -- the boot time sync and the first app sync, for one.
+ * A second caller now waits for the first join and then finds it done. */
+static portMUX_TYPE      s_use_mux = portMUX_INITIALIZER_UNLOCKED;
+static int               s_users;
+static volatile int      s_releasing;
+static SemaphoreHandle_t s_join;
+static StaticSemaphore_t s_join_buf;
+
+static SemaphoreHandle_t join_lock(void) {
+  portENTER_CRITICAL(&s_use_mux);
+  if (!s_join) s_join = xSemaphoreCreateRecursiveMutexStatic(&s_join_buf);
+  portEXIT_CRITICAL(&s_use_mux);
+  return s_join;
+}
+
+static int join_take(int wait_ms) {
+  return xSemaphoreTakeRecursive(join_lock(), wait_ms < 0 ? portMAX_DELAY
+                                 : pdMS_TO_TICKS(wait_ms)) == pdTRUE;
+}
+static void join_give(void) { xSemaphoreGiveRecursive(join_lock()); }
+
+void wifi_use(void) {
+  for (;;) {
+    int ok = 0;
+    portENTER_CRITICAL(&s_use_mux);
+    if (!s_releasing) { s_users++; ok = 1; }
+    portEXIT_CRITICAL(&s_use_mux);
+    if (ok) return;
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
+
+void wifi_unuse(void) {
+  portENTER_CRITICAL(&s_use_mux);
+  if (s_users > 0) s_users--;
+  portEXIT_CRITICAL(&s_use_mux);
+}
+
+int wifi_in_use(void) { return s_users > 0; }
+
 /* The whole driver, not just the radio: wifi_stop gives back 3 KB of the
  * 50 the driver holds (measured 2026-10-02), and that was the difference
  * between Bluetooth starting and not with Today open. Everything wifi_start
  * built goes, so the next start builds it again from nothing. */
-static int s_pinned;
-void wifi_pin(int on) { if (on) s_pinned++; else if (s_pinned > 0) s_pinned--; }
-
-void wifi_release(void) {
-  /* Not under ESP-NOW (kernel/net/link.c): deinit with it running fails,
-   * and a game would lose its partner to make room for a print. */
-  if (!s_inited || s_pinned) return;
+int wifi_release(void) {
+  int busy;
+  if (!s_inited) return 0;
+  /* Not mid-join: the joiner would find the driver gone under it. */
+  if (!join_take(0)) return -1;
+  portENTER_CRITICAL(&s_use_mux);
+  busy = s_users > 0;
+  if (!busy) s_releasing = 1;
+  portEXIT_CRITICAL(&s_use_mux);
+  /* Not under a transfer, and not under ESP-NOW (kernel/net/link.c):
+   * deinit with it running fails, and a game would lose its partner to
+   * make room for a print. */
+  if (busy) {
+    join_give();
+    ESP_LOGI(TAG, "not released: %d using it", s_users);
+    return -1;
+  }
   wifi_stop();
   if (s_on_wifi) esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_on_wifi);
   if (s_on_ip) esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, s_on_ip);
@@ -203,7 +269,10 @@ void wifi_release(void) {
   s_netif = NULL;
   s_inited = 0;
   snprintf(s_detail, sizeof s_detail, "off, to make room");
+  s_releasing = 0;
+  join_give();
   ESP_LOGI(TAG, "released, %u bytes of heap free", (unsigned)esp_get_free_heap_size());
+  return 0;
 }
 
 void wifi_stop(void) {
@@ -324,7 +393,18 @@ int wifi_forget_one(const char *ssid) {
   return gone;
 }
 
+static int connect_one(const char *ssid, const char *pass, int timeout_ms);
+static int scan(WifiAp *out, int max);
+
 int wifi_connect(const char *ssid, const char *pass, int timeout_ms) {
+  int rc;
+  if (!join_take(timeout_ms)) return -1;
+  rc = connect_one(ssid, pass, timeout_ms);
+  join_give();
+  return rc;
+}
+
+static int connect_one(const char *ssid, const char *pass, int timeout_ms) {
   wifi_config_t cfg;
   EventBits_t bits;
 
@@ -391,7 +471,23 @@ static int connect_driver_config(int timeout_ms) {
  * ones it saw, strongest first, each with a share of the time; if it saw none
  * (a hidden network, or away from all of them), every one in turn, most
  * recent first, until the time is up. */
+static int connect_saved(int timeout_ms);
+
 int wifi_connect_saved(int timeout_ms) {
+  int rc;
+  int64_t t0 = esp_timer_get_time() / 1000;
+  if (!join_take(0)) {
+    /* Someone else is joining: wait for theirs, which may do the work. */
+    if (!join_take(timeout_ms)) return -1;
+    if (wifi_is_connected()) { join_give(); return 0; }
+  }
+  timeout_ms -= (int)(esp_timer_get_time() / 1000 - t0);
+  rc = timeout_ms > 0 ? connect_saved(timeout_ms) : -1;
+  join_give();
+  return rc;
+}
+
+static int connect_saved(int timeout_ms) {
   /* On the heap, not the stack: this is called from cardos-bg, whose 4 KB
    * stack a list and a scan (1.4 KB) overflowed -- a reboot loop on the
    * first join after boot (2026-09-29). See CLAUDE.md on cardos-bg. */
@@ -422,7 +518,7 @@ int wifi_connect_saved(int timeout_ms) {
   }
 
   until = esp_timer_get_time() / 1000 + timeout_ms;
-  nseen = wifi_scan(w->aps, WIFI_MAX_SCAN);
+  nseen = scan(w->aps, WIFI_MAX_SCAN);
   for (i = 0; i < nseen; i++) { w->seen[i] = w->aps[i].ssid; w->rssi[i] = w->aps[i].rssi; }
   n = wifilist_order(&w->l, w->seen, w->rssi, nseen, w->order);
   /* Only what the scan saw. Asked to, wifilist_order falls back to every
@@ -449,7 +545,7 @@ int wifi_connect_saved(int timeout_ms) {
     int share = (int)(left / (n - i));
     if (left < 2000) break;
     if (share < 8000) share = (int)(left < 8000 ? left : 8000);  /* a join needs a few seconds */
-    if (wifi_connect(w->l.net[w->order[i]].ssid, w->l.net[w->order[i]].pass, share) == 0) {
+    if (connect_one(w->l.net[w->order[i]].ssid, w->l.net[w->order[i]].pass, share) == 0) {
       rc = 0;
       break;
     }
@@ -461,7 +557,16 @@ int wifi_connect_saved(int timeout_ms) {
   return -1;
 }
 
+/* Under the join lock too: a scan mid-join used to end the join. */
 int wifi_scan(WifiAp *out, int max) {
+  int n;
+  if (!join_take(25000)) return 0;
+  n = scan(out, max);
+  join_give();
+  return n;
+}
+
+static int scan(WifiAp *out, int max) {
   wifi_scan_config_t cfg;
   uint16_t found = 0;
   wifi_ap_record_t *recs;
