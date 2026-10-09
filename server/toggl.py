@@ -47,7 +47,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 
-from . import accounts, dash, store
+from . import accounts, dash, store, wire
 
 API = "https://api.track.toggl.com/api/v9"
 RECENT = 10
@@ -209,7 +209,7 @@ def epoch(s):
 
 
 def clean(s):
-    return " ".join((s or "").replace("\t", " ").split())[:60]
+    return wire.flat(s, 60)
 
 
 def current():

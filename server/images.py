@@ -26,6 +26,7 @@ import struct
 import threading
 import time
 
+from .pixels import rgb565_bytes
 
 MAX_IN = 16 << 20
 MAX_W, MAX_H = 320, 240
@@ -56,13 +57,7 @@ def convert(data, w=240, h=135, fit="contain", fmt="img"):
             pad.paste(im, ((w - im.width) // 2, (h - im.height) // 2))
             im = pad
         out_w, out_h = im.size
-    rgb = im.tobytes()
-    px = bytearray(out_w * out_h * 2)
-    for i in range(out_w * out_h):
-        r, g, b = rgb[3 * i], rgb[3 * i + 1], rgb[3 * i + 2]
-        v = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
-        px[2 * i] = v >> 8                     # high byte first: the panel's order
-        px[2 * i + 1] = v & 0xFF
+    px = rgb565_bytes(im.tobytes())          # high byte first: the panel's order
     if fmt == "565":
         return bytes(px), out_w, out_h
     return b"CIMG" + struct.pack("<HH", out_w, out_h) + bytes(px), out_w, out_h

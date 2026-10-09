@@ -33,6 +33,8 @@ import time
 import mss
 import numpy as np
 
+from .pixels import encode_row, rgb565_rows
+
 WIDTH = 240
 HEIGHT = 135
 
@@ -43,48 +45,6 @@ DEFAULT_FPS = 12
 # A row has to differ by more than this many pixels to be worth sending. Zero
 # would resend rows that changed by one antialiased pixel of a blinking caret.
 CHANGE_THRESHOLD = 0
-
-
-def rgb565_rows(bgra):
-    """A captured BGRA frame to one u16 per pixel, byte-swapped for the panel.
-
-    Vectorised because doing it per pixel in Python at twelve frames a second
-    is thirty-nine thousand pixels a frame and Python is not that fast."""
-    b = bgra[:, :, 0].astype(np.uint16)
-    g = bgra[:, :, 1].astype(np.uint16)
-    r = bgra[:, :, 2].astype(np.uint16)
-    v = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-    # The panel is MSB-first and the chip is little-endian.
-    return ((v >> 8) | ((v & 0xFF) << 8)).astype(np.uint16)
-
-
-def encode_row(row):
-    """One row of u16 to RLE. Same two modes as the .cpx codec: a run, or a
-    literal stretch, because a run-only encoder expands noisy rows by 3x and a
-    desktop is mostly noisy rows with long flat ones between them."""
-    out = bytearray()
-    i = 0
-    n = len(row)
-    while i < n:
-        run = 1
-        while i + run < n and row[i + run] == row[i] and run < 128:
-            run += 1
-        if run >= 2:
-            out.append(run - 1)
-            out += struct.pack("<H", int(row[i]))
-            i += run
-            continue
-        start = i
-        while i < n:
-            if i + 2 < n and row[i] == row[i + 1] == row[i + 2]:
-                break
-            i += 1
-            if i - start == 128:
-                break
-        count = i - start
-        out.append(128 + count - 1)
-        out += row[start:start + count].astype("<u2").tobytes()
-    return bytes(out)
 
 
 class Screen:

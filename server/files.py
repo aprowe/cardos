@@ -44,7 +44,8 @@ import time
 import urllib.parse
 from collections import deque
 
-from . import accounts
+from . import accounts, wire
+from .routes import arg as _arg
 
 CHUNK = 3072                 # bytes a job carries: 4096 of base64
 POLL_WAIT = 1.5              # how long an idle poll is held open
@@ -183,10 +184,6 @@ def _json(h, obj, code=200):
     h._send(code, "application/json", json.dumps(obj), (("Cache-Control", "no-store"),))
 
 
-def _arg(args, k):
-    return (args.get(k) or [""])[0]
-
-
 def _browser(fn):
     """The device's errors as JSON (the cookie is the route's auth, "dash")."""
     def wrapped(h, path, args):
@@ -273,7 +270,7 @@ def post_mv(h, args):
 
 def run_line(line):
     """A console line on the device: (refused, output)."""
-    line = " ".join((line or "").replace("\t", " ").split())
+    line = wire.flat(line)
     if not line:
         raise ValueError("an empty line")
     if len(line) > LINE_MAX:

@@ -18,7 +18,7 @@ import os
 import threading
 import time
 
-from . import accounts, dash, store
+from . import accounts, dash, store, wire
 
 KEEP = 500
 SHOW = 40
@@ -37,7 +37,7 @@ def load():
 
 
 def _flat(s, n):
-    return " ".join(s.replace("\t", " ").split())[:n]
+    return wire.flat(s, n)
 
 
 def post(name, text):

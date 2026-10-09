@@ -24,7 +24,8 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import jobs
+from . import jobs, wire
+from .routes import arg as _arg
 
 API = "https://api.launcherhub.net/firmwares"
 CDN = "https://m5burner-cdn.m5stack.com/firmware/"
@@ -41,8 +42,7 @@ _cache = jobs.LRU(64)            # url -> (when, the catalog's answer)
 def _flat(s, n=60):
     """One line of ASCII: the device's font has nothing past 0x7E, and a
     catalog full of emoji would draw as boxes."""
-    s = str(s or "").encode("ascii", "ignore").decode()
-    return " ".join(str(s or "").replace("\t", " ").split())[:n]
+    return wire.flat(s, n, ascii=True)
 
 
 def _json(url, opener=urllib.request.urlopen):
@@ -134,10 +134,6 @@ def fetch_app(file, ao, size, opener=urllib.request.urlopen):
 
 
 # ---- routes ---------------------------------------------------------------
-
-def _arg(args, k, default=""):
-    return (args.get(k) or [default])[0]
-
 
 def get_list(h, path, args):
     """a page of the catalog"""

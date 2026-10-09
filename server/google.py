@@ -53,7 +53,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import accounts, dash, store
+from . import accounts, dash, store, wire
+from .routes import arg as _arg
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 CAL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
@@ -242,14 +243,10 @@ def pages(url, key="items"):
 
 
 def clean(s):
-    return " ".join((s or "").replace("\t", " ").split())
+    return wire.flat(s)
 
 
 # ---- routes ----------------------------------------------------------------------
-
-def _arg(args, name):
-    return (args.get(name) or [""])[0]
-
 
 def _fields(body):
     """key=value lines."""

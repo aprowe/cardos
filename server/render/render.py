@@ -42,6 +42,7 @@ import tempfile
 from PIL import Image, ImageFilter
 
 from .pixelrender import shoot_pixel
+from ..pixels import encode_row, rgb565_swapped
 
 CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -170,42 +171,6 @@ def trim(im):
         if len(set(px[x, y] for x in range(0, w, 6))) > 1:
             last = y
     return im.crop((0, 0, w, min(h, last + 12)))
-
-
-def rgb565_swapped(r, g, b):
-    v = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-    return ((v >> 8) & 0xFF) | ((v & 0xFF) << 8)
-
-
-def encode_row(pixels):
-    """One row of u16 pixels to RLE bytes."""
-    out = bytearray()
-    i = 0
-    n = len(pixels)
-    while i < n:
-        # How far does the current value run?
-        run = 1
-        while i + run < n and pixels[i + run] == pixels[i] and run < 128:
-            run += 1
-        if run >= 2:
-            out.append(run - 1)
-            out += struct.pack("<H", pixels[i])
-            i += run
-            continue
-        # A literal stretch, ending where a run of 3 or more begins -- below
-        # that, breaking out of the literal costs more than it saves.
-        start = i
-        while i < n and len(out) < 1 << 20:
-            if i + 2 < n and pixels[i] == pixels[i + 1] == pixels[i + 2]:
-                break
-            i += 1
-            if i - start == 128:
-                break
-        count = i - start
-        out.append(128 + count - 1)
-        for p in pixels[start:start + count]:
-            out += struct.pack("<H", p)
-    return bytes(out)
 
 
 def to_cpx(im, links=()):
