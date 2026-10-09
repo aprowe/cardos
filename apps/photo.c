@@ -129,6 +129,7 @@ static void index_save(void) {
 /* The synced photo a file is, or -1. */
 static int synced_at(const char *file) {
   int i;
+  if (!str_same(P.dir, DIR)) return -1;     /* opened on a picture elsewhere */
   for (i = 0; i < P.nsynced; i++) {
     char want[24];
     api->fmt(want, sizeof want, "%s.img", P.id[i]);
@@ -581,14 +582,27 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   P.at = rect(0, 0, SCR_W, SCR_H);   /* until the first paint says otherwise */
   api->fmt(P.dir, sizeof P.dir, "%s", DIR);
   index_load();
-  rescan();
-  /* An argument names a picture in /pics to start on. */
+  /* An argument names a picture to start on -- in /pics, or anywhere: Files
+   * opens an .img where it lies, and then that folder is the one shown and
+   * nothing is synced into it. */
   if (argc > 1) {
-    int i;
-    for (i = 0; i < P.count; i++) if (ends_with(argv[1], P.files[i])) P.cur = i;
+    int i, slash = -1;
+    const char *name = argv[1];
+    for (i = 0; argv[1][i]; i++) if (argv[1][i] == '/') slash = i;
+    if (slash > 0) {
+      api->fmt(P.dir, sizeof P.dir, "%.*s", slash, argv[1]);
+      name = argv[1] + slash + 1;
+    } else if (slash == 0) {
+      api->fmt(P.dir, sizeof P.dir, "/");
+      name = argv[1] + 1;
+    }
+    rescan();
+    for (i = 0; i < P.count; i++) if (str_same(name, P.files[i])) P.cur = i;
+  } else {
+    rescan();
   }
   P.sync = SYNC_IDLE;
-  sync_begin();
+  if (str_same(P.dir, DIR)) sync_begin();
   UI.paint = app_paint;
   UI.key = app_key;
   UI.click = app_click;
