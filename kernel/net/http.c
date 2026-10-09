@@ -1,4 +1,23 @@
-/* One-shot HTTP GET. See http.h. */
+/* HTTP(S) requests, blocking. See http.h.
+ *
+ * Five public transfers -- a request into a buffer, a file posted, a file
+ * exchanged for a file, a download, a stream -- and one way of doing each
+ * step they share. They used to be five copies of the same setup and
+ * teardown, and had drifted: -4 meant "not enough memory" in four of them
+ * and "not 2xx" in the stream, and the reason string was reset by two and
+ * left stale by three, so net_status reported an earlier request's failure.
+ * Now every transfer is
+ *
+ *   req_open        the network, the memory, the client, the handshake
+ *   send_*          the body, from memory or a file
+ *   req_headers     the status line and headers
+ *   read_*          the reply, into a buffer, a file or a sink
+ *   req_status      2xx or -status
+ *   req_close
+ *
+ * and the codes are pinned in http.h: -1 no network, -2 bad arguments,
+ * -3 transport (s_why always says which step), -4 out of memory, -NNN the
+ * HTTP status. */
 
 #include "kernel/net/http.h"
 #include "kernel/sys/busy.h"
@@ -73,13 +92,20 @@ static char s_why[96];
 
 const char *http_last_error(void) { return s_why[0] ? s_why : "no error"; }
 
-/* A -3 that says which step, with the heap beside it. Not logged to the
- * card from here: this runs on httpq's task, and the caller logs it. */
+/* Why, in words, with the heap beside it. Not logged to the card from
+ * here: this runs on httpq's task too, and the caller logs it. */
 static void why_failed(const char *what, esp_err_t e) {
   unsigned kb = (unsigned)(heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024);
   if (e != ESP_OK) snprintf(s_why, sizeof s_why, "%s: %s, %u KB free", what, esp_err_to_name(e), kb);
   else snprintf(s_why, sizeof s_why, "%s, %u KB free", what, kb);
   ESP_LOGW(TAG, "%s", s_why);
+}
+
+/* The same for a failure that is not about the heap. Returns `rc`. */
+static int fail(int rc, const char *what) {
+  snprintf(s_why, sizeof s_why, "%s", what);
+  ESP_LOGW(TAG, "%s (%d)", s_why, rc);
+  return rc;
 }
 
 /* Refuse early, and say what is actually wrong. "Not enough memory: 21 KB
@@ -137,179 +163,124 @@ static esp_err_t open_tls(esp_http_client_handle_t cli, int len) {
   return e;
 }
 
-/* The indicator wraps the two calls that block for seconds. http_stream is
- * deliberately not among them: it runs for as long as a viewer is open and
- * paints the screen itself, so a badge over it would be fighting the very
- * thing it is meant to reassure you about. */
-int http_request_quiet(const char *method, const char *url,
-                 const char *body, const char *content_type,
-                 const char *bearer,
-                 char *out, size_t out_size, int timeout_ms) {
-  esp_http_client_config_t cfg;
+/* ---- the steps -------------------------------------------------------------- */
+
+typedef struct {
   esp_http_client_handle_t cli;
-  int status, got = 0;
+} Req;
 
-  int truncated = 0;
+/* Everything up to a connection ready for the body: the network (brought
+ * up rather than refused -- something that wants a URL wants the network,
+ * and the radio's cost is still only paid when something asks), the
+ * memory a handshake needs, the client, the headers, and the handshake.
+ * `body_len` is the Content-Length to send, 0 for none. 0, or the code;
+ * on failure there is nothing to close. */
+static int req_open(Req *r, esp_http_client_method_t method, const char *url,
+                    const char *auth, const char *content_type, int body_len,
+                    int timeout_ms, int buffer_size) {
+  esp_http_client_config_t cfg;
+  esp_err_t e;
 
-  if (!url || !out || out_size < 2) return -2;
-  out[0] = 0;
-
-  /* Bring the network up rather than refusing. Something that wants a URL
-   * wants the network, and making it say so separately only moves the same
-   * call into every caller. The radio's cost is still only paid when something
-   * actually asks. */
-  if (!wifi_is_connected() && wifi_connect_saved(20000) != 0) return -1;
+  r->cli = NULL;
+  if (!url || !*url) return fail(-2, "no URL");
+  if (!wifi_is_connected() && wifi_connect_saved(20000) != 0) {
+    char what[sizeof s_why];
+    snprintf(what, sizeof what, "no network: %s", wifi_status());
+    return fail(-1, what);
+  }
   if (!enough_memory(url)) return -4;
 
   memset(&cfg, 0, sizeof cfg);
   cfg.url = url;
+  cfg.method = method;
   cfg.timeout_ms = timeout_ms;
   /* The bundle is what makes https work without shipping a certificate per
    * site. About 60 KB of flash, and nothing at runtime until a handshake
    * actually happens. */
   cfg.crt_bundle_attach = esp_crt_bundle_attach;
   cfg.disable_auto_redirect = false;
-  cfg.buffer_size = 1024;
+  cfg.buffer_size = buffer_size;
 
-  if (!method || !strcmp(method, "GET"))        cfg.method = HTTP_METHOD_GET;
-  else if (!strcmp(method, "POST"))             cfg.method = HTTP_METHOD_POST;
-  else if (!strcmp(method, "PATCH"))            cfg.method = HTTP_METHOD_PATCH;
-  else if (!strcmp(method, "PUT"))              cfg.method = HTTP_METHOD_PUT;
-  else if (!strcmp(method, "DELETE"))           cfg.method = HTTP_METHOD_DELETE;
-  else return -2;
-
-  cli = esp_http_client_init(&cfg);
-  if (!cli) return -2;
-
-  set_auth(cli, bearer);
+  r->cli = esp_http_client_init(&cfg);
+  if (!r->cli) return fail(-2, "the client would not start: is the URL right?");
+  set_auth(r->cli, auth);
   if (content_type && *content_type)
-    esp_http_client_set_header(cli, "Content-Type", content_type);
+    esp_http_client_set_header(r->cli, "Content-Type", content_type);
 
-  s_why[0] = 0;
-  {
-    int blen = body ? (int)strlen(body) : 0;
-    esp_err_t e = open_tls(cli, blen);
-    if (e != ESP_OK) {
-      why_failed("could not connect", e);
-      esp_http_client_cleanup(cli);
-      return -3;
-    }
-    if (blen > 0 && esp_http_client_write(cli, body, blen) != blen) {
-      why_failed("the request was cut off sending", ESP_OK);
-      esp_http_client_close(cli);
-      esp_http_client_cleanup(cli);
-      return -3;
-    }
-  }
-
-  if (esp_http_client_fetch_headers(cli) < 0) {
-    esp_http_client_close(cli);
-    esp_http_client_cleanup(cli);
+  e = open_tls(r->cli, body_len);
+  if (e != ESP_OK) {
+    why_failed("could not connect", e);
+    esp_http_client_cleanup(r->cli);
+    r->cli = NULL;
     return -3;
   }
-
-  /* Read the body whatever the status: an error from an API is a JSON document
-   * explaining itself, and throwing it away is what makes a failure a mystery.
-   * Reading stops at the buffer rather than draining -- whatever is past the
-   * end was not going to be looked at. */
-  while ((size_t)got < out_size - 1) {
-    int n = esp_http_client_read(cli, out + got, (int)(out_size - 1 - (size_t)got));
-    if (n < 0) { truncated = 1; break; }
-    if (n == 0) break;
-    got += n;
-  }
-  out[got] = 0;
-  /* A connection that dropped mid-body used to come back as a shorter
-   * document and a success. Only when the buffer had room for more: a body
-   * the buffer cut short is the caller's choice, and was never complete. */
-  if ((size_t)got < out_size - 1 && !esp_http_client_is_complete_data_received(cli))
-    truncated = 1;
-
-  status = esp_http_client_get_status_code(cli);
-  esp_http_client_close(cli);
-  esp_http_client_cleanup(cli);
-
-  if (status < 200 || status >= 300) {
-    ESP_LOGW(TAG, "%s %s -> %d", method ? method : "GET", url, status);
-    return (status > 0 && status < 1000) ? -status : -4;
-  }
-  if (truncated) return -3;
-  return got;
+  return 0;
 }
 
-int http_post_file(const char *url, const char *path, const char *content_type,
-                   char *out, size_t out_size, int timeout_ms) {
-  return http_post_file_progress(url, path, content_type, NULL, out, out_size,
-                                 timeout_ms, NULL);
+static void req_close(Req *r) {
+  if (!r->cli) return;
+  esp_http_client_close(r->cli);
+  esp_http_client_cleanup(r->cli);
+  r->cli = NULL;
 }
 
-int http_post_file_progress(const char *url, const char *path,
-                            const char *content_type, const char *bearer,
-                            char *out, size_t out_size, int timeout_ms,
-                            void (*progress)(int sent, int total)) {
-  esp_http_client_config_t cfg;
-  esp_http_client_handle_t cli;
-  int fd, size, sent = 0, got = 0, status, truncated = 0;
-  uint8_t *chunk;
-
-  if (!url || !path || !out || out_size < 2) return -2;
-  out[0] = 0;
-
-  if (!wifi_is_connected() && wifi_connect_saved(20000) != 0) return -1;
-  if (!enough_memory(url)) return -4;
-
-  fd = fs_open(path, FS_O_READ);
-  if (fd < 0) return -2;
-  size = fs_seek(fd, 0, FS_SEEK_END);
-  if (size <= 0 || fs_seek(fd, 0, FS_SEEK_SET) < 0) { fs_close(fd); return -2; }
-  if ((chunk = (uint8_t *)malloc(CHUNK)) == NULL) { fs_close(fd); return -4; }
-
-  memset(&cfg, 0, sizeof cfg);
-  cfg.url = url;
-  cfg.timeout_ms = timeout_ms;
-  cfg.crt_bundle_attach = esp_crt_bundle_attach;
-  cfg.method = HTTP_METHOD_POST;
-  cfg.buffer_size = 1024;
-
-  cli = esp_http_client_init(&cfg);
-  if (!cli) { free(chunk); fs_close(fd); return -2; }
-  if (content_type && *content_type)
-    esp_http_client_set_header(cli, "Content-Type", content_type);
-  set_auth(cli, bearer);
-
-  /* Opened with the length up front, then streamed a kilobyte at a time. The
-   * whole point of this function is that the body never exists in memory: a
-   * fifteen-second recording is 480 KB and there are about 120 KB to play
-   * with. */
-  if (open_tls(cli, size) != ESP_OK) {
-    free(chunk);
-    fs_close(fd);
-    esp_http_client_cleanup(cli);
+static int send_buf(Req *r, const char *body, int len) {
+  if (len > 0 && esp_http_client_write(r->cli, body, len) != len) {
+    why_failed("the request was cut off sending", ESP_OK);
     return -3;
   }
+  return 0;
+}
+
+/* `size` bytes of `fd`, a chunk at a time: the body never exists in memory
+ * (a fifteen-second recording is 480 KB, and there are about 120 to play
+ * with). */
+static int send_from_fd(Req *r, int fd, int size, uint8_t *chunk,
+                        void (*progress)(int sent, int total)) {
+  int sent = 0;
   while (sent < size) {
     int n = fs_read(fd, chunk, CHUNK);
     if (n <= 0) break;
-    if (esp_http_client_write(cli, (const char *)chunk, n) != n) break;
+    if (esp_http_client_write(r->cli, (const char *)chunk, n) != n) break;
     sent += n;
     if (progress) progress(sent, size);
   }
-  free(chunk);
-  fs_close(fd);
   if (sent != size) {
-    esp_http_client_close(cli);
-    esp_http_client_cleanup(cli);
+    why_failed("the request was cut off sending", ESP_OK);
     return -3;
   }
+  return 0;
+}
 
-  if (esp_http_client_fetch_headers(cli) < 0) {
-    esp_http_client_close(cli);
-    esp_http_client_cleanup(cli);
-    return -3;
-  }
+/* The status line and headers. Content-Length (or 0 when the server did not
+ * say), or -3. */
+static int64_t req_headers(Req *r) {
+  int64_t len = esp_http_client_fetch_headers(r->cli);
+  if (len < 0) { why_failed("no answer (timed out?)", ESP_OK); return -3; }
+  return len;
+}
+
+/* 0 for a 2xx, else the status negated -- -404 is a 404. A response with
+ * no status a number can carry is a transport failure. */
+static int req_status(Req *r, const char *url) {
+  int status = esp_http_client_get_status_code(r->cli);
+  if (status >= 200 && status < 300) return 0;
+  ESP_LOGW(TAG, "%s -> %d", url, status);
+  if (status > 0 && status < 1000) return -status;
+  return fail(-3, "no HTTP status in the answer");
+}
+
+/* Into `out`, up to out_size - 1 and a NUL, whatever the status: an error
+ * from an API is a document explaining itself, and throwing it away is what
+ * makes a failure a mystery. Reading stops at the buffer rather than
+ * draining -- whatever is past the end was not going to be looked at. Bytes
+ * read; *cut is set when the connection dropped with room still left. */
+static int read_to_buf(Req *r, char *out, size_t out_size, int *cut) {
+  int got = 0;
+  *cut = 0;
   while ((size_t)got < out_size - 1) {
-    int n = esp_http_client_read(cli, out + got, (int)(out_size - 1 - (size_t)got));
-    if (n < 0) { truncated = 1; break; }
+    int n = esp_http_client_read(r->cli, out + got, (int)(out_size - 1 - (size_t)got));
+    if (n < 0) { *cut = 1; break; }
     if (n == 0) break;
     got += n;
   }
@@ -317,132 +288,55 @@ int http_post_file_progress(const char *url, const char *path,
   /* A connection that dropped mid-body used to come back as a shorter
    * document and a success. Only when the buffer had room for more: a body
    * the buffer cut short is the caller's choice, and was never complete. */
-  if ((size_t)got < out_size - 1 && !esp_http_client_is_complete_data_received(cli))
-    truncated = 1;
-
-  status = esp_http_client_get_status_code(cli);
-  esp_http_client_close(cli);
-  esp_http_client_cleanup(cli);
-  if (status < 200 || status >= 300) {
-    ESP_LOGW(TAG, "POST %s -> %d", url, status);
-    return (status > 0 && status < 1000) ? -status : -4;
-  }
-  if (truncated) return -3;
+  if ((size_t)got < out_size - 1 && !esp_http_client_is_complete_data_received(r->cli))
+    *cut = 1;
   return got;
 }
 
-static int exchange_files(uint8_t *s_chunk, const char *url, const char *body_path,
-                          const char *content_type, const char *auth,
-                          const char *reply_path, int timeout_ms);
-
-int http_exchange_files(const char *url, const char *body_path,
-                        const char *content_type, const char *auth,
-                        const char *reply_path, int timeout_ms) {
-  uint8_t *chunk = (uint8_t *)malloc(CHUNK);
-  int rc;
-  if (!chunk) return -4;
-  rc = exchange_files(chunk, url, body_path, content_type, auth, reply_path, timeout_ms);
-  free(chunk);
-  return rc;
-}
-
-/* `s_chunk` is the transfer's own CHUNK bytes; the name is the old static's,
- * kept so the body below reads as it did. */
-static int exchange_files(uint8_t *s_chunk, const char *url, const char *body_path,
-                          const char *content_type, const char *auth,
-                          const char *reply_path, int timeout_ms) {
-  esp_http_client_config_t cfg;
-  esp_http_client_handle_t cli;
-  int fd, size, sent = 0, got = 0, status, rc;
-
-  if (!url || !body_path || !reply_path) return -2;
-  if (!wifi_is_connected() && wifi_connect_saved(20000) != 0) return -1;
-  if (!enough_memory(url)) return -4;
-
-  fd = fs_open(body_path, FS_O_READ);
-  if (fd < 0) return -2;
-  size = fs_seek(fd, 0, FS_SEEK_END);
-  if (size <= 0 || fs_seek(fd, 0, FS_SEEK_SET) < 0) { fs_close(fd); return -2; }
-
-  memset(&cfg, 0, sizeof cfg);
-  cfg.url = url;
-  cfg.timeout_ms = timeout_ms;
-  cfg.crt_bundle_attach = esp_crt_bundle_attach;
-  cfg.method = HTTP_METHOD_POST;
-  cfg.buffer_size = 1024;
-
-  cli = esp_http_client_init(&cfg);
-  if (!cli) { fs_close(fd); return -2; }
-  set_auth(cli, auth);
-  if (content_type && *content_type)
-    esp_http_client_set_header(cli, "Content-Type", content_type);
-
-  s_why[0] = 0;
-  {
-    esp_err_t e = open_tls(cli, size);
-    if (e != ESP_OK) {
-      why_failed("could not connect", e);
-      fs_close(fd);
-      esp_http_client_cleanup(cli);
-      return -3;
-    }
-  }
-  while (sent < size) {
-    int n = fs_read(fd, s_chunk, CHUNK);
-    if (n <= 0) break;
-    if (esp_http_client_write(cli, (const char *)s_chunk, n) != n) break;
-    sent += n;
-  }
-  fs_close(fd);
-  if (sent != size || esp_http_client_fetch_headers(cli) < 0) {
-    why_failed(sent != size ? "the request was cut off sending" : "no answer (timed out?)", ESP_OK);
-    esp_http_client_close(cli);
-    esp_http_client_cleanup(cli);
-    return -3;
-  }
-
-  /* The reply is written whatever the status, as http_request reads it
-   * whatever the status: an API's error is a document that explains itself,
-   * and the caller can only show it if it was kept. */
-  fd = fs_open(reply_path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
-  if (fd < 0) {
-    esp_http_client_close(cli);
-    esp_http_client_cleanup(cli);
-    return -2;
-  }
-  for (;;) {
-    int n = esp_http_client_read(cli, (char *)s_chunk, CHUNK);
-    int put = 0;
-    if (n < 0) { got = -3; break; }
+/* As much as `cap` holds, or what is left: 0 at the end, <0 on an error
+ * with nothing read. */
+static int read_full(esp_http_client_handle_t cli, uint8_t *b, int cap) {
+  int got = 0;
+  while (got < cap) {
+    int n = esp_http_client_read(cli, (char *)b + got, cap - got);
+    if (n < 0) return got ? got : n;
     if (n == 0) break;
-    while (put < n) {
-      int w = fs_write(fd, s_chunk + put, (size_t)(n - put));
-      if (w <= 0) { n = -1; break; }
-      put += w;
-    }
-    if (n < 0) { got = -3; break; }
     got += n;
   }
-  fs_close(fd);
-  /* Half a reply is not a reply: a connection dropped mid-body used to leave
-   * a file that scanned cleanly as a shorter answer, and was believed. */
-  if (got >= 0 && !esp_http_client_is_complete_data_received(cli)) got = -3;
+  return got;
+}
 
-  status = esp_http_client_get_status_code(cli);
-  esp_http_client_close(cli);
-  esp_http_client_cleanup(cli);
-  if (got < 0) {
-    char what[48];
-    snprintf(what, sizeof what, "the answer was cut off (HTTP %d)", status);
+/* The whole reply into `fd` through `buf`. Bytes written, or -3 for a
+ * socket or card that failed, or a reply cut short -- `expected` (0 when
+ * the server did not say) is checked too. Written in full or not at all:
+ * fs_write returns -1 on a short write and leaves the partial bytes behind,
+ * which is how a truncated file gets written and believed. */
+static int read_to_fd(Req *r, int fd, uint8_t *buf, int cap, int64_t expected,
+                      HttpProgress progress, void *ctx) {
+  int total = 0;
+  for (;;) {
+    int n = read_full(r->cli, buf, cap), put = 0;
+    if (n < 0) { why_failed("the answer was cut off", ESP_OK); return -3; }
+    if (n == 0) break;
+    while (put < n) {
+      int w = fs_write(fd, buf + put, (size_t)(n - put));
+      if (w <= 0) return fail(-3, "the card would not take the answer");
+      put += w;
+    }
+    total += n;
+    if (progress) progress(ctx, (uint32_t)total, (uint32_t)(expected > 0 ? expected : 0));
+  }
+  /* Fewer bytes than promised is a failure, not a smaller file: the
+   * installers hash what they get, but a page, a photo or the agent's reply
+   * cut short by a dropped connection was being kept and believed. */
+  if (!esp_http_client_is_complete_data_received(r->cli) ||
+      (expected > 0 && total != expected)) {
+    char what[64];
+    snprintf(what, sizeof what, "the answer was cut off: %d of %d bytes", total, (int)expected);
     why_failed(what, ESP_OK);
     return -3;
   }
-  if (status < 200 || status >= 300) {
-    ESP_LOGW(TAG, "POST %s -> %d", url, status);
-    rc = (status > 0 && status < 1000) ? -status : -4;
-    return rc;
-  }
-  return got;
+  return total;
 }
 
 /* ---- big transfers ----
@@ -469,16 +363,131 @@ static void big_end(uint8_t *b) {
   wifi_fast(0);
 }
 
-/* As much as `cap` holds, or what is left: 0 at the end, <0 on an error
- * with nothing read. */
-static int read_full(esp_http_client_handle_t cli, uint8_t *b, int cap) {
-  int got = 0;
-  while (got < cap) {
-    int n = esp_http_client_read(cli, (char *)b + got, cap - got);
-    if (n < 0) return got ? got : n;
-    if (n == 0) break;
-    got += n;
+/* A file to send: open, and its size. 0 or -2. */
+static int open_body(const char *path, int *fd, int *size) {
+  *fd = fs_open(path, FS_O_READ);
+  if (*fd < 0) return fail(-2, "cannot read the file to send");
+  *size = fs_seek(*fd, 0, FS_SEEK_END);
+  if (*size <= 0 || fs_seek(*fd, 0, FS_SEEK_SET) < 0) {
+    fs_close(*fd);
+    return fail(-2, "the file to send is empty");
   }
+  return 0;
+}
+
+/* ---- the transfers ------------------------------------------------------------ */
+
+/* The indicator wraps the two calls that block for seconds. http_stream is
+ * deliberately not among them: it runs for as long as a viewer is open and
+ * paints the screen itself, so a badge over it would be fighting the very
+ * thing it is meant to reassure you about. */
+int http_request_quiet(const char *method, const char *url,
+                 const char *body, const char *content_type,
+                 const char *bearer,
+                 char *out, size_t out_size, int timeout_ms) {
+  esp_http_client_method_t m;
+  Req r;
+  int rc, got, cut, blen = body ? (int)strlen(body) : 0;
+
+  s_why[0] = 0;
+  if (!out || out_size < 2) return fail(-2, "no buffer for the answer");
+  out[0] = 0;
+
+  if (!method || !strcmp(method, "GET"))        m = HTTP_METHOD_GET;
+  else if (!strcmp(method, "POST"))             m = HTTP_METHOD_POST;
+  else if (!strcmp(method, "PATCH"))            m = HTTP_METHOD_PATCH;
+  else if (!strcmp(method, "PUT"))              m = HTTP_METHOD_PUT;
+  else if (!strcmp(method, "DELETE"))           m = HTTP_METHOD_DELETE;
+  else return fail(-2, "not a method this client speaks");
+
+  if ((rc = req_open(&r, m, url, bearer, content_type, blen, timeout_ms, 1024)) != 0) return rc;
+  if ((rc = send_buf(&r, body, blen)) != 0 || (rc = (int)req_headers(&r)) < 0) {
+    req_close(&r);
+    return rc;
+  }
+  got = read_to_buf(&r, out, out_size, &cut);
+  rc = req_status(&r, url);
+  req_close(&r);
+  if (rc < 0) return rc;
+  if (cut) { why_failed("the answer was cut off", ESP_OK); return -3; }
+  return got;
+}
+
+int http_post_file(const char *url, const char *path, const char *content_type,
+                   char *out, size_t out_size, int timeout_ms) {
+  return http_post_file_progress(url, path, content_type, NULL, out, out_size,
+                                 timeout_ms, NULL);
+}
+
+int http_post_file_progress(const char *url, const char *path,
+                            const char *content_type, const char *bearer,
+                            char *out, size_t out_size, int timeout_ms,
+                            void (*progress)(int sent, int total)) {
+  Req r;
+  uint8_t *chunk;
+  int fd, size, rc, got, cut;
+
+  s_why[0] = 0;
+  if (!path || !out || out_size < 2) return fail(-2, "no file, or no buffer for the answer");
+  out[0] = 0;
+  if ((rc = open_body(path, &fd, &size)) != 0) return rc;
+  if ((chunk = (uint8_t *)malloc(CHUNK)) == NULL) {
+    fs_close(fd);
+    return fail(-4, "no memory for the transfer");
+  }
+  /* Opened with the length up front, then streamed a kilobyte at a time. */
+  rc = req_open(&r, HTTP_METHOD_POST, url, bearer, content_type, size, timeout_ms, 1024);
+  if (rc == 0) rc = send_from_fd(&r, fd, size, chunk, progress);
+  free(chunk);
+  fs_close(fd);
+  if (rc == 0) rc = (int)req_headers(&r);
+  if (rc < 0) { req_close(&r); return rc; }
+
+  got = read_to_buf(&r, out, out_size, &cut);
+  rc = req_status(&r, url);
+  req_close(&r);
+  if (rc < 0) return rc;
+  if (cut) { why_failed("the answer was cut off", ESP_OK); return -3; }
+  return got;
+}
+
+int http_exchange_files(const char *url, const char *body_path,
+                        const char *content_type, const char *auth,
+                        const char *reply_path, int timeout_ms) {
+  Req r;
+  uint8_t *chunk;
+  int fd, size, rc, got;
+
+  s_why[0] = 0;
+  if (!body_path || !reply_path) return fail(-2, "no file to send, or none for the answer");
+  if ((rc = open_body(body_path, &fd, &size)) != 0) return rc;
+  if ((chunk = (uint8_t *)malloc(CHUNK)) == NULL) {
+    fs_close(fd);
+    return fail(-4, "no memory for the transfer");
+  }
+  rc = req_open(&r, HTTP_METHOD_POST, url, auth, content_type, size, timeout_ms, 1024);
+  if (rc == 0) rc = send_from_fd(&r, fd, size, chunk, NULL);
+  fs_close(fd);
+  if (rc == 0) rc = (int)req_headers(&r);
+  if (rc < 0) { free(chunk); req_close(&r); return rc; }
+
+  /* The reply is written whatever the status, as http_request reads it
+   * whatever the status: an API's error is a document that explains itself,
+   * and the caller can only show it if it was kept. */
+  fd = fs_open(reply_path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+  if (fd < 0) {
+    free(chunk);
+    req_close(&r);
+    return fail(-2, "cannot write the answer to the card");
+  }
+  /* Half a reply is not a reply: a connection dropped mid-body used to
+   * leave a file that scanned cleanly as a shorter answer. */
+  got = read_to_fd(&r, fd, chunk, CHUNK, 0, NULL, NULL);
+  fs_close(fd);
+  free(chunk);
+  rc = req_status(&r, url);
+  req_close(&r);
+  if (rc < 0) return rc;
   return got;
 }
 
@@ -488,58 +497,31 @@ int http_stream(const char *url, HttpSink on_data, void *ctx, int timeout_ms) {
 
 int http_stream_ex(const char *url, const char *bearer, HttpSink on_data, void *ctx,
                    int timeout_ms) {
-  esp_http_client_config_t cfg;
-  esp_http_client_handle_t cli;
-  int total = 0, status;
+  Req r;
+  uint8_t *b;
+  int rc, cap, total = 0;
 
-  if (!url || !on_data) return -2;
-  if (!wifi_is_connected() && wifi_connect_saved(20000) != 0) return -1;
-
-  memset(&cfg, 0, sizeof cfg);
-  cfg.url = url;
-  cfg.timeout_ms = timeout_ms;
-  cfg.crt_bundle_attach = esp_crt_bundle_attach;
-  cfg.buffer_size = 2048;
-
-  cli = esp_http_client_init(&cfg);
-  if (!cli) return -2;
-  set_auth(cli, bearer);
-  if (open_tls(cli, 0) != ESP_OK) {
-    esp_http_client_cleanup(cli);
-    return -3;
+  s_why[0] = 0;
+  if (!on_data) return fail(-2, "nowhere for the stream to go");
+  if ((rc = req_open(&r, HTTP_METHOD_GET, url, bearer, NULL, 0, timeout_ms, 2048)) != 0) return rc;
+  if ((rc = (int)req_headers(&r)) < 0 || (rc = req_status(&r, url)) < 0) {
+    req_close(&r);
+    return rc;
   }
-  if (esp_http_client_fetch_headers(cli) < 0) {
-    esp_http_client_close(cli);
-    esp_http_client_cleanup(cli);
-    return -3;
+  if ((b = big_begin(&cap)) == NULL) {
+    req_close(&r);
+    return fail(-4, "no memory for the transfer");
   }
-  status = esp_http_client_get_status_code(cli);
-  if (status < 200 || status >= 300) {
-    esp_http_client_close(cli);
-    esp_http_client_cleanup(cli);
-    return -4;
+  /* Until the caller says stop, the server stops, or the socket does: a
+   * stream has no end to fall short of, so how it ended is not an error. */
+  for (;;) {
+    int n = read_full(r.cli, b, cap);
+    if (n <= 0) break;
+    total += n;
+    if (on_data(ctx, b, n)) break;
   }
-
-  /* Until the caller says stop, the server stops, or the socket does. */
-  {
-    int cap;
-    uint8_t *b = big_begin(&cap);
-    if (!b) {
-      esp_http_client_close(cli);
-      esp_http_client_cleanup(cli);
-      return -4;
-    }
-    for (;;) {
-      int n = read_full(cli, b, cap);
-      if (n <= 0) break;
-      total += n;
-      if (on_data(ctx, b, n)) break;
-    }
-    big_end(b);
-  }
-
-  esp_http_client_close(cli);
-  esp_http_client_cleanup(cli);
+  big_end(b);
+  req_close(&r);
   return total;
 }
 
@@ -552,79 +534,32 @@ int http_download(const char *url, const char *path, int timeout_ms) {
 }
 
 static int http_download_ex_do(const char *url, const char *path, const char *bearer,
-                     HttpProgress progress, void *ctx, int timeout_ms) {
-  esp_http_client_config_t cfg;
-  esp_http_client_handle_t cli;
-  int status, fd, total = 0, rc = -3, cap = 0;
+                               HttpProgress progress, void *ctx, int timeout_ms) {
+  Req r;
   int64_t expected;
-  uint8_t *big = NULL;
+  uint8_t *big;
+  int fd, rc, cap;
 
-  if (!url || !path) return -2;
-  if (!wifi_is_connected() && wifi_connect_saved(20000) != 0) return -1;
-  if (!enough_memory(url)) return -4;
-
-  memset(&cfg, 0, sizeof cfg);
-  cfg.url = url;
-  cfg.timeout_ms = timeout_ms;
-  cfg.crt_bundle_attach = esp_crt_bundle_attach;
-  cfg.buffer_size = 1024;
-
-  cli = esp_http_client_init(&cfg);
-  if (!cli) return -2;
-
-  set_auth(cli, bearer);
-
-  if (open_tls(cli, 0) != ESP_OK) {
-    esp_http_client_cleanup(cli);
-    return -3;
+  s_why[0] = 0;
+  if (!path) return fail(-2, "nowhere to put the download");
+  if ((rc = req_open(&r, HTTP_METHOD_GET, url, bearer, NULL, 0, timeout_ms, 1024)) != 0) return rc;
+  /* Not written at all on a failing status: a 404's page is not the file. */
+  if ((expected = req_headers(&r)) < 0 || (rc = req_status(&r, url)) < 0) {
+    req_close(&r);
+    return expected < 0 ? (int)expected : rc;
   }
-  expected = esp_http_client_fetch_headers(cli);
-  if (expected < 0) goto done;
-
-  status = esp_http_client_get_status_code(cli);
-  if (status < 200 || status >= 300) {
-    ESP_LOGW(TAG, "%s -> %d", url, status);
-    rc = (status > 0 && status < 1000) ? -status : -4;
-    goto done;
-  }
-
   fd = fs_open(path, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
-  if (fd < 0) { rc = -2; goto done; }
-
-  big = big_begin(&cap);
-  if (!big) { fs_close(fd); rc = -4; goto done; }
-  for (;;) {
-    int n = read_full(cli, big, cap);
-    int put = 0;
-    if (n < 0) { fs_close(fd); rc = -3; goto done; }
-    if (n == 0) break;
-    /* Written in full or not at all: fs_write returns -1 on a short write and
-     * leaves the partial bytes behind, which is how a truncated file gets
-     * written and believed. */
-    while (put < n) {
-      int w = fs_write(fd, big + put, (size_t)(n - put));
-      if (w <= 0) { fs_close(fd); rc = -3; goto done; }
-      put += w;
-    }
-    total += n;
-    if (progress) progress(ctx, (uint32_t)total, (uint32_t)(expected > 0 ? expected : 0));
+  if (fd < 0) { req_close(&r); return fail(-2, "cannot write the download to the card"); }
+  if ((big = big_begin(&cap)) == NULL) {
+    fs_close(fd);
+    req_close(&r);
+    return fail(-4, "no memory for the transfer");
   }
+  rc = read_to_fd(&r, fd, big, cap, expected, progress, ctx);
   fs_close(fd);
-  /* Fewer bytes than promised is a failure here, not a smaller file: the
-   * firmware and app installers hash what they get, but a page or a photo
-   * cut short by a dropped connection was being kept and shown. */
-  if (!esp_http_client_is_complete_data_received(cli) ||
-      (expected > 0 && total != expected)) {
-    ESP_LOGW(TAG, "%s: got %d of %d bytes", url, total, (int)expected);
-    rc = -3;
-    goto done;
-  }
-  rc = total;
-
-done:
-  if (big) big_end(big);
-  esp_http_client_close(cli);
-  esp_http_client_cleanup(cli);
+  big_end(big);
+  if (rc < 0) ESP_LOGW(TAG, "%s: %s", url, s_why);
+  req_close(&r);
   return rc;
 }
 

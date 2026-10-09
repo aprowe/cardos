@@ -1,24 +1,34 @@
-/* One-shot HTTP GET into a caller's buffer. Device-only.
+/* HTTP and HTTPS, blocking. Device-only.
  *
- * Deliberately not a streaming client. An app on this board has a few
- * kilobytes to spare and no business holding a connection open across paint
- * calls, so the whole shape of the API is "ask for a small thing, block, get
- * it or don't". Anything that does not fit in the buffer is truncated rather
- * than failing: a stock quote is in the first line whatever else follows.
+ * A request into a caller's buffer, a file posted, a file exchanged for a
+ * file, a download to the card, and a stream to a callback. Anything that
+ * does not fit in a buffer is truncated rather than failing: a stock quote
+ * is in the first line whatever else follows.
  *
- * Blocking, for as long as the timeout allows. The caller is the main loop, so
- * the screen stops while this runs -- say what is happening before calling.
- */
+ * Blocking, for as long as the timeout allows. Called from the shell, the
+ * screen stops while this runs -- say what is happening before calling;
+ * kernel/net/httpq.c runs a request on a task of its own instead.
+ *
+ * EVERY function here returns, on failure, one of:
+ *
+ *   -1    no network (and none could be joined)
+ *   -2    bad arguments: no URL, a URL the client cannot parse, a method it
+ *         does not speak, a local file that cannot be read or written
+ *   -3    transport: could not connect, cut off sending, no answer, the
+ *         answer cut off. http_last_error() always says which.
+ *   -4    not enough memory: for TLS, for the client, or for the transfer
+ *   -NNN  the server answered with HTTP status NNN (-404 is a 404)
+ *
+ * and on success a byte count. http_last_error() is reset at the start of
+ * every call, so it never describes an earlier request. */
 #ifndef CARDOS_HTTP_H
 #define CARDOS_HTTP_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-/* Returns the number of bytes written (NUL-terminated), or negative:
- *   -1 no network        -2 bad URL or request refused
- *   -3 transport failure -4 HTTP status was not 2xx (the status is negated
- *                           into the return when it fits, so -404 is a 404) */
+/* Returns the number of bytes written into `buf` -- at most size - 1, then a
+ * NUL; size - 1 means the reply filled it and may have been longer. */
 int http_get(const char *url, char *buf, size_t size, int timeout_ms);
 
 /* The general form. `method` is "GET", "POST", "PATCH" or "DELETE"; `body` and
@@ -75,7 +85,10 @@ int http_exchange_files(const char *url, const char *body_path,
  * buffered beyond one chunk, so a stream can be longer than the heap -- which
  * for a screen share is the point: the frames never stop.
  *
- * Returns bytes received, or negative. */
+ * Returns bytes received, or the codes above -- a non-2xx status is -NNN,
+ * as everywhere else (it used to be -4). However the stream ends once it
+ * has begun -- the caller stopping it, the server, the socket -- is not an
+ * error. */
 typedef int (*HttpSink)(void *ctx, const uint8_t *data, int n);
 int http_stream(const char *url, HttpSink on_data, void *ctx, int timeout_ms);
 /* The same with a token (set_auth's forms), for a stream from a server that
