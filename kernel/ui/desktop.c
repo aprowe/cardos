@@ -372,6 +372,10 @@ static void paint_window(WinId w, Rect clip) {
 static Rect s_tb_clip;
 static void tb_clip(Rect r) { draw_set_clip(rect_intersect(r, s_tb_clip)); }
 
+/* What the taskbar's clock last said: the once-a-second tick repaints it
+ * only when the minute has changed, not every second. */
+static char s_clock_shown[8];
+
 static void paint_taskbar(Rect clip) {
   Rect bar = R(0, DESK_H, DISPLAY_W, TASKBAR_H);
   Rect start = R(2, DESK_H + 2, 34, TASKBAR_H - 4);
@@ -414,6 +418,8 @@ static void paint_taskbar(Rect clip) {
   {
     Rect c = R(DISPLAY_W - 30, DESK_H + 2, 28, TASKBAR_H - 4);
     clock_hm(clock, sizeof clock);
+    if (rect_equals(rect_intersect(c, s_tb_clip), c))   /* all of it was drawn */
+      snprintf(s_clock_shown, sizeof s_clock_shown, "%s", clock);
     draw_bevel(c, C_FACE, C_SHADOW, C_LIGHT);
     draw_text((int16_t)(c.x + 2), (int16_t)(c.y + 1), clock, C_TEXT, C_FACE);
   }
@@ -612,9 +618,13 @@ static WinId s_drag_win;
 
 /* ------------------------------------------------------------ paint ----- */
 
-static void paint_job(void *ctx, WinId w, Rect r) {
+static WinId s_job_win;
+static Rect  s_job_rect;
+
+static void job_body(void *ctx) {
+  WinId w = s_job_win;
+  Rect r = s_job_rect;
   (void)ctx;
-  if (s_start_open && rect_overlaps(r, s_menu_rect)) s_menu_hit = 1;
   if (w == WIN_NONE) {
     draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
     draw_rect(rect_intersect(r, R(0, 0, DISPLAY_W, DESK_H)), C_DESKTOP);
@@ -626,6 +636,23 @@ static void paint_job(void *ctx, WinId w, Rect r) {
   } else {
     paint_window(w, r);
   }
+}
+
+/* Each piece the compositor hands out is composed off the panel and sent
+ * whole (draw_offscreen): a window is an outer bevel, a title bar, a white
+ * well and then the app, every one a fill drawn over by the next, and on
+ * the panel an app that ticked showed a white frame each time. A window
+ * whose app paints direct (CAPP_PAINT_DIRECT: Web reads the card in paint)
+ * is drawn as before. */
+static void paint_job(void *ctx, WinId w, Rect r) {
+  (void)ctx;
+  if (s_start_open && rect_overlaps(r, s_menu_rect)) s_menu_hit = 1;
+  s_job_win = w;
+  s_job_rect = r;
+  if (w != WIN_NONE && capprun_paint_direct(app_of(w))) { job_body(NULL); return; }
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  draw_offscreen(r, w == WIN_NONE ? C_DESKTOP : C_FACE, job_body, NULL);
+  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
 }
 
 /* A fullscreen app gets the panel and nothing else: no desktop, no chrome, no
@@ -1206,7 +1233,14 @@ int desktop_key(uint8_t key) {
     if (f != WIN_NONE) {
       const AppDef *a = app_of(f);
       if (a->key && a->key(a->state, key)) {
-        wm_damage(wm_frame(f));
+        /* What the app says changed, as the tick does -- not the whole
+         * frame, which repainted the bevel, the title and the well under
+         * every keystroke. */
+        Rect want;
+        if (a->take_damage && a->take_damage(a->state, &want))
+          wm_damage(rect_intersect(want, wm_content(f)));
+        else
+          wm_damage(wm_content(f));
         desktop_flush();
         return 0;
       }
@@ -1335,8 +1369,14 @@ void desktop_tick(uint32_t ms) {
       bthid_state(BTHID_MOUSE) != BTH_CONNECTING && (s_now_ms / 1000u) % 15 == 0 &&
       bg_idle_ms() > 2000)
     bg_submit(BG_BT_RECONNECT);
-  wm_damage(R(DISPLAY_W - 30, DESK_H + 2, 28, TASKBAR_H - 4));
-  desktop_flush();
+  {
+    char now[8];
+    clock_hm(now, sizeof now);
+    if (strcmp(now, s_clock_shown) != 0) {
+      wm_damage(R(DISPLAY_W - 30, DESK_H + 2, 28, TASKBAR_H - 4));
+      desktop_flush();
+    }
+  }
 }
 
 #define NVS_NS        "cardos"
