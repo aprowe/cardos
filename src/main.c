@@ -85,9 +85,11 @@ static char     s_line[CARDOS_LINE_MAX + 1];
 static int      s_len;
 /* Three shells over the same kernel. The launcher is the one meant for daily
  * use, the desktop is the demonstration that windows work, and the console is
- * for development. */
-typedef enum { MODE_CONSOLE = 0, MODE_DESKTOP, MODE_LAUNCHER } Mode;
-static Mode     s_mode;
+ * for development. Which one has the screen is ui_shell() (kernel/ui/shell.c)
+ * and nothing else: it used to be kept here as well, in an s_mode that a
+ * command opening its app, or a desktop app calling run(), could leave
+ * behind -- the launcher on screen and the keys still going to the desktop.
+ * go() below is the one way to change it from here. */
 
 /* Booted with escape held: no saved setting has been applied, no radio has
  * been started, and the console has the screen. See app_main. */
@@ -97,6 +99,35 @@ static void prompt(void) {
   con_set_color(COLOR_AMBER);
   con_printf("%s> ", shell_cwd());
   con_set_color(COLOR_GREEN);
+}
+
+/* Give the screen to a shell.
+ *
+ * `init` 1 starts it the way its own command does: launchui_init or
+ * desktop_init, which set ui_shell themselves; for the console, a cleared
+ * screen, "back at the console" when it came from a painted shell, and a
+ * prompt. `init` 0 only makes sure it is the one up: the launcher is started
+ * if it is not already, the desktop is handed the screen back as it was
+ * left, and the console gets a prompt under whatever it already shows. */
+static void go(UiShell to, int init) {
+  UiShell from = ui_shell();
+  switch (to) {
+  case UI_LAUNCHER:
+    if (init || from != UI_LAUNCHER) launchui_init();
+    break;
+  case UI_DESKTOP:
+    if (init) desktop_init();
+    else if (from != UI_DESKTOP) { ui_set_shell(UI_DESKTOP); desktop_repaint(); }
+    break;
+  default:
+    ui_set_shell(UI_NONE);
+    if (init) {
+      con_clear();
+      if (from != UI_NONE) con_write("back at the console\n");
+    }
+    prompt();
+    break;
+  }
 }
 
 /* `mem map`: the executable heap block by block, for finding what splits
@@ -319,14 +350,8 @@ static void run_builtin(const char *line, char *arg) {
     con_printf("orientation %d of %d\n", display_orient(), DISPLAY_ORIENTS);
     con_write("flip again if this is not right\n");
   }
-  else if (!strcmp(line, "desk")) {
-    desktop_init();
-    s_mode = MODE_DESKTOP;
-  }
-  else if (!strcmp(line, "launch") || !strcmp(line, "gui")) {
-    launchui_init();
-    s_mode = MODE_LAUNCHER;
-  }
+  else if (!strcmp(line, "desk"))   go(UI_DESKTOP, 1);
+  else if (!strcmp(line, "launch") || !strcmp(line, "gui")) go(UI_LAUNCHER, 1);
   else if (!strcmp(line, "wifi")) cmd_wifi(arg);
   else if (!strcmp(line, "get"))  cmd_get(arg);
   /* The same as d held at power-on, from here: the card is unmounted under
@@ -352,11 +377,7 @@ static void run_builtin(const char *line, char *arg) {
   else if (!strcmp(line, "env"))  cmd_env();
   else if (!strcmp(line, "set"))  cmd_set(arg);
   else if (!strcmp(line, "hotkey")) cmd_hotkey(arg);
-  else if (!strcmp(line, "run")) {
-    /* cmd_run starts it; the mode has to change here, where the loop is. */
-    cmd_run(arg);
-    if (arg && *arg && ui_shell() == UI_LAUNCHER) s_mode = MODE_LAUNCHER;
-  }
+  else if (!strcmp(line, "run"))    cmd_run(arg);
   else if (!strcmp(line, "clear"))  con_clear();
   else if (!strcmp(line, "reboot")) esp_restart();
   else if (!strcmp(line, "defaults")) {
@@ -419,11 +440,8 @@ static void run_builtin(const char *line, char *arg) {
      * PATH lookup, and both end in the same place -- which is what makes a
      * command that lives on the card indistinguishable from one that does
      * not. */
-    if (shell_exec(line, (arg && *arg) ? arg : NULL) == 0) {
-      if (ui_shell() == UI_LAUNCHER) s_mode = MODE_LAUNCHER;
-    } else {
+    if (shell_exec(line, (arg && *arg) ? arg : NULL) != 0)
       con_printf("unknown command: %s\n", line);
-    }
   }
 }
 
@@ -838,13 +856,6 @@ static void hist_walk(int delta) {
  * them to whatever had focus, and an editor would eat opt-3 as a character.
  *
  * Returns 1 if the key was one of these and has been dealt with. */
-static void enter_console(void) {
-  s_mode = MODE_CONSOLE;
-  ui_set_shell(UI_NONE);
-  con_clear();
-  prompt();
-}
-
 /* The shortcut list, over whatever is on screen. Drawn with the same panel
  * every app's ctrl-h uses, so there is one thing that looks like help. Any key
  * closes it, and the shell underneath repaints. */
@@ -876,31 +887,35 @@ static void feed_key(uint8_t k);          /* defined with the loop, below */
 
 static int ops_open_app(const char *name) {
   /* The launcher's runner, which is also what `run` uses: one way to start an
-   * app, so voice cannot start one differently from the console. */
-  if (launchui_run(name, NULL) != 0) return -1;
-  if (s_mode != MODE_LAUNCHER) { launchui_init(); s_mode = MODE_LAUNCHER; }
-  return 0;
+   * app, so voice cannot start one differently from the console. An app it
+   * opens takes the screen through the launcher (ui_shell follows); a
+   * command runs where it was asked from. */
+  return launchui_run(name, NULL) != 0 ? -1 : 0;
 }
 
 static void ops_switch_shell(const char *which) {
-  if (!strcmp(which, "desktop"))       { desktop_init(); s_mode = MODE_DESKTOP; }
-  else if (!strcmp(which, "console"))  { enter_console(); }
-  else                                 { launchui_init(); s_mode = MODE_LAUNCHER; }
+  if (!strcmp(which, "desktop"))       go(UI_DESKTOP, 1);
+  else if (!strcmp(which, "console"))  go(UI_NONE, 1);
+  else                                 go(UI_LAUNCHER, 1);
 }
 
 /* The button on top: the console never claims it; a shell asks its app. */
 static int sink_button(int event, const char *text) {
-  if (s_mode == MODE_LAUNCHER) return launchui_button(event, text);
-  if (s_mode == MODE_DESKTOP) return desktop_button(event, text);
-  return 0;
+  switch (ui_shell()) {
+  case UI_LAUNCHER: return launchui_button(event, text);
+  case UI_DESKTOP:  return desktop_button(event, text);
+  default:          return 0;
+  }
 }
 
 static int sink_wants_text(void) {
   /* The console is always taking text; a shell running an app defers to the
    * app, which is the same question `; . , /` already asks. */
-  if (s_mode == MODE_CONSOLE) return 1;
-  if (s_mode == MODE_LAUNCHER) return launchui_wants_text();
-  return desktop_wants_text();
+  switch (ui_shell()) {
+  case UI_LAUNCHER: return launchui_wants_text();
+  case UI_DESKTOP:  return desktop_wants_text();
+  default:          return 1;
+  }
 }
 
 /* The hotkey table is a text file on the card, /config/hotkeys.txt, so it
@@ -980,8 +995,8 @@ static int global_key(uint8_t k) {
   /* The panel is above everything, so it gets the key first. */
   if (s_opt_help) {
     s_opt_help = 0;
-    if (s_mode == MODE_DESKTOP) desktop_repaint();
-    else if (s_mode == MODE_LAUNCHER) launchui_repaint();
+    if (ui_shell() == UI_DESKTOP) desktop_repaint();
+    else if (ui_shell() == UI_LAUNCHER) launchui_repaint();
     else { con_clear(); prompt(); }
     return 1;
   }
@@ -994,15 +1009,13 @@ static int global_key(uint8_t k) {
     notify_center_open();
     return 1;
   case KEY_OPT_DIGIT(1):
-    launchui_init();
-    s_mode = MODE_LAUNCHER;
+    go(UI_LAUNCHER, 1);
     return 1;
   case KEY_OPT_DIGIT(2):
-    desktop_init();
-    s_mode = MODE_DESKTOP;
+    go(UI_DESKTOP, 1);
     return 1;
   case KEY_OPT_DIGIT(3):
-    enter_console();
+    go(UI_NONE, 1);
     return 1;
 
   /* Brightness, from anywhere, without needing to see the screen.
@@ -1033,7 +1046,7 @@ static int global_key(uint8_t k) {
    * doing on the console rather than freezing a shell silently. */
   case KEY_OPT_LETTER('b'): {
     int n;
-    enter_console();
+    go(UI_NONE, 1);
     con_write("bluetooth: looking...\n");
     n = bthid_autoconnect(4);
     con_printf("  %d connected: %s\n", n, bthid_status(BTHID_MOUSE));
@@ -1041,7 +1054,7 @@ static int global_key(uint8_t k) {
     return 1;
   }
   case KEY_OPT_LETTER('w'):
-    enter_console();
+    go(UI_NONE, 1);
     con_write("wifi: joining the saved network...\n");
     wifi_connect_saved(20000);
     con_printf("  %s\n", wifi_status());
@@ -1067,7 +1080,7 @@ static int global_key(uint8_t k) {
    * runs at the console -- so the chord works from wherever, without
    * finding the console first. */
   case KEY_UPDATE_ALL:
-    enter_console();
+    go(UI_NONE, 1);
     cmd_update("all");
     prompt();
     return 1;
@@ -1077,10 +1090,9 @@ static int global_key(uint8_t k) {
    * running); from the console or the desktop it takes the screen first,
    * the same way fn-` already does from the console. */
   case KEY_APP_SEARCH:
-    if (s_mode != MODE_LAUNCHER) {
-      s_search_from = s_mode;
-      launchui_init();
-      s_mode = MODE_LAUNCHER;
+    if (ui_shell() != UI_LAUNCHER) {
+      s_search_from = (int)ui_shell();
+      go(UI_LAUNCHER, 1);
     }
     launchui_open_search();
     return 1;
@@ -1092,8 +1104,7 @@ static int global_key(uint8_t k) {
      * into whatever has focus. */
     if (k >= KEY_OPT_LETTER('a') && k <= KEY_OPT_LETTER('z')) {
       const char *name = hotkey_get((char)('a' + (k - KEY_OPT_LETTER('a'))));
-      if (name && shell_exec(name, NULL) == 0 && ui_shell() == UI_LAUNCHER)
-        s_mode = MODE_LAUNCHER;
+      if (name) shell_exec(name, NULL);
       return 1;
     }
     return KEY_IS_OPT(k);
@@ -1149,16 +1160,15 @@ static void forget_google(void) {
 /* The serial link's hooks (kernel/sys/serlink.h): a PC working on the
  * device over USB, whatever is on screen. */
 static int ser_open(const char *name, const char *args) {
-  if (shell_exec(name, (args && *args) ? args : NULL) != 0) return -1;
-  if (ui_shell() == UI_LAUNCHER) s_mode = MODE_LAUNCHER;
-  return 0;
+  return shell_exec(name, (args && *args) ? args : NULL) != 0 ? -1 : 0;
 }
 
 static void ser_state(char *out, size_t n) {
-  const AppDef *a = s_mode == MODE_LAUNCHER ? launchui_running()
-                  : s_mode == MODE_DESKTOP ? desktop_focused_app() : NULL;
+  UiShell sh = ui_shell();
+  const AppDef *a = sh == UI_LAUNCHER ? launchui_running()
+                  : sh == UI_DESKTOP ? desktop_focused_app() : NULL;
   snprintf(out, n, "shell=%s app=%s heap=%u low=%u up=%lus",
-           s_mode == MODE_LAUNCHER ? "launcher" : s_mode == MODE_DESKTOP ? "desktop" : "console",
+           sh == UI_LAUNCHER ? "launcher" : sh == UI_DESKTOP ? "desktop" : "console",
            a && a->name ? a->name : "-",
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
            (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
@@ -1175,20 +1185,20 @@ static void ser_state(char *out, size_t n) {
  * is not a painted shell and wants nothing. */
 /* What has the keyboard, for the agent's `action` tool. */
 static const AppDef *ops_running_app(void) {
-  if (s_mode == MODE_LAUNCHER) return launchui_running();
-  if (s_mode == MODE_DESKTOP) return desktop_focused_app();
+  if (ui_shell() == UI_LAUNCHER) return launchui_running();
+  if (ui_shell() == UI_DESKTOP) return desktop_focused_app();
   return NULL;
 }
 
 static void repaint_shells(void) {
-  if (s_mode == MODE_DESKTOP) desktop_repaint();
-  else if (s_mode == MODE_LAUNCHER) launchui_repaint();
+  if (ui_shell() == UI_DESKTOP) desktop_repaint();
+  else if (ui_shell() == UI_LAUNCHER) launchui_repaint();
 }
 
 /* Everything, the console included -- what a screenshot needs painted. */
 static void repaint_all(void) {
   if (power_showing_clock()) { sleepclock_paint(); return; }   /* it has the panel */
-  if (s_mode == MODE_CONSOLE) con_repaint();
+  if (ui_shell() == UI_NONE) con_repaint();
   else repaint_shells();
   alarm_paint_over();          /* a ringing alarm stays on top */
   notify_paint_over();         /* and a notification's banner */
@@ -1211,7 +1221,7 @@ static void serial_shot(void) {
  * producing keys -- including a spoken sentence -- reaches the same code
  * rather than a second copy of it that drifts. */
 static void console_key(uint8_t k) {
-  if (s_mode == MODE_CONSOLE) con_cursor(0);
+  if (ui_shell() == UI_NONE) con_cursor(0);
   if (k == KEY_ENTER) {
     s_line[s_len] = 0;
     con_putc('\n');
@@ -1223,7 +1233,7 @@ static void console_key(uint8_t k) {
     /* Only if the console still owns the screen. `desk` and `launch` paint a
      * whole shell from inside run_pipeline, and printing a prompt afterwards
      * drew a line of console over the top of it. */
-    if (s_mode == MODE_CONSOLE) prompt();
+    if (ui_shell() == UI_NONE) prompt();
   } else if (k == KEY_BACKSPACE) {
     if (s_len > 0) { s_len--; con_putc('\b'); }
   } else if (k == KEY_UP) {
@@ -1252,8 +1262,8 @@ static void feed_key(uint8_t k) {
   if (!k) return;
   if (global_key(k)) return;
 
-  if (s_mode == MODE_LAUNCHER)      { launchui_key(k); return; }
-  if (s_mode == MODE_DESKTOP)       { desktop_key(k); return; }
+  if (ui_shell() == UI_LAUNCHER)    { launchui_key(k); return; }
+  if (ui_shell() == UI_DESKTOP)     { desktop_key(k); return; }
   console_key(k);
 }
 
@@ -1484,13 +1494,11 @@ void app_main(void) {
 
   /* Safe mode always lands at the console: it is the one shell that cannot be
    * hidden by a setting, and the one with `defaults` in it. */
-  if (s_safe_mode) {
-    prompt();
-    s_mode = MODE_CONSOLE;
-  } else switch (ui_saved_shell()) {
-  case UI_DESKTOP:  desktop_init(); s_mode = MODE_DESKTOP; break;
-  case UI_NONE:     prompt();       s_mode = MODE_CONSOLE; break;
-  default:          launchui_init(); s_mode = MODE_LAUNCHER; break;
+  if (s_safe_mode) go(UI_NONE, 0);
+  else switch (ui_saved_shell()) {
+  case UI_DESKTOP:  go(UI_DESKTOP, 1); break;
+  case UI_NONE:     go(UI_NONE, 0); break;
+  default:          go(UI_LAUNCHER, 1); break;
   }
   if (!s_safe_mode) blip(BLIP_BOOT);
 
@@ -1502,8 +1510,7 @@ void app_main(void) {
      * for why the whole cycle happens inside this call. */
     agent_tick();
     if (voice_tick()) {
-      if (s_mode == MODE_LAUNCHER) launchui_repaint();
-      else if (s_mode == MODE_DESKTOP) desktop_repaint();
+      repaint_shells();
     }
 
     /* A character arriving on the serial console counts as a keypress, so the
@@ -1584,8 +1591,8 @@ void app_main(void) {
     {
       const char *done = bg_take_result();
       if (done) {
-        if (s_mode == MODE_CONSOLE) { con_printf("%s\n", done); prompt(); }
-        else if (s_mode == MODE_LAUNCHER) launchui_note(done);
+        if (ui_shell() == UI_NONE) { con_printf("%s\n", done); prompt(); }
+        else if (ui_shell() == UI_LAUNCHER) launchui_note(done);
       }
     }
 
@@ -1600,8 +1607,8 @@ void app_main(void) {
         clock_apply_zone();
         snprintf(line, sizeof line, "timezone: %s", zone[0] ? zone : rule);
         applogf("tz", "%s (%s)", zone, rule);
-        if (s_mode == MODE_CONSOLE) { con_printf("%s\n", line); prompt(); }
-        else if (s_mode == MODE_LAUNCHER) launchui_note(line);
+        if (ui_shell() == UI_NONE) { con_printf("%s\n", line); prompt(); }
+        else if (ui_shell() == UI_LAUNCHER) launchui_note(line);
       }
     }
 
@@ -1627,7 +1634,7 @@ void app_main(void) {
     /* Before any shell sees it. */
     if (k && global_key(k)) k = 0;
 
-    if (s_mode == MODE_LAUNCHER) {
+    if (ui_shell() == UI_LAUNCHER) {
       MouseReport mr;
       int got = 0;
       while (bthid_poll_mouse(&mr)) { launchui_mouse_apply(&mr); got = 1; }
@@ -1636,13 +1643,9 @@ void app_main(void) {
       if (k) {
         int r = launchui_key(k);
         if (r == 1) {
-          s_mode = MODE_CONSOLE;
-          ui_set_shell(UI_NONE);
-          con_clear();
-          con_write("back at the console\n");
-          prompt();
+          go(UI_NONE, 1);
         } else if (r == 2) {
-          s_mode = MODE_DESKTOP;      /* the launcher handed over */
+          /* the launcher handed over: desktop_init has the screen */
         } else if (s_search_from >= 0 && !launchui_search_active()) {
           /* The search opt-space opened from outside the launcher just
            * closed. Enter on a hit leaves an app running here, which
@@ -1650,25 +1653,15 @@ void app_main(void) {
            * gives the screen back to what opt-space took it from. */
           int from = s_search_from;
           s_search_from = -1;
-          if (!launchui_running()) {
-            if (from == MODE_CONSOLE) {
-              s_mode = MODE_CONSOLE;
-              ui_set_shell(UI_NONE);
-              con_clear();
-              con_write("back at the console\n");
-              prompt();
-            } else if (from == MODE_DESKTOP) {
-              s_mode = MODE_DESKTOP;
-              desktop_repaint();
-            }
-          }
+          if (!launchui_running() && from != UI_LAUNCHER)
+            go((UiShell)from, from == UI_NONE);   /* the console redraws; the desktop is as left */
         }
       }
       vTaskDelay(pdMS_TO_TICKS(rest_ms()));
       continue;
     }
 
-    if (s_mode == MODE_DESKTOP) {
+    if (ui_shell() == UI_DESKTOP) {
       MouseReport mr;
       /* Drain whatever the radio queued. It arrives on the Bluetooth task,
        * which must not touch the display, so this is where it turns into
@@ -1679,14 +1672,8 @@ void app_main(void) {
         if (got) desktop_mouse_done();   /* one repaint for the whole burst */
       }
       desktop_tick((uint32_t)(esp_timer_get_time() / 1000));
-      if ((k && desktop_key(k)) || desktop_take_leave()) {
-        /* ESC left the desktop: hand the screen back to the console. */
-        s_mode = MODE_CONSOLE;
-        ui_set_shell(UI_NONE);
-        con_clear();
-        con_write("back at the console\n");
-        prompt();
-      }
+      /* ESC left the desktop: hand the screen back to the console. */
+      if ((k && desktop_key(k)) || desktop_take_leave()) go(UI_NONE, 1);
       vTaskDelay(pdMS_TO_TICKS(rest_ms()));
       continue;
     }
@@ -1696,14 +1683,13 @@ void app_main(void) {
      * here. Before this it reached the line editor and did nothing. */
     if (k == KEY_QUIT) {
       con_cursor(0);
-      launchui_init();
-      s_mode = MODE_LAUNCHER;
+      go(UI_LAUNCHER, 1);
       continue;
     }
 
     if (k) {
       console_key(k);
-      if (s_mode == MODE_CONSOLE) {
+      if (ui_shell() == UI_NONE) {
         last_blink = esp_timer_get_time();
         blink = 1;
         con_cursor(1);
@@ -1712,7 +1698,7 @@ void app_main(void) {
 
     {
       int64_t now = esp_timer_get_time();
-      if (s_mode == MODE_CONSOLE && now - last_blink > 500000) {   /* 500 ms */
+      if (ui_shell() == UI_NONE && now - last_blink > 500000) {   /* 500 ms */
         last_blink = now;
         blink = !blink;
         con_cursor(blink);
@@ -1734,7 +1720,7 @@ void app_main(void) {
      * get the machine in between. */
     {
       uint32_t quiet = bg_idle_ms();
-      int ms = (s_mode != MODE_CONSOLE) ? 5 : 10;
+      int ms = (ui_shell() != UI_NONE) ? 5 : 10;
       if (quiet > 2000) ms = 25;
       if (power_asleep()) ms = 40;
       vTaskDelay(pdMS_TO_TICKS(ms));
