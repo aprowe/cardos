@@ -3,6 +3,7 @@ idf_component_register(
     "main.c"
     "shellcmd.c"
     "../kernel/drv/display.c"
+    "../kernel/drv/disptarget.c"
     "../kernel/drv/board.c"
     "../kernel/drv/es8311.c"
     "../kernel/drv/imu.c"

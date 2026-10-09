@@ -242,9 +242,14 @@ static int api_key_pending(void) {
 /* The clip, in the coordinates an app draws in -- which are the screen's, since
  * paint hands it absolute rectangles. An app compares this with the rect it was
  * given: smaller means its own damage came back, equal means the shell is
- * repainting it for reasons of its own and everything has to be drawn. */
+ * repainting it for reasons of its own and everything has to be drawn.
+ *
+ * The clip as the shell set it, not the strip the OS may be composing it in
+ * (draw_offscreen): a full repaint drawn sixteen rows at a time is still a
+ * full repaint, and Roku, Pinball, Level and toolbar.h test for exactly
+ * that by comparing this with their rectangle. */
 static CRect api_paint_area(void) {
-  Rect c = draw_clip();
+  Rect c = draw_paint_area();
   CRect o;
   o.x = c.x; o.y = c.y; o.w = c.w; o.h = c.h;
   return o;
