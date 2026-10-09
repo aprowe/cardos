@@ -883,7 +883,7 @@ static void show_opt_help(void) {
  * include the desktop to get them. This file is the only one that knows how
  * the three shells relate, so this is where the knowledge stays. */
 
-static void feed_key(uint8_t k);          /* defined with the loop, below */
+static void dispatch_key(uint8_t k);      /* defined with the loop, below */
 
 static int ops_open_app(const char *name) {
   /* The launcher's runner, which is also what `run` uses: one way to start an
@@ -1252,24 +1252,90 @@ static void console_key(uint8_t k) {
   }
 }
 
-/* One key, delivered to whichever shell has the screen.
+/* The console's cursor: on after a key, then blinking every 500 ms. */
+static int64_t s_last_blink;
+static int     s_blink;
+
+/* One key, delivered.
  *
  * Every source ends up here: the matrix, a Bluetooth keyboard, a character off
- * the serial line, and a word that was spoken. That is what lets voice work in
- * apps that have never heard of it -- by the time a transcript reaches an app,
- * it is indistinguishable from typing. */
-static void feed_key(uint8_t k) {
+ * the serial line, a word that was spoken and a key the agent typed. That is
+ * what lets voice work in apps that have never heard of it -- by the time a
+ * transcript reaches an app, it is indistinguishable from typing.
+ *
+ * All of it, not only the shell's half. Whatever stands over the shells
+ * answers first -- a ringing alarm, a ringing notification, the notification
+ * centre, the global chords -- and whatever a shell hands on afterwards (the
+ * launcher to the console or the desktop, the desktop to the console, the
+ * console to the launcher) happens here as well. Keys from voice and the
+ * agent used to come in through a second, shorter copy that skipped the
+ * gating and every one of those transitions. The loop's own concerns -- the
+ * lock screen, waking, repeats -- are about a physical keyboard and stay in
+ * the loop. */
+static void dispatch_key(uint8_t k) {
   if (!k) return;
+
+  /* A ringing alarm answers every key: nothing underneath should open,
+   * type or close because someone reached out to stop it. */
+  if (alarm_ringing()) { alarm_key(k); return; }
+
+  /* A ringing notification (a Timer finished while closed) is stopped by
+   * any key, and the key goes no further. */
+  if (notify_ringing()) { notify_dismiss(); return; }
+
+  /* The notification centre (fn-n) has every key while it is open. */
+  if (notify_center_active()) {
+    uint8_t arrow = keyboard_arrow_for(k);
+    notify_center_key(arrow ? arrow : k);
+    return;
+  }
+
+  /* Before any shell sees it. */
   if (global_key(k)) return;
 
-  if (ui_shell() == UI_LAUNCHER)    { launchui_key(k); return; }
-  if (ui_shell() == UI_DESKTOP)     { desktop_key(k); return; }
-  console_key(k);
+  switch (ui_shell()) {
+  case UI_LAUNCHER: {
+    int r = launchui_key(k);
+    if (r == 1) {
+      go(UI_NONE, 1);
+    } else if (r == 2) {
+      /* the launcher handed over: desktop_init has the screen */
+    } else if (s_search_from >= 0 && !launchui_search_active()) {
+      /* The search opt-space opened from outside the launcher just
+       * closed. Enter on a hit leaves an app running here, which
+       * stays; cancelling (Escape, or backspace past the start)
+       * gives the screen back to what opt-space took it from. */
+      int from = s_search_from;
+      s_search_from = -1;
+      if (!launchui_running() && from != UI_LAUNCHER)
+        go((UiShell)from, from == UI_NONE);   /* the console redraws; the desktop is as left */
+    }
+    return;
+  }
+  case UI_DESKTOP:
+    /* ESC left the desktop: hand the screen back to the console. */
+    if (desktop_key(k)) go(UI_NONE, 1);
+    return;
+  default:
+    /* The way out of the console is the way out of everything else: fn-` or
+     * opt-backspace goes to the launcher, as the same key there comes back
+     * here. Before this it reached the line editor and did nothing. */
+    if (k == KEY_QUIT) {
+      con_cursor(0);
+      go(UI_LAUNCHER, 1);
+      return;
+    }
+    console_key(k);
+    if (ui_shell() == UI_NONE) {
+      s_last_blink = esp_timer_get_time();
+      s_blink = 1;
+      con_cursor(1);
+    }
+    return;
+  }
 }
 
 void app_main(void) {
-  int64_t last_blink = 0;
-  int blink = 0;
   size_t heap_at_boot;
   const char *nvs_erased = NULL;    /* why, if this boot wiped the settings */
 
@@ -1486,8 +1552,8 @@ void app_main(void) {
   bg_submit(BG_TIME_SYNC);
 
   {
-    static const ShellOps OPS = { ops_open_app, ops_switch_shell, feed_key, ops_running_app };
-    static const InputSink SINK = { sink_wants_text, feed_key, sink_button };
+    static const ShellOps OPS = { ops_open_app, ops_switch_shell, dispatch_key, ops_running_app };
+    static const InputSink SINK = { sink_wants_text, dispatch_key, sink_button };
     shell_set_ops(&OPS);
     input_set_sink(&SINK);
   }
@@ -1612,96 +1678,34 @@ void app_main(void) {
       }
     }
 
-    /* A ringing alarm answers every key: nothing underneath should open,
-     * type or close because someone reached out to stop it. */
-    if (k && alarm_ringing()) { alarm_key(k); k = 0; }
+    dispatch_key(k);
 
-    /* A ringing notification (a Timer finished while closed) is stopped by
-     * any key, and the key goes no further. */
-    if (k && notify_ringing()) { notify_dismiss(); k = 0; }
-
-    /* The notification centre (fn-n) has every key while it is open, and
-     * the shells wait: an animating app would draw over it. */
-    if (notify_center_active()) {
-      if (k) {
-        uint8_t arrow = keyboard_arrow_for(k);
-        notify_center_key(arrow ? arrow : k);
-      }
-      vTaskDelay(pdMS_TO_TICKS(rest_ms()));
-      continue;
-    }
-
-    /* Before any shell sees it. */
-    if (k && global_key(k)) k = 0;
-
-    if (ui_shell() == UI_LAUNCHER) {
-      MouseReport mr;
-      int got = 0;
-      while (bthid_poll_mouse(&mr)) { launchui_mouse_apply(&mr); got = 1; }
-      if (got) launchui_mouse_done();
-      launchui_tick((uint32_t)(esp_timer_get_time() / 1000));
-      if (k) {
-        int r = launchui_key(k);
-        if (r == 1) {
-          go(UI_NONE, 1);
-        } else if (r == 2) {
-          /* the launcher handed over: desktop_init has the screen */
-        } else if (s_search_from >= 0 && !launchui_search_active()) {
-          /* The search opt-space opened from outside the launcher just
-           * closed. Enter on a hit leaves an app running here, which
-           * stays; cancelling (Escape, or backspace past the start)
-           * gives the screen back to what opt-space took it from. */
-          int from = s_search_from;
-          s_search_from = -1;
-          if (!launchui_running() && from != UI_LAUNCHER)
-            go((UiShell)from, from == UI_NONE);   /* the console redraws; the desktop is as left */
-        }
-      }
-      vTaskDelay(pdMS_TO_TICKS(rest_ms()));
-      continue;
-    }
-
-    if (ui_shell() == UI_DESKTOP) {
-      MouseReport mr;
-      /* Drain whatever the radio queued. It arrives on the Bluetooth task,
-       * which must not touch the display, so this is where it turns into
-       * pointer movement. */
-      {
+    /* The notification centre is drawn over the shells, and they wait while
+     * it is open: an animating app would draw over it. */
+    if (!notify_center_active()) {
+      if (ui_shell() == UI_LAUNCHER) {
+        MouseReport mr;
         int got = 0;
+        while (bthid_poll_mouse(&mr)) { launchui_mouse_apply(&mr); got = 1; }
+        if (got) launchui_mouse_done();
+        launchui_tick((uint32_t)(esp_timer_get_time() / 1000));
+      } else if (ui_shell() == UI_DESKTOP) {
+        MouseReport mr;
+        int got = 0;
+        /* Drain whatever the radio queued. It arrives on the Bluetooth task,
+         * which must not touch the display, so this is where it turns into
+         * pointer movement. */
         while (bthid_poll_mouse(&mr)) { desktop_mouse_apply(&mr); got = 1; }
         if (got) desktop_mouse_done();   /* one repaint for the whole burst */
-      }
-      desktop_tick((uint32_t)(esp_timer_get_time() / 1000));
-      /* ESC left the desktop: hand the screen back to the console. */
-      if ((k && desktop_key(k)) || desktop_take_leave()) go(UI_NONE, 1);
-      vTaskDelay(pdMS_TO_TICKS(rest_ms()));
-      continue;
-    }
-
-    /* The way out of the console is the way out of everything else: fn-` or
-     * opt-backspace goes to the launcher, as the same key there comes back
-     * here. Before this it reached the line editor and did nothing. */
-    if (k == KEY_QUIT) {
-      con_cursor(0);
-      go(UI_LAUNCHER, 1);
-      continue;
-    }
-
-    if (k) {
-      console_key(k);
-      if (ui_shell() == UI_NONE) {
-        last_blink = esp_timer_get_time();
-        blink = 1;
-        con_cursor(1);
-      }
-    }
-
-    {
-      int64_t now = esp_timer_get_time();
-      if (ui_shell() == UI_NONE && now - last_blink > 500000) {   /* 500 ms */
-        last_blink = now;
-        blink = !blink;
-        con_cursor(blink);
+        desktop_tick((uint32_t)(esp_timer_get_time() / 1000));
+        if (desktop_take_leave()) go(UI_NONE, 1);
+      } else {
+        int64_t now = esp_timer_get_time();
+        if (now - s_last_blink > 500000) {   /* 500 ms */
+          s_last_blink = now;
+          s_blink = !s_blink;
+          con_cursor(s_blink);
+        }
       }
     }
 
@@ -1720,9 +1724,10 @@ void app_main(void) {
      * get the machine in between. */
     {
       uint32_t quiet = bg_idle_ms();
-      int ms = (ui_shell() != UI_NONE) ? 5 : 10;
+      int ms = 10;
       if (quiet > 2000) ms = 25;
       if (power_asleep()) ms = 40;
+      if (ui_shell() != UI_NONE || notify_center_active()) ms = rest_ms();
       vTaskDelay(pdMS_TO_TICKS(ms));
     }
   }
