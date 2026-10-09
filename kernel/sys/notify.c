@@ -380,10 +380,17 @@ static void sched_save(void) {
 }
 
 static void sched_load(void) {
-  static char buf[SCHED_MAX * 144];
-  char *p, *f[6];
+  /* Once, at boot: on the heap for the reading, not 4.6 KB of .bss for the
+   * uptime. */
+  enum { SCHED_READ = SCHED_MAX * 144 };
+  char *buf, *p, *f[6];
   int r, i = 0;
-  if (read_small(SCHED_FILE, buf, sizeof buf) <= 0) return;
+  if ((buf = malloc(SCHED_READ)) == NULL) {
+    ESP_LOGW(TAG, "no %d bytes to read %s: scheduled notifications not restored",
+             SCHED_READ, SCHED_FILE);
+    return;
+  }
+  if (read_small(SCHED_FILE, buf, SCHED_READ) <= 0) { free(buf); return; }
   for (p = buf; *p && i < SCHED_MAX; ) {
     char *end = strchr(p, '\n');
     int k = 0;
@@ -403,6 +410,7 @@ static void sched_load(void) {
     if (!end) break;
     p = end + 1;
   }
+  free(buf);
 }
 
 static Sched *sched_find(const char *app, const char *key) {

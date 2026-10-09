@@ -105,7 +105,8 @@ static void prompt(void) {
  * not what. Collected under the walk and printed after it: the walk holds
  * the heap's lock, and printing may allocate. */
 #define MAP_MAX 96
-static struct { uintptr_t at; uint32_t size; uint8_t used; } s_map[MAP_MAX];
+typedef struct { uintptr_t at; uint32_t size; uint8_t used; } MapRow;
+static MapRow *s_map;            /* for the one command, not the uptime */
 static int s_map_n, s_map_more;
 
 /* Kind: 0 a run of small used blocks (summed), 1 a big used block, 2 a
@@ -132,6 +133,10 @@ static bool map_block(walker_heap_into_t heap, walker_block_info_t b, void *ctx)
 
 static void cmd_mem_map(void) {
   int i;
+  if ((s_map = malloc(MAP_MAX * sizeof *s_map)) == NULL) {
+    con_write("no memory for the map\n");
+    return;
+  }
   s_map_n = s_map_more = 0;
   s_small = s_small_n = 0;
   heap_caps_walk(MALLOC_CAP_EXEC, map_block, NULL);
@@ -142,6 +147,8 @@ static void cmd_mem_map(void) {
                     s_map[i].used == 1 ? "used" : "FREE", (unsigned)s_map[i].size);
   }
   if (s_map_more) con_printf("  (%d more)\n", s_map_more);
+  free(s_map);
+  s_map = NULL;
 }
 
 static void mem_line(const char *line, void *ctx) { (void)ctx; con_printf("%s\n", line); }

@@ -419,8 +419,18 @@ static int         s_idx_ok;              /* every record so far made it in */
  * there, which also deletes the file; set when a scan writes a new one. */
 static int         s_idx_live = 1;
 
-/* The catalog lines of the app being loaded, for its index record. */
-static char        s_idx_cmds[1024];
+/* The scan's working buffers, on the heap from catalog_begin to
+ * catalog_end rather than in .bss for the uptime: 3.4 KB used for a second
+ * at boot and after `update apps`. NULL outside a scan, or when the scan
+ * could not have them -- then it simply loads every app, as a scan with no
+ * index does, and writes none. */
+#define IDX_CMDS 1024
+typedef struct {
+  char cmds[IDX_CMDS];      /* the catalog lines of the app being loaded */
+  char found[IDX_CMDS];     /* a remembered app's lines, from the old index */
+  char line[1400];          /* one record being written */
+} ScanBufs;
+static ScanBufs   *s_scan;
 static size_t      s_idx_cmds_len;
 static int         s_idx_cmds_full;
 
@@ -450,6 +460,9 @@ void capprun_catalog_begin(uint32_t stamp) {
   int fd, n;
 
   capprun_watch_apps();          /* in case boot did not */
+  free(s_scan);
+  if ((s_scan = malloc(sizeof *s_scan)) == NULL)
+    ESP_LOGW(TAG, "no %u bytes for the app index: loading every app", (unsigned)sizeof *s_scan);
   if (s_catalog_fd >= 0) fs_close(s_catalog_fd);
   s_catalog_fd = fs_open(CAPPRUN_CATALOG, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
 
@@ -461,7 +474,7 @@ void capprun_catalog_begin(uint32_t stamp) {
   free(s_idx_old);
   s_idx_old = NULL;
   s_idx_body = NULL;
-  if (s_idx_live && fs_stat(APPIDX_PATH, &st) == 0 && st.size > 0 &&
+  if (s_scan && s_idx_live && fs_stat(APPIDX_PATH, &st) == 0 && st.size > 0 &&
       st.size < APPIDX_READ_MAX && (s_idx_old = malloc(st.size + 1)) != NULL) {
     fd = fs_open(APPIDX_PATH, FS_O_READ);
     n = fd >= 0 ? fs_read(fd, s_idx_old, st.size) : -1;
@@ -470,6 +483,7 @@ void capprun_catalog_begin(uint32_t stamp) {
     s_idx_body = appidx_body(s_idx_old, key);
   }
 
+  if (!s_scan) { s_idx_ok = 0; return; }   /* no index written without the buffers */
   n = appidx_header(head, sizeof head, key);
   s_idx_fd = fs_open(APPIDX_TMP, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
   s_idx_ok = s_idx_fd >= 0 && n > 0 && fs_write(s_idx_fd, head, (size_t)n) == n;
@@ -482,6 +496,8 @@ void capprun_catalog_end(void) {
   free(s_idx_old);
   s_idx_old = NULL;
   s_idx_body = NULL;
+  free(s_scan);
+  s_scan = NULL;
   if (s_idx_fd < 0) return;
   fs_close(s_idx_fd);
   s_idx_fd = -1;
@@ -497,10 +513,9 @@ void capprun_catalog_end(void) {
 
 /* One app's record into the index being written. */
 static void idx_write(const Entry *e, uint32_t size, uint32_t mtime, const char *cmds) {
-  static char line[1400];
   AppIdxRec r;
   int n;
-  if (s_idx_fd < 0 || !s_idx_ok || !mtime) return;
+  if (!s_scan || s_idx_fd < 0 || !s_idx_ok || !mtime) return;
   memset(&r, 0, sizeof r);
   r.size = size;
   r.mtime = mtime;
@@ -508,9 +523,9 @@ static void idx_write(const Entry *e, uint32_t size, uint32_t mtime, const char 
   memcpy(r.icon, e->icon, sizeof r.icon);
   snprintf(r.path, sizeof r.path, "%s", e->path);
   snprintf(r.name, sizeof r.name, "%s", e->name);
-  n = appidx_record(line, sizeof line, &r, cmds);
+  n = appidx_record(s_scan->line, sizeof s_scan->line, &r, cmds);
   /* Too big to remember is not an error: that one app is loaded next time. */
-  if (n > 0 && fs_write(s_idx_fd, line, (size_t)n) != n) s_idx_ok = 0;
+  if (n > 0 && fs_write(s_idx_fd, s_scan->line, (size_t)n) != n) s_idx_ok = 0;
 }
 
 /* The app's name in the catalog is its file's, "todo" for .../todo.capp --
@@ -532,10 +547,11 @@ static void catalog_add(const char *path, const CappInfo *info) {
     n = strlen(line);
     line[n++] = '\n';
     if (s_catalog_fd >= 0) fs_write(s_catalog_fd, line, n);
-    if (s_idx_cmds_len + n < sizeof s_idx_cmds) {
-      memcpy(s_idx_cmds + s_idx_cmds_len, line, n);
+    if (!s_scan) continue;                 /* not in a scan: no record to make */
+    if (s_idx_cmds_len + n < sizeof s_scan->cmds) {
+      memcpy(s_scan->cmds + s_idx_cmds_len, line, n);
       s_idx_cmds_len += n;
-      s_idx_cmds[s_idx_cmds_len] = 0;
+      s_scan->cmds[s_idx_cmds_len] = 0;
     } else {
       s_idx_cmds_full = 1;
     }
@@ -626,13 +642,16 @@ static int load_entry(const char *path, int transient, int keep) {
 int capprun_load(const char *path) { return load_entry(path, 0, 0); }
 
 int capprun_scan_load(const char *path, uint32_t size, uint32_t mtime) {
-  static char cmds[sizeof s_idx_cmds];
   AppIdxRec r;
   int i;
 
+  if (!s_scan) return load_entry(path, 0, 0);   /* no buffers: no index either */
+
   /* Remembered, and the file has not changed since: the entry, without the
    * load. */
-  if (s_idx_body && appidx_find(s_idx_body, path, size, mtime, &r, cmds, sizeof cmds)) {
+  if (s_idx_body && appidx_find(s_idx_body, path, size, mtime, &r, s_scan->found,
+                                sizeof s_scan->found)) {
+    const char *cmds = s_scan->found;
     for (i = 0; i < CAPPRUN_APPS; i++) if (!s_entry[i].used) break;
     if (i < CAPPRUN_APPS) {
       Entry *e = &s_entry[i];
@@ -649,10 +668,10 @@ int capprun_scan_load(const char *path, uint32_t size, uint32_t mtime) {
   }
 
   s_idx_cmds_len = 0;
-  s_idx_cmds[0] = 0;
+  s_scan->cmds[0] = 0;
   s_idx_cmds_full = 0;
   i = load_entry(path, 0, 0);
-  if (i >= 0 && !s_idx_cmds_full) idx_write(&s_entry[i], size, mtime, s_idx_cmds);
+  if (i >= 0 && !s_idx_cmds_full) idx_write(&s_entry[i], size, mtime, s_scan->cmds);
   return i;
 }
 
