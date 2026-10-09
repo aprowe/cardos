@@ -8,6 +8,7 @@
 #include "kernel/sys/agent.h"
 #include "kernel/sys/env.h"
 #include "kernel/drv/mic.h"
+#include "kernel/sys/audio.h"
 #include "kernel/drv/display.h"
 #include "kernel/net/http.h"
 #include "kernel/net/update.h"
@@ -177,6 +178,36 @@ static void send_and_act(int to) {
   }
 }
 
+/* ---- the audio is shared ---------------------------------------------------
+ *
+ * G43 is the mic's clock and the speaker's LRCLK, and an app may be using
+ * either through kernel/sys/audio.c. A hold during music STOPS THE MUSIC
+ * first: the button is the one thing a person reaches for to talk to the
+ * machine, and refusing it because a song is on is the wrong way round.
+ * (Pausing would keep the channel -- and G43 -- up.) A hold during an
+ * app's recording (Memo, Noodle) is refused with a word on screen: two
+ * recordings cannot share the one mic, and the app's is the one that was
+ * asked for first. */
+static int take_audio(void) {
+  int waited = 0;
+  if (audio_state() == AUDIO_PLAYING) {
+    audio_stop();
+    while (audio_state() != AUDIO_IDLE && waited < 1000) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+      waited += 10;
+    }
+  }
+  if (audio_claim("the voice button") == 0) return 0;
+  {
+    const char *who = audio_holder();
+    snprintf(s_status, sizeof s_status, "the mic is busy (%s)", who ? who : "in use");
+  }
+  overlay_result(s_status);
+  vTaskDelay(pdMS_TO_TICKS(1500));
+  overlay_close();
+  return -1;
+}
+
 static void voice_to(int max_ms, int hold, int to);
 
 void voice_once(int max_ms, int hold) { voice_to(max_ms, hold, TO_TYPE); }
@@ -187,6 +218,7 @@ static void voice_to(int max_ms, int hold, int to) {
   /* Recording first, the network after. It used to join WiFi before
    * listening, so a sentence waited up to twenty seconds for a radio -- and
    * a tap, which is how a memo starts, would have too. */
+  if (take_audio() != 0) return;
   s_recording = 1;
   s_level = 0;
   s_press_ms = now_ms();
@@ -194,6 +226,7 @@ static void voice_to(int max_ms, int hold, int to) {
   bytes = mic_record_wav(WAV_PATH, max_ms, hold ? stop_cb : (int (*)(void))0,
                          level_cb);
   s_recording = 0;
+  audio_release();                     /* the upload needs no audio */
 
   /* A tap: the first half of tap-then-hold. Nothing to say and nothing to
    * send; the next press decides. */
@@ -282,6 +315,7 @@ static void memo_once(void) {
   }
   name = strrchr(path, '/') + 1;
 
+  if (take_audio() != 0) return;
   s_recording = 1;
   s_level = 0;
   s_press_ms = now_ms();
@@ -289,6 +323,7 @@ static void memo_once(void) {
   overlay_memo(0, 0);
   bytes = mic_record_wav(path, MIC_HARD_MAX_MS, stop_cb, memo_level_cb);
   s_recording = 0;
+  audio_release();
 
   /* A tap: the first half of tap-then-hold, not a memo. */
   if (g0_release(&s_g0, now_ms() - s_press_ms, now_ms())) {

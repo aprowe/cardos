@@ -9,8 +9,10 @@
  * that has no reason to own that code.
  *
  * G43 is shared with the speaker's LRCLK, so recording and playback are
- * mutually exclusive on this hardware. kernel/drv/speaker.c calls mic_close
- * before it takes the pins, and kernel/sys/audio.c runs one or the other.
+ * mutually exclusive on this hardware. mic_record_wav holds the speaker's
+ * pin lock (speaker_pins_take) while it records, each side refuses to open
+ * beside the other, and kernel/sys/audio.c says who is using the audio
+ * (audio_claim) so voice and an app's recording or music take turns.
  */
 #ifndef CARDOS_MIC_H
 #define CARDOS_MIC_H
@@ -21,8 +23,9 @@
 #define MIC_MAX_MS   15000     /* the voice button: a sentence, 480 KB at most */
 #define MIC_HARD_MAX_MS (10 * 60 * 1000)   /* a memo: ten minutes, 19 MB, on the card */
 
-/* Take the pins and start the converter. Cheap to call repeatedly; the second
- * call is a no-op. Returns 0, or -1 if the I2S channel could not be opened. */
+/* Take the pins and start the converter. Returns 0, or -1 if the I2S channel
+ * could not be opened -- or is open already (one recorder at a time), or
+ * the speaker has G43. */
 int  mic_open(void);
 
 /* Give the pins back. Called when a recording ends, so a future speaker driver
@@ -44,8 +47,9 @@ int  mic_is_open(void);
  * nothing goes to the card. For a meter or a toy that runs for minutes, where
  * a file would be 32 KB a second of wear for nothing.
  *
- * Returns bytes of audio written (excluding the 44-byte header), or -1. With
- * no path, the bytes that were heard. */
+ * Returns bytes of audio written (excluding the 44-byte header), -1 if the
+ * mic or the card failed, or -2 if G43 is someone else's (a WAV playing, a
+ * recording already running). With no path, the bytes that were heard. */
 int  mic_record_wav(const char *path, int max_ms,
                     int (*stop)(void), void (*level)(int pct));
 

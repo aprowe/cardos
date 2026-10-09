@@ -8,7 +8,15 @@
  * the shell is one cooperative loop.
  *
  * One job at a time, and the two are exclusive by hardware anyway: G43 is
- * the mic's clock and the speaker's LRCLK. */
+ * the mic's clock and the speaker's LRCLK.
+ *
+ * WHO HAS THE AUDIO. A job here, or a claim: the voice button records from
+ * the shell, outside any job, and used to open the mic beside Music's
+ * playback (both driving G43) or beside Memo's recording (one channel, two
+ * readers, and the first to finish deleting it under the other). Now
+ * kernel/sys/voice.c claims the audio first; while it holds it, a job is
+ * refused (-1, busy), and while a job runs, the claim is. The drivers
+ * enforce the pin underneath (speaker_pins_take). */
 #ifndef CARDOS_AUDIO_H
 #define CARDOS_AUDIO_H
 
@@ -42,5 +50,13 @@ uint32_t audio_total_ms(void);
 /* Bytes recorded by the last recording, or -1 if it failed. */
 int  audio_last_bytes(void);
 const char *audio_error(void);
+
+/* The audio for someone outside a job (`who`, a static string, for
+ * messages). 0 if it is theirs now, -1 if a job is running or someone else
+ * holds it. Give it back with audio_release, from wherever. */
+int  audio_claim(const char *who);
+void audio_release(void);
+/* Who has it -- a claimant's name, "a recording", "playback" -- or NULL. */
+const char *audio_holder(void);
 
 #endif /* CARDOS_AUDIO_H */

@@ -134,7 +134,10 @@ static int open_tx(uint32_t rate, int channels) {
     },
   };
   if (s_tx) return 0;
-  mic_close();                                   /* G43 is ours now */
+  /* G43 is the mic's clock. This used to close the mic and take the pin,
+   * whoever was recording; the pin lock (speaker_pins_take) should make it
+   * impossible, and if it ever is not, refusing is the safe half. */
+  if (mic_is_open()) { fail("the mic has G43"); return -1; }
   if (i2s_new_channel(&chan, &s_tx, NULL) != ESP_OK) { fail("no I2S channel"); return -1; }
   if (i2s_channel_init_std_mode(s_tx, &std) != ESP_OK) {
     i2s_del_channel(s_tx); s_tx = NULL;
@@ -183,11 +186,26 @@ int speaker_play_wav(const char *path, int (*stop)(void),
   return speaker_play_wav_ex(path, stop, progress, NULL, NULL);
 }
 
-/* One user of the channel at a time: the audio task's WAV and blip.c's
- * sounds. A WAV waits for a blip to finish (milliseconds); a blip that finds
- * the channel taken is not made. */
+/* One user of G43 at a time: the audio task's WAV, blip.c's sounds, and
+ * the mic (mic_record_wav takes it too). A WAV waits for a blip to finish
+ * (milliseconds); a blip that finds it taken is not made. Made statically,
+ * once, under a spinlock: lazily from two tasks could have made two. */
 static SemaphoreHandle_t s_lock;
-static void need_lock(void) { if (!s_lock) s_lock = xSemaphoreCreateMutex(); }
+static StaticSemaphore_t s_lock_buf;
+static portMUX_TYPE      s_lock_mux = portMUX_INITIALIZER_UNLOCKED;
+static void need_lock(void) {
+  portENTER_CRITICAL(&s_lock_mux);
+  if (!s_lock) s_lock = xSemaphoreCreateMutexStatic(&s_lock_buf);
+  portEXIT_CRITICAL(&s_lock_mux);
+}
+
+int speaker_pins_take(int wait_ms) {
+  need_lock();
+  return xSemaphoreTake(s_lock, pdMS_TO_TICKS(wait_ms)) == pdTRUE ? 0 : -1;
+}
+void speaker_pins_give(void) { need_lock(); xSemaphoreGive(s_lock); }
+
+int speaker_is_open(void) { return s_tx != NULL; }
 
 static int play_wav_locked(const char *path, int (*stop)(void),
                            void (*progress)(uint32_t bytes),

@@ -6,8 +6,10 @@
  * with a reason rather than played as noise.
  *
  * G43 is the microphone's PDM clock as well as this LRCLK, so recording and
- * playback are mutually exclusive: speaker_play_wav closes the mic before
- * it takes the pins, and gives them back when it is done. */
+ * playback are mutually exclusive. One lock says whose the pin is --
+ * speaker_pins_take -- and the mic takes it too (mic_record_wav). Opening
+ * the channel while the mic is open is refused; it used to close the mic
+ * under whoever was recording. */
 #ifndef CARDOS_SPEAKER_H
 #define CARDOS_SPEAKER_H
 
@@ -43,6 +45,16 @@ const char *speaker_error(void);
  * played. -1 at once if the channel is in use -- for blip.c, whose sounds
  * are worth nothing late. */
 int speaker_play_pcm(const int16_t *pcm, int n, uint32_t rate);
+
+/* G43, held: 0 once it is the caller's (waiting up to wait_ms), -1 if
+ * someone else kept it. A mutex: give it back from the same task. The
+ * play functions above take it themselves; the mic's recorder takes it
+ * for as long as it records. */
+int  speaker_pins_take(int wait_ms);
+void speaker_pins_give(void);
+
+/* The channel is up (playing, or a blip). */
+int  speaker_is_open(void);
 
 /* Volume, 0..100, remembered across reboots. 60 by default; the NS4168 is
  * loud. Takes effect on the next block, so mid-playback too. */

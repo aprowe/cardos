@@ -30,6 +30,44 @@ static char              s_path[128];
 static int               s_max_ms;
 static char              s_error[48];
 
+/* Who else has the audio: the voice button, recording from the shell
+ * outside any job here. NULL when nobody. Under s_mux with s_state, so a
+ * claim and a job cannot both start. */
+static const char       *s_claim;
+static portMUX_TYPE      s_mux = portMUX_INITIALIZER_UNLOCKED;
+
+/* Make it ours for `state`, or say who has it. */
+static int take(int state) {
+  int ok;
+  portENTER_CRITICAL(&s_mux);
+  ok = s_state == AUDIO_IDLE && !s_claim;
+  if (ok) s_state = state;
+  portEXIT_CRITICAL(&s_mux);
+  return ok ? 0 : -1;
+}
+
+int audio_claim(const char *who) {
+  int ok;
+  portENTER_CRITICAL(&s_mux);
+  ok = s_state == AUDIO_IDLE && !s_claim;
+  if (ok) s_claim = who ? who : "someone";
+  portEXIT_CRITICAL(&s_mux);
+  return ok ? 0 : -1;
+}
+
+void audio_release(void) {
+  portENTER_CRITICAL(&s_mux);
+  s_claim = NULL;
+  portEXIT_CRITICAL(&s_mux);
+}
+
+const char *audio_holder(void) {
+  const char *c = s_claim;
+  if (c) return c;
+  return s_state == AUDIO_RECORDING ? "a recording" :
+         s_state == AUDIO_PLAYING ? "playback" : NULL;
+}
+
 static int  stop_cb(void) { return s_stop; }
 static int  paused_cb(void) { return s_paused; }
 static int32_t seek_cb(void) { int32_t s = s_seek; s_seek = -1; return s; }
@@ -41,7 +79,8 @@ static void record_task(void *param) {
   (void)param;
   n = mic_record_wav(s_path[0] ? s_path : NULL, s_max_ms, stop_cb, level_cb);
   s_last_bytes = n;
-  if (n < 0) snprintf(s_error, sizeof s_error, "%s", "the mic or the card refused");
+  if (n == -2) snprintf(s_error, sizeof s_error, "%s", "the mic is in use");
+  else if (n < 0) snprintf(s_error, sizeof s_error, "%s", "the mic or the card refused");
   ESP_LOGI(TAG, "recorded %d bytes to %s", n, s_path);
   s_level = -1;
   s_state = AUDIO_IDLE;
@@ -59,12 +98,12 @@ static void play_task(void *param) {
   vTaskDelete(NULL);
 }
 
-static int start(void (*task)(void *), int state, const char *name) {
+/* Called with s_state already set by take(). */
+static int start(void (*task)(void *), const char *name) {
   s_stop = 0;
   s_paused = 0;
   s_seek = -1;
   s_error[0] = 0;
-  s_state = state;
   if (xTaskCreatePinnedToCore(task, name, A_STACK, NULL, A_PRIORITY, NULL, 0) != pdPASS) {
     s_state = AUDIO_IDLE;
     snprintf(s_error, sizeof s_error, "%s", "no memory for the task");
@@ -74,28 +113,29 @@ static int start(void (*task)(void *), int state, const char *name) {
 }
 
 int audio_record(const char *path, int max_ms) {
-  if (s_state != AUDIO_IDLE) return -1;
   if (path && !*path) return -2;
+  if (take(AUDIO_RECORDING) != 0) return -1;
   snprintf(s_path, sizeof s_path, "%s", path ? path : "");   /* "" listens */
   s_max_ms = max_ms;
   s_level = 0;
   s_last_bytes = -1;
-  return start(record_task, AUDIO_RECORDING, "record");
+  return start(record_task, "record");
 }
 
 int audio_play(const char *path) {
   WavInfo w;
   const char *why = "";
-  if (s_state != AUDIO_IDLE) return -1;
+  if (take(AUDIO_PLAYING) != 0) return -1;
   if (!path || speaker_wav_info(path, &w, &why) != 0) {
     snprintf(s_error, sizeof s_error, "%s", why);
+    s_state = AUDIO_IDLE;
     return -2;
   }
   snprintf(s_path, sizeof s_path, "%s", path);
   s_total_bytes = w.data_bytes;
   s_byte_rate = w.rate * w.channels * 2;
   s_pos_bytes = 0;
-  return start(play_task, AUDIO_PLAYING, "play");
+  return start(play_task, "play");
 }
 
 void audio_stop(void) { s_stop = 1; }

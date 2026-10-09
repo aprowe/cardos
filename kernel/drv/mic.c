@@ -6,6 +6,7 @@
  * The same 16 kHz mono reaches everything above mic_open either way. */
 
 #include "kernel/drv/mic.h"
+#include "kernel/drv/speaker.h"
 #include "kernel/fs/fs.h"
 
 #include <string.h>
@@ -44,7 +45,12 @@ int mic_open(void) {
     },
   };
 
-  if (s_rx) return 0;
+  /* One recorder. A second used to be told 0 and read the same channel
+   * into the same static block, and the first to finish deleted the
+   * channel under the other (Memo recording, then a G0 hold). And not
+   * beside the speaker: G43 is its LRCLK. */
+  if (s_rx) { ESP_LOGW(TAG, "already recording"); return -1; }
+  if (speaker_is_open()) { ESP_LOGW(TAG, "the speaker has G43"); return -1; }
 
   if (i2s_new_channel(&chan, NULL, &s_rx) != ESP_OK) {
     ESP_LOGE(TAG, "i2s_new_channel failed");
@@ -144,8 +150,25 @@ static int loudness(const int16_t *s, int n) {
   return peak * 100 / 32768;
 }
 
+static int record_locked(const char *path, int max_ms,
+                         int (*stop)(void), void (*level)(int pct));
+
+/* G43 for the whole recording: the speaker's lock is the pin's. A blip
+ * still sounding is waited out (a few tens of milliseconds); a WAV playing
+ * is not, and the answer is -2 -- kernel/sys/audio.c decides who goes
+ * first, this only refuses to share. */
 int mic_record_wav(const char *path, int max_ms,
                    int (*stop)(void), void (*level)(int pct)) {
+  int n;
+  if (speaker_pins_take(300) != 0) { ESP_LOGW(TAG, "G43 is in use"); return -2; }
+  n = record_locked(path, max_ms, stop, level);
+  speaker_pins_give();
+  return n;
+}
+
+static int record_locked(const char *path, int max_ms,
+                         int (*stop)(void), void (*level)(int pct)) {
+  /* Static, and safe so: one recording at a time, under the pin lock. */
   static int16_t block[BLOCK_SAMPLES];
   uint8_t header[44];
   uint32_t total = 0;
