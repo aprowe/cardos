@@ -31,6 +31,7 @@
 #include "kernel/ui/help.h"
 #include "kernel/ui/appsearch.h"
 #include "kernel/ui/picker.h"
+#include "kernel/ui/apphost.h"
 #include "kernel/ui/icons_builtin.h"
 #include "kernel/sys/hotkeys.h"
 #include "kernel/sys/clock.h"
@@ -76,7 +77,12 @@ static char     s_note[48];
 /* The app currently running fullscreen, or NULL for the carousel. */
 static const AppDef *s_app;
 static int            s_app_dirty;
-static int            s_app_clear;    /* the screen still has the carousel on it */
+/* How the next paint of it came about: AH_FULL and friends (apphost.h). The
+ * carousel is still on the panel when an app opens, and help or the picker
+ * was over it when they close: a whole repaint, composed off the panel, and
+ * the surround outside a smaller app's rect. Never a white fill of the app's
+ * rect first -- that was the white frame between the carousel and the app. */
+static int            s_app_how;
 static int            s_help;         /* the key list is over everything */
 static int            s_binding;      /* k was pressed: the next letter binds */
 static int            s_pointer_on;   /* a mouse has moved: there is a cursor */
@@ -419,54 +425,10 @@ static Rect s_extra;
 static int  s_has_extra;
 
 static void paint_app(int asked) {
-  /* Read before the clearing below resets it: a frame that clears the screen
-   * has to be a whole repaint, whatever the app thinks changed. */
-  int cleared = s_app_clear;
-
-  /* The carousel is still on the panel when an app opens, and an app that does
-   * not cover every pixel would otherwise be drawn on top of it. Clearing is
-   * done once on entry rather than every frame: doing it per frame would make
-   * anything that repaints itself flicker. */
-  if (s_app_clear) {
-    s_app_clear = 0;
-    draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-    draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
-    draw_rect(s_app_rect, C_WHITE);
-    if (s_app_rect.w < DISPLAY_W || s_app_rect.h < DISPLAY_H)
-      draw_frame(rect_inset(s_app_rect, -1), C_SHADOW);
-  }
-
-  /* Clipped to its own rectangle, so an app that draws past its declared size
-   * cannot scribble over the surround it does not own -- and narrowed further
-   * to whatever the app says actually changed.
-   *
-   * This is what stops a keypress redrawing a whole screen. Until an app
-   * marks damage it gets its full rectangle, exactly as before, so nothing
-   * written before this notices; an app that marks a row gets a row, and the
-   * drawing it does outside that row costs a clip test each rather than a
-   * blit. A full clear is still available to the shell -- s_app_clear -- for
-   * the cases where the app genuinely cannot know what is underneath. */
-  {
-    Rect area = s_app_rect;
-    Rect want;
-    int marked = s_app->take_damage && s_app->take_damage(s_app->state, &want);
-    if (!cleared && marked) {
-      Rect vis = rect_intersect(want, s_app_rect);
-      if (!rect_is_empty(vis)) area = vis;
-    }
-    /* Something the shell put over the app went away (launchui_damage):
-     * that too, and only that if the app itself asked for nothing. */
-    if (!cleared && s_has_extra) {
-      Rect ex = rect_intersect(s_extra, s_app_rect);
-      if (!asked) area = marked ? rect_union(area, ex) : ex;
-      else if (!rect_equals(area, s_app_rect)) area = rect_union(area, ex);
-    }
-    s_has_extra = 0;
-    if (rect_is_empty(area)) { draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H)); return; }
-    draw_set_clip(area);
-  }
-  if (s_app->paint) s_app->paint(s_app->state, s_app_rect);
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  int how = s_app_how | (asked ? AH_ASKED : 0);
+  s_app_how = 0;
+  apphost_paint(s_app, s_app_rect, how, s_has_extra ? &s_extra : NULL);
+  s_has_extra = 0;
 }
 
 /* The shell's own keys, appended under the app's. Two lists rather than one so
@@ -583,7 +545,9 @@ void launchui_damage(Rect r) {
 }
 
 void launchui_repaint(void) {
-  if (s_app) s_app_dirty = 1;
+  /* All of it: whatever asked (a banner going, an alarm, a panel) was over
+   * the app, and the app's own damage knows nothing about it. */
+  if (s_app) { s_app_dirty = 1; s_app_how |= AH_FULL | AH_SURROUND; }
   else s_dirty = 1;
   flush();
 }
@@ -686,10 +650,10 @@ static void launch_with(int i, const char *args) {
     start_app(ic->slot, ic->name, args);
     if (!capprun_is_app(ic->slot)) { said_why(ic->name); return; }
     a = capprun_def(ic->slot);
-    if (!a) return;
+    if (!a) { flush(); return; }
   } else {
     a = icon_app(i);
-    if (!a) return;
+    if (!a) { flush(); return; }
     if (a->open) a->open(a->state);
     if (args && *args && a->set_args) a->set_args(a->state, args);
   }
@@ -698,7 +662,7 @@ static void launch_with(int i, const char *args) {
    * desktop behind it for a window to sit on. */
   s_app = a;
   s_app_rect = app_rect(a);
-  s_app_clear = 1;
+  s_app_how = AH_FULL | AH_SURROUND | AH_OPENED;
   s_app_dirty = 1;
   flush();
 }
@@ -830,16 +794,15 @@ static void move(int delta) {
  * at should still be there afterwards. Conflating the two meant the line after
  * "cat foo" was typed into the carousel. */
 static void enter(void) {
-  int here = ui_shell() == UI_LAUNCHER;
   ui_set_shell(UI_LAUNCHER);
   mouse_init(DISPLAY_W, DISPLAY_H);
   s_note[0] = 0;
   s_binding = 0;
   s_dirty = 1;
   draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-  /* From another shell the screen is someone else's; from the launcher the
-   * app about to paint covers it, and a fill first is a flash. */
-  if (!here) draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
+  /* No fill, from another shell either: what paints next covers the whole
+   * panel -- the carousel and its bar, or an app with its surround, both
+   * composed off the panel -- and a fill first was a teal flash. */
 }
 
 /* The icon list, loaded if it is not already. Not reloaded on every run: a
@@ -890,7 +853,7 @@ static void host(const AppDef *a) {
   if (s_app && s_app != a) capprun_release(s_app);
   s_app = a;
   s_app_rect = app_rect(a);
-  s_app_clear = 1;
+  s_app_how = AH_FULL | AH_SURROUND | AH_OPENED;
   s_app_dirty = 1;
   flush();
 }
@@ -1048,7 +1011,7 @@ int launchui_key(uint8_t key) {
    * one specific key is a panel you fight. */
   if (s_help) {
     s_help = 0;
-    if (s_app) { s_app_dirty = 1; s_app_clear = 1; }
+    if (s_app) { s_app_dirty = 1; s_app_how |= AH_FULL | AH_SURROUND; }
     else s_dirty = 1;
     flush();
     return 0;
@@ -1066,7 +1029,7 @@ int launchui_key(uint8_t key) {
       uint8_t arrow = keyboard_arrow_for(key);
       if (arrow) key = arrow;
     }
-    if (picker_key(key, s_now_ms)) { s_app_dirty = 1; s_app_clear = 1; }
+    if (picker_key(key, s_now_ms)) { s_app_dirty = 1; s_app_how |= AH_FULL | AH_SURROUND; }
     flush();
     return 0;
   }
@@ -1280,7 +1243,7 @@ void launchui_mouse_apply(const MouseReport *r) {
   if (s_app && picker_active()) {
     s_pointer_on = 1;
     if (btn && picker_click((int16_t)mouse_x(), (int16_t)mouse_y(), btn)) {
-      s_app_dirty = 1; s_app_clear = 1;
+      s_app_dirty = 1; s_app_how |= AH_FULL | AH_SURROUND;
     }
     if (wheel) picker_wheel(wheel > 0 ? -1 : 1);
     flush();

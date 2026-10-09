@@ -36,6 +36,7 @@ idf_component_register(
     "../kernel/ui/appsearch.c"
     "../kernel/ui/pins.c"
     "../kernel/ui/launchui.c"
+    "../kernel/ui/apphost.c"
     "../kernel/ui/shell.c"
     "../kernel/ui/help.c"
     "../kernel/ui/pickmodel.c"

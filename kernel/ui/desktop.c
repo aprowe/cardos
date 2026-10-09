@@ -15,6 +15,7 @@
 #include "kernel/ui/shell.h"
 #include "kernel/ui/help.h"
 #include "kernel/ui/picker.h"
+#include "kernel/ui/apphost.h"
 #include "kernel/drv/bthid.h"
 #include "kernel/sys/clock.h"
 #include "esp_timer.h"
@@ -60,7 +61,9 @@ static int   s_nwin;
  * picture viewer worth having on a 240x135 screen. */
 static const AppDef *s_full;
 static int s_full_dirty;
-static int s_full_clear;     /* the desktop is still on the panel underneath */
+/* How the fullscreen app's next paint came about (AH_* in apphost.h): it
+ * opened over the desktop, or help or the picker covered it. */
+static int s_full_how;
 static Rect s_full_rect;
 
 /* The pointer can also ask to leave for the console, and a mouse handler has
@@ -635,43 +638,15 @@ static Rect s_extra;
 static int  s_has_extra;
 
 static void paint_fullscreen(void) {
-  int cleared, asked = s_full_dirty;
+  int asked = s_full_dirty, how;
   if (!asked && !s_has_extra) return;
   s_full_dirty = 0;
-  cleared = s_full_clear;
-
-  /* The desktop is still on the panel when an app takes it over, and an app
-   * that does not cover every pixel would otherwise be drawn on top of it.
-   * Once on entry, not per frame: per frame would flicker. */
-  if (s_full_clear) {
-    s_full_clear = 0;
-    draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
-    draw_rect(R(0, 0, DISPLAY_W, DISPLAY_H), C_DESKTOP);
-    draw_rect(s_full_rect, C_WHITE);
-    if (s_full_rect.w < DISPLAY_W || s_full_rect.h < DISPLAY_H)
-      draw_frame(rect_inset(s_full_rect, -1), C_SHADOW);
-  }
-
-  /* Narrowed to what the app says changed, when it says. The same mechanism
-   * the launcher uses; see AppDef.take_damage. */
-  {
-    Rect area = s_full_rect, want;
-    int marked = s_full->take_damage && s_full->take_damage(s_full->state, &want);
-    if (!cleared && marked) {
-      Rect vis = rect_intersect(want, s_full_rect);
-      if (!rect_is_empty(vis)) area = vis;
-    }
-    if (!cleared && s_has_extra) {
-      Rect ex = rect_intersect(s_extra, s_full_rect);
-      if (!asked) area = marked ? rect_union(area, ex) : ex;
-      else if (!rect_equals(area, s_full_rect)) area = rect_union(area, ex);
-    }
-    s_has_extra = 0;
-    if (rect_is_empty(area)) { draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H)); return; }
-    draw_set_clip(area);
-  }
-  if (s_full->paint) s_full->paint(s_full->state, s_full_rect);
-  draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H));
+  how = s_full_how | (asked ? AH_ASKED : 0);
+  s_full_how = 0;
+  /* The same function the launcher paints its app with: a full repaint
+   * off the panel, damage direct, the surround outside a smaller app. */
+  apphost_paint(s_full, s_full_rect, how, s_has_extra ? &s_extra : NULL);
+  s_has_extra = 0;
 }
 
 void desktop_flush(void) {
@@ -726,7 +701,12 @@ void desktop_damage(Rect r) {
 }
 
 void desktop_repaint(void) {
-  if (s_full) { s_full_dirty = 1; desktop_flush(); return; }
+  if (s_full) {
+    s_full_dirty = 1;
+    s_full_how |= AH_FULL | AH_SURROUND;   /* help, the picker, a panel: over all of it */
+    desktop_flush();
+    return;
+  }
   wm_damage(R(0, 0, DISPLAY_W, DISPLAY_H));
   desktop_flush();
 }
@@ -824,7 +804,7 @@ static void launch_icon_index(int idx) {
     if (a->pref_h > 0 && a->pref_h < h) h = a->pref_h;
     s_full = a;
     s_full_rect = R((DISPLAY_W - w) / 2, (DISPLAY_H - h) / 2, w, h);
-    s_full_clear = 1;
+    s_full_how = AH_FULL | AH_SURROUND | AH_OPENED;
     s_full_dirty = 1;
     desktop_flush();
     return;
@@ -976,7 +956,7 @@ static void toggle_fullscreen(void) {
     if (a->pref_h > 0 && a->pref_h < h) h = a->pref_h;
     s_full = a;
     s_full_rect = R((DISPLAY_W - w) / 2, (DISPLAY_H - h) / 2, w, h);
-    s_full_clear = 1;
+    s_full_how = AH_FULL | AH_SURROUND | AH_OPENED;
     s_full_dirty = 1;
     desktop_flush();
   }

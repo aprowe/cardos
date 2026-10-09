@@ -1218,4 +1218,9 @@ const AppDef *capprun_def(int slot) {
   return &e->run->def;
 }
 
+int capprun_paint_direct(const AppDef *a) {
+  Run *s = run_of(a);
+  return s && (s->flags & CAPP_PAINT_DIRECT) != 0;
+}
+
 uint32_t capprun_exec_free(void) { return capp_exec_free(); }
