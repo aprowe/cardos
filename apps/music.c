@@ -17,6 +17,7 @@
 #include "kernel/app/capp.h"
 #include "apps/footer.h"
 #include "apps/safefile.h"
+#include "apps/syncset.h"
 
 static const CardApi *api;
 static const CappAudio *au;
@@ -343,14 +344,15 @@ static int on_data(void *ctx, const uint8_t *d, int n) {
 static void sync_run(void) {
   static char ids[MAXT][12], titles[MAXT][TITLE];
   static uint32_t ms[MAXT], bytes[MAXT];
-  char url[160], path[64], part[64];
+  char url[160], path[64], part[64], was[IDL];
   const char *p;
-  int r, n = 0, i, j, fetched = 0, missing = 0;
+  int r, n = 0, i, j, fetched = 0, missing = 0, whole, kept;
 
   if (!api->net_ready() && api->net_connect(15000) != 0) { say(0, "offline: playing what is here"); mark_all(); return; }
   api->fmt(url, sizeof url, "%s/music", api->proxy());
   r = api->http("GET", url, 0, 0, "", M.reply, sizeof M.reply, 15000);
   if (r < 0 || (M.reply[0] == 'e' && M.reply[1] == 'r')) { say(1, "the server did not answer"); mark_all(); return; }
+  whole = sync_reply(M.reply, r, (int)sizeof M.reply);
   for (p = M.reply; *p && n < MAXT; p = next_line(p)) {
     char num[16];
     field(p, 0, ids[n], sizeof ids[n]);
@@ -359,10 +361,15 @@ static void sync_run(void) {
     field(p, 3, num, sizeof num); bytes[n] = (uint32_t)to_num(num);
     if (ids[n][0]) n++;
   }
-  /* Gone from the server: gone from here (not the one playing). */
-  for (i = 0; i < M.n; i++) {
-    for (j = 0; j < n; j++) if (same(M.id[i], ids[j])) break;
-    if (j == n && i != M.playing && !M.local[i]) { path_of(i, path, sizeof path); api->remove(path); }
+  /* Gone from the server: gone from here (not the one playing) -- but only
+   * against the whole list. One that filled the reply, or ran to MAXT, is
+   * not all of it, and what it leaves out stays (apps/syncset.h). */
+  if (sync_may_delete(whole, n, MAXT)) {
+    for (i = 0; i < M.n; i++) {
+      if (M.local[i] || i == M.playing || sync_listed(M.id[i], &ids[0][0], n, (int)sizeof ids[0])) continue;
+      path_of(i, path, sizeof path);
+      api->remove(path);
+    }
   }
   api->mkdir(DIR);
   /* The rest, each streamed to NAME.part and renamed only when whole. */
@@ -390,9 +397,26 @@ static void sync_run(void) {
     api->rename(part, path);
     fetched++;
   }
-  /* The list is the server's, as far as the card has it. */
-  M.n = 0;
-  for (j = 0; j < n; j++) {
+  /* The list is the server's, as far as the card has it -- and with a
+   * partial list, the tracks it did not mention that are still here. The
+   * order changes, so the one playing is found again by its id. */
+  was[0] = 0;
+  if (M.playing >= 0 && M.playing < M.n) api->fmt(was, sizeof was, "%s", M.id[M.playing]);
+  kept = 0;
+  if (!sync_may_delete(whole, n, MAXT)) {
+    for (i = 0; i < M.n && n + kept < MAXT; i++) {
+      if (M.local[i] || sync_listed(M.id[i], &ids[0][0], n, (int)sizeof ids[0])) continue;
+      if (kept != i) {
+        api->mem_cpy(M.id[kept], M.id[i], sizeof M.id[0]);
+        api->mem_cpy(M.title[kept], M.title[i], sizeof M.title[0]);
+        M.ms[kept] = M.ms[i];
+      }
+      M.local[kept] = 0;
+      kept++;
+    }
+  }
+  M.n = kept;
+  for (j = 0; j < n && M.n < MAXT; j++) {
     CappStat st;
     api->fmt(path, sizeof path, DIR "/%s.wav", ids[j]);
     if (api->stat(path, &st) != 0) continue;
@@ -405,7 +429,10 @@ static void sync_run(void) {
   index_save();
   add_local();
   if (M.sel >= M.n) M.sel = M.n ? M.n - 1 : 0;
-  if (M.playing >= M.n) M.playing = -1;
+  if (M.playing >= 0) {
+    M.playing = -1;
+    for (i = 0; i < M.n && was[0]; i++) if (same(M.id[i], was)) { M.playing = i; break; }
+  }
   if (M.cancelled) say(0, "sync stopped: r to go on");
   else if (!M.bad) say(0, fetched ? (fetched == 1 ? "1 new track" : "new tracks") : "");
   if (!M.bad && fetched > 1) api->fmt(M.status, sizeof M.status, "%d new tracks", fetched);
