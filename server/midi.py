@@ -22,7 +22,6 @@ import sys
 import threading
 import time
 
-from . import notes
 
 FORMAT = r"""You write songs for a tiny MIDI sequencer. Output ONLY the song, in this
 exact text format, inside one ```song fenced block, and nothing else.
@@ -156,8 +155,6 @@ def _run(jid, chat, request):
 
 def post_compose(h, path, args):
     """ask Claude for a song; the id to ask after"""
-    if not notes._allowed(h):
-        return
     request = h.body(16000).decode("utf-8", "replace").strip()
     if not request:
         h.text("error what should it write?\n", 400)
@@ -174,8 +171,6 @@ def post_compose(h, path, args):
 
 def get_compose(h, path, args):
     """the song, once it is written"""
-    if not notes._allowed(h):
-        return
     jid = (args.get("id") or [""])[0]
     with _lock:
         job = _jobs.get(jid)
@@ -192,6 +187,6 @@ def get_compose(h, path, args):
 
 
 ROUTES = [
-    ("POST", "/midi/compose", post_compose, "open"),
-    ("GET", "/midi/compose", get_compose, "open"),
+    ("POST", "/midi/compose", post_compose, "device_or_dash"),
+    ("GET", "/midi/compose", get_compose, "device_or_dash"),
 ]

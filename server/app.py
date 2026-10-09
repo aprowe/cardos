@@ -12,13 +12,16 @@ and a route function takes (handler, path, args). This file owns only what
 every route shares: dispatch, the token, the error line a crashed route still
 owes the device, and the helpers for writing a reply.
 
-A route is behind the token unless its tuple says "open", and an open route
-checks for itself when it has something worth protecting -- /render shows the
-banner to anyone but renders only for the device.
+A route is behind the token unless its tuple says otherwise (the kinds are
+in server/routes.py): "device_or_dash" also takes the dashboard's cookie,
+"dash" takes only the cookie, "admin" is the token and the owner, and an
+"open" route checks for itself when it has something worth protecting --
+/render shows the banner to anyone but renders only for the device.
 
 Run it with `python -m server`; see __main__.py for the flags.
 """
 import hmac
+import json
 import os
 import sys
 import traceback
@@ -239,6 +242,39 @@ class Handler(BaseHTTPRequestHandler):
         self.text("unauthorised\n", 403)
         return False
 
+    def device_or_dash(self):
+        """The device's bearer or the dashboard's cookie; a 403 otherwise.
+
+        Without accounts this takes only "Authorization: Bearer", not the
+        X-Token spelling authorised() also reads -- as it always has."""
+        if dash.logged_in(self):
+            return True
+        tok = self.chat.token if self.chat else None
+        if not tok:
+            return True
+        if accounts.enabled():
+            return self.authorised()               # says whose, or answers 403
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and hmac.compare_digest(tok, auth[7:]):
+            return True
+        self.text("error signed out\n", 403)
+        return False
+
+    def dash_signed_in(self):
+        """The dashboard's cookie, never the bearer. Refusals are JSON, which
+        the page reads: a 403 sends it to sign in."""
+        if not dash.password() or not dash._server_token(self):
+            self.json({"error": "the dashboard needs --token and DASH_PASSWORD"}, 503)
+            return False
+        if not dash.logged_in(self):
+            self.json({"error": "signed out"}, 403)
+            return False
+        return True
+
+    def json(self, obj, code=200, headers=()):
+        self._send(code, "application/json", json.dumps(obj),
+                   (("Cache-Control", "no-store"),) + tuple(headers))
+
     def update_files(self, flavor=updates.DEFAULT_FLAVOR):
         """(firmware, apps_dir) that /update serves for a flavor."""
         if self.store:
@@ -272,7 +308,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             fn, auth = found
             accounts.set_current(None)          # nobody, until a token or cookie says
-            if auth != "open" and not self.authorised():
+            if auth == "device_or_dash":
+                if not self.device_or_dash():
+                    return
+            elif auth == "dash":
+                if not self.dash_signed_in():
+                    return
+            elif auth != "open" and not self.authorised():
                 return
             # The repo-editing agent and its builds are the owner's alone.
             if auth == "admin" and not accounts.is_admin():

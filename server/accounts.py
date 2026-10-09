@@ -13,7 +13,7 @@ owner-only on disk, like google.json beside it. A device from before that
 has only its hash, until it is given a new token.
 
 A request is somebody's once its token or cookie has been checked
-(app.Handler.authorised, notes._allowed, dash.logged_in): current() is
+(app.Handler.authorised and device_or_dash, dash.logged_in): current() is
 that user for the rest of it. user_dir() is where that user's files are.
 
 Without an accounts.json the server is one person, as it always was:

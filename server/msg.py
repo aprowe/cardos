@@ -18,7 +18,7 @@ import os
 import threading
 import time
 
-from . import accounts, dash, notes, store
+from . import accounts, dash, store
 
 KEEP = 500
 SHOW = 40
@@ -66,8 +66,6 @@ def since(sid, most=SHOW):
 
 def get_msg(h, path, args):
     """the messages after ?since=ID"""
-    if not notes._allowed(h):
-        return
     try:
         sid = int((args.get("since") or ["0"])[0])
         most = max(1, min(SHOW, int((args.get("max") or [str(SHOW)])[0])))
@@ -78,8 +76,6 @@ def get_msg(h, path, args):
 
 def post_msg(h, path, args):
     """a message from ?name=, the text in the body"""
-    if not notes._allowed(h):
-        return
     text = h.body(TEXT_MAX * 4).decode("utf-8", "replace")
     try:
         mid = post((args.get("name") or [""])[0], text)
@@ -126,8 +122,6 @@ def get_notify_poll(h, path, args):
     -- a device that has never asked -- it is only told where the room is,
     so its first poll is not every message ever sent. Other sources can add
     their own lines here later; the device ignores kinds it does not know."""
-    if not notes._allowed(h):
-        return
     try:
         sid = int((args.get("chat") or ["-1"])[0])
         nid = int((args.get("note") or ["-1"])[0])
@@ -153,7 +147,7 @@ def get_notify_poll(h, path, args):
 
 
 ROUTES = [
-    ("GET", "/notify/poll", get_notify_poll, "open"),
-    ("GET", "/msg", get_msg, "open"),
-    ("POST", "/msg", post_msg, "open"),
+    ("GET", "/notify/poll", get_notify_poll, "device_or_dash"),
+    ("GET", "/msg", get_msg, "device_or_dash"),
+    ("POST", "/msg", post_msg, "device_or_dash"),
 ]

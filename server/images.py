@@ -26,7 +26,6 @@ import struct
 import threading
 import time
 
-from . import notes
 
 MAX_IN = 16 << 20
 MAX_W, MAX_H = 320, 240
@@ -95,8 +94,6 @@ def _octets(h, data):
 
 def post_convert(h, path, args):
     """a JPG or PNG, as a picture the device shows"""
-    if not notes._allowed(h):
-        return
     try:
         w, ht, fit, fmt = _args(args)
         out, ow, oh = convert(h.body(MAX_IN), w, ht, fit, fmt)
@@ -117,8 +114,6 @@ def post_convert(h, path, args):
 
 def get_result(h, path, args):
     """a kept conversion, fetched once"""
-    if not notes._allowed(h):
-        return
     nid = (args.get("id") or [""])[0]
     with _lock:
         got = _kept.pop(nid, None)
@@ -129,8 +124,8 @@ def get_result(h, path, args):
 
 
 ROUTES = [
-    ("POST", "/image/convert", post_convert, "open"),
-    ("GET", "/image/result", get_result, "open"),
+    ("POST", "/image/convert", post_convert, "device_or_dash"),
+    ("GET", "/image/result", get_result, "device_or_dash"),
     # Under /dash as well: on the public name nginx passes only /dash*.
-    ("POST", "/dash/image/convert", post_convert, "open"),
+    ("POST", "/dash/image/convert", post_convert, "device_or_dash"),
 ]

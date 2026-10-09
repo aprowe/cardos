@@ -28,7 +28,7 @@ import sys
 import threading
 import time
 
-from . import midi, notes
+from . import midi
 
 DOC_MAX = 24000
 SAY_MAX = 2000
@@ -146,8 +146,6 @@ def _session(args):
 
 def post_start(h, path, args):
     """a document to talk about; the session id"""
-    if not notes._allowed(h):
-        return
     doc = h.body(DOC_MAX).decode("utf-8", "replace")
     name = ((args.get("name") or ["document"])[0] or "document")[:80]
     kind = (args.get("kind") or ["text"])[0]
@@ -159,8 +157,6 @@ def post_start(h, path, args):
 
 def post_say(h, path, args):
     """something said about the document; poll for the answer"""
-    if not notes._allowed(h):
-        return
     s = _session(args)
     if not s:
         h.text("error that conversation is over\n", 404)
@@ -180,8 +176,6 @@ def post_say(h, path, args):
 
 def get_poll(h, path, args):
     """the answer, once there is one"""
-    if not notes._allowed(h):
-        return
     s = _session(args)
     if not s:
         h.text("error that conversation is over\n", 404)
@@ -201,8 +195,6 @@ def get_poll(h, path, args):
 
 def get_doc(h, path, args):
     """the latest revision of the document"""
-    if not notes._allowed(h):
-        return
     s = _session(args)
     if not s or s.revision is None:
         h.text("error no revision\n", 404)
@@ -211,8 +203,8 @@ def get_doc(h, path, args):
 
 
 ROUTES = [
-    ("POST", "/talk/start", post_start, "open"),
-    ("POST", "/talk/say", post_say, "open"),
-    ("GET", "/talk/poll", get_poll, "open"),
-    ("GET", "/talk/doc", get_doc, "open"),
+    ("POST", "/talk/start", post_start, "device_or_dash"),
+    ("POST", "/talk/say", post_say, "device_or_dash"),
+    ("GET", "/talk/poll", get_poll, "device_or_dash"),
+    ("GET", "/talk/doc", get_doc, "device_or_dash"),
 ]
