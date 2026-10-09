@@ -153,26 +153,3 @@ int rpc_parse(const char *line, RpcCmd *cmd) {
   }
   return 0;
 }
-
-const char *rpc_wake(const char *text) {
-  static const char *NAMES[] = { "carlos", "karlos", "carlus", "carlo" };
-  size_t n;
-  const char *p;
-
-  if (!text) return NULL;
-  p = skip_space(text);
-
-  for (n = 0; n < sizeof NAMES / sizeof NAMES[0]; n++) {
-    const char *w = NAMES[n];
-    const char *q = p;
-    while (*w && lower(*q) == *w) { q++; w++; }
-    if (*w) continue;
-    /* The name has to end here -- "Carlsberg" is not the wake word. */
-    if (*q && !is_space(*q) && *q != ',' && *q != '.' && *q != ':' &&
-        *q != '!' && *q != '?')
-      continue;
-    while (*q == ',' || *q == '.' || *q == ':' || *q == '!' || *q == '?') q++;
-    return skip_space(q);
-  }
-  return NULL;
-}

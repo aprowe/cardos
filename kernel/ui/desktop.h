@@ -61,12 +61,6 @@ void desktop_mouse_done(void);
 void desktop_icon_click(int16_t x, int16_t y);
 void desktop_reload_icons(void);
 
-/* Remembered across a reboot: set when the desktop launches a firmware, so
- * that the rollback after the guest is reset lands back on the desktop rather
- * than at a console the user never asked for. */
-void desktop_set_autostart(int on);
-int  desktop_autostart(void);
-
 /* Bring a band of the focused window's content into view, for an app whose
  * selection moved somewhere the window is currently scrolled away from. */
 void desktop_scroll_into_view(int16_t y, int16_t h);

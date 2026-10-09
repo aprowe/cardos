@@ -104,32 +104,6 @@ void cmd_ls(const char *arg) {
   if (n == 0) con_write("(empty)\n");
 }
 
-void cmd_cat(const char *arg) {
-  char target[FS_PATH_MAX];
-  char buf[128];
-  int fd, got, shown = 0;
-
-  if (!fs_mounted()) { err("cat", "no card mounted"); return; }
-  if (!arg || !*arg) { err("cat", "needs a filename"); return; }
-  if (resolve(arg, target) != 0) return;
-
-  fd = fs_open(target, FS_O_READ);
-  if (fd < 0) { err(arg, "cannot open"); return; }
-
-  /* A 40x16 console is not a pager. Stop at a screenful rather than scrolling
-   * a megabyte of binary past the user. */
-  while (shown < 15 * 40 && (got = fs_read(fd, buf, sizeof buf)) > 0) {
-    int i;
-    for (i = 0; i < got && shown < 15 * 40; i++) {
-      char c = buf[i];
-      con_putc((c == '\n' || (c >= 0x20 && c < 0x7F)) ? c : '.');
-      shown++;
-    }
-  }
-  fs_close(fd);
-  con_putc('\n');
-}
-
 void cmd_df(void) {
   uint64_t total = 0, freeb = 0;
   if (!fs_mounted()) { err("df", "no card mounted"); return; }

@@ -24,7 +24,6 @@ static const Pref PREFS[] = {
   { "bright",   P_U8 },     /* kernel/drv/display.c */
   { "volume",   P_U8 },     /* kernel/drv/speaker.c */
   { "shell",    P_U8 },     /* kernel/ui/shell.c */
-  { "autodesk", P_U8 },     /* kernel/ui/desktop.c */
   { "btboot",   P_U8 },     /* kernel/drv/bthid.c */
   { "pins",     P_STR },    /* kernel/ui/pins.c */
   { "dim_s",    P_U16 },    /* kernel/sys/power.c */

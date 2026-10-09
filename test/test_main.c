@@ -639,8 +639,6 @@ void test_rpc_tolerates_what_a_recogniser_produces(void);
 void test_rpc_refuses_anything_else(void);
 void test_rpc_clamps_the_brightness(void);
 void test_rpc_does_not_overflow_on_a_long_argument(void);
-void test_rpc_wake_word(void);
-void test_rpc_wake_word_alone_leaves_nothing(void);
 void test_rpc_say_is_one_line(void);
 void test_rpc_one_line_flattens_breaks(void);
 void test_created_tasks_get_distinct_live_tids(void);
@@ -1487,8 +1485,6 @@ int main(void) {
   RUN(test_rpc_refuses_anything_else);
   RUN(test_rpc_clamps_the_brightness);
   RUN(test_rpc_does_not_overflow_on_a_long_argument);
-  RUN(test_rpc_wake_word);
-  RUN(test_rpc_wake_word_alone_leaves_nothing);
   RUN(test_rpc_say_is_one_line);
   RUN(test_rpc_one_line_flattens_breaks);
   printf("-- sched --\n");

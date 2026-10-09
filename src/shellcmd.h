@@ -7,7 +7,6 @@ const char *shell_cwd(void);
 void cmd_pwd(void);
 void cmd_cd(const char *arg);
 void cmd_ls(const char *arg);
-void cmd_cat(const char *arg);
 void cmd_df(void);
 void cmd_mkdir(const char *arg);
 void cmd_rm(const char *arg);

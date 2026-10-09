@@ -60,14 +60,4 @@ int rpc_parse(const char *line, RpcCmd *cmd);
  * from a tool call rather than a line. */
 void rpc_one_line(char *s);
 
-/* The wake word.
- *
- * Returns a pointer into `text` just past the wake word and any punctuation
- * after it, or NULL if the text does not start with it. Case-insensitive, and
- * tolerant of what recognition does to a name it does not know: "Carlos",
- * "carlos,", "Carlos:" and "Karlos" all count. Recognisers hear a name they
- * have no word for and pick something close, and a wake word that only works
- * when spelled correctly is a wake word that mostly does not work. */
-const char *rpc_wake(const char *text);
-
 #endif /* CARDOS_RPC_H */

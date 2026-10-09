@@ -1112,10 +1112,7 @@ int desktop_key(uint8_t key) {
       break;
     case KEY_ENTER:
       menu_close();
-      if (s_start_sel >= s_nmenu) {
-        desktop_set_autostart(0);   /* leaving on purpose: stay at the console */
-        return 1;
-      }
+      if (s_start_sel >= s_nmenu) return 1;   /* to the console */
       launch_menu_item(s_start_sel);
       desktop_flush();
       return 0;
@@ -1334,9 +1331,6 @@ void desktop_tick(uint32_t ms) {
   desktop_flush();
 }
 
-#define NVS_NS        "cardos"
-#define NVS_AUTOSTART "autodesk"
-
 /* Bring a band of the focused window's content into view. An app calls this
  * from its key handler when it moves a selection that the window is scrolling:
  * the window system knows where the viewport is, and the app knows where the
@@ -1362,24 +1356,6 @@ void desktop_scroll_into_view(int16_t y, int16_t h) {
   else if (y + h > s_scroll[idx] + inner.h)
     s_scroll[idx] = (int16_t)(y + h - inner.h);
   clamp_scroll(idx, a, inner);
-}
-
-void desktop_set_autostart(int on) {
-  nvs_handle_t h;
-  if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-  nvs_set_u8(h, NVS_AUTOSTART, (uint8_t)(on ? 1 : 0));
-  nvs_commit(h);
-  nvs_close(h);
-  prefs_mirror();              /* and /config/settings.txt: see prefs.h */
-}
-
-int desktop_autostart(void) {
-  nvs_handle_t h;
-  uint8_t v = 0;
-  if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return 0;
-  if (nvs_get_u8(h, NVS_AUTOSTART, &v) != ESP_OK) v = 0;
-  nvs_close(h);
-  return v ? 1 : 0;
 }
 
 void desktop_init(void) {

@@ -689,7 +689,6 @@ const uint8_t *icon_bitmap(int i) {
   if (ic->kind == ICON_FIRMWARE) return ICON_FIRMWARE_;
   if (ic->kind == ICON_FOLDER)   return ICON_FOLDER_;
 
-  if (strcmp(ic->name, "Files") == 0)    return ICON_FILES;
   if (strcmp(ic->name, "Memory") == 0)   return ICON_MEMORY;
   if (strcmp(ic->name, "Settings") == 0) return ICON_SETTINGS;
   if (strcmp(ic->name, "About") == 0)    return ICON_ABOUT;
@@ -794,15 +793,9 @@ int icons_boot_firmware(int i) {
 
   if (!ic || ic->kind != ICON_FIRMWARE) return 0;
 
-  /* Remember that CardOS launched it, so that when the bootloader rolls back
-   * after the guest is reset we come straight back to the shell the user was
-   * in rather than to a console they never asked for. */
-  desktop_set_autostart(1);
-  if (launcher_check(ic->path, &info, &why) != LAUNCH_OK) {
-    desktop_set_autostart(0);
-    return 0;
-  }
+  /* The way back after the guest is reset is the shell saved in NVS
+   * (ui_saved_shell), which is the one this was launched from. */
+  if (launcher_check(ic->path, &info, &why) != LAUNCH_OK) return 0;
   launcher_boot(ic->path, NULL, NULL);    /* does not return on success */
-  desktop_set_autostart(0);
   return 0;
 }

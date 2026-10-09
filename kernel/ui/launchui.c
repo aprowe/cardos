@@ -1107,7 +1107,7 @@ int launchui_key(uint8_t key) {
     return 0;
   case KEY_QUIT:
     if (s_folder >= 0) { close_folder(); return 0; }
-    desktop_set_autostart(0); return 1;     /* to the console */
+    return 1;                               /* to the console */
 
   /* Up and down move along the row too. There is nothing else to move, and a
    * key that does nothing is worse than a duplicate. */
