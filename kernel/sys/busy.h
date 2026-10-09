@@ -36,7 +36,10 @@ void busy_begin(const char *what);
 void busy_end(void);
 
 /* How the shell is told to paint over the hole the indicator leaves. There is
- * no framebuffer to restore from, so the only way back is to redraw. */
+ * no framebuffer to restore from, so the only way back is to redraw. The
+ * launcher and the desktop are asked to repaint just the badge's rectangle
+ * (launchui_damage, desktop_damage); this is for anything else. The badge
+ * shows only once a request has run 350 ms, so most never need either. */
 void busy_on_done(void (*repaint)(void));
 
 /* Is it showing? For anything that draws and would otherwise fight it. */

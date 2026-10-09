@@ -413,7 +413,12 @@ static Rect app_rect(const AppDef *a) {
   return R((DISPLAY_W - w) / 2, (DISPLAY_H - h) / 2, w, h);
 }
 
-static void paint_app(void) {
+/* A rectangle the shell must repaint for reasons of its own -- the busy
+ * badge went -- kept apart from the app's damage. */
+static Rect s_extra;
+static int  s_has_extra;
+
+static void paint_app(int asked) {
   /* Read before the clearing below resets it: a frame that clears the screen
    * has to be a whole repaint, whatever the app thinks changed. */
   int cleared = s_app_clear;
@@ -444,11 +449,20 @@ static void paint_app(void) {
   {
     Rect area = s_app_rect;
     Rect want;
-    if (!cleared && s_app->take_damage &&
-        s_app->take_damage(s_app->state, &want)) {
+    int marked = s_app->take_damage && s_app->take_damage(s_app->state, &want);
+    if (!cleared && marked) {
       Rect vis = rect_intersect(want, s_app_rect);
       if (!rect_is_empty(vis)) area = vis;
     }
+    /* Something the shell put over the app went away (launchui_damage):
+     * that too, and only that if the app itself asked for nothing. */
+    if (!cleared && s_has_extra) {
+      Rect ex = rect_intersect(s_extra, s_app_rect);
+      if (!asked) area = marked ? rect_union(area, ex) : ex;
+      else if (!rect_equals(area, s_app_rect)) area = rect_union(area, ex);
+    }
+    s_has_extra = 0;
+    if (rect_is_empty(area)) { draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H)); return; }
     draw_set_clip(area);
   }
   if (s_app->paint) s_app->paint(s_app->state, s_app_rect);
@@ -505,9 +519,10 @@ static void flush(void) {
     return;
   }
   if (s_app) {
-    if (!s_app_dirty) return;
+    int asked = s_app_dirty;
+    if (!asked && !s_has_extra) return;
     s_app_dirty = 0;
-    paint_app();
+    paint_app(asked);
     /* Last, and every time: an app that animates repaints over the pointer
      * otherwise, and a cursor that blinks out whenever the ball moves is
      * worse than no cursor at all. */
@@ -557,6 +572,15 @@ static void paint_spinner(uint32_t ms) {
 /* The app the launcher is showing, or NULL. For anything that wants to drive
  * it without a finger -- see capprun_actions. */
 const AppDef *launchui_running(void) { return s_app; }
+
+void launchui_damage(Rect r) {
+  if (!s_app) { s_dirty = 1; flush(); return; }
+  /* Help and the picker are over the app, and are repainted whole. */
+  if (s_help || picker_active()) { s_app_dirty = 1; flush(); return; }
+  s_extra = s_has_extra ? rect_union(s_extra, r) : r;
+  s_has_extra = 1;
+  flush();
+}
 
 void launchui_repaint(void) {
   if (s_app) s_app_dirty = 1;

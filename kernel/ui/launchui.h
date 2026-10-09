@@ -34,6 +34,10 @@ int launchui_search_active(void);
 /* Repaint now, for an app that is about to block. */
 void launchui_repaint(void);
 
+/* Repaint just `r`, now: what something drawn over the shell left behind
+ * (the busy badge). An app on screen repaints its own damage and this. */
+void launchui_damage(Rect r);
+
 /* The app it is showing, or NULL. */
 const AppDef *launchui_running(void);
 

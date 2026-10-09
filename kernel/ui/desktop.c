@@ -629,9 +629,14 @@ static void paint_job(void *ctx, WinId w, Rect r) {
  * taskbar, no pointer. The compositor is not involved, so there is no damage
  * to merge and no window to clip against -- the render loop is one call into
  * the app's paint with the screen as its rectangle. */
+/* A rectangle the shell must repaint for reasons of its own -- the busy
+ * badge went -- kept apart from the fullscreen app's damage. */
+static Rect s_extra;
+static int  s_has_extra;
+
 static void paint_fullscreen(void) {
-  int cleared;
-  if (!s_full_dirty) return;
+  int cleared, asked = s_full_dirty;
+  if (!asked && !s_has_extra) return;
   s_full_dirty = 0;
   cleared = s_full_clear;
 
@@ -651,11 +656,18 @@ static void paint_fullscreen(void) {
    * the launcher uses; see AppDef.take_damage. */
   {
     Rect area = s_full_rect, want;
-    if (!cleared && s_full->take_damage &&
-        s_full->take_damage(s_full->state, &want)) {
+    int marked = s_full->take_damage && s_full->take_damage(s_full->state, &want);
+    if (!cleared && marked) {
       Rect vis = rect_intersect(want, s_full_rect);
       if (!rect_is_empty(vis)) area = vis;
     }
+    if (!cleared && s_has_extra) {
+      Rect ex = rect_intersect(s_extra, s_full_rect);
+      if (!asked) area = marked ? rect_union(area, ex) : ex;
+      else if (!rect_equals(area, s_full_rect)) area = rect_union(area, ex);
+    }
+    s_has_extra = 0;
+    if (rect_is_empty(area)) { draw_set_clip(R(0, 0, DISPLAY_W, DISPLAY_H)); return; }
     draw_set_clip(area);
   }
   if (s_full->paint) s_full->paint(s_full->state, s_full_rect);
@@ -699,6 +711,18 @@ void desktop_flush(void) {
 
   paint_ctx();         /* above the windows, below only the pointer */
   draw_pointer();      /* always last: the pointer is above everything */
+}
+
+void desktop_damage(Rect r) {
+  if (s_full && !picker_active()) {
+    s_extra = s_has_extra ? rect_union(s_extra, r) : r;
+    s_has_extra = 1;
+  } else if (s_full) {
+    s_full_dirty = 1;
+  } else {
+    wm_damage(r);
+  }
+  desktop_flush();
 }
 
 void desktop_repaint(void) {
