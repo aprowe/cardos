@@ -155,7 +155,7 @@ sync() {
 }
 
 # The dashboard (server/dash.py) on its own name, over HTTPS -- Google will
-# not redirect a web sign-in anywhere else. Only /dash and /google/creds are
+# not redirect a web sign-in anywhere else. Only /dash is
 # exposed on that name; Build, voice and updates stay on :8080 as before.
 # Needs the DNS A record for $DASH_HOST pointing here first, or certbot fails.
 # Safe to repeat. With a "Web application" client JSON from the Cloud console,
@@ -175,7 +175,6 @@ server {
     location = /dash/photos/upload { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-upload.conf; }
     location = /dash/files/put { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-upload.conf; }
     location = /dash/music/upload { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-music.conf; }
-    location = /google/creds { proxy_pass http://127.0.0.1:8081; include /etc/nginx/cardos-dash-proxy.conf; }
     location = / { return 302 /dash; }
     location / { return 404; }
 }
