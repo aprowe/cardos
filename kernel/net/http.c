@@ -16,14 +16,17 @@
 
 static const char *TAG = "http";
 
-/* One kilobyte of scratch, shared by the upload and the download.
+/* A kilobyte of scratch for moving a file through the socket, one per
+ * transfer, from the heap for as long as the transfer runs.
  *
- * Static rather than on the stack because task stacks here are 1 KB, and one
- * copy rather than two because both users are blocking calls on the same task
- * -- a download cannot be halfway through while an upload runs. Two of these
- * was two kilobytes of permanently spent RAM on a machine with a hundred and
- * twenty free. */
-static uint8_t s_chunk[1024];
+ * It used to be one static shared by every transfer, on the grounds that
+ * all of them were blocking calls on one task. They are not: the agent's
+ * exchange runs on httpq's task while voice, screenshots and
+ * api->http_upload post files from the shell, and a G0 dictation during a
+ * Claude turn had both writing it at once. Not on the stack either: the
+ * shell's is 8 KB with an app's frames on it, and httpq's 6 KB has to hold a
+ * TLS handshake (it logs its high-water mark; see httpq.c). */
+#define CHUNK 1024
 
 /* The `auth` string, applied. A bare token is a bearer; anything with a
  * colon in it is header lines, "Name: value" separated by newlines, sent as
@@ -247,6 +250,7 @@ int http_post_file_progress(const char *url, const char *path,
   esp_http_client_config_t cfg;
   esp_http_client_handle_t cli;
   int fd, size, sent = 0, got = 0, status, truncated = 0;
+  uint8_t *chunk;
 
   if (!url || !path || !out || out_size < 2) return -2;
   out[0] = 0;
@@ -258,6 +262,7 @@ int http_post_file_progress(const char *url, const char *path,
   if (fd < 0) return -2;
   size = fs_seek(fd, 0, FS_SEEK_END);
   if (size <= 0 || fs_seek(fd, 0, FS_SEEK_SET) < 0) { fs_close(fd); return -2; }
+  if ((chunk = (uint8_t *)malloc(CHUNK)) == NULL) { fs_close(fd); return -4; }
 
   memset(&cfg, 0, sizeof cfg);
   cfg.url = url;
@@ -267,7 +272,7 @@ int http_post_file_progress(const char *url, const char *path,
   cfg.buffer_size = 1024;
 
   cli = esp_http_client_init(&cfg);
-  if (!cli) { fs_close(fd); return -2; }
+  if (!cli) { free(chunk); fs_close(fd); return -2; }
   if (content_type && *content_type)
     esp_http_client_set_header(cli, "Content-Type", content_type);
   set_auth(cli, bearer);
@@ -277,17 +282,19 @@ int http_post_file_progress(const char *url, const char *path,
    * fifteen-second recording is 480 KB and there are about 120 KB to play
    * with. */
   if (open_tls(cli, size) != ESP_OK) {
+    free(chunk);
     fs_close(fd);
     esp_http_client_cleanup(cli);
     return -3;
   }
   while (sent < size) {
-    int n = fs_read(fd, s_chunk, sizeof s_chunk);
+    int n = fs_read(fd, chunk, CHUNK);
     if (n <= 0) break;
-    if (esp_http_client_write(cli, (const char *)s_chunk, n) != n) break;
+    if (esp_http_client_write(cli, (const char *)chunk, n) != n) break;
     sent += n;
     if (progress) progress(sent, size);
   }
+  free(chunk);
   fs_close(fd);
   if (sent != size) {
     esp_http_client_close(cli);
@@ -324,9 +331,26 @@ int http_post_file_progress(const char *url, const char *path,
   return got;
 }
 
+static int exchange_files(uint8_t *s_chunk, const char *url, const char *body_path,
+                          const char *content_type, const char *auth,
+                          const char *reply_path, int timeout_ms);
+
 int http_exchange_files(const char *url, const char *body_path,
                         const char *content_type, const char *auth,
                         const char *reply_path, int timeout_ms) {
+  uint8_t *chunk = (uint8_t *)malloc(CHUNK);
+  int rc;
+  if (!chunk) return -4;
+  rc = exchange_files(chunk, url, body_path, content_type, auth, reply_path, timeout_ms);
+  free(chunk);
+  return rc;
+}
+
+/* `s_chunk` is the transfer's own CHUNK bytes; the name is the old static's,
+ * kept so the body below reads as it did. */
+static int exchange_files(uint8_t *s_chunk, const char *url, const char *body_path,
+                          const char *content_type, const char *auth,
+                          const char *reply_path, int timeout_ms) {
   esp_http_client_config_t cfg;
   esp_http_client_handle_t cli;
   int fd, size, sent = 0, got = 0, status, rc;
@@ -364,7 +388,7 @@ int http_exchange_files(const char *url, const char *body_path,
     }
   }
   while (sent < size) {
-    int n = fs_read(fd, s_chunk, sizeof s_chunk);
+    int n = fs_read(fd, s_chunk, CHUNK);
     if (n <= 0) break;
     if (esp_http_client_write(cli, (const char *)s_chunk, n) != n) break;
     sent += n;
@@ -387,7 +411,7 @@ int http_exchange_files(const char *url, const char *body_path,
     return -2;
   }
   for (;;) {
-    int n = esp_http_client_read(cli, (char *)s_chunk, sizeof s_chunk);
+    int n = esp_http_client_read(cli, (char *)s_chunk, CHUNK);
     int put = 0;
     if (n < 0) { got = -3; break; }
     if (n == 0) break;
@@ -428,19 +452,20 @@ int http_exchange_files(const char *url, const char *body_path,
  * with the radio dozing between beacons. Now the radio stays awake for the
  * transfer (wifi_fast), and the reads fill an 8 KB buffer before anything
  * is written, so the card sees multi-block writes. 8 KB is borrowed for the
- * transfer only; without it, the old 1 KB scratch buffer still works. */
+ * transfer only; without it, 1 KB still works, and without that, nothing
+ * does (NULL: the caller says -4). */
 #define BIG_CHUNK 8192
 
 static uint8_t *big_begin(int *cap) {
   uint8_t *b = (uint8_t *)malloc(BIG_CHUNK);
-  wifi_fast(1);
-  if (b) { *cap = BIG_CHUNK; return b; }
-  *cap = (int)sizeof s_chunk;
-  return s_chunk;
+  *cap = BIG_CHUNK;
+  if (!b) { b = (uint8_t *)malloc(CHUNK); *cap = CHUNK; }
+  if (b) wifi_fast(1);
+  return b;
 }
 
 static void big_end(uint8_t *b) {
-  if (b != s_chunk) free(b);
+  free(b);
   wifi_fast(0);
 }
 
@@ -495,12 +520,15 @@ int http_stream_ex(const char *url, const char *bearer, HttpSink on_data, void *
     return -4;
   }
 
-  /* Until the caller says stop, the server stops, or the socket does. The
-   * shared scratch buffer is fine here for the same reason it is fine
-   * elsewhere: these are all blocking calls on one task. */
+  /* Until the caller says stop, the server stops, or the socket does. */
   {
     int cap;
     uint8_t *b = big_begin(&cap);
+    if (!b) {
+      esp_http_client_close(cli);
+      esp_http_client_cleanup(cli);
+      return -4;
+    }
     for (;;) {
       int n = read_full(cli, b, cap);
       if (n <= 0) break;
@@ -564,6 +592,7 @@ static int http_download_ex_do(const char *url, const char *path, const char *be
   if (fd < 0) { rc = -2; goto done; }
 
   big = big_begin(&cap);
+  if (!big) { fs_close(fd); rc = -4; goto done; }
   for (;;) {
     int n = read_full(cli, big, cap);
     int put = 0;
