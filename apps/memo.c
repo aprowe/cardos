@@ -14,6 +14,7 @@
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 #define DIR       CAPP_HOME "/memos"
 /* The bottom of the screen: the strip -- the status, or the meter, or the
@@ -442,8 +443,9 @@ static int app_key(void *st, unsigned char k) {
   if (M.ask == ASK_DELETE) {
     /* y deletes; n, Escape and Backspace say no, as in every app. Enter is
      * play here, so it is not a yes. */
-    if (k == 'y' || k == 'Y') { M.ask = ASK_NONE; delete_memo(); }
-    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) M.ask = ASK_NONE;
+    int a = confirm_key(api, k);
+    if (a != CONFIRM_WAIT) M.ask = ASK_NONE;
+    if (a == CONFIRM_YES) delete_memo();
     return 1;
   }
   switch (k) {

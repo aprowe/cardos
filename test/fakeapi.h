@@ -14,10 +14,10 @@
  *   api = &A;
  *
  * The defaults: drawing does nothing; fmt is vsnprintf; the clock is
- * fake_now / fake_epoch / fake_ticks, which a test may set; the network is
+ * fakeapi_now / fakeapi_epoch / fakeapi_ticks, which a test may set; the network is
  * up and every request fails with -1; paint_area is FAKE_SCREEN; fonts are
- * the 6x8 one; key_repeat, headless and key_pending read fake_repeat,
- * fake_headless and fake_key_pending; out and out_line append to fake_out;
+ * the 6x8 one; key_repeat, headless and key_pending read fakeapi_repeat,
+ * fakeapi_headless and fakeapi_key_pending; out and out_line append to fakeapi_out;
  * proxy is "http://srv"; audio, midi, link and agent are tables that do
  * nothing; anything that would start something else returns -1.
  *
@@ -34,14 +34,14 @@
 
 void fakeapi_init(CardApi *a);
 
-extern CappTime fake_now;          /* what now() fills in */
-extern uint32_t fake_epoch;        /* what epoch() returns */
-extern uint32_t fake_ticks;        /* what ticks_ms() returns */
-extern int      fake_repeat;       /* what key_repeat() returns */
-extern int      fake_headless;     /* what headless() returns */
-extern int      fake_key_pending;  /* what key_pending() returns */
-extern char     fake_out[4096];    /* what out() and out_line() wrote */
-extern CRect    fake_screen;       /* what paint_area() returns: 240x135 */
+extern CappTime fakeapi_now;          /* what now() fills in */
+extern uint32_t fakeapi_epoch;        /* what epoch() returns */
+extern uint32_t fakeapi_ticks;        /* what ticks_ms() returns */
+extern int      fakeapi_repeat;       /* what key_repeat() returns */
+extern int      fakeapi_headless;     /* what headless() returns */
+extern int      fakeapi_key_pending;  /* what key_pending() returns */
+extern char     fakeapi_out[4096];    /* what out() and out_line() wrote */
+extern CRect    fakeapi_screen;       /* what paint_area() returns: 240x135 */
 
 /* ---- an in-memory card ----
  *

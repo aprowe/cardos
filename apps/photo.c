@@ -24,6 +24,7 @@
 #include "kernel/app/capp.h"
 #include "apps/safefile.h"
 #include "apps/syncset.h"
+#include "apps/confirm.h"
 
 #define SCR_W 240
 #define SCR_H 135
@@ -491,8 +492,10 @@ static int do_action(int a) {
 static int app_key(void *st, unsigned char k) {
   (void)st;
   if (P.ask_delete) {
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_WAIT) return 1;
     P.ask_delete = 0;
-    if (k == 'y' || k == 'Y') { delete_current(); return 1; }
+    if (a == CONFIRM_YES) { delete_current(); return 1; }
     return status_changed();     /* the question goes; the picture stays */
   }
   switch (k) {

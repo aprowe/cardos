@@ -50,6 +50,7 @@
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 static const CardApi *api;
 
@@ -925,9 +926,9 @@ static int key_today(uint8_t k) {
     /* y and only y deletes: Enter used to as well, and Enter is the key a
      * thumb is already on. n, Escape and Backspace say no; anything else
      * leaves the question up. */
-    if (api->key_repeat()) return 1;
-    if (k == 'y' || k == 'Y') delete_habit(H.sel);
-    else if (!(k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK)) return 1;
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_WAIT) return 1;
+    if (a == CONFIRM_YES) delete_habit(H.sel);
     H.ask = ASK_NONE;
     return 1;
   }

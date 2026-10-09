@@ -7,14 +7,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-CappTime fake_now;
-uint32_t fake_epoch;
-uint32_t fake_ticks;
-int      fake_repeat;
-int      fake_headless;
-int      fake_key_pending;
-char     fake_out[4096];
-CRect    fake_screen = { 0, 0, 240, 135 };
+CappTime fakeapi_now;
+uint32_t fakeapi_epoch;
+uint32_t fakeapi_ticks;
+int      fakeapi_repeat;
+int      fakeapi_headless;
+int      fakeapi_key_pending;
+char     fakeapi_out[4096];
+CRect    fakeapi_screen = { 0, 0, 240, 135 };
 
 /* ---- the defaults ------------------------------------------------------------ */
 
@@ -50,19 +50,19 @@ static int d_fmt(char *b, size_t n, const char *f, ...) {
   va_end(ap);
   return r;
 }
-static uint32_t d_ticks(void) { return fake_ticks; }
+static uint32_t d_ticks(void) { return fakeapi_ticks; }
 static void d_log(const char *m) { (void)m; }
 
 static void d_out(const char *s) {
-  size_t have = strlen(fake_out);
-  snprintf(fake_out + have, sizeof fake_out - have, "%s", s);
+  size_t have = strlen(fakeapi_out);
+  snprintf(fakeapi_out + have, sizeof fakeapi_out - have, "%s", s);
 }
 static void d_out_line(const char *s) { d_out(s); d_out("\n"); }
 static int  d_in_line(char *b, size_t n) { (void)b; (void)n; return -1; }
 static int  d_zero(void) { return 0; }
 static int  d_one(void) { return 1; }
-static int  d_key_repeat(void) { return fake_repeat; }
-static int  d_key_pending(void) { return fake_key_pending; }
+static int  d_key_repeat(void) { return fakeapi_repeat; }
+static int  d_key_pending(void) { return fakeapi_key_pending; }
 
 static int d_http_get(const char *u, char *b, size_t n, int ms) { (void)u; (void)b; (void)n; (void)ms; return -1; }
 static int d_net_connect(int ms) { (void)ms; return 0; }
@@ -82,12 +82,12 @@ static int d_http_stream(const char *u, int (*cb)(void *, const uint8_t *, int),
   return -1;
 }
 static void d_damage(CRect r) { (void)r; }
-static CRect d_paint_area(void) { return fake_screen; }
+static CRect d_paint_area(void) { return fakeapi_screen; }
 static void d_ui(const CappUi *u) { (void)u; }
 static int d_update(char *o, size_t n) { if (n) o[0] = 0; return 0; }
 static int d_update_apply(int os, char *o, size_t n) { (void)os; if (n) o[0] = 0; return 0; }
-static void d_now(CappTime *t) { *t = fake_now; }
-static uint32_t d_epoch(void) { return fake_epoch; }
+static void d_now(CappTime *t) { *t = fakeapi_now; }
+static uint32_t d_epoch(void) { return fakeapi_epoch; }
 static void *d_exec_alloc(size_t n) { (void)n; return NULL; }
 static void *d_exec_writable(void *p) { return p; }
 static void d_exec_free(void *p) { (void)p; }
@@ -124,7 +124,7 @@ static const CappAudio AUDIO = { d_au_record, d_au_play, d_void, d_zero, d_au_le
 static const CappAudio *d_audio(void) { return &AUDIO; }
 
 static const char *d_proxy(void) { return "http://srv"; }
-static int  d_headless(void) { return fake_headless; }
+static int  d_headless(void) { return fakeapi_headless; }
 static void d_command_done(int rc, const char *o) { (void)rc; (void)o; }
 static int  d_font_load(const char *n) { (void)n; return -1; }
 static void d_font_free(int f) { (void)f; }
@@ -221,13 +221,13 @@ void fakeapi_init(CardApi *a) {
   a->link = d_link;
   a->key_repeat = d_key_repeat;
   a->key_pending = d_key_pending;
-  fake_out[0] = 0;
-  fake_ticks = 1000;
-  fake_repeat = fake_headless = fake_key_pending = 0;
-  memset(&fake_now, 0, sizeof fake_now);
-  fake_now.year = 2026; fake_now.month = 10; fake_now.day = 9;
-  fake_now.hour = 12; fake_now.wday = 5; fake_now.synced = 2;
-  fake_epoch = 1791547200u;                 /* 2026-10-09 12:00 UTC */
+  fakeapi_out[0] = 0;
+  fakeapi_ticks = 1000;
+  fakeapi_repeat = fakeapi_headless = fakeapi_key_pending = 0;
+  memset(&fakeapi_now, 0, sizeof fakeapi_now);
+  fakeapi_now.year = 2026; fakeapi_now.month = 10; fakeapi_now.day = 9;
+  fakeapi_now.hour = 12; fakeapi_now.wday = 5; fakeapi_now.synced = 2;
+  fakeapi_epoch = 1791547200u;                 /* 2026-10-09 12:00 UTC */
 }
 
 /* ---- the in-memory card ------------------------------------------------------ */

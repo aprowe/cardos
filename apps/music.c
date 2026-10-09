@@ -16,6 +16,7 @@
  */
 #include "kernel/app/capp.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 #include "apps/safefile.h"
 #include "apps/syncset.h"
 
@@ -479,8 +480,10 @@ static int do_action(int a) {
 static int app_key(void *st, uint8_t k) {
   (void)st;
   if (M.ask_delete) {
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_WAIT) return 1;
     M.ask_delete = 0;
-    if (k == 'y' || k == 'Y') delete_sel();
+    if (a == CONFIRM_YES) delete_sel();
     mark_all();
     return 1;
   }

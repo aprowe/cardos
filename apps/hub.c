@@ -16,6 +16,7 @@
 
 #include "kernel/app/capp.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 static const CardApi *api;
 
@@ -369,12 +370,14 @@ static int app_key(void *st, uint8_t k) {
     else if (k >= 32 && k < 127 && n + 1 < sizeof C.qedit) { C.qedit[n] = (char)k; C.qedit[n + 1] = 0; }
     return 1;
   case V_ASK:
-    if (k == 'y' || k == 'Y') { C.view = V_BOOTING; return 1; }   /* tick boots, after the paint */
-    if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) {
+    switch (confirm_key(api, k)) {
+    case CONFIRM_YES: C.view = V_BOOTING; return 1;   /* tick boots, after the paint */
+    case CONFIRM_NO:
       C.view = V_VERS;
       say(0, "kept: the launcher's Firmware folder boots it");
+      return 1;
+    default: return 1;
     }
-    return 1;
   case V_BOOTING:
     return 1;
   case V_VERS:

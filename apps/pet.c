@@ -22,6 +22,7 @@
 #include "kernel/app/capp.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 #include "apps/petsim.h"
 
 static const CardApi *api;
@@ -467,8 +468,9 @@ static int app_key(void *st, uint8_t k) {
   if (C.view == V_GAME) { game_key(k); return 1; }
   if (C.view == V_INFO) { if (k == CAPP_KEY_ESC || k == CAPP_KEY_ENTER || k == 'i') C.view = V_ROOM; return 1; }
   if (C.view == V_ASK_NEW) {
-    if (k == 'y' || k == 'Y') { C.view = V_ROOM; new_egg(); tell_os(); }
-    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) C.view = V_ROOM;
+    int a = confirm_key(api, k);
+    if (a != CONFIRM_WAIT) C.view = V_ROOM;
+    if (a == CONFIRM_YES) { new_egg(); tell_os(); }
     return 1;
   }
   if (C.p.stage == PET_GONE) {

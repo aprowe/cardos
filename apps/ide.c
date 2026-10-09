@@ -22,6 +22,7 @@
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 #include "apps/safefile.h"
 #include "apps/asmvm.h"
 
@@ -964,9 +965,9 @@ static void app_paint(void *st, CRect c) {
 static int key_browse(unsigned char k) {
   /* A delete waits for its answer, and nothing else happens meanwhile. */
   if (E.confirm) {
-    if (k == 'y' || k == 'Y') delete_selected();
-    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK)
-      E.confirm = 0;
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_YES) delete_selected();
+    else if (a == CONFIRM_NO) E.confirm = 0;
     return 1;
   }
   switch (k) {

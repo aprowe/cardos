@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 /* The app itself, statics and all: its internals are the thing under test.
  *
@@ -32,18 +33,6 @@
 
 /* ---- a CardApi that does just enough ------------------------------------- */
 
-static int fake_fmt(char *buf, size_t n, const char *fmt, ...) {
-  va_list ap;
-  int r;
-  va_start(ap, fmt);
-  r = vsnprintf(buf, n, fmt, ap);
-  va_end(ap);
-  return r;
-}
-
-static void *fake_memset(void *d, int c, size_t n)         { return memset(d, c, n); }
-static void *fake_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
-static size_t fake_strlen(const char *s)                   { return strlen(s); }
 
 static CardApi FAKE;
 
@@ -74,17 +63,13 @@ static void fake_notify_cancel(const char *key) { if (!strcmp(key, "*")) NCANCEL
 static uint32_t fake_no_epoch(void) { return 0; }
 
 static void use_fake_api(void) {
-  memset(&FAKE, 0, sizeof FAKE);
+  fakeapi_init(&FAKE);
   FAKE.notify_at = fake_notify_at;
   FAKE.notify_cancel = fake_notify_cancel;
   FAKE.epoch = fake_no_epoch;
   NSCHED = NCANCEL_ALL = 0;
   FAKE.open = fake_no_card;
   FAKE.proxy = fake_proxy;
-  FAKE.fmt = fake_fmt;
-  FAKE.mem_set = fake_memset;
-  FAKE.mem_cpy = fake_memcpy;
-  FAKE.str_len = fake_strlen;
   FAKE.damage = fake_damage;
   api = &FAKE;
   memset(&C, 0, sizeof C);

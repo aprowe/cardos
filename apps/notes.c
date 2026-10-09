@@ -39,6 +39,7 @@
 #include "apps/safefile.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 static const CardApi *api;
 
@@ -849,9 +850,10 @@ static int app_key(void *st, uint8_t k) {
     return 1;
   }
   if (N.ask_delete) {
-    /* y deletes; n, Escape, Backspace -- anything else -- is a no. */
-    if (k == 'y' || k == 'Y') delete_selected();
-    else cancel_delete();
+    /* y deletes; n, Escape, Backspace is a no; anything else waits. */
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_YES) delete_selected();
+    else if (a == CONFIRM_NO) cancel_delete();
     return 1;
   }
   switch (k) {

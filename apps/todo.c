@@ -39,6 +39,7 @@
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 #define MAX_ITEMS  40
 #define TITLE_MAX  38
@@ -1362,19 +1363,10 @@ static void ask_delete(void) {
 /* The answer. Anything that is not one is swallowed rather than acted on:
  * a stray arrow should not leave the question open over another task. */
 static int key_confirm(unsigned char k) {
-  if (api->key_repeat()) return 1;
-  switch (k) {
-  case 'y': case 'Y':
-    T.confirm = 0;
-    delete_selected();
-    return 1;
-  case 'n': case 'N':
-  case CAPP_KEY_ESC:
-  case CAPP_KEY_BACK:
-    T.confirm = 0;
-    return 1;
-  default: return 1;
-  }
+  int a = confirm_key(api, k);
+  if (a != CONFIRM_WAIT) T.confirm = 0;
+  if (a == CONFIRM_YES) delete_selected();
+  return 1;
 }
 
 /* The one place that knows what anything does. */

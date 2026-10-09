@@ -28,6 +28,7 @@
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 static const CardApi *api;
 
@@ -521,8 +522,9 @@ static int key_face(uint8_t k) {
 static int key_list(uint8_t k) {
   if (K.ask_delete) {
     /* y and only y: Enter is edit here, one key from a mistake. */
-    if (k == 'y' || k == 'Y') delete_selected();
-    else if (!(k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK)) return 1;
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_WAIT) return 1;
+    if (a == CONFIRM_YES) delete_selected();
     K.ask_delete = 0;
     return 1;
   }

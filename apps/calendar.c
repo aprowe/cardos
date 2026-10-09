@@ -60,6 +60,7 @@
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 #define MAX_EVENTS  40
 #define SUMMARY_MAX 34
@@ -1767,14 +1768,10 @@ static void damage_all(void) {
  * else is swallowed, so a stray arrow cannot move the selection out from
  * under the question. */
 static int key_confirm(unsigned char k) {
-  if (api->key_repeat && api->key_repeat()) return 1;
-  switch (k) {
-  case 'y': case 'Y': delete_asked(); return 1;
-  case 'n': case 'N':
-  case CAPP_KEY_ESC:
-  case CAPP_KEY_BACK: clear_asking(); return 1;
-  default: return 1;
-  }
+  int a = confirm_key(api, k);
+  if (a == CONFIRM_YES) delete_asked();
+  else if (a == CONFIRM_NO) clear_asking();
+  return 1;
 }
 
 static int app_key(void *st, unsigned char k) {

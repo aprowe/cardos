@@ -25,6 +25,7 @@
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 #define MAX_ENTRIES 96
 #define PATH_MAX   128
@@ -748,11 +749,12 @@ static int app_key(void *st, unsigned char k) {
   unsay();
 
   if (X.ask == ASK_NEWDIR || X.ask == ASK_RENAME) return key_prompt(k);
-  /* Asked to delete: y or Enter does it; n, Escape, Backspace, anything
-   * else, is a no. */
+  /* Asked to delete: y does it; n, Escape or Backspace is a no; anything
+   * else -- Enter included -- leaves the question up (apps/confirm.h). */
   if (X.ask == ASK_DELETE) {
-    if (k == 'y' || k == 'Y' || k == CAPP_KEY_ENTER) do_delete();
-    else cancel_ask();
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_YES) do_delete();
+    else if (a == CONFIRM_NO) cancel_ask();
     return 1;
   }
 

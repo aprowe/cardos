@@ -34,6 +34,7 @@
 #include "kernel/app/capp.h"
 #include "apps/midiseq.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 #include "apps/safefile.h"
 
 static const CardApi *api;
@@ -774,8 +775,10 @@ static int app_key(void *st, uint8_t k) {
   (void)st;
   if (M.view == V_ASK) { key_ask(k); mark_all(); return 1; }
   if (M.ask_delete) {
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_WAIT) return 1;
     M.ask_delete = 0;
-    if (k == 'y' || k == 'Y') { stop(); delete_sel(); M.view = V_LIST; }
+    if (a == CONFIRM_YES) { stop(); delete_sel(); M.view = V_LIST; }
     mark_all();
     return 1;
   }

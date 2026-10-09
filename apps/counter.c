@@ -31,6 +31,7 @@
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 static const CardApi *api;
 
@@ -469,12 +470,11 @@ static int app_key(void *st, uint8_t k) {
   if (a != TB_NONE) return do_action(a);
 
   if (C.ask == ASK_RESET) {
-    if (api->key_repeat()) return 1;
     /* y and only y: Enter is the lap key, and a lap pressed out of habit
      * must not wipe the count. */
-    if (k == 'y' || k == 'Y') { C.ask = ASK_NONE; reset_all(); }
-    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) C.ask = ASK_NONE;
-    else return 1;
+    int ans = confirm_key(api, k);
+    if (ans != CONFIRM_WAIT) C.ask = ASK_NONE;
+    if (ans == CONFIRM_YES) reset_all();
     return 1;
   }
 

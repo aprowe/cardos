@@ -24,6 +24,7 @@
 #include "kernel/app/capp.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 #define MAX_ENTRIES  96
 #define PATH_MAX    128
@@ -526,11 +527,12 @@ static int app_key(void *st, unsigned char k) {
   if (handled) return r;
   unsay();
 
-  /* Asked to delete: y does it, and anything else -- n, Escape, Backspace
-   * -- is a no. */
+  /* Asked to delete: y does it; n, Escape or Backspace is a no; anything
+   * else, a held d's repeat included, leaves the question up. */
   if (F.ask == ASK_DELETE) {
-    if (k == 'y' || k == 'Y') delete_selected();
-    else cancel_ask();
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_YES) delete_selected();
+    else if (a == CONFIRM_NO) cancel_ask();
     return 1;
   }
   if (F.ask != ASK_NONE) return key_prompt(k);
