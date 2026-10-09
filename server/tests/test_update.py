@@ -4,7 +4,7 @@ The real firmware.bin is used when there is one, because the one thing worth
 checking against reality is that the ELF SHA is read from the right offset.
 The apps are made up, so this does not depend on build_apps.py having run.
 """
-import os, shutil, sys, tempfile, threading, urllib.request, urllib.error
+import os, shutil, sys, tempfile, threading, unittest, urllib.request, urllib.error
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))             # the repository root
 
@@ -84,9 +84,9 @@ def main():
     updates.FIRMWARE_RELEASE = fw_rel
     updates.APPS_DIR = apps
     app.Handler.chat = chatmod.ChatService(claude="stub")
-    srv = ThreadingHTTPServer(("127.0.0.1", 8138), app.Handler)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    base = "http://127.0.0.1:8138"
+    base = "http://127.0.0.1:%d" % srv.server_address[1]
 
     r = get(base + "/update").decode()
     fails += not check("/update is the manifest", r.split("\n")[1],
@@ -144,9 +144,22 @@ def main():
                        "fir")
 
     srv.shutdown()
+    srv.server_close()
     shutil.rmtree(tmp)
     print("\n%d failure(s)" % fails)
     return 1 if fails else 0
+
+
+class Script(unittest.TestCase):
+    """So `unittest discover` runs this too -- the token check on /update,
+    the route that ships firmware, was outside the suite."""
+
+    def test_the_whole_script(self):
+        # main() points updates at its fixtures; put them back after.
+        for name in ("FIRMWARE", "FIRMWARE_RELEASE", "APPS_DIR"):
+            self.addCleanup(setattr, updates, name, getattr(updates, name))
+        self.addCleanup(setattr, app.Handler, "chat", app.Handler.chat)
+        self.assertEqual(main(), 0)
 
 
 if __name__ == "__main__":
