@@ -129,6 +129,15 @@ static void boot(void) {
 
 static void steps(int n) { while (n-- > 0) sim_step(); }
 
+/* A file on the pretend card as a string, "" if it is not there. */
+static const char *card_text(const char *path) {
+  static char out[4097];
+  int f = find(path);
+  out[0] = 0;
+  if (f >= 0) { memcpy(out, FILES[f].data, (size_t)FILES[f].len); out[FILES[f].len] = 0; }
+  return out;
+}
+
 static void set_program(const char *src) {
   ed_from_text(src);
   apply_program();
@@ -383,14 +392,14 @@ void test_forklift_an_edit_that_does_not_parse_survives_a_restart(void) {
   save_all();
   boot();                                      /* the same card */
   CHECK(strstr(E.line[0], "# half done"));
-  CHECK(strstr(E.good, "# works"));
+  CHECK(strstr(card_text(GOOD_PATH), "# works"));
   CHECK_EQ(1, G.running);                      /* on the one that parsed */
 }
 
 void test_forklift_a_fresh_card_starts_with_a_program_that_works(void) {
   fresh_card();
   boot();
-  CHECK(strstr(E.good, "bot = "));
+  CHECK(strstr(card_text(GOOD_PATH), "bot = "));
   CHECK_EQ(1, G.running);
   CHECK_EQ(0, G.credits);
 }

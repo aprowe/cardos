@@ -720,9 +720,13 @@ typedef struct {
 
 typedef struct {
   FlVal   v;
-  int32_t next;                   /* the rest of a list, or a frame's parent */
+  /* The rest of a list, or a frame's parent: a cell index, and there are
+   * FL_MAX_CELL of them, so 16 bits -- 4 bytes a cell, 1.7 KB of the arena,
+   * since the struct no longer pads to 20 (2026-10-09). */
+  int16_t next;                   /* -1 for none */
   int16_t sym;                    /* a frame's name */
 } FlCell;
+typedef char fl_cells_fit_in_next[FL_MAX_CELL < 32768 ? 1 : -1];
 
 typedef struct {
   const FlProg  *p;
@@ -787,7 +791,7 @@ static void fl_append(FlRun *R, FlVal *head, int *last, FlVal x) {
   if (c < 0) return;
   R->cell[c].v = x;
   R->cell[c].next = -1;
-  if (*last >= 0) R->cell[*last].next = c;
+  if (*last >= 0) R->cell[*last].next = (int16_t)c;
   else { *head = fl_v(V_CONS); head->i = c; }
   *last = c;
 }
@@ -797,7 +801,7 @@ static FlVal fl_cons(FlRun *R, FlVal head, FlVal tail) {
   FlVal v;
   if (c < 0) return fl_v(V_NIL);
   R->cell[c].v = head;
-  R->cell[c].next = tail.t == V_CONS ? tail.i : -1;
+  R->cell[c].next = (int16_t)(tail.t == V_CONS ? tail.i : -1);
   v = fl_v(V_CONS);
   v.i = c;
   return v;
@@ -955,7 +959,7 @@ static FlVal fl_apply(FlRun *R, FlVal f, FlVal x) {
     if (c < 0) return fl_v(V_NIL);
     R->cell[c].v = x;
     R->cell[c].sym = (int16_t)lam->v;
-    R->cell[c].next = f.i;
+    R->cell[c].next = (int16_t)f.i;
     return fl_eval(R, lam->a, c);
   }
   if (f.t == V_PRIM) {
@@ -964,7 +968,7 @@ static FlVal fl_apply(FlRun *R, FlVal f, FlVal x) {
     int i, at;
     if (c < 0) return fl_v(V_NIL);
     R->cell[c].v = x;
-    R->cell[c].next = f.n ? f.i : -1;
+    R->cell[c].next = (int16_t)(f.n ? f.i : -1);
     if (got < arity) {
       v = f;
       v.n = (uint8_t)got;

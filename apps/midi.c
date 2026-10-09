@@ -168,18 +168,19 @@ static void title_of(const char *path, char *out) {
   out[k] = 0;
 }
 
+/* Listed straight into M.file and closed up in place -- a second copy of
+ * the list to filter from was 1.3 KB of the data block (2026-10-09). */
 static void rescan(void) {
-  static char raw[MAXS][NAMEL];
-  int n = api->list(DIR, &raw[0][0], MAXS, NAMEL), i;
+  int n = api->list(DIR, &M.file[0][0], MAXS, NAMEL), i;
   M.n = 0;
   if (n < 0) { api->mkdir(DIR); n = 0; }
   for (i = 0; i < n && M.n < MAXS; i++) {
     char path[64];
-    if (!ends_song(raw[i])) continue;
-    api->fmt(M.file[M.n], NAMEL, "%s", raw[i]);
-    api->fmt(path, sizeof path, DIR "/%s", raw[i]);
+    if (!ends_song(M.file[i])) continue;
+    if (M.n != i) api->mem_cpy(M.file[M.n], M.file[i], NAMEL);
+    api->fmt(path, sizeof path, DIR "/%s", M.file[M.n]);
     title_of(path, M.title[M.n]);
-    if (!M.title[M.n][0]) api->fmt(M.title[M.n], NAMEL, "%s", raw[i]);
+    if (!M.title[M.n][0]) api->fmt(M.title[M.n], NAMEL, "%s", M.file[M.n]);
     M.n++;
   }
   if (M.sel >= M.n) M.sel = M.n ? M.n - 1 : 0;

@@ -234,6 +234,24 @@ void test_notes_a_new_file_here_goes_up(void) {
   CHECK_EQ(N.nidx, 1);
 }
 
+/* The plan names a new file by its row in the list, not by a copy of its
+ * name: each goes up once, whatever order the list sorts them in. */
+void test_notes_several_new_files_go_up_once_each(void) {
+  int i, n = 0;
+  fresh();
+  put(DIR "/Zebra.md", "Zebra\n");
+  put(DIR "/Apple.md", "Apple\n");
+  put(DIR "/Mango.md", "Mango\n");
+  sync_all();
+  for (i = 0; i < SRV_NOTES; i++) if (S[i].used) n++;
+  CHECK_EQ(n, 3);
+  CHECK_EQ(N.nidx, 3);
+  s_calls = 0;
+  sync_all();                         /* nothing changed: nothing goes up again */
+  for (i = 0, n = 0; i < SRV_NOTES; i++) if (S[i].used) n++;
+  CHECK_EQ(n, 3);
+}
+
 void test_notes_deleting_here_deletes_there_and_the_other_way(void) {
   fresh();
   s_add("One\n");

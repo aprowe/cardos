@@ -194,9 +194,10 @@ TOTAL_BUDGET = 44 * 1024
 # Apps allowed over the budget for now, each with why. Take one off as soon
 # as it is back under -- the build says when.
 OVER_BUDGET = {
-    "forklift": "the Forklang cell arena and node pool; E.good and FlCell.next are the way back",
-    "notes": "file[48] in every queued Op; an index into the rows is the way back",
-    "midi": "a second copy of the song list in load_list's raw[]",
+    # Its data is under 28 KB since E.good went to the card and FlCell.next
+    # to 16 bits; the code is the rest -- a parser, an evaluator, an editor
+    # and the game, 21 KB of it, in its own block of executable RAM.
+    "forklift": "code+data only: 21 KB of code (Forklang, its editor and the game)",
 }
 
 

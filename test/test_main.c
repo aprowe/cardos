@@ -511,6 +511,7 @@ void test_notes_a_server_note_arrives_as_a_file_named_by_its_title(void);
 void test_notes_a_change_here_goes_up_and_one_there_comes_down(void);
 void test_notes_a_change_on_both_keeps_both(void);
 void test_notes_a_new_file_here_goes_up(void);
+void test_notes_several_new_files_go_up_once_each(void);
 void test_notes_deleting_here_deletes_there_and_the_other_way(void);
 void test_notes_a_note_deleted_there_but_changed_here_comes_back(void);
 void test_notes_the_hash_is_the_servers(void);
@@ -1376,6 +1377,7 @@ int main(void) {
   RUN(test_notes_a_change_here_goes_up_and_one_there_comes_down);
   RUN(test_notes_a_change_on_both_keeps_both);
   RUN(test_notes_a_new_file_here_goes_up);
+  RUN(test_notes_several_new_files_go_up_once_each);
   RUN(test_notes_deleting_here_deletes_there_and_the_other_way);
   RUN(test_notes_a_note_deleted_there_but_changed_here_comes_back);
   RUN(test_notes_the_hash_is_the_servers);

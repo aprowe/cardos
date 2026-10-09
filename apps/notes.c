@@ -85,7 +85,10 @@ typedef struct {
   uint8_t op;
   int8_t  i;                    /* into idx, or -1 */
   int8_t  s;                    /* into srv, or -1 */
-  char    file[FILE_MAX];       /* OP_UP_NEW from a file not yet in the index */
+  /* OP_UP_NEW from a file not yet in the index: which of rowfile. It was
+   * the name itself, 48 bytes in each of 96 ops -- 4.5 KB of a data block
+   * that has to be found in one piece (2026-10-09). */
+  int8_t  f;
 } Op;
 
 static struct {
@@ -373,49 +376,52 @@ static int srv_by_id(const char *id) {
 
 /* ---- the plan --------------------------------------------------------------------- */
 
-static void add_op(int op, int i, int s, const char *file) {
+static void add_op(int op, int i, int s, int f) {
   Op *o;
   if (N.nop >= MAX_OPS) return;
   o = &N.op[N.nop++];
   o->op = (uint8_t)op;
   o->i = (int8_t)i;
   o->s = (int8_t)s;
-  api->fmt(o->file, sizeof o->file, "%s", file ? file : "");
+  o->f = (int8_t)f;
 }
 
+/* The plan reads the card's files from rowfile, so the list is read again
+ * first. Nothing reloads it while a sync runs -- keys, actions and G0 are
+ * all refused then -- and do_op checks a file is still not indexed before
+ * sending it, so a list that did move cannot send one twice. */
 static void plan(void) {
-  int i, n;
+  int i;
   char h[9];
   N.nop = N.at = 0;
+  load_rows();
   for (i = 0; i < N.nidx; i++) {
     int s = srv_by_id(N.idx[i].id), len = read_file(N.idx[i].file);
     if (len < 0 && !file_exists(N.idx[i].file)) {              /* deleted here */
-      if (s >= 0 && str_same(N.srv[s].hash, N.idx[i].hash)) add_op(OP_DEL_SRV, i, s, 0);
-      else if (s >= 0) add_op(OP_DOWN, i, s, 0);                /* changed there: back */
-      else add_op(OP_DEL_LOCAL, i, -1, 0);                      /* gone from both */
+      if (s >= 0 && str_same(N.srv[s].hash, N.idx[i].hash)) add_op(OP_DEL_SRV, i, s, -1);
+      else if (s >= 0) add_op(OP_DOWN, i, s, -1);                /* changed there: back */
+      else add_op(OP_DEL_LOCAL, i, -1, -1);                      /* gone from both */
       continue;
     }
     if (len < 0) continue;                                      /* too long to carry */
     fnv_hex(N.text, len, h);
     if (s < 0) {                                                /* deleted there */
-      if (str_same(h, N.idx[i].hash)) add_op(OP_DEL_LOCAL, i, -1, 0);
-      else add_op(OP_UP_NEW, i, -1, N.idx[i].file);             /* changed here: back */
+      if (str_same(h, N.idx[i].hash)) add_op(OP_DEL_LOCAL, i, -1, -1);
+      else add_op(OP_UP_NEW, i, -1, -1);                       /* changed here: back */
       continue;
     }
     {
       int here = !str_same(h, N.idx[i].hash), there = !str_same(N.srv[s].hash, N.idx[i].hash);
-      if (here && there && !str_same(h, N.srv[s].hash)) add_op(OP_CONFLICT, i, s, 0);
-      else if (here && !there) add_op(OP_UP, i, s, 0);
-      else if (there && !here) add_op(OP_DOWN, i, s, 0);
+      if (here && there && !str_same(h, N.srv[s].hash)) add_op(OP_CONFLICT, i, s, -1);
+      else if (here && !there) add_op(OP_UP, i, s, -1);
+      else if (there && !here) add_op(OP_DOWN, i, s, -1);
       else if (here) api->fmt(N.idx[i].hash, sizeof N.idx[i].hash, "%s", h);  /* the same edit */
     }
   }
   for (i = 0; i < N.nsrv; i++)
-    if (idx_by_id(N.srv[i].id) < 0) add_op(OP_DOWN_NEW, -1, i, 0);
-  n = api->list_ex(DIR, N.ent, MAX_NOTES + 8);
-  for (i = 0; i < n; i++)
-    if (!N.ent[i].is_dir && ends_md(N.ent[i].name) && idx_by_file(N.ent[i].name) < 0)
-      add_op(OP_UP_NEW, -1, -1, N.ent[i].name);
+    if (idx_by_id(N.srv[i].id) < 0) add_op(OP_DOWN_NEW, -1, i, -1);
+  for (i = 0; i < N.nrows; i++)
+    if (idx_by_file(N.rowfile[i]) < 0) add_op(OP_UP_NEW, -1, -1, i);
 }
 
 /* One operation. 0, or <0 with the status saying why. */
@@ -448,7 +454,10 @@ static int do_op(Op *o) {
 
   case OP_UP_NEW: {
     char id[12];
-    api->fmt(file, sizeof file, "%s", o->file);
+    if (x) api->fmt(file, sizeof file, "%s", x->file);
+    else if (o->f >= 0 && o->f < N.nrows && idx_by_file(N.rowfile[o->f]) < 0)
+      api->fmt(file, sizeof file, "%s", N.rowfile[o->f]);
+    else return 0;                          /* already sent, or gone: nothing to do */
     if ((len = read_file(file)) < 0) return -2;
     if ((r = ask("POST", "/notes/note", N.text, N.line, sizeof N.line)) < 0) return r;
     tsv_field(N.line, 0, id, sizeof id);

@@ -380,7 +380,10 @@ static struct {
   int  nlines;
   int  cx, cy, top, left;
   char src[SRC_MAX];              /* the lines joined, for the parser */
-  char good[SRC_MAX];             /* the last program that parsed */
+  /* The last program that parsed lives on the card (GOOD_PATH), written
+   * when it changes and read back only when the editor's text will not
+   * parse. A copy here was 2.9 KB of the largest data block of any app
+   * (2026-10-09). */
   char status[64];
   int  status_err;
   int  changed;
@@ -463,10 +466,6 @@ static void save_all(void) {
     safe_line(&f, E.src);
     safe_commit(&f);
   }
-  if (E.good[0] && safe_begin(&f, api, GOOD_PATH) == 0) {
-    safe_line(&f, E.good);
-    safe_commit(&f);
-  }
   G.dirty = 0;
 }
 
@@ -514,14 +513,35 @@ static void load_all(void) {
   if (read_file(CODE_PATH, E.src, SRC_MAX) <= 0)
     api->fmt(E.src, SRC_MAX, "%s", DEFAULT_PROGRAM);
   ed_from_text(E.src);
-  /* What apply_program falls back to if the text above does not parse. */
-  if (read_file(GOOD_PATH, E.good, SRC_MAX) <= 0) E.good[0] = 0;
+}
+
+/* Is GOOD_PATH already `text`? Read in pieces and compared, so keeping it
+ * costs no buffer and a program that has not changed is not written again
+ * every time the app opens. */
+static int good_is(const char *text) {
+  char buf[64];
+  int fd = safe_open_read(api, GOOD_PATH), n, at = 0, same = 1, i;
+  if (fd < 0) return 0;
+  while (same && (n = api->read(fd, buf, sizeof buf)) > 0)
+    for (i = 0; i < n; i++, at++) if (!text[at] || text[at] != buf[i]) { same = 0; break; }
+  api->close(fd);
+  return same && !text[at];
+}
+
+/* Keep `text`, which just parsed, as what to fall back to. */
+static void good_keep(const char *text) {
+  SafeFile f;
+  if (good_is(text)) return;
+  api->mkdir(DIR);
+  if (safe_begin(&f, api, GOOD_PATH) != 0) return;
+  safe_line(&f, text);
+  safe_commit(&f);
 }
 
 /* Start running what is in the editor, or say why not. */
 static void apply_program(void) {
   if (ed_check() == 0) {
-    ed_to_text(E.good);
+    good_keep(E.src);                 /* ed_check left the text that parsed there */
     G.running = 1;
     G.err[0] = 0;
     G.err_line = 0;
@@ -531,7 +551,8 @@ static void apply_program(void) {
     /* Keep the one that worked, if there was one. */
     char why[64];
     api->fmt(why, sizeof why, "%s", E.status);
-    if (E.good[0] && fl_parse(&G.prog, E.good) == 0) {
+    /* E.src is the parser's scratch, rebuilt from the editor each time. */
+    if (read_file(GOOD_PATH, E.src, SRC_MAX) > 0 && fl_parse(&G.prog, E.src) == 0) {
       G.running = 1;
       api->fmt(G.err, sizeof G.err, "kept the old program. %s", why);
     } else {
