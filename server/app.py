@@ -32,6 +32,13 @@ from . import accounts, agent, chat, m5hub, daily, dash, dashapi, files, google,
 from .chat import ROOT as ROOT_DIR
 
 
+DASH_UNCONFIGURED = "the dashboard needs --token and DASH_PASSWORD"
+
+
+def dash_configured(h):
+    return bool(dash.password() and dash._server_token(h))
+
+
 def int_arg(args, name, default):
     """A query parameter as an int, or the default; a value that is not a
     number is a client error, not a traceback."""
@@ -261,15 +268,12 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def dash_signed_in(self):
-        """The dashboard's cookie, never the bearer. Refusals are JSON, which
-        the page reads: a 403 sends it to sign in."""
-        if not dash.password() or not dash._server_token(self):
-            self.json({"error": "the dashboard needs --token and DASH_PASSWORD"}, 503)
-            return False
-        if not dash.logged_in(self):
-            self.json({"error": "signed out"}, 403)
-            return False
-        return True
+        """The dashboard's cookie, never the bearer; a JSON 403 otherwise,
+        which the page reads as "signed out" and sends to the sign-in."""
+        if dash.logged_in(self):
+            return True
+        self.json({"error": "signed out"}, 403)
+        return False
 
     def json(self, obj, code=200, headers=()):
         self._send(code, "application/json", json.dumps(obj),

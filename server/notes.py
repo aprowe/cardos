@@ -19,7 +19,6 @@ A save with no text deletes nothing -- an empty note is still a note. Last
 write wins: the device keeps a conflicting copy of its own rather than
 asking the server to merge.
 """
-import json
 import os
 import re
 import secrets

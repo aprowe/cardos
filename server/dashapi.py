@@ -32,8 +32,14 @@ def _json(h, obj, code=200, headers=()):
 def _api(fn):
     """fn(h, args) as a route. Signed in already: every route here is
     "dash", which app._dispatch checks -- a 403 the page turns into the
-    sign-in screen."""
+    sign-in screen. And refused, as it always was, on a server without
+    --token and DASH_PASSWORD, even with a cookie (one made by name, with
+    accounts, needs no DASH_PASSWORD)."""
     def wrapped(h, path, args):
+        from . import app
+        if not app.dash_configured(h):
+            _json(h, {"error": app.DASH_UNCONFIGURED}, 503)
+            return
         fn(h, args)
     wrapped.__doc__ = fn.__doc__
     return wrapped

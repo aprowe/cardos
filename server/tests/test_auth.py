@@ -161,6 +161,15 @@ class Doors(unittest.TestCase):
 class DoorsWithAccounts(Doors):
     with_accounts = True
 
+    def test_a_cookie_without_dash_password(self):
+        # A cookie made by name needs no DASH_PASSWORD. The page's API still
+        # says the dashboard is not set up; the lists the page reads do not.
+        os.environ.pop("DASH_PASSWORD")
+        cookie = {"Cookie": "%s=%s" % (dash.COOKIE, self.cookie)}
+        self.assertEqual(self.req("GET", "/dash/api/me", headers=cookie)[0], 503)
+        self.assertEqual(self.req("GET", "/dash/notes", headers=cookie)[0], 200)
+        self.assertEqual(self.req("GET", "/dash/api/me")[0], 403)
+
     def test_the_owners_routes(self):
         accounts.add_user("sam", "sams-password")
         _, tok = accounts.add_device("sam", "hers")

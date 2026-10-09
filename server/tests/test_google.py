@@ -6,7 +6,6 @@ deleted in a browser on exactly that), and a login that refreshes itself.
 
     python -m server.tests.test_google
 """
-import json
 import os
 import sys
 import tempfile
