@@ -1803,13 +1803,10 @@ static int app_tick(void *st, uint32_t now_ms) {
   if (was != T.stage || n != T.n) { damage_all(); redraw = 1; }
   if (status_changed()) { damage_status(); redraw = 1; }
   /* The bar's dots animate off the clock, so while one is in the air the bar
-   * asks for itself back -- and only the bar. When there is no bar (no mouse
-   * has appeared) this marks nothing and asks for nothing, which is the
-   * whole fix. */
-  if (T.stage != SYNC_IDLE && toolbar_bar_rect().w) {
-    toolbar_damage_bar();
-    redraw = 1;
-  }
+   * asks for itself back -- and only the bar, and only when the dots have
+   * moved on. When there is no bar (no mouse has appeared) this marks
+   * nothing and asks for nothing, which is the whole fix. */
+  if (T.stage != SYNC_IDLE && toolbar_damage_bar()) redraw = 1;
   return redraw;
 }
 

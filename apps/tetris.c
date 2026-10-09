@@ -255,8 +255,10 @@ static uint32_t drop_ms(void) {
 
 /* ---- drawing -------------------------------------------------------------- */
 
+/* Each pixel once: the face inside the bevel, then the bevel -- a fill of
+ * the whole cell drawn over showed as a flash of flat colour. */
 static void draw_block(int x, int y, uint16_t colour) {
-  api->fill(capp_rect(x, y, CELL, CELL), colour);
+  api->fill(capp_rect(x + 1, y + 1, CELL - 2, CELL - 2), colour);
   api->fill(capp_rect(x, y, CELL, 1), CAPP_WHITE);
   api->fill(capp_rect(x, y, 1, CELL), CAPP_WHITE);
   api->fill(capp_rect(x, y + CELL - 1, CELL, 1), CAPP_BLACK);
@@ -285,19 +287,30 @@ static void layout(CRect c) {
   G.have_area = 1;
 }
 
+/* Is board cell (r, c) part of the piece when it sits at (row, col)? */
+static int piece_at(int row, int r, int c) {
+  int dr = r - row, dc = c - G.col;
+  if (dr < 0 || dr >= TT_BOX || dc < 0 || dc >= TT_BOX) return 0;
+  return (TT_SHAPE[G.type][G.rot] & (uint16_t)(1u << (dr * 4 + dc))) != 0;
+}
+
+/* Every cell drawn once, in its final colour: a locked block, else the
+ * falling piece, else its ghost, else the background. Filling the cells
+ * under the piece and then drawing the piece over them showed the piece
+ * and its ghost flat background for a moment on every drop and move. */
 static void paint_board(void) {
-  int r, c, gr;
+  int r, c, gr = G.row;
+  while (!collides(G.type, G.rot, G.col, gr + 1)) gr++;
   for (r = 0; r < BOARD_H_CELLS; r++)
     for (c = 0; c < BOARD_W_CELLS; c++) {
       int x = G.board_r.x + c * CELL, y = G.board_r.y + r * CELL;
       if (G.board[r][c]) draw_block(x, y, PIECE_COLOUR[G.board[r][c] - 1]);
-      else api->fill(capp_rect(x, y, CELL, CELL), CLR_BOARD_BG);
+      else if (piece_at(G.row, r, c)) draw_block(x, y, PIECE_COLOUR[G.type]);
+      else if (gr > G.row && piece_at(gr, r, c)) {
+        api->fill(capp_rect(x + 1, y + 1, CELL - 2, CELL - 2), CLR_BOARD_BG);
+        api->frame(capp_rect(x, y, CELL, CELL), CLR_DIM);
+      } else api->fill(capp_rect(x, y, CELL, CELL), CLR_BOARD_BG);
     }
-  gr = G.row;
-  while (!collides(G.type, G.rot, G.col, gr + 1)) gr++;
-  if (gr > G.row)
-    draw_shape_px(G.type, G.rot, G.board_r.x + G.col * CELL, G.board_r.y + gr * CELL, 1);
-  draw_shape_px(G.type, G.rot, G.board_r.x + G.col * CELL, G.board_r.y + G.row * CELL, 0);
 }
 
 static void paint_panel(void) {

@@ -2022,10 +2022,7 @@ static int app_tick(void *st, uint32_t now_ms) {
    * when there is a toolbar to draw them in. */
   if (was != C.stage || n != C.n) { damage_all(); redraw = 1; }
   if (status_changed()) { damage_footer(); redraw = 1; }
-  if (C.stage != SYNC_IDLE && toolbar_bar_rect().w) {
-    toolbar_damage_bar();
-    redraw = 1;
-  }
+  if (C.stage != SYNC_IDLE && toolbar_damage_bar()) redraw = 1;
   return redraw;
 }
 

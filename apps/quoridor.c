@@ -82,7 +82,7 @@ static struct {
   int      lsel;                   /* the lobby's highlighted player */
   int      lstate, lpeers;         /* what the lobby last drew, to know when to again */
   char     note[48];               /* "they left", "Sam said no" ... */
-  uint32_t lobby_at;
+  uint32_t lsig;                   /* what the lobby shows, hashed: see lobby_sig */
 } G;
 
 static int bx(void) { return G.area.x + 6; }
@@ -485,7 +485,27 @@ static int app_key(void *st, uint8_t k) {
 /* The computer's reply, a moment after yours -- and only while the board is
  * on screen: it does not move behind the title. */
 /* The other device: the lobby's changes, the game starting, their moves. */
-static int net_tick(uint32_t now) {
+/* Everything the lobby draws, as one number: the state, the names (in
+ * order), the one asking or asked, and the note. It used to repaint once a
+ * second whether or not any of it had changed, to catch a name changing
+ * under the same count -- and every repaint fills the screen before drawing,
+ * so the lobby blinked once a second while it waited. */
+static uint32_t lobby_sig(int st) {
+  uint32_t h = 2166136261u;
+  int i, n = G.L->peers();
+  const char *s;
+  h = (h ^ (uint32_t)st) * 16777619u;
+  h = (h ^ (uint32_t)n) * 16777619u;
+  for (i = -1; i < n && i < 5; i++) {
+    if (i < 0 && st != CAPP_LINK_INVITED && st != CAPP_LINK_INVITING) continue;
+    for (s = G.L->peer_name(i); s && *s; s++) h = (h ^ (uint8_t)*s) * 16777619u;
+    h = (h ^ 0xFFu) * 16777619u;
+  }
+  for (s = G.note; *s; s++) h = (h ^ (uint8_t)*s) * 16777619u;
+  return h;
+}
+
+static int net_tick(void) {
   int st, n, redraw = 0;
   uint8_t b[16];
   if (!net_game() || !G.L) return 0;
@@ -500,11 +520,12 @@ static int net_tick(uint32_t now) {
     }
     if (st == CAPP_LINK_LOOKING && G.lstate == CAPP_LINK_INVITING && G.L->why()[0])
       api->fmt(G.note, sizeof G.note, "%.46s", G.L->why());
-    if (st != G.lstate || G.L->peers() != G.lpeers || (uint32_t)(now - G.lobby_at) > 1000) {
-      G.lobby_at = now;
+    {
+      uint32_t sig = lobby_sig(st);
+      if (st == G.lstate && G.L->peers() == G.lpeers && sig == G.lsig) return 0;
+      G.lsig = sig;
       return 1;
     }
-    return 0;
   }
   if (st == CAPP_LINK_ENDED && !G.note[0]) {
     api->fmt(G.note, sizeof G.note, "%.46s", G.L->why());
@@ -531,7 +552,7 @@ static int net_tick(uint32_t now) {
 static int app_tick(void *st, uint32_t now) {
   QMove m;
   (void)st;
-  if (net_game()) return net_tick(now);
+  if (net_game()) return net_tick();
   if (!G.ai_at || G.screen != SCREEN_GAME || (int32_t)(now - G.ai_at) < 0) return 0;
   G.ai_at = 0;
   if (G.q.winner >= 0 || G.q.turn != 1 || !cpu_game()) return 0;

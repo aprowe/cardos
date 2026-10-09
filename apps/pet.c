@@ -35,6 +35,11 @@ static const CardApi *api;
 #define SPR     16
 #define BOX_W   (SPR * SCALE + 8)      /* the sprite and a 4 px margin each side */
 #define BOX_H   (SPR * SCALE + 4)
+/* What a step repaints: the box and the 4 px it may have moved from, twice
+ * over, so the room either side is in the same blit and nothing under it
+ * is filled first. */
+#define STEP_M  8
+#define WIDE_W  (BOX_W + 2 * STEP_M)
 #define BAR_H   12
 #define ROOM_Y  BAR_H
 #define ROOM_H  (135 - BAR_H - FOOT_H)
@@ -139,7 +144,7 @@ static struct {
   /* the game */
   int      round, wins, guess, look, reveal;
   uint32_t reveal_at;
-  uint16_t box[BOX_W * BOX_H];
+  uint16_t box[WIDE_W * BOX_H];
 } C;
 
 static uint32_t num(const char *s) {
@@ -271,7 +276,9 @@ static void paint_bar(void) {
   api->text((int16_t)(238 - w), 2, s, C.p.sick ? CLR_BAD : CLR_TEXT, CLR_BAR);
 }
 
-/* The sprite into C.box with the room behind it, then out in one blit. */
+/* The sprite into C.box with the room behind it and STEP_M of room either
+ * side, then out in one blit -- which repaints where it just stepped from
+ * as well, so a step needs nothing else drawn. */
 static void paint_pet(void) {
   const char *const *art = art_of(&C.p);
   Colours col = colours(&C.p);
@@ -282,7 +289,7 @@ static void paint_pet(void) {
   int egg_shift = C.p.stage == PET_EGG ? (C.frame ? 1 : -1) : 0;
   for (j = 0; j < BOX_H; j++) {
     uint16_t v = PET_Y + j >= FLOOR_Y ? fl : bg;
-    for (i = 0; i < BOX_W; i++) C.box[j * BOX_W + i] = v;
+    for (i = 0; i < WIDE_W; i++) C.box[j * WIDE_W + i] = v;
   }
   for (r = 0; r < SPR; r++)
     for (c = 0; c < SPR; c++) {
@@ -308,10 +315,10 @@ static void paint_pet(void) {
       for (j = 0; j < SCALE; j++)
         for (i = 0; i < SCALE; i++) {
           int y = 2 + r * SCALE + j + bob - 2, x = 4 + c * SCALE + i + egg_shift;
-          if (y >= 0 && y < BOX_H && x >= 0 && x < BOX_W) C.box[y * BOX_W + x] = v;
+          if (y >= 0 && y < BOX_H && x >= 0 && x < BOX_W) C.box[y * WIDE_W + STEP_M + x] = v;
         }
     }
-  api->pixels(capp_rect(C.x, PET_Y, BOX_W, BOX_H), C.box);
+  api->pixels(capp_rect(C.x - STEP_M, PET_Y, WIDE_W, BOX_H), C.box);
 }
 
 static void paint_poop(int n) {
@@ -338,7 +345,8 @@ static void paint_room(void) {
     return;
   }
   paint_poop(C.p.poop);
-  if (C.p.asleep) api->text(C.x + BOX_W - 4 > 230 ? 200 : (int16_t)(C.x + BOX_W - 4), PET_Y - 6, "z Z", CLR_TEXT, bg);
+  /* Both above the box's rows, so a step's blit never cuts into them. */
+  if (C.p.asleep) api->text(C.x + BOX_W - 4 > 230 ? 200 : (int16_t)(C.x + BOX_W - 4), PET_Y - 8, "z Z", CLR_TEXT, bg);
   if (C.p.sick) api->text((int16_t)(C.x + 4), PET_Y - 8, "+ ill", CLR_BAD, bg);
   paint_pet();
 }
@@ -397,8 +405,23 @@ static void paint_game(void) {
   }
 }
 
+/* The rect a step marks (app_tick). */
+static CRect step_rect(void) { return capp_rect(C.x - STEP_M, PET_Y - 10, WIDE_W, BOX_H + 10); }
+
+static int inside(CRect a, CRect b) {
+  return a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h;
+}
+
 static void app_paint(void *st, CRect full) {
   (void)st;
+  /* A step's own repaint: only the box, which carries the room it stood
+   * on. Filling the room under it first, as a full paint does, showed the
+   * pet as a patch of wall every 650 ms. The lettering above did not move
+   * (the pet walks only awake and well, when there is none). */
+  if (C.view == V_ROOM && C.p.stage != PET_GONE && inside(api->paint_area(), step_rect())) {
+    paint_pet();
+    return;
+  }
   paint_bar();
   if (C.view == V_INFO) paint_info();
   else if (C.view == V_GAME) paint_game();
@@ -514,9 +537,9 @@ static int app_tick(void *st, uint32_t now) {
       if (C.x < 8) { C.x = 8; C.dir = 1; }
       if (C.x > 186 - BOX_W) { C.x = 186 - BOX_W; C.dir = -1; }
     }
-    /* Only the box moves: the room around it stays as it was. The 4 px
-     * margin covers the step. Lettering above it is redrawn too. */
-    api->damage(capp_rect(C.x - 8, PET_Y - 10, BOX_W + 16, BOX_H + 10));
+    /* Only the box moves: the room around it stays as it was. Its STEP_M
+     * of room either side covers the step (app_paint). */
+    api->damage(step_rect());
     return 1;
   }
   return redraw;
