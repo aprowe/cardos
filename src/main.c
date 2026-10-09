@@ -32,8 +32,6 @@
 #include "kernel/net/link.h"
 #include "kernel/ui/sleepclock.h"
 #include "kernel/drv/imu.h"
-#include "kernel/mem/mem.h"
-#include "kernel/task/sched.h"
 #include "kernel/fs/fs.h"
 #include "shellcmd.h"
 #include "kernel/fs/path.h"
@@ -45,7 +43,6 @@
 #include "kernel/app/cmdline.h"
 #include "kernel/app/capp.h"
 #include "kernel/net/wifi.h"
-#include "kernel/net/gauth.h"
 #include "kernel/ui/shell.h"
 #include "kernel/sys/env.h"
 #include "kernel/sys/sio.h"
@@ -62,10 +59,14 @@
 #include "kernel/sys/alarm.h"
 #include "kernel/sys/agent.h"
 #include "kernel/net/httpq.h"
+#include "kernel/net/share.h"
+#include "kernel/ui/fontres.h"
+#include "kernel/sys/midi.h"
 #include "kernel/net/update.h"
 #include "kernel/sys/power.h"
 #include "kernel/drv/battery.h"
 #include "kernel/sys/hotkeys.h"
+#include "kernel/sys/memreport.h"
 
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -78,65 +79,20 @@
  * answering "invalid_client". A refresh token is longer still. */
 #define CARDOS_LINE_MAX 200
 
-/* The handle heap. Carved once from the IDF heap at boot; everything CardOS
- * allocates afterwards comes through kmem_alloc. Deliberately not "whatever is
- * left" -- a fixed, stated size is what makes the numbers in `mem` mean
- * something, and CLAUDE.md is emphatic that memory here gets measured rather
- * than assumed. */
-/* The memory manager's arena, reserved at boot.
- *
- * 128 KB when the radios did not exist; 48 KB once they did, because with
- * 128 the two together left 1156 bytes free and the WiFi driver failed buffer
- * allocations in a loop ("wifi:m f null").
- *
- * 16 KB now, and for a blunter reason: measured on the device with Bluetooth
- * up, 79588 bytes of heap were free, WiFi wanted 49792 of them and a TLS
- * handshake about 34000 more -- so Todo and Stocks could not reach the network
- * at all while a mouse was connected. The arena was holding 48 KB for a
- * subsystem that, grepped for, has no caller anywhere outside kernel/mem: the
- * loader allocates app images from the IDF heap, and so does everything else.
- * Reserving a third of the free memory for nothing was the whole shortage.
- *
- * It stays rather than going to zero because the swap allocator and handle
- * table are a real part of the design and 16 KB keeps them exercisable. If
- * something ever does allocate from here in earnest, this number is the one to
- * raise -- and `mem` is where to see that it needs raising.
- *
- * RESERVED ON FIRST USE, NOT AT BOOT (2026-09-18). The size was never the
- * whole story: a 16 KB block taken early sits in the middle of the heap and
- * splits it, and what a TLS handshake needs is not 34 KB of total free space
- * but one contiguous run of about 17 KB. With an app loaded the largest run
- * was 16384 bytes against that threshold, so Calendar's sync was refused --
- * intermittently, because it depended on what else had been loaded. Since
- * nothing outside kernel/mem calls kmem_alloc (grep says so, and a test
- * asserts it), reserving the block up front bought a split heap and nothing
- * else. kmem_ensure() below makes it appear the moment something actually
- * allocates, which is also the moment `mem` starts reporting it. */
-#define CARDOS_HEAP_BYTES (16 * 1024)
-
-static uint8_t *s_heap;
-
-/* The handle arena, brought into existence by the first thing that wants it.
- * Nothing does today, which is exactly why it must not be taken at boot: it
- * would be 16 KB sitting in the middle of the heap, splitting the contiguous
- * run a TLS handshake needs. Every would-be caller of kmem_alloc calls this
- * first; if that ever becomes more than a handful of places, the call belongs
- * inside kmem_alloc rather than in front of it. */
-int kmem_ensure(void) {
-  if (s_heap) return 0;
-  s_heap = heap_caps_malloc(CARDOS_HEAP_BYTES,
-                            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  if (!s_heap) return -1;
-  kmem_init(s_heap, CARDOS_HEAP_BYTES);
-  return 0;
-}
+/* The handle arena (kernel/mem), the swap allocator and the scheduler's
+ * policy half are not in the firmware any more (2026-10-09). Nothing outside
+ * kernel/mem ever allocated from the arena, kmem_ensure had no caller, and
+ * `ps` listed the one task the loop pretended to be. The portable sources and
+ * their host tests stay: they are a design the host suite still runs. */
 static char     s_line[CARDOS_LINE_MAX + 1];
 static int      s_len;
 /* Three shells over the same kernel. The launcher is the one meant for daily
  * use, the desktop is the demonstration that windows work, and the console is
- * for development. */
-typedef enum { MODE_CONSOLE = 0, MODE_DESKTOP, MODE_LAUNCHER } Mode;
-static Mode     s_mode;
+ * for development. Which one has the screen is ui_shell() (kernel/ui/shell.c)
+ * and nothing else: it used to be kept here as well, in an s_mode that a
+ * command opening its app, or a desktop app calling run(), could leave
+ * behind -- the launcher on screen and the keys still going to the desktop.
+ * go() below is the one way to change it from here. */
 
 /* Booted with escape held: no saved setting has been applied, no radio has
  * been started, and the console has the screen. See app_main. */
@@ -148,13 +104,43 @@ static void prompt(void) {
   con_set_color(COLOR_GREEN);
 }
 
+/* Give the screen to a shell.
+ *
+ * `init` 1 starts it the way its own command does: launchui_init or
+ * desktop_init, which set ui_shell themselves; for the console, a cleared
+ * screen, "back at the console" when it came from a painted shell, and a
+ * prompt. `init` 0 only makes sure it is the one up: the launcher is started
+ * if it is not already, the desktop is handed the screen back as it was
+ * left, and the console gets a prompt under whatever it already shows. */
+static void go(UiShell to, int init) {
+  UiShell from = ui_shell();
+  switch (to) {
+  case UI_LAUNCHER:
+    if (init || from != UI_LAUNCHER) launchui_init();
+    break;
+  case UI_DESKTOP:
+    if (init) desktop_init();
+    else if (from != UI_DESKTOP) { ui_set_shell(UI_DESKTOP); desktop_repaint(); }
+    break;
+  default:
+    ui_set_shell(UI_NONE);
+    if (init) {
+      con_clear();
+      if (from != UI_NONE) con_write("back at the console\n");
+    }
+    prompt();
+    break;
+  }
+}
+
 /* `mem map`: the executable heap block by block, for finding what splits
  * it. An app's image has to fit in one piece of it, and "plenty free but
  * the largest piece is small" says only that something sits in the middle,
  * not what. Collected under the walk and printed after it: the walk holds
  * the heap's lock, and printing may allocate. */
 #define MAP_MAX 96
-static struct { uintptr_t at; uint32_t size; uint8_t used; } s_map[MAP_MAX];
+typedef struct { uintptr_t at; uint32_t size; uint8_t used; } MapRow;
+static MapRow *s_map;            /* for the one command, not the uptime */
 static int s_map_n, s_map_more;
 
 /* Kind: 0 a run of small used blocks (summed), 1 a big used block, 2 a
@@ -181,6 +167,10 @@ static bool map_block(walker_heap_into_t heap, walker_block_info_t b, void *ctx)
 
 static void cmd_mem_map(void) {
   int i;
+  if ((s_map = malloc(MAP_MAX * sizeof *s_map)) == NULL) {
+    con_write("no memory for the map\n");
+    return;
+  }
   s_map_n = s_map_more = 0;
   s_small = s_small_n = 0;
   heap_caps_walk(MALLOC_CAP_EXEC, map_block, NULL);
@@ -191,62 +181,14 @@ static void cmd_mem_map(void) {
                     s_map[i].used == 1 ? "used" : "FREE", (unsigned)s_map[i].size);
   }
   if (s_map_more) con_printf("  (%d more)\n", s_map_more);
+  free(s_map);
+  s_map = NULL;
 }
 
-static void cmd_mem(void) {
-  con_printf("heap free        %6u B  (largest block %u)\n",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-  /* With the largest block: an app's code has to fit in one piece, and the
-   * total said 44 KB free the day Calendar could not load in 13.9. */
-  con_printf("exec free        %6u B  (largest block %u)\n",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_EXEC),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_EXEC));
-  con_printf("low water        %6u B\n",
-             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
-  /* Reported as what it is. "reserved at boot" was true and was also the
-   * bug: the reader had no way to see that the reservation was the thing
-   * standing between a TLS handshake and a contiguous block. */
-  if (s_heap)
-    con_printf("handle arena     %6u B  in use\n", (unsigned)CARDOS_HEAP_BYTES);
-  else
-    con_printf("handle arena          0 B  reserved on first use (%u KB)\n",
-               (unsigned)(CARDOS_HEAP_BYTES / 1024));
-  con_printf("bluetooth        %6u B%s\n", bthid_radio_on() ? (unsigned)bthid_heap_cost() : 0u,
-             bthid_radio_on() ? "" : "  (radio off)");
-  con_printf("wifi             %6u B\n", (unsigned)wifi_heap_cost());
-  /* The settings store, because when it fills up the next boot erases it
-   * and every credential with it -- which looks like Google forgetting you
-   * for no reason. Entries are 32 bytes; a page holds 126 of them. */
-  {
-    nvs_stats_t st;
-    if (nvs_get_stats(NULL, &st) == ESP_OK)
-      con_printf("nvs              %6u of %u entries used, %u free\n",
-                 (unsigned)st.used_entries, (unsigned)st.total_entries,
-                 (unsigned)st.free_entries);
-  }
-}
+static void mem_line(const char *line, void *ctx) { (void)ctx; con_printf("%s\n", line); }
 
-static const char *state_name(TaskState st) {
-  switch (st) {
-  case TASK_READY:    return "ready";
-  case TASK_RUNNING:  return "run";
-  case TASK_SLEEPING: return "sleep";
-  case TASK_BLOCKED:  return "block";
-  case TASK_DEAD:     return "dead";
-  default:            return "free";
-  }
-}
-
-static void cmd_ps(void) {
-  TaskInfo info[SCHED_MAX_TASKS];
-  int n = sched_list(info, SCHED_MAX_TASKS), i;
-  con_write("tid  state  slices name\n");
-  for (i = 0; i < n; i++)
-    con_printf("%-4u %-6s %-6u %s\n", (unsigned)info[i].tid,
-               state_name(info[i].state), (unsigned)info[i].slices,
-               info[i].name);
-}
+/* The same lines the Memory app shows (kernel/sys/memreport.c). */
+static void cmd_mem(void) { mem_report(mem_line, NULL); }
 
 /* Grouped by what you are trying to do, and kept next to the dispatcher so the
  * two are edited together -- a help text that drifts is worse than none. */
@@ -263,7 +205,7 @@ static void cmd_help(void) {
   con_write("         print [scan|use N|test|FILE] (bluetooth thermal printer)\n");
   con_write("screens  launch (carousel), desk (windows), escape returns\n");
   con_write("boot     apps, boot NAME, boot! NAME, bootinfo\n");
-  con_write("system   mem ps taskcost flip clear reboot echo\n");
+  con_write("system   mem taskcost flip clear reboot echo\n");
   con_write("         log [N|clear] -- what the apps wrote to the card\n");
   con_write("         time (ntp; no rtc on this board), battery\n");
   con_write("voice    hold the button on top, or type listen\n");
@@ -393,7 +335,6 @@ static void run_builtin(const char *line, char *arg) {
     else if (capprun_action_invoke(a, what) != 0)
       con_printf("%s has no action '%s'\n", a->name, what);
   }
-  else if (!strcmp(line, "ps"))     cmd_ps();
   else if (!strcmp(line, "ls"))     cmd_ls(arg);
   else if (!strcmp(line, "cd"))     cmd_cd(arg);
   else if (!strcmp(line, "pwd"))    cmd_pwd();
@@ -412,14 +353,8 @@ static void run_builtin(const char *line, char *arg) {
     con_printf("orientation %d of %d\n", display_orient(), DISPLAY_ORIENTS);
     con_write("flip again if this is not right\n");
   }
-  else if (!strcmp(line, "desk")) {
-    desktop_init();
-    s_mode = MODE_DESKTOP;
-  }
-  else if (!strcmp(line, "launch") || !strcmp(line, "gui")) {
-    launchui_init();
-    s_mode = MODE_LAUNCHER;
-  }
+  else if (!strcmp(line, "desk"))   go(UI_DESKTOP, 1);
+  else if (!strcmp(line, "launch") || !strcmp(line, "gui")) go(UI_LAUNCHER, 1);
   else if (!strcmp(line, "wifi")) cmd_wifi(arg);
   else if (!strcmp(line, "get"))  cmd_get(arg);
   /* The same as d held at power-on, from here: the card is unmounted under
@@ -445,12 +380,7 @@ static void run_builtin(const char *line, char *arg) {
   else if (!strcmp(line, "env"))  cmd_env();
   else if (!strcmp(line, "set"))  cmd_set(arg);
   else if (!strcmp(line, "hotkey")) cmd_hotkey(arg);
-  else if (!strcmp(line, "google")) cmd_google(arg);
-  else if (!strcmp(line, "run")) {
-    /* cmd_run starts it; the mode has to change here, where the loop is. */
-    cmd_run(arg);
-    if (arg && *arg && ui_shell() == UI_LAUNCHER) s_mode = MODE_LAUNCHER;
-  }
+  else if (!strcmp(line, "run"))    cmd_run(arg);
   else if (!strcmp(line, "clear"))  con_clear();
   else if (!strcmp(line, "reboot")) esp_restart();
   else if (!strcmp(line, "defaults")) {
@@ -513,11 +443,8 @@ static void run_builtin(const char *line, char *arg) {
      * PATH lookup, and both end in the same place -- which is what makes a
      * command that lives on the card indistinguishable from one that does
      * not. */
-    if (shell_exec(line, (arg && *arg) ? arg : NULL) == 0) {
-      if (ui_shell() == UI_LAUNCHER) s_mode = MODE_LAUNCHER;
-    } else {
+    if (shell_exec(line, (arg && *arg) ? arg : NULL) != 0)
       con_printf("unknown command: %s\n", line);
-    }
   }
 }
 
@@ -535,7 +462,7 @@ static void run_builtin(const char *line, char *arg) {
 static const char *const COMMANDS[] = {
   "apps", "boot", "boot!", "bootinfo", "cat", "cd", "clear", "df", "desk",
   "echo", "flip", "get", "gui", "help", "launch", "log", "ls", "mem", "mkdir", "motion",
-  "battery", "defaults", "listen", "mouse", "ps", "pwd", "reboot", "rm",
+  "battery", "defaults", "listen", "mouse", "pwd", "reboot", "rm",
   "run", "time",
   "safe",
   "print", "share", "shot", "taskcost", "update", "usbdisk", "volume", "wifi",
@@ -932,13 +859,6 @@ static void hist_walk(int delta) {
  * them to whatever had focus, and an editor would eat opt-3 as a character.
  *
  * Returns 1 if the key was one of these and has been dealt with. */
-static void enter_console(void) {
-  s_mode = MODE_CONSOLE;
-  ui_set_shell(UI_NONE);
-  con_clear();
-  prompt();
-}
-
 /* The shortcut list, over whatever is on screen. Drawn with the same panel
  * every app's ctrl-h uses, so there is one thing that looks like help. Any key
  * closes it, and the shell underneath repaints. */
@@ -966,35 +886,39 @@ static void show_opt_help(void) {
  * include the desktop to get them. This file is the only one that knows how
  * the three shells relate, so this is where the knowledge stays. */
 
-static void feed_key(uint8_t k);          /* defined with the loop, below */
+static void dispatch_key(uint8_t k);      /* defined with the loop, below */
 
 static int ops_open_app(const char *name) {
   /* The launcher's runner, which is also what `run` uses: one way to start an
-   * app, so voice cannot start one differently from the console. */
-  if (launchui_run(name, NULL) != 0) return -1;
-  if (s_mode != MODE_LAUNCHER) { launchui_init(); s_mode = MODE_LAUNCHER; }
-  return 0;
+   * app, so voice cannot start one differently from the console. An app it
+   * opens takes the screen through the launcher (ui_shell follows); a
+   * command runs where it was asked from. */
+  return launchui_run(name, NULL) != 0 ? -1 : 0;
 }
 
 static void ops_switch_shell(const char *which) {
-  if (!strcmp(which, "desktop"))       { desktop_init(); s_mode = MODE_DESKTOP; }
-  else if (!strcmp(which, "console"))  { enter_console(); }
-  else                                 { launchui_init(); s_mode = MODE_LAUNCHER; }
+  if (!strcmp(which, "desktop"))       go(UI_DESKTOP, 1);
+  else if (!strcmp(which, "console"))  go(UI_NONE, 1);
+  else                                 go(UI_LAUNCHER, 1);
 }
 
 /* The button on top: the console never claims it; a shell asks its app. */
 static int sink_button(int event, const char *text) {
-  if (s_mode == MODE_LAUNCHER) return launchui_button(event, text);
-  if (s_mode == MODE_DESKTOP) return desktop_button(event, text);
-  return 0;
+  switch (ui_shell()) {
+  case UI_LAUNCHER: return launchui_button(event, text);
+  case UI_DESKTOP:  return desktop_button(event, text);
+  default:          return 0;
+  }
 }
 
 static int sink_wants_text(void) {
   /* The console is always taking text; a shell running an app defers to the
    * app, which is the same question `; . , /` already asks. */
-  if (s_mode == MODE_CONSOLE) return 1;
-  if (s_mode == MODE_LAUNCHER) return launchui_wants_text();
-  return desktop_wants_text();
+  switch (ui_shell()) {
+  case UI_LAUNCHER: return launchui_wants_text();
+  case UI_DESKTOP:  return desktop_wants_text();
+  default:          return 1;
+  }
 }
 
 /* The hotkey table is a text file on the card, /config/hotkeys.txt, so it
@@ -1043,9 +967,6 @@ static void volume_panel_tick(void) {
   if (overlay_showing_volume()) overlay_close();
 }
 
-/* The loop's pause: 5 ms while someone is there; 40 once the screen sleeps,
- * when a keypress need only wake it -- an eighth of the polling. */
-static int rest_ms(void) { return power_asleep() ? 40 : 5; }
 
 /* A key at the lock screen -- the clock or black, one lock with two faces.
  * c shows the clock, o turns it black (fn-c and fn-o too); opt-backspace
@@ -1074,8 +995,8 @@ static int global_key(uint8_t k) {
   /* The panel is above everything, so it gets the key first. */
   if (s_opt_help) {
     s_opt_help = 0;
-    if (s_mode == MODE_DESKTOP) desktop_repaint();
-    else if (s_mode == MODE_LAUNCHER) launchui_repaint();
+    if (ui_shell() == UI_DESKTOP) desktop_repaint();
+    else if (ui_shell() == UI_LAUNCHER) launchui_repaint();
     else { con_clear(); prompt(); }
     return 1;
   }
@@ -1088,15 +1009,13 @@ static int global_key(uint8_t k) {
     notify_center_open();
     return 1;
   case KEY_OPT_DIGIT(1):
-    launchui_init();
-    s_mode = MODE_LAUNCHER;
+    go(UI_LAUNCHER, 1);
     return 1;
   case KEY_OPT_DIGIT(2):
-    desktop_init();
-    s_mode = MODE_DESKTOP;
+    go(UI_DESKTOP, 1);
     return 1;
   case KEY_OPT_DIGIT(3):
-    enter_console();
+    go(UI_NONE, 1);
     return 1;
 
   /* Brightness, from anywhere, without needing to see the screen.
@@ -1127,7 +1046,7 @@ static int global_key(uint8_t k) {
    * doing on the console rather than freezing a shell silently. */
   case KEY_OPT_LETTER('b'): {
     int n;
-    enter_console();
+    go(UI_NONE, 1);
     con_write("bluetooth: looking...\n");
     n = bthid_autoconnect(4);
     con_printf("  %d connected: %s\n", n, bthid_status(BTHID_MOUSE));
@@ -1135,7 +1054,7 @@ static int global_key(uint8_t k) {
     return 1;
   }
   case KEY_OPT_LETTER('w'):
-    enter_console();
+    go(UI_NONE, 1);
     con_write("wifi: joining the saved network...\n");
     wifi_connect_saved(20000);
     con_printf("  %s\n", wifi_status());
@@ -1161,7 +1080,7 @@ static int global_key(uint8_t k) {
    * runs at the console -- so the chord works from wherever, without
    * finding the console first. */
   case KEY_UPDATE_ALL:
-    enter_console();
+    go(UI_NONE, 1);
     cmd_update("all");
     prompt();
     return 1;
@@ -1171,10 +1090,9 @@ static int global_key(uint8_t k) {
    * running); from the console or the desktop it takes the screen first,
    * the same way fn-` already does from the console. */
   case KEY_APP_SEARCH:
-    if (s_mode != MODE_LAUNCHER) {
-      s_search_from = s_mode;
-      launchui_init();
-      s_mode = MODE_LAUNCHER;
+    if (ui_shell() != UI_LAUNCHER) {
+      s_search_from = (int)ui_shell();
+      go(UI_LAUNCHER, 1);
     }
     launchui_open_search();
     return 1;
@@ -1186,8 +1104,7 @@ static int global_key(uint8_t k) {
      * into whatever has focus. */
     if (k >= KEY_OPT_LETTER('a') && k <= KEY_OPT_LETTER('z')) {
       const char *name = hotkey_get((char)('a' + (k - KEY_OPT_LETTER('a'))));
-      if (name && shell_exec(name, NULL) == 0 && ui_shell() == UI_LAUNCHER)
-        s_mode = MODE_LAUNCHER;
+      if (name) shell_exec(name, NULL);
       return 1;
     }
     return KEY_IS_OPT(k);
@@ -1222,19 +1139,36 @@ static int factory_is_newer(const esp_partition_t *self) {
   return build_stamp(&theirs) > build_stamp(ours);
 }
 
+/* The device held a Google login once (kernel/net/gauth.c, gone 2026-10-09):
+ * a client secret and a refresh token in NVS, mirrored in plain text to
+ * /config/google.txt on a card anyone can take out. The server holds the
+ * login now, so a leftover copy of either is only a secret lying about. */
+static void forget_google(void) {
+  nvs_handle_t h;
+  if (fs_remove(CAPP_CONFIG "/google.txt") == 0)
+    applogf("google", "deleted the old /config/google.txt");
+  /* Read-only first: opening a namespace for writing creates it. */
+  if (nvs_open("cardosg", NVS_READONLY, &h) != ESP_OK) return;
+  nvs_close(h);
+  if (nvs_open("cardosg", NVS_READWRITE, &h) == ESP_OK) {
+    nvs_erase_all(h);
+    nvs_commit(h);
+    nvs_close(h);
+  }
+}
+
 /* The serial link's hooks (kernel/sys/serlink.h): a PC working on the
  * device over USB, whatever is on screen. */
 static int ser_open(const char *name, const char *args) {
-  if (shell_exec(name, (args && *args) ? args : NULL) != 0) return -1;
-  if (ui_shell() == UI_LAUNCHER) s_mode = MODE_LAUNCHER;
-  return 0;
+  return shell_exec(name, (args && *args) ? args : NULL) != 0 ? -1 : 0;
 }
 
 static void ser_state(char *out, size_t n) {
-  const AppDef *a = s_mode == MODE_LAUNCHER ? launchui_running()
-                  : s_mode == MODE_DESKTOP ? desktop_focused_app() : NULL;
+  UiShell sh = ui_shell();
+  const AppDef *a = sh == UI_LAUNCHER ? launchui_running()
+                  : sh == UI_DESKTOP ? desktop_focused_app() : NULL;
   snprintf(out, n, "shell=%s app=%s heap=%u low=%u up=%lus",
-           s_mode == MODE_LAUNCHER ? "launcher" : s_mode == MODE_DESKTOP ? "desktop" : "console",
+           sh == UI_LAUNCHER ? "launcher" : sh == UI_DESKTOP ? "desktop" : "console",
            a && a->name ? a->name : "-",
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
            (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
@@ -1251,20 +1185,20 @@ static void ser_state(char *out, size_t n) {
  * is not a painted shell and wants nothing. */
 /* What has the keyboard, for the agent's `action` tool. */
 static const AppDef *ops_running_app(void) {
-  if (s_mode == MODE_LAUNCHER) return launchui_running();
-  if (s_mode == MODE_DESKTOP) return desktop_focused_app();
+  if (ui_shell() == UI_LAUNCHER) return launchui_running();
+  if (ui_shell() == UI_DESKTOP) return desktop_focused_app();
   return NULL;
 }
 
 static void repaint_shells(void) {
-  if (s_mode == MODE_DESKTOP) desktop_repaint();
-  else if (s_mode == MODE_LAUNCHER) launchui_repaint();
+  if (ui_shell() == UI_DESKTOP) desktop_repaint();
+  else if (ui_shell() == UI_LAUNCHER) launchui_repaint();
 }
 
 /* Everything, the console included -- what a screenshot needs painted. */
 static void repaint_all(void) {
   if (power_showing_clock()) { sleepclock_paint(); return; }   /* it has the panel */
-  if (s_mode == MODE_CONSOLE) con_repaint();
+  if (ui_shell() == UI_NONE) con_repaint();
   else repaint_shells();
   alarm_paint_over();          /* a ringing alarm stays on top */
   notify_paint_over();         /* and a notification's banner */
@@ -1283,16 +1217,11 @@ static void serial_shot(void) {
     ESP_LOGW("shot", "%s: %s", name, shot_error());
 }
 
-static uint32_t clock_ms(void *ctx) {
-  (void)ctx;
-  return (uint32_t)(esp_timer_get_time() / 1000);
-}
-
 /* The console's own key handling, lifted out of the loop so that anything
  * producing keys -- including a spoken sentence -- reaches the same code
  * rather than a second copy of it that drifts. */
 static void console_key(uint8_t k) {
-  if (s_mode == MODE_CONSOLE) con_cursor(0);
+  if (ui_shell() == UI_NONE) con_cursor(0);
   if (k == KEY_ENTER) {
     s_line[s_len] = 0;
     con_putc('\n');
@@ -1304,7 +1233,7 @@ static void console_key(uint8_t k) {
     /* Only if the console still owns the screen. `desk` and `launch` paint a
      * whole shell from inside run_pipeline, and printing a prompt afterwards
      * drew a line of console over the top of it. */
-    if (s_mode == MODE_CONSOLE) prompt();
+    if (ui_shell() == UI_NONE) prompt();
   } else if (k == KEY_BACKSPACE) {
     if (s_len > 0) { s_len--; con_putc('\b'); }
   } else if (k == KEY_UP) {
@@ -1323,24 +1252,113 @@ static void console_key(uint8_t k) {
   }
 }
 
-/* One key, delivered to whichever shell has the screen.
+/* The console's cursor: on after a key, then blinking every 500 ms. */
+static int64_t s_last_blink;
+static int     s_blink;
+
+/* One key, delivered.
  *
  * Every source ends up here: the matrix, a Bluetooth keyboard, a character off
- * the serial line, and a word that was spoken. That is what lets voice work in
- * apps that have never heard of it -- by the time a transcript reaches an app,
- * it is indistinguishable from typing. */
-static void feed_key(uint8_t k) {
+ * the serial line, a word that was spoken and a key the agent typed. That is
+ * what lets voice work in apps that have never heard of it -- by the time a
+ * transcript reaches an app, it is indistinguishable from typing.
+ *
+ * All of it, not only the shell's half. Whatever stands over the shells
+ * answers first -- a ringing alarm, a ringing notification, the notification
+ * centre, the global chords -- and whatever a shell hands on afterwards (the
+ * launcher to the console or the desktop, the desktop to the console, the
+ * console to the launcher) happens here as well. Keys from voice and the
+ * agent used to come in through a second, shorter copy that skipped the
+ * gating and every one of those transitions. The loop's own concerns -- the
+ * lock screen, waking, repeats -- are about a physical keyboard and stay in
+ * the loop. */
+static void dispatch_key(uint8_t k) {
   if (!k) return;
+
+  /* A ringing alarm answers every key: nothing underneath should open,
+   * type or close because someone reached out to stop it. */
+  if (alarm_ringing()) { alarm_key(k); return; }
+
+  /* A ringing notification (a Timer finished while closed) is stopped by
+   * any key, and the key goes no further. */
+  if (notify_ringing()) { notify_dismiss(); return; }
+
+  /* The notification centre (fn-n) has every key while it is open. */
+  if (notify_center_active()) {
+    uint8_t arrow = keyboard_arrow_for(k);
+    notify_center_key(arrow ? arrow : k);
+    return;
+  }
+
+  /* Before any shell sees it. */
   if (global_key(k)) return;
 
-  if (s_mode == MODE_LAUNCHER)      { launchui_key(k); return; }
-  if (s_mode == MODE_DESKTOP)       { desktop_key(k); return; }
-  console_key(k);
+  switch (ui_shell()) {
+  case UI_LAUNCHER: {
+    int r = launchui_key(k);
+    if (r == 1) {
+      go(UI_NONE, 1);
+    } else if (r == 2) {
+      /* the launcher handed over: desktop_init has the screen */
+    } else if (s_search_from >= 0 && !launchui_search_active()) {
+      /* The search opt-space opened from outside the launcher just
+       * closed. Enter on a hit leaves an app running here, which
+       * stays; cancelling (Escape, or backspace past the start)
+       * gives the screen back to what opt-space took it from. */
+      int from = s_search_from;
+      s_search_from = -1;
+      if (!launchui_running() && from != UI_LAUNCHER)
+        go((UiShell)from, from == UI_NONE);   /* the console redraws; the desktop is as left */
+    }
+    return;
+  }
+  case UI_DESKTOP:
+    /* ESC left the desktop: hand the screen back to the console. */
+    if (desktop_key(k)) go(UI_NONE, 1);
+    return;
+  default:
+    /* The way out of the console is the way out of everything else: fn-` or
+     * opt-backspace goes to the launcher, as the same key there comes back
+     * here. Before this it reached the line editor and did nothing. */
+    if (k == KEY_QUIT) {
+      con_cursor(0);
+      go(UI_LAUNCHER, 1);
+      return;
+    }
+    console_key(k);
+    if (ui_shell() == UI_NONE) {
+      s_last_blink = esp_timer_get_time();
+      s_blink = 1;
+      con_cursor(1);
+    }
+    return;
+  }
+}
+
+/* How long the loop rests between passes: one policy, whichever shell is up.
+ *
+ * 5 ms while something is happening: the pointer has to keep up with the
+ * hand. But outside the moment somebody is pressing a key, a carousel or a
+ * prompt is static, and two hundred keyboard scans a second to discover that
+ * nothing has changed is work for its own sake -- the launcher did exactly
+ * that, idle, while the console already dropped to 25 ms.
+ *
+ * So after two seconds of quiet the pass drops to 25 ms. The cost is that the
+ * first keypress after a pause can be noticed 25 ms late, which is under what
+ * anyone perceives, and the very next pass is back to 5 ms because that
+ * keypress reset the clock. An app on screen with a tick handler keeps the
+ * 5 ms, because its tick is the only way it moves on its own (Kart is steered
+ * by tilt, Noodle by breath; neither presses a key). 40 ms once the screen
+ * sleeps, when a keypress need only wake it -- an eighth of the polling. */
+static int rest_ms(void) {
+  const AppDef *a;
+  if (power_asleep()) return 40;
+  if (bg_idle_ms() <= 2000) return 5;
+  a = notify_center_active() ? NULL : ops_running_app();
+  return a && a->tick ? 5 : 25;
 }
 
 void app_main(void) {
-  int64_t last_blink = 0;
-  int blink = 0;
   size_t heap_at_boot;
   const char *nvs_erased = NULL;    /* why, if this boot wiped the settings */
 
@@ -1391,7 +1409,7 @@ void app_main(void) {
   con_printf("CardOS %s (%s) on %s\n", esp_app_get_description()->version,
              update_flavor(), board_name());
   con_set_color(COLOR_GREY);
-  con_write("kernel core: memory + swap\n\n");
+  con_write("kernel core\n\n");
   con_set_color(COLOR_GREEN);
 
   heap_at_boot = esp_get_free_heap_size();
@@ -1402,11 +1420,6 @@ void app_main(void) {
     con_set_color(COLOR_GREEN);
   }
 
-  /* The handle arena is not taken here any more. See CARDOS_HEAP_BYTES. */
-
-  /* The scheduler's policy half runs now; the Xtensa context switch does not
-   * exist yet, so this loop *is* the shell task rather than being switched to
-   * it. `ps` therefore shows one task. spawn/kill arrive with the switch. */
   /* NVS, before anything reads a setting.
    *
    * It used to be initialised inside wifi_start and the Bluetooth radio, which
@@ -1422,7 +1435,7 @@ void app_main(void) {
        * once, and until it was written down it looked like Google forgetting
        * the device for no reason, over and over. */
       con_set_color(COLOR_RED);
-      con_printf("nvs %s: erasing it. wifi, google and settings are gone;\n"
+      con_printf("nvs %s: erasing it. wifi and settings are gone;\n"
                  "whatever /config mirrors comes back below.\n",
                  err == ESP_ERR_NVS_NO_FREE_PAGES ? "is full" : "is another version");
       con_set_color(COLOR_GREEN);
@@ -1468,12 +1481,9 @@ void app_main(void) {
   }
 
   env_init();
-  sched_init(clock_ms, NULL);
-  sched_create("shell");
-  sched_next();                  /* mark it running, so it owns its locks */
 
   /* A missing card is a normal condition, not a boot failure: CardOS runs
-   * without one, just without apps or swap. Say which, rather than leaving
+   * without one, just without apps. Say which, rather than leaving
    * the user to guess why `ls` is empty. */
   if (fs_mount() == 0) {
     uint64_t total = 0, freeb = 0;
@@ -1489,7 +1499,7 @@ void app_main(void) {
      * or repeating the Google consent dance. */
     if (nvs_erased) applogf("nvs", "erased at boot: %s", nvs_erased);
     if (wifi_restore_from_card())  con_write("wifi: network restored from /config/wifi.txt\n");
-    if (gauth_restore_from_card()) con_write("google: credentials restored from /config/google.txt\n");
+    forget_google();
     if (env_restore_from_card())   con_write("env: variables restored from /config/env.txt\n");
     /* Everything else small (prefs.h). Brightness was read before the card
      * was up, so a restored one is applied now; the rest are read later. */
@@ -1504,14 +1514,12 @@ void app_main(void) {
   } else {
     hotkeys_init(NULL);          /* nothing to bind to, and nowhere to keep it */
     con_set_color(COLOR_GREY);
-    con_write("no sd card: no apps, no swap\n");
+    con_write("no sd card: no apps\n");
     con_set_color(COLOR_GREEN);
   }
 
   /* Success criterion 6: the free heap is reported and understood. */
   con_printf("heap %u KB free at boot\n", (unsigned)(heap_at_boot / 1024));
-  con_printf("handle heap %u KB reserved\n",
-                 (unsigned)(CARDOS_HEAP_BYTES / 1024));
   con_write("type help\n\n");
 
   /* Came back from a firmware the desktop launched: return there, rather than
@@ -1543,6 +1551,13 @@ void app_main(void) {
    * does: through the launcher. */
   capprun_set_opener(launchui_run);
   capprun_set_shell(shell_remote);
+  /* What an app owns goes with it (capprun_on_release). */
+  capprun_on_release(httpq_abandon);         /* a request it will never collect */
+  capprun_on_release(fontres_release_owner); /* the fonts it asked for */
+  capprun_on_release(midi_release_owner);    /* the MIDI port, its notes stopped */
+  capprun_on_release(link_release_owner);    /* the ESP-NOW link, its partner told */
+  capprun_on_release(power_release_owner);   /* the screen, if it held it on */
+  capprun_on_release(share_app_closed);      /* the share, if it started it */
   {
     static const SerlinkHooks hooks = { shell_remote, ser_open, ser_state, repaint_all };
     serlink_init(&hooks);
@@ -1567,21 +1582,19 @@ void app_main(void) {
   bg_submit(BG_TIME_SYNC);
 
   {
-    static const ShellOps OPS = { ops_open_app, ops_switch_shell, feed_key, ops_running_app };
-    static const InputSink SINK = { sink_wants_text, feed_key, sink_button };
+    static const ShellOps OPS = { ops_open_app, ops_switch_shell, dispatch_key, ops_running_app };
+    static const InputSink SINK = { sink_wants_text, dispatch_key, sink_button };
     shell_set_ops(&OPS);
     input_set_sink(&SINK);
   }
 
   /* Safe mode always lands at the console: it is the one shell that cannot be
    * hidden by a setting, and the one with `defaults` in it. */
-  if (s_safe_mode) {
-    prompt();
-    s_mode = MODE_CONSOLE;
-  } else switch (ui_saved_shell()) {
-  case UI_DESKTOP:  desktop_init(); s_mode = MODE_DESKTOP; break;
-  case UI_NONE:     prompt();       s_mode = MODE_CONSOLE; break;
-  default:          launchui_init(); s_mode = MODE_LAUNCHER; break;
+  if (s_safe_mode) go(UI_NONE, 0);
+  else switch (ui_saved_shell()) {
+  case UI_DESKTOP:  go(UI_DESKTOP, 1); break;
+  case UI_NONE:     go(UI_NONE, 0); break;
+  default:          go(UI_LAUNCHER, 1); break;
   }
   if (!s_safe_mode) blip(BLIP_BOOT);
 
@@ -1593,8 +1606,7 @@ void app_main(void) {
      * for why the whole cycle happens inside this call. */
     agent_tick();
     if (voice_tick()) {
-      if (s_mode == MODE_LAUNCHER) launchui_repaint();
-      else if (s_mode == MODE_DESKTOP) desktop_repaint();
+      repaint_shells();
     }
 
     /* A character arriving on the serial console counts as a keypress, so the
@@ -1675,8 +1687,8 @@ void app_main(void) {
     {
       const char *done = bg_take_result();
       if (done) {
-        if (s_mode == MODE_CONSOLE) { con_printf("%s\n", done); prompt(); }
-        else if (s_mode == MODE_LAUNCHER) launchui_note(done);
+        if (ui_shell() == UI_NONE) { con_printf("%s\n", done); prompt(); }
+        else if (ui_shell() == UI_LAUNCHER) launchui_note(done);
       }
     }
 
@@ -1691,144 +1703,42 @@ void app_main(void) {
         clock_apply_zone();
         snprintf(line, sizeof line, "timezone: %s", zone[0] ? zone : rule);
         applogf("tz", "%s (%s)", zone, rule);
-        if (s_mode == MODE_CONSOLE) { con_printf("%s\n", line); prompt(); }
-        else if (s_mode == MODE_LAUNCHER) launchui_note(line);
+        if (ui_shell() == UI_NONE) { con_printf("%s\n", line); prompt(); }
+        else if (ui_shell() == UI_LAUNCHER) launchui_note(line);
       }
     }
 
-    /* A ringing alarm answers every key: nothing underneath should open,
-     * type or close because someone reached out to stop it. */
-    if (k && alarm_ringing()) { alarm_key(k); k = 0; }
+    dispatch_key(k);
 
-    /* A ringing notification (a Timer finished while closed) is stopped by
-     * any key, and the key goes no further. */
-    if (k && notify_ringing()) { notify_dismiss(); k = 0; }
-
-    /* The notification centre (fn-n) has every key while it is open, and
-     * the shells wait: an animating app would draw over it. */
-    if (notify_center_active()) {
-      if (k) {
-        uint8_t arrow = keyboard_arrow_for(k);
-        notify_center_key(arrow ? arrow : k);
-      }
-      vTaskDelay(pdMS_TO_TICKS(rest_ms()));
-      continue;
-    }
-
-    /* Before any shell sees it. */
-    if (k && global_key(k)) k = 0;
-
-    if (s_mode == MODE_LAUNCHER) {
-      MouseReport mr;
-      int got = 0;
-      while (bthid_poll_mouse(&mr)) { launchui_mouse_apply(&mr); got = 1; }
-      if (got) launchui_mouse_done();
-      launchui_tick((uint32_t)(esp_timer_get_time() / 1000));
-      if (k) {
-        int r = launchui_key(k);
-        if (r == 1) {
-          s_mode = MODE_CONSOLE;
-          ui_set_shell(UI_NONE);
-          con_clear();
-          con_write("back at the console\n");
-          prompt();
-        } else if (r == 2) {
-          s_mode = MODE_DESKTOP;      /* the launcher handed over */
-        } else if (s_search_from >= 0 && !launchui_search_active()) {
-          /* The search opt-space opened from outside the launcher just
-           * closed. Enter on a hit leaves an app running here, which
-           * stays; cancelling (Escape, or backspace past the start)
-           * gives the screen back to what opt-space took it from. */
-          int from = s_search_from;
-          s_search_from = -1;
-          if (!launchui_running()) {
-            if (from == MODE_CONSOLE) {
-              s_mode = MODE_CONSOLE;
-              ui_set_shell(UI_NONE);
-              con_clear();
-              con_write("back at the console\n");
-              prompt();
-            } else if (from == MODE_DESKTOP) {
-              s_mode = MODE_DESKTOP;
-              desktop_repaint();
-            }
-          }
-        }
-      }
-      vTaskDelay(pdMS_TO_TICKS(rest_ms()));
-      continue;
-    }
-
-    if (s_mode == MODE_DESKTOP) {
-      MouseReport mr;
-      /* Drain whatever the radio queued. It arrives on the Bluetooth task,
-       * which must not touch the display, so this is where it turns into
-       * pointer movement. */
-      {
+    /* The notification centre is drawn over the shells, and they wait while
+     * it is open: an animating app would draw over it. */
+    if (!notify_center_active()) {
+      if (ui_shell() == UI_LAUNCHER) {
+        MouseReport mr;
         int got = 0;
+        while (bthid_poll_mouse(&mr)) { launchui_mouse_apply(&mr); got = 1; }
+        if (got) launchui_mouse_done();
+        launchui_tick((uint32_t)(esp_timer_get_time() / 1000));
+      } else if (ui_shell() == UI_DESKTOP) {
+        MouseReport mr;
+        int got = 0;
+        /* Drain whatever the radio queued. It arrives on the Bluetooth task,
+         * which must not touch the display, so this is where it turns into
+         * pointer movement. */
         while (bthid_poll_mouse(&mr)) { desktop_mouse_apply(&mr); got = 1; }
         if (got) desktop_mouse_done();   /* one repaint for the whole burst */
-      }
-      desktop_tick((uint32_t)(esp_timer_get_time() / 1000));
-      if ((k && desktop_key(k)) || desktop_take_leave()) {
-        /* ESC left the desktop: hand the screen back to the console. */
-        s_mode = MODE_CONSOLE;
-        ui_set_shell(UI_NONE);
-        con_clear();
-        con_write("back at the console\n");
-        prompt();
-      }
-      vTaskDelay(pdMS_TO_TICKS(rest_ms()));
-      continue;
-    }
-
-    /* The way out of the console is the way out of everything else: fn-` or
-     * opt-backspace goes to the launcher, as the same key there comes back
-     * here. Before this it reached the line editor and did nothing. */
-    if (k == KEY_QUIT) {
-      con_cursor(0);
-      launchui_init();
-      s_mode = MODE_LAUNCHER;
-      continue;
-    }
-
-    if (k) {
-      console_key(k);
-      if (s_mode == MODE_CONSOLE) {
-        last_blink = esp_timer_get_time();
-        blink = 1;
-        con_cursor(1);
+        desktop_tick((uint32_t)(esp_timer_get_time() / 1000));
+        if (desktop_take_leave()) go(UI_NONE, 1);
+      } else {
+        int64_t now = esp_timer_get_time();
+        if (now - s_last_blink > 500000) {   /* 500 ms */
+          s_last_blink = now;
+          s_blink = !s_blink;
+          con_cursor(s_blink);
+        }
       }
     }
 
-    {
-      int64_t now = esp_timer_get_time();
-      if (s_mode == MODE_CONSOLE && now - last_blink > 500000) {   /* 500 ms */
-        last_blink = now;
-        blink = !blink;
-        con_cursor(blink);
-      }
-    }
-
-    /* How hard to poll.
-     *
-     * 5 ms while something is happening: the pointer has to keep up with the
-     * hand. But outside the moment somebody is pressing a key this screen is
-     * static -- the clock ticks once a second and nothing else moves -- and
-     * two hundred keyboard scans a second to discover that nothing has
-     * changed is work for its own sake.
-     *
-     * After two seconds of quiet the poll drops to 25 ms. The cost is that
-     * the first keypress after a pause can be noticed 25 ms late, which is
-     * under what anyone perceives, and the very next pass is back to 5 ms
-     * because that keypress reset the clock. Radios and the background task
-     * get the machine in between. */
-    {
-      uint32_t quiet = bg_idle_ms();
-      int ms = (s_mode != MODE_CONSOLE) ? 5 : 10;
-      if (quiet > 2000) ms = 25;
-      if (power_asleep()) ms = 40;
-      vTaskDelay(pdMS_TO_TICKS(ms));
-    }
+    vTaskDelay(pdMS_TO_TICKS(rest_ms()));
   }
 }

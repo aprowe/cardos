@@ -13,25 +13,6 @@ so the launcher has one drawing path for built-ins and loaded apps alike.
 import sys
 
 ART = {
-    # A folder, with the tab on the left the way every file manager draws it.
-    "Files": [
-        "................",
-        "................",
-        "..######........",
-        ".#......#.......",
-        ".#.......######.",
-        ".#............#.",
-        ".#............#.",
-        ".#............#.",
-        ".#............#.",
-        ".#............#.",
-        ".#............#.",
-        ".#............#.",
-        ".#............#.",
-        "..############..",
-        "................",
-        "................",
-    ],
     # A DIP package: body, legs down both sides, and the notch that says which
     # end is pin one.
     "Memory": [
@@ -111,6 +92,26 @@ ART = {
         "................",
         "................",
     ],
+    # A folder: tab on the top left, body below. The launcher's folders; the
+    # file manager that used the same shape is a .capp with its own icon.
+    "folder": [
+        "................",
+        "................",
+        "..#####.........",
+        ".#.....#........",
+        ".##############.",
+        ".#............#.",
+        ".#............#.",
+        ".#............#.",
+        ".#............#.",
+        ".#............#.",
+        ".#............#.",
+        ".#............#.",
+        ".#............#.",
+        ".##############.",
+        "................",
+        "................",
+    ],
     # The fallback, for an app with no icon of its own: a blank page with a
     # folded corner.
     "generic": [
@@ -167,7 +168,7 @@ STATUS = {
     ],
 }
 
-ORDER = ["Files", "Memory", "Settings", "About", "firmware", "generic"]
+ORDER = ["Memory", "Settings", "About", "firmware", "folder", "generic"]
 STATUS_ORDER = ["wifi", "mouse", "kbd"]
 
 
@@ -222,9 +223,9 @@ def main():
     ]
     for name in ORDER:
         b = pack(ART[name])
-        # ICON_FIRMWARE is taken by the IconKind enumerator, so the table's
-        # entry gets a trailing underscore rather than a different scheme.
-        sym = "ICON_" + name.upper() + ("_" if name == "firmware" else "")
+        # ICON_FIRMWARE and ICON_FOLDER are taken by the IconKind enumerators,
+        # so their tables get a trailing underscore rather than another scheme.
+        sym = "ICON_" + name.upper() + ("_" if name in ("firmware", "folder") else "")
         lines.append("static const uint8_t %s[32] = {" % sym)
         for i in range(0, 32, 8):
             lines.append("  " + " ".join("0x%02X," % v for v in b[i:i + 8]))

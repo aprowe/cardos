@@ -151,37 +151,6 @@ void test_rpc_does_not_overflow_on_a_long_argument(void) {
   CHECK(strlen(c.arg) < RPC_ARG_MAX);
 }
 
-void test_rpc_wake_word(void) {
-  CHECK(rpc_wake("carlos open notes") != NULL);
-  CHECK(!strcmp(rpc_wake("carlos open notes"), "open notes"));
-  CHECK(!strcmp(rpc_wake("Carlos, open notes"), "open notes"));
-  CHECK(!strcmp(rpc_wake("  CARLOS: turn the brightness down"),
-                "turn the brightness down"));
-
-  /* Recognition hears a name it has no word for and picks something close, so
-   * the near misses count too. */
-  CHECK(rpc_wake("karlos open notes") != NULL);
-  CHECK(rpc_wake("Carlo open notes") != NULL);
-
-  /* And things that merely start with the same letters do not. */
-  CHECK(rpc_wake("carlsberg is a lager") == NULL);
-  CHECK(rpc_wake("the carlos I know") == NULL);
-  CHECK(rpc_wake("hello there") == NULL);
-  CHECK(rpc_wake("") == NULL);
-  CHECK(rpc_wake(NULL) == NULL);
-}
-
-/* The wake word on its own is not a command -- it is someone starting to speak
- * and stopping. It must not come back as an empty instruction. */
-void test_rpc_wake_word_alone_leaves_nothing(void) {
-  const char *rest = rpc_wake("Carlos.");
-  int ok;
-  CHECK(rest != NULL);
-  CHECK_EQ((int)strlen(rest), 0);
-  parse(rest, &ok);
-  CHECK(!ok);
-}
-
 /* `say` puts text into whatever is listening, and the console listens. A line
  * break in the text would be delivered as enter -- so "say ls\nrm /x" was a
  * command typed and run, which is exactly what the vocabulary exists to

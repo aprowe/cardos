@@ -24,7 +24,6 @@ static const Pref PREFS[] = {
   { "bright",   P_U8 },     /* kernel/drv/display.c */
   { "volume",   P_U8 },     /* kernel/drv/speaker.c */
   { "shell",    P_U8 },     /* kernel/ui/shell.c */
-  { "autodesk", P_U8 },     /* kernel/ui/desktop.c */
   { "btboot",   P_U8 },     /* kernel/drv/bthid.c */
   { "pins",     P_STR },    /* kernel/ui/pins.c */
   { "dim_s",    P_U16 },    /* kernel/sys/power.c */
@@ -114,7 +113,7 @@ static const Pref *find(const char *key) {
 }
 
 int prefs_restore_from_card(void) {
-  static char text[FILE_MAX + 1];        /* once, at boot: 1 KB of .bss -- move to the heap if RAM gets tight */
+  char *text;                            /* once, at boot: on the heap for the call */
   char key[24], val[VAL_MAX], have[VAL_MAX];
   const char *p;
   nvs_handle_t h;
@@ -127,12 +126,16 @@ int prefs_restore_from_card(void) {
     if (fs_rename(PREFS_FILE ".tmp", PREFS_FILE) != 0) return 0;
     if ((fd = fs_open(PREFS_FILE, FS_O_READ)) < 0) return 0;
   }
+  if ((text = (char *)malloc(FILE_MAX + 1)) == NULL) {
+    fs_close(fd);
+    ESP_LOGW(TAG, "no memory to read %s: nothing restored", PREFS_FILE);
+    return 0;
+  }
   n = fs_read(fd, text, FILE_MAX);
   fs_close(fd);
-  if (n <= 0) return 0;
+  if (n <= 0 || nvs_open(PREFS_NS, NVS_READWRITE, &h) != ESP_OK) { free(text); return 0; }
   text[n] = 0;
 
-  if (nvs_open(PREFS_NS, NVS_READWRITE, &h) != ESP_OK) return 0;
   p = text;
   while (kv_next(&p, key, sizeof key, val, sizeof val)) {
     const Pref *pref = find(key);
@@ -141,6 +144,7 @@ int prefs_restore_from_card(void) {
   }
   if (restored) nvs_commit(h);
   nvs_close(h);
+  free(text);
   if (restored) ESP_LOGI(TAG, "restored %d setting(s) from %s", restored, PREFS_FILE);
   return restored;
 }

@@ -17,8 +17,9 @@
 #include <stdio.h>
 #include <string.h>
 
-/* One colour icon, 16x16 RGB565. Loaded on demand and kept: 512 bytes each,
- * and only for entries that actually have a file. */
+#include "esp_timer.h"
+
+/* One colour icon, 16x16 RGB565, 512 bytes. */
 #define CIC_PIXELS (16 * 16)
 #define CIC_HEADER 8
 
@@ -35,6 +36,7 @@ static int  s_ord[MAX_ICONS * 2];
 static int  s_nord;
 static int  s_ord_folder = -2;     /* the folder s_ord is for; -2 none */
 static void load_favs(void);
+static void colour_forget(void);
 
 /* The .capp binaries are carried in the firmware and written out to the card.
  * There is no card reader in the loop, so an app that can only arrive by
@@ -459,10 +461,8 @@ static void scan(const char *dir, int bin_only, int parent) {
       continue;
     }
 
-    /* Cleared before it is filled. The colour pointer in particular is freed
-     * by the next reload, and leaving a stale one here meant the second reload
-     * freed it twice -- which aborts in the allocator with a backtrace that
-     * points at free() and says nothing about icons. */
+    /* Cleared before it is filled: a colour source left over from the
+     * last scan would belong to whatever entry had this index then. */
     memset(ic, 0, sizeof *ic);
     ic->parent = parent;
 
@@ -580,11 +580,8 @@ static void partition_cli(void) {
 
 void icons_reload(void) {
   int i;
-  for (i = 0; i < s_nicon; i++) {
-    free(s_icon[i].colour);
-    s_icon[i].colour = NULL;
-    s_icon[i].colour_tried = 0;
-  }
+  colour_forget();                       /* the entries are about to be renumbered */
+  for (i = 0; i < s_nicon; i++) s_icon[i].colour_src = 0;
   s_nicon = 0;
   s_nvisible = 0;
   capprun_unload_all();
@@ -689,42 +686,69 @@ const uint8_t *icon_bitmap(int i) {
   if (ic->kind == ICON_FIRMWARE) return ICON_FIRMWARE_;
   if (ic->kind == ICON_FOLDER)   return ICON_FOLDER_;
 
-  if (strcmp(ic->name, "Files") == 0)    return ICON_FILES;
   if (strcmp(ic->name, "Memory") == 0)   return ICON_MEMORY;
   if (strcmp(ic->name, "Settings") == 0) return ICON_SETTINGS;
   if (strcmp(ic->name, "About") == 0)    return ICON_ABOUT;
   return ICON_GENERIC;
 }
 
-/* Read NAME.cic, if there is one. The header is checked rather than trusted:
- * this is a file on a removable card, and anything at all can be in it. */
-static uint16_t *load_cic(const char *name) {
+/* ---- colour icons ---------------------------------------------------------
+ *
+ * They were loaded the first time each was drawn and kept: about forty
+ * separate 512-byte blocks, allocated one at a time as the carousel was
+ * walked and held for the uptime -- the small, long-lived allocations that
+ * settle in the middle of the heap and split it. Now sixteen slots of one
+ * static array, least recently drawn out first. Sixteen is more than either
+ * shell shows at once (the desktop's grid is fifteen, the carousel about
+ * seven), so a paint never pushes out an icon it has just drawn; and a slot
+ * drawn in the last FRESH_MS is never taken, whatever the count. The generic
+ * page every app without a picture shares is one copy, not one per app. */
+#define CIC_SLOTS 16
+#define FRESH_MS  100
+
+enum { SRC_UNKNOWN = 0, SRC_FILE, SRC_MONO, SRC_GENERIC, SRC_NONE };
+
+typedef struct {
+  int16_t  owner;                 /* icon index + 1; 0 is empty */
+  uint32_t used_ms;
+  uint16_t px[CIC_PIXELS];
+} CicSlot;
+
+static CicSlot  s_cic[CIC_SLOTS];
+static uint16_t s_generic[CIC_PIXELS];
+static int      s_generic_state;  /* 0 not read, 1 read, -1 there is none */
+
+static void colour_forget(void) {
+  int k;
+  for (k = 0; k < CIC_SLOTS; k++) s_cic[k].owner = 0;
+  s_generic_state = 0;            /* seeding may have written a new one */
+}
+
+/* Read NAME.cic into `px`, if there is one. The header is checked rather than
+ * trusted: this is a file on a removable card, and anything at all can be in
+ * it. 0 on success. */
+static int load_cic(const char *name, uint16_t *px) {
   char path[96];
   uint8_t head[CIC_HEADER];
-  uint16_t *px;
   int fd, want = CIC_PIXELS * 2, got = 0;
 
   snprintf(path, sizeof path, "%s/%s.cic", ICON_DIR, name);
   fd = fs_open(path, FS_O_READ);
-  if (fd < 0) return NULL;
+  if (fd < 0) return -1;
 
   if (fs_read(fd, head, CIC_HEADER) != CIC_HEADER ||
       head[0] != 'C' || head[1] != 'I' || head[2] != 'C' || head[3] != '1' ||
       head[4] != 16 || head[5] != 0 || head[6] != 16 || head[7] != 0) {
     fs_close(fd);
-    return NULL;
+    return -1;
   }
-
-  px = (uint16_t *)malloc((size_t)want);
-  if (!px) { fs_close(fd); return NULL; }
   while (got < want) {
     int n = fs_read(fd, (uint8_t *)px + got, (size_t)(want - got));
     if (n <= 0) break;
     got += n;
   }
   fs_close(fd);
-  if (got != want) { free(px); return NULL; }
-  return px;
+  return got == want ? 0 : -1;
 }
 
 /* An app with no colour icon of its own -- one Build made, which reached
@@ -742,14 +766,12 @@ static int mono_bit(const uint8_t *m, int x, int y) {
   return (m[y * 2 + (x >> 3)] >> (7 - (x & 7))) & 1;
 }
 
-static uint16_t *mono_colour(const uint8_t *m) {
-  uint16_t *px, ink = swap565(110, 214, 200), edge = swap565(24, 26, 32);
+static int mono_colour(const uint8_t *m, uint16_t *px) {
+  uint16_t ink = swap565(110, 214, 200), edge = swap565(24, 26, 32);
   int x, y, any = 0;
-  if (!m) return NULL;
+  if (!m) return -1;
   for (x = 0; x < 32; x++) any |= m[x];
-  if (!any) return NULL;
-  px = (uint16_t *)malloc(16 * 16 * 2);
-  if (!px) return NULL;
+  if (!any) return -1;
   for (y = 0; y < 16; y++)
     for (x = 0; x < 16; x++) {
       uint16_t v = 0;
@@ -758,33 +780,86 @@ static uint16_t *mono_colour(const uint8_t *m) {
                mono_bit(m, x, y - 1) || mono_bit(m, x, y + 1)) v = edge;
       px[y * 16 + x] = v;
     }
-  return px;
+  return 0;
+}
+
+static const uint16_t *generic(void) {
+  if (s_generic_state == 0) s_generic_state = load_cic("generic", s_generic) == 0 ? 1 : -1;
+  return s_generic_state > 0 ? s_generic : NULL;
+}
+
+/* The .cic an entry would have. Folders look theirs up in a namespace of
+ * their own: the card is FAT, which matches names without regard to case,
+ * so a folder called Firmware and the chip drawn for a firmware *image*
+ * would otherwise be competing for one file called firmware.cic. */
+static void cic_name(const Icon *ic, char *out, size_t n) {
+  if (ic->kind == ICON_FOLDER) snprintf(out, n, "folder-%s", ic->name);
+  else snprintf(out, n, "%s", ic->kind == ICON_FIRMWARE ? "firmware" : ic->name);
+}
+
+/* The entry's pixels into `px`, working out where they come from the first
+ * time and remembering it, so a missing file is not looked for again on
+ * every repaint. 0 when `px` was filled. */
+static int fill(Icon *ic, uint16_t *px) {
+  char key[32];
+  cic_name(ic, key, sizeof key);
+  switch (ic->colour_src) {
+  case SRC_FILE: return load_cic(key, px);
+  case SRC_MONO: return mono_colour(capprun_icon(ic->slot), px);
+  case SRC_UNKNOWN: break;
+  default: return -1;
+  }
+  if (load_cic(key, px) == 0) { ic->colour_src = SRC_FILE; return 0; }
+  if (ic->kind == ICON_CAPP && mono_colour(capprun_icon(ic->slot), px) == 0) {
+    ic->colour_src = SRC_MONO;
+    return 0;
+  }
+  /* No generic for folders: generic.cic is a blank page -- an app with
+   * nothing drawn for it -- and folders wearing it would look like apps,
+   * and like each other. Without a colour they fall through to
+   * ICON_FOLDER_, which is at least the right shape. */
+  ic->colour_src = ic->kind == ICON_FIRMWARE || ic->kind == ICON_FOLDER ? SRC_NONE : SRC_GENERIC;
+  return -1;
+}
+
+/* An empty slot, or the one drawn longest ago if that was not just now. */
+static int pick_slot(uint32_t now) {
+  int k, best = -1;
+  for (k = 0; k < CIC_SLOTS; k++) {
+    if (!s_cic[k].owner) return k;
+    if (best < 0 || (int32_t)(s_cic[k].used_ms - s_cic[best].used_ms) < 0) best = k;
+  }
+  if (now - s_cic[best].used_ms < FRESH_MS) return -1;   /* on screen: keep it */
+  return best;
 }
 
 const uint16_t *icon_colour(int i) {
   Icon *ic;
+  CicSlot *c;
+  uint32_t now;
+  int k;
+
   if (i < 0 || i >= s_nicon) return NULL;
   ic = &s_icon[i];
-  if (ic->colour_tried) return ic->colour;
-  ic->colour_tried = 1;
-  if (ic->kind == ICON_FOLDER) {
-    /* Folders look their icon up in a namespace of their own. The card is
-     * FAT, which matches names without regard to case, so a folder called
-     * Firmware and the chip drawn for a firmware *image* would otherwise be
-     * competing for one file called firmware.cic. */
-    char key[32];
-    snprintf(key, sizeof key, "folder-%s", ic->name);
-    ic->colour = load_cic(key);
-    /* No generic fallback: generic.cic is a blank page -- an app with nothing
-     * drawn for it -- and folders wearing it would look like apps, and like
-     * each other. Without a colour they fall through to ICON_FOLDER_, which
-     * is at least the right shape. */
-    return ic->colour;
+  now = (uint32_t)(esp_timer_get_time() / 1000);
+  if (ic->colour_src == SRC_NONE) return NULL;
+  if (ic->colour_src == SRC_GENERIC) return generic();
+
+  k = ic->colour_slot;
+  if (k >= 0 && k < CIC_SLOTS && s_cic[k].owner == i + 1) {
+    s_cic[k].used_ms = now;
+    return s_cic[k].px;
   }
-  ic->colour = load_cic(ic->kind == ICON_FIRMWARE ? "firmware" : ic->name);
-  if (!ic->colour && ic->kind == ICON_CAPP) ic->colour = mono_colour(capprun_icon(ic->slot));
-  if (!ic->colour && ic->kind != ICON_FIRMWARE) ic->colour = load_cic("generic");
-  return ic->colour;
+
+  if ((k = pick_slot(now)) < 0) return NULL;
+  c = &s_cic[k];
+  c->owner = 0;                   /* whoever had it has lost it either way */
+  if (fill(ic, c->px) != 0)
+    return ic->colour_src == SRC_GENERIC ? generic() : NULL;
+  c->owner = (int16_t)(i + 1);
+  c->used_ms = now;
+  ic->colour_slot = (int8_t)k;
+  return c->px;
 }
 
 int icons_boot_firmware(int i) {
@@ -794,15 +869,9 @@ int icons_boot_firmware(int i) {
 
   if (!ic || ic->kind != ICON_FIRMWARE) return 0;
 
-  /* Remember that CardOS launched it, so that when the bootloader rolls back
-   * after the guest is reset we come straight back to the shell the user was
-   * in rather than to a console they never asked for. */
-  desktop_set_autostart(1);
-  if (launcher_check(ic->path, &info, &why) != LAUNCH_OK) {
-    desktop_set_autostart(0);
-    return 0;
-  }
+  /* The way back after the guest is reset is the shell saved in NVS
+   * (ui_saved_shell), which is the one this was launched from. */
+  if (launcher_check(ic->path, &info, &why) != LAUNCH_OK) return 0;
   launcher_boot(ic->path, NULL, NULL);    /* does not return on success */
-  desktop_set_autostart(0);
   return 0;
 }

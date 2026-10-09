@@ -11,7 +11,6 @@
 #include "kernel/drv/display.h"
 #include "kernel/ui/draw.h"
 #include "kernel/ui/shell.h"
-#include "kernel/ui/launchui.h"
 #include "kernel/ui/app.h"
 #include "kernel/drv/keyboard.h"
 #include "kernel/sys/power.h"
@@ -139,7 +138,7 @@ void notify_post(const char *app, const char *title, const char *text) {
   s_banner_until = s_now + BANNER_MS;
   banner_paint();
   blip(BLIP_NOTIFY);
-  if (s_repaint && ui_shell() == UI_LAUNCHER && !launchui_running()) s_repaint();  /* the bar's dot */
+  if (s_repaint && ui_shell() == UI_LAUNCHER && !shell_running_app()) s_repaint();  /* the bar's dot */
 }
 
 void notify_opened(const char *app) {
@@ -192,9 +191,13 @@ static void chat_seen_save(int id) {
   fs_close(fd);
 }
 
-/* `app` is what an awake screen shows: it is telling them itself. */
+/* `app` is what an awake screen shows: it is telling them itself. Whichever
+ * shell has it -- shell_running_app is the launcher's app or the desktop's
+ * focused window -- and not while the screen sleeps, when nothing is shown
+ * and the lock screen's list is where it should land. One test for the
+ * Chat poll and for a scheduled notification falling due. */
 static int on_screen(const char *app) {
-  const AppDef *a = ui_shell() == UI_LAUNCHER ? launchui_running() : NULL;
+  const AppDef *a = shell_running_app();
   return a && a->name && !strcmp(a->name, app) && !power_asleep();
 }
 static int chat_on_screen(void) { return on_screen("Chat"); }
@@ -339,7 +342,7 @@ void notify_center_key(uint8_t k) {
       char app[NQ_APP];
       snprintf(app, sizeof app, "%s", s_q.it[s_sel].app);
       center_close();
-      if (ui_shell() == UI_LAUNCHER) launchui_run(app, NULL);
+      shell_open_app(app);                 /* from whichever shell is up */
       return;
     }
     center_close();
@@ -384,10 +387,17 @@ static void sched_save(void) {
 }
 
 static void sched_load(void) {
-  static char buf[SCHED_MAX * 144];
-  char *p, *f[6];
+  /* Once, at boot: on the heap for the reading, not 4.6 KB of .bss for the
+   * uptime. */
+  enum { SCHED_READ = SCHED_MAX * 144 };
+  char *buf, *p, *f[6];
   int r, i = 0;
-  if (read_small(SCHED_FILE, buf, sizeof buf) <= 0) return;
+  if ((buf = malloc(SCHED_READ)) == NULL) {
+    ESP_LOGW(TAG, "no %d bytes to read %s: scheduled notifications not restored",
+             SCHED_READ, SCHED_FILE);
+    return;
+  }
+  if (read_small(SCHED_FILE, buf, SCHED_READ) <= 0) { free(buf); return; }
   for (p = buf; *p && i < SCHED_MAX; ) {
     char *end = strchr(p, '\n');
     int k = 0;
@@ -407,6 +417,7 @@ static void sched_load(void) {
     if (!end) break;
     p = end + 1;
   }
+  free(buf);
 }
 
 static Sched *sched_find(const char *app, const char *key) {
@@ -449,11 +460,6 @@ void notify_cancel(const char *app, const char *key) {
   if (any) sched_save();
 }
 
-static int app_on_screen(const char *app) {
-  const AppDef *a = ui_shell() == UI_LAUNCHER ? launchui_running() : NULL;
-  return a && a->name && !strcmp(a->name, app);
-}
-
 static void sched_tick(uint32_t now) {
   uint32_t epoch = clock_epoch();
   int i, changed = 0;
@@ -465,7 +471,7 @@ static void sched_tick(uint32_t now) {
     if (!due) continue;
     s->used = 0;
     changed = 1;
-    if (app_on_screen(s->app)) continue;       /* the app is showing it itself */
+    if (on_screen(s->app)) continue;           /* the app is showing it itself */
     notify_post(s->app, s->title, s->text);
     if (s->ring) {
       s_ring = 1;

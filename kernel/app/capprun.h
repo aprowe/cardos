@@ -102,10 +102,26 @@ int            capprun_fullscreen(int slot);
 /* Which of the running app's declared needs were met. See CAPP_NEEDS_*. */
 int            capprun_caps_ok(void);
 
-/* An identity for the app whose handler (or capp_main) is running: the
- * owner of anything it starts that outlives the call, such as a request in
- * kernel/net/httpq.c. NULL when no app code is on the stack. */
+/* An identity for the app whose code is running -- its capp_main, or one of
+ * its callbacks -- or NULL when the caller is the kernel itself: the owner of
+ * anything it starts that outlives the call (a request in kernel/net/httpq.c,
+ * the share, the MIDI port, a font, the screen held awake), so that its
+ * release, and only its release, lets go of them. When one app's handler
+ * starts another, the one starting is the one running. */
 const void    *capprun_executing(void);
+
+/* The same identity, by its older name. There were two, and they disagreed
+ * when one app started another from a handler: the starter by one, the
+ * started by the other, so what one app opened another could be the owner
+ * of. */
+static inline const void *capprun_caller(void) { return capprun_executing(); }
+
+/* Something to do with an owner when its app is let go: abandon its request,
+ * close its port, release its fonts. Called with the identity
+ * capprun_executing() gave out, before the app's code is unloaded. Register
+ * at boot, before any app runs; there is room for CAPPRUN_ON_RELEASE. */
+#define CAPPRUN_ON_RELEASE 12
+int            capprun_on_release(void (*fn)(const void *owner));
 
 /* Its name, for a log line. "app" when no app code is running. */
 const char    *capprun_executing_name(void);
@@ -119,12 +135,6 @@ void           capprun_damage(CRect r);
  * again, which is the whole point of loading it late. Safe to call with a
  * built-in's AppDef, or twice; both do nothing. */
 void           capprun_release(const AppDef *a);
-
-/* The slot whose code is executing right now -- its capp_main, or one of its
- * callbacks -- or NULL when the caller is the kernel itself. An identity for
- * things an app can own, so that its release, and only its release, lets go
- * of them; share_start takes it as the owner. */
-const void    *capprun_caller(void);
 
 /* Valid only after a run that installed an interface. */
 const AppDef *capprun_def(int slot);

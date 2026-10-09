@@ -56,11 +56,12 @@ typedef struct {
   int      cli;         /* a command: runnable, but not shown anywhere */
   int      parent;      /* flat index of the folder this sits in, or -1 */
 
-  /* The colour icon, read from the card the first time it is asked for.
-   * colour_tried separates "no file" from "not looked yet", so a missing one
-   * is not re-read on every repaint. */
-  uint16_t *colour;
-  int       colour_tried;
+  /* Where the colour icon comes from, once looked for (icons.c: a .cic
+   * file, the app's 1bpp icon coloured, the shared generic one, or none),
+   * and the cache slot holding its pixels if it is in one. Zero is "not
+   * looked yet", so a fresh entry needs nothing but clearing. */
+  uint8_t   colour_src;
+  int8_t    colour_slot;
 } Icon;
 
 /* Seeds the folder if it is empty and loads every .capp it finds. Safe to call
@@ -94,7 +95,12 @@ const uint8_t *icon_bitmap(int i);
 
 /* 16x16 RGB565 from /desktop/icons/NAME.cic, or NULL if there is no such file.
  * Preferred over the 1bpp shape when present: a colour icon is the one someone
- * drew on purpose. */
+ * drew on purpose.
+ *
+ * The pixels live in a small cache, so the pointer is good until the next
+ * call: draw with it, then ask again. NULL too, for that one call, when every
+ * slot holds an icon drawn in the last moment -- the caller's 1bpp fallback
+ * is drawn rather than an icon on screen being evicted mid-paint. */
 const uint16_t *icon_colour(int i);
 
 #define ICON_DIR ICONS_DIR "/icons"
