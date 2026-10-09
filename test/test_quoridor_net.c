@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 #include "kernel/net/linkproto.h"
 
 #define capp_info quoridor_capp_info
@@ -65,14 +66,8 @@ static void q_fill(CRect r, uint16_t c) { (void)r; (void)c; }
 static void q_text(int16_t x, int16_t y, const char *s, uint16_t f, uint16_t b) { (void)x; (void)y; (void)s; (void)f; (void)b; }
 static void q_text_font(int f, int16_t x, int16_t y, const char *s, uint16_t fg, uint16_t bg) { (void)f; (void)x; (void)y; (void)s; (void)fg; (void)bg; }
 static int q_font_load(const char *n) { (void)n; return -1; }
-static size_t q_strlen(const char *s) { return strlen(s); }
 static uint32_t q_ticks(void) { return QNOW; }
 static void q_ui(const CappUi *ui) { QUI = *ui; }
-static int q_fmt(char *buf, size_t n, const char *fmt, ...) {
-  va_list ap; int r;
-  va_start(ap, fmt); r = vsnprintf(buf, n, fmt, ap); va_end(ap);
-  return r;
-}
 
 static CardApi QAPI;
 static const CRect QWIN = { 0, 0, 240, 135 };
@@ -92,10 +87,10 @@ static void run_ms(uint32_t ms) {
 static void key(uint8_t k) { QUI.key(QUI.state, k); QUI.paint(QUI.state, QWIN); }
 
 static void qboot(void) {
-  memset(&QAPI, 0, sizeof QAPI);
+  fakeapi_init(&QAPI);
   QAPI.version = CAPP_API_VERSION;
   QAPI.fill = q_fill; QAPI.text = q_text; QAPI.text_font = q_text_font;
-  QAPI.font_load = q_font_load; QAPI.str_len = q_strlen; QAPI.fmt = q_fmt;
+  QAPI.font_load = q_font_load; 
   QAPI.ticks_ms = q_ticks; QAPI.ui = q_ui; QAPI.link = q_link;
   memset(&G, 0, sizeof G);
   nqair = 0;

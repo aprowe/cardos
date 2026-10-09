@@ -110,7 +110,9 @@ static struct {
   int shown;                   /* asked for with fn-b, with or without a mouse */
   int focus;                   /* the keyboard is in the bar, not the app */
   int busy;
-  int open;                    /* index of the open menu, or -1 */
+  int phase;                   /* the busy dots' step when they were last marked */
+  int dots_x;                  /* where the first dot is, from paint; 0 not yet */
+  int open;                   /* index of the open menu, or -1 */
   int hot_menu, hot_item, hot_icon;
 
   int mx0[TB_TITLES], mx1[TB_TITLES];   /* local extents, from paint */
@@ -264,9 +266,12 @@ static TB_OPT void toolbar_paint_bar(CRect c) {
   }
   for (; i < TB_ICONS; i++) TB.ix0[i] = TB.ix1[i] = -1;
 
-  /* Three dots where the icons end, animated off the millisecond clock. */
+  /* Three dots where the icons end, animated off the millisecond clock.
+   * Where they are is kept, so a step of theirs marks only them. */
+  TB.dots_x = c.x + x - 13;
   if (TB.busy) {
     int phase = (int)(TB.api->ticks_ms() / 140u) % 3, d;
+    TB.phase = phase;                         /* what is on screen now */
     for (d = 0; d < 3; d++) {
       r.x = (short)(c.x + x - 13 + d * 4);
       r.y = (short)(c.y + 4);
@@ -284,13 +289,24 @@ static TB_OPT CRect toolbar_bar_rect(void) {
   return r;
 }
 
-/* Ask for the bar back and nothing else. The busy dots animate off the clock,
- * so something has to keep asking for a repaint -- and an app that answers
- * "repaint" without saying what changed gets its whole window redrawn several
- * times a second, which is a flicker far worse than the reassurance. */
-static TB_OPT void toolbar_damage_bar(void) {
+/* Ask for the busy dots back and nothing else, and only when they have moved
+ * on: 1 if it marked them (answer "repaint"), else 0. The dots animate off
+ * the clock, so something has to keep asking -- and an app that answers
+ * "repaint" without saying what changed gets its whole window redrawn
+ * several times a second, which is a flicker far worse than the
+ * reassurance. Marking the whole bar every tick (every 5 ms) still filled
+ * it and wrote the titles over the fill 28 times for each step of the
+ * dots, and the titles blinked for as long as a sync ran. */
+static TB_OPT int toolbar_damage_bar(void) {
   CRect r = toolbar_bar_rect();
-  if (r.w) TB.api->damage(r);
+  int phase;
+  if (!r.w) return 0;
+  phase = (int)(TB.api->ticks_ms() / 140u) % 3;
+  if (phase == TB.phase) return 0;
+  TB.phase = phase;
+  if (TB.dots_x > r.x) { r.x = (int16_t)TB.dots_x; r.y = (int16_t)(r.y + 4); r.w = 12; r.h = 3; }
+  TB.api->damage(r);
+  return 1;
 }
 
 static TB_OPT int toolbar_only_bar(void) {

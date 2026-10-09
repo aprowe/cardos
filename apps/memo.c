@@ -12,8 +12,11 @@
  * which the card takes without noticing. */
 
 #include "kernel/app/capp.h"
+#include "apps/datetime.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 #define DIR       CAPP_HOME "/memos"
 /* The bottom of the screen: the strip -- the status, or the meter, or the
@@ -65,22 +68,10 @@ static struct {
   CRect content;
 } M;
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
-
 static void say(const char *s) { api->fmt(M.status, sizeof M.status, "%s", s); }
 
 static void path_of(const Memo *m, char *out, size_t n) {
   api->fmt(out, n, "%s/%s", DIR, m->name);
-}
-
-/* m:ss, for a length or a clock. */
-static void mmss(uint32_t ms, char *out, size_t n) {
-  uint32_t s = ms / 1000;
-  api->fmt(out, n, "%u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
 }
 
 /* ---- the list ------------------------------------------------------------ */
@@ -205,8 +196,8 @@ static void paint_rows(CRect c, int list_h) {
     int sel = i == M.sel;
     unsigned short bg = sel ? CLR_SEL : CLR_BG;
     char len[12], line[48];
-    mmss(m->bytes / (BYTES_PER_SEC / 1000), len, sizeof len);
-    api->fill(rect(c.x, y, c.w, ROW_H), bg);
+    dt_mmss(api, m->bytes / (BYTES_PER_SEC / 1000), len, sizeof len);
+    api->fill(capp_rect(c.x, y, c.w, ROW_H), bg);
     api->fmt(line, sizeof line, "%s", m->name);
     api->text((short)(c.x + 6), (short)(y + 1), line, sel ? CLR_BAR_FG : CLR_TEXT, bg);
     api->text((short)(c.x + c.w - 6 - 6 * (short)api->str_len(len)), (short)(y + 1), len,
@@ -222,7 +213,7 @@ static void paint_rows(CRect c, int list_h) {
  * redraw fifteen times a second is a flicker. */
 static void paint_strip(CRect c) {
   int st = au->state();
-  CRect s = rect(c.x, c.y + c.h - BOTTOM_H, c.w, STRIP_H);
+  CRect s = capp_rect(c.x, c.y + c.h - BOTTOM_H, c.w, STRIP_H);
 
   if (M.busy && st == CAPP_AUDIO_RECORDING) {
     /* | dot | clock | meter |, every pixel of the strip painted exactly
@@ -231,22 +222,22 @@ static void paint_strip(CRect c) {
     int lvl = au->level();
     int mw = c.w - 60, tw;
     int w = mw * (lvl < 0 ? 0 : lvl) / 100;
-    mmss(api->ticks_ms() - M.started_ms, clock, sizeof clock);
+    dt_mmss(api, api->ticks_ms() - M.started_ms, clock, sizeof clock);
     tw = 6 * (int)api->str_len(clock);
-    api->fill(rect(s.x, s.y, 4, STRIP_H), CLR_BAR);
-    api->fill(rect(s.x + 4, s.y, 8, 2), CLR_BAR);
-    api->fill(rect(s.x + 4, s.y + 2, 8, 8), CLR_REC);
-    api->fill(rect(s.x + 4, s.y + 10, 8, STRIP_H - 10), CLR_BAR);
-    api->fill(rect(s.x + 12, s.y, 4, STRIP_H), CLR_BAR);
-    api->fill(rect(s.x + 16, s.y, 36, 3), CLR_BAR);
+    api->fill(capp_rect(s.x, s.y, 4, STRIP_H), CLR_BAR);
+    api->fill(capp_rect(s.x + 4, s.y, 8, 2), CLR_BAR);
+    api->fill(capp_rect(s.x + 4, s.y + 2, 8, 8), CLR_REC);
+    api->fill(capp_rect(s.x + 4, s.y + 10, 8, STRIP_H - 10), CLR_BAR);
+    api->fill(capp_rect(s.x + 12, s.y, 4, STRIP_H), CLR_BAR);
+    api->fill(capp_rect(s.x + 16, s.y, 36, 3), CLR_BAR);
     api->text((short)(s.x + 16), (short)(s.y + 3), clock, CLR_BAR_FG, CLR_BAR);
-    if (tw < 36) api->fill(rect(s.x + 16 + tw, s.y + 3, 36 - tw, 8), CLR_BAR);
-    api->fill(rect(s.x + 16, s.y + 11, 36, STRIP_H - 11), CLR_BAR);
-    api->fill(rect(s.x + 52, s.y, mw, 3), CLR_BAR);
-    if (w > 0) api->fill(rect(s.x + 52, s.y + 3, w, 7), CLR_METER);
-    if (w < mw) api->fill(rect(s.x + 52 + w, s.y + 3, mw - w, 7), CLR_BG);
-    api->fill(rect(s.x + 52, s.y + 10, mw, STRIP_H - 10), CLR_BAR);
-    api->fill(rect(s.x + 52 + mw, s.y, c.w - 52 - mw, STRIP_H), CLR_BAR);
+    if (tw < 36) api->fill(capp_rect(s.x + 16 + tw, s.y + 3, 36 - tw, 8), CLR_BAR);
+    api->fill(capp_rect(s.x + 16, s.y + 11, 36, STRIP_H - 11), CLR_BAR);
+    api->fill(capp_rect(s.x + 52, s.y, mw, 3), CLR_BAR);
+    if (w > 0) api->fill(capp_rect(s.x + 52, s.y + 3, w, 7), CLR_METER);
+    if (w < mw) api->fill(capp_rect(s.x + 52 + w, s.y + 3, mw - w, 7), CLR_BG);
+    api->fill(capp_rect(s.x + 52, s.y + 10, mw, STRIP_H - 10), CLR_BAR);
+    api->fill(capp_rect(s.x + 52 + mw, s.y, c.w - 52 - mw, STRIP_H), CLR_BAR);
     return;
   }
   if (M.busy && st == CAPP_AUDIO_PLAYING) {
@@ -255,20 +246,20 @@ static void paint_strip(CRect c) {
     uint32_t p = au->pos_ms(), t = au->total_ms();
     int tw, bx = s.x + 4 + 6 * 11 + 6, bw = c.w - (4 + 6 * 11 + 6) - 4;
     int w = t ? (int)((uint32_t)bw * p / t) : 0;
-    mmss(p, pos, sizeof pos); mmss(t, tot, sizeof tot);
+    dt_mmss(api, p, pos, sizeof pos); dt_mmss(api, t, tot, sizeof tot);
     api->fmt(both, sizeof both, "%s / %s", pos, tot);
     tw = 6 * (int)api->str_len(both);
     if (tw > 6 * 11) tw = 6 * 11;
-    api->fill(rect(s.x, s.y, 4, STRIP_H), CLR_BAR);
-    api->fill(rect(s.x + 4, s.y, 6 * 11 + 6, 3), CLR_BAR);
+    api->fill(capp_rect(s.x, s.y, 4, STRIP_H), CLR_BAR);
+    api->fill(capp_rect(s.x + 4, s.y, 6 * 11 + 6, 3), CLR_BAR);
     api->text((short)(s.x + 4), (short)(s.y + 3), both, CLR_BAR_FG, CLR_BAR);
-    api->fill(rect(s.x + 4 + tw, s.y + 3, 6 * 11 + 6 - tw, 8), CLR_BAR);
-    api->fill(rect(s.x + 4, s.y + 11, 6 * 11 + 6, STRIP_H - 11), CLR_BAR);
-    api->fill(rect(bx, s.y, bw, 4), CLR_BAR);
-    if (w > 0) api->fill(rect(bx, s.y + 4, w, 5), CLR_PLAY);
-    if (w < bw) api->fill(rect(bx + w, s.y + 4, bw - w, 5), CLR_BG);
-    api->fill(rect(bx, s.y + 9, bw, STRIP_H - 9), CLR_BAR);
-    api->fill(rect(bx + bw, s.y, s.x + c.w - (bx + bw), STRIP_H), CLR_BAR);
+    api->fill(capp_rect(s.x + 4 + tw, s.y + 3, 6 * 11 + 6 - tw, 8), CLR_BAR);
+    api->fill(capp_rect(s.x + 4, s.y + 11, 6 * 11 + 6, STRIP_H - 11), CLR_BAR);
+    api->fill(capp_rect(bx, s.y, bw, 4), CLR_BAR);
+    if (w > 0) api->fill(capp_rect(bx, s.y + 4, w, 5), CLR_PLAY);
+    if (w < bw) api->fill(capp_rect(bx + w, s.y + 4, bw - w, 5), CLR_BG);
+    api->fill(capp_rect(bx, s.y + 9, bw, STRIP_H - 9), CLR_BAR);
+    api->fill(capp_rect(bx + bw, s.y, s.x + c.w - (bx + bw), STRIP_H), CLR_BAR);
     return;
   }
   {
@@ -309,7 +300,7 @@ static void app_paint(void *st, CRect c) {
     M.content = r;
     /* The strip owns its own rows: clearing them here and again in
      * paint_strip is the flicker a moving meter would show. */
-    api->fill(rect(r.x, r.y, r.w, r.h - BOTTOM_H), CLR_BG);
+    api->fill(capp_rect(r.x, r.y, r.w, r.h - BOTTOM_H), CLR_BG);
     paint_rows(r, r.h - BOTTOM_H);
     paint_strip(r);
     paint_hints(r);
@@ -367,22 +358,6 @@ static int do_action(int a) {
 
 static int app_action(void *st, int a) { (void)st; return do_action(a); }
 
-/* Lower-case: is `needle` somewhere in `hay`? */
-static int contains(const char *hay, const char *needle) {
-  int i, j;
-  for (i = 0; hay[i]; i++) {
-    for (j = 0; needle[j]; j++) {
-      char a = hay[i + j], b = needle[j];
-      if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
-      if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
-      if (a != b) break;
-    }
-    if (!needle[j]) return 1;
-    if (!hay[i + j]) return 0;
-  }
-  return 0;
-}
-
 /* The commands. Playback runs on the kernel's audio task, so it carries on
  * after a headless instance is released; `stop` reaches it the same way. */
 static int app_command(void *st, int action, int argc, const char *const *argv,
@@ -398,17 +373,17 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
   case ACT_LIST:
     if (!M.n) { api->fmt(out, n, "no memos yet"); return 0; }
     for (i = 0; i < M.n && o + 8 < n; i++) {
-      mmss(M.memo[i].bytes / 32, len, sizeof len);    /* 16 kHz mono 16-bit */
+      dt_mmss(api, M.memo[i].bytes / 32, len, sizeof len);    /* 16 kHz mono 16-bit */
       o += (size_t)api->fmt(out + o, n - o, "- %s (%s)\n", M.memo[i].name, len);
     }
     return 0;
 
   case ACT_PLAY_NAMED:
     if (!M.n) { api->fmt(out, n, "no memos yet"); return -1; }
-    if (contains("latest", argv[0]) || contains("newest", argv[0]) ||
-        contains("last", argv[0])) { hit = 0; hits = 1; }
+    if (str_contains("latest", argv[0], 1) || str_contains("newest", argv[0], 1) ||
+        str_contains("last", argv[0], 1)) { hit = 0; hits = 1; }
     else
-      for (i = 0; i < M.n; i++) if (contains(M.memo[i].name, argv[0])) { hit = i; hits++; }
+      for (i = 0; i < M.n; i++) if (str_contains(M.memo[i].name, argv[0], 1)) { hit = i; hits++; }
     if (!hits) { api->fmt(out, n, "no memo matches \"%s\"", argv[0]); return -1; }
     if (hits > 1) { api->fmt(out, n, "%d memos match \"%s\"; say more", hits, argv[0]); return -1; }
     if (au->state() != CAPP_AUDIO_IDLE) au->stop();
@@ -442,8 +417,9 @@ static int app_key(void *st, unsigned char k) {
   if (M.ask == ASK_DELETE) {
     /* y deletes; n, Escape and Backspace say no, as in every app. Enter is
      * play here, so it is not a yes. */
-    if (k == 'y' || k == 'Y') { M.ask = ASK_NONE; delete_memo(); }
-    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) M.ask = ASK_NONE;
+    int a = confirm_key(api, k);
+    if (a != CONFIRM_WAIT) M.ask = ASK_NONE;
+    if (a == CONFIRM_YES) delete_memo();
     return 1;
   }
   switch (k) {
@@ -534,7 +510,7 @@ static int app_tick(void *st, uint32_t now_ms) {
       if (api->run_command("notes", line, out, sizeof out) == 0) say(out);
       else say(out[0] ? out : "not noted");
     }
-    api->damage(rect(M.content.x, M.content.y + M.content.h - BOTTOM_H, M.content.w, STRIP_H));
+    api->damage(capp_rect(M.content.x, M.content.y + M.content.h - BOTTOM_H, M.content.w, STRIP_H));
     return 1;
   }
   if (M.busy) {
@@ -549,7 +525,7 @@ static int app_tick(void *st, uint32_t now_ms) {
           const char *slash = M.recording, *p;
           for (p = M.recording; *p; p++) if (*p == '/') slash = p + 1;
           for (i = 0; i < M.n; i++) if (!name_cmp(M.memo[i].name, slash)) { M.sel = i; M.top = 0; break; }
-          mmss((uint32_t)bytes / (BYTES_PER_SEC / 1000), len, sizeof len);
+          dt_mmss(api, (uint32_t)bytes / (BYTES_PER_SEC / 1000), len, sizeof len);
           api->fmt(line, sizeof line, "saved, %s", len);
           say(line);
         } else {
@@ -572,7 +548,7 @@ static int app_tick(void *st, uint32_t now_ms) {
       M.strip_sig = sig;
       M.strip_at = now_ms;
     }
-    api->damage(rect(M.content.x, M.content.y + M.content.h - BOTTOM_H, M.content.w, STRIP_H));
+    api->damage(capp_rect(M.content.x, M.content.y + M.content.h - BOTTOM_H, M.content.w, STRIP_H));
     return 1;
   }
   return 0;

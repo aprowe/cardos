@@ -20,8 +20,10 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 #include "apps/petsim.h"
 
 static const CardApi *api;
@@ -33,6 +35,11 @@ static const CardApi *api;
 #define SPR     16
 #define BOX_W   (SPR * SCALE + 8)      /* the sprite and a 4 px margin each side */
 #define BOX_H   (SPR * SCALE + 4)
+/* What a step repaints: the box and the 4 px it may have moved from, twice
+ * over, so the room either side is in the same blit and nothing under it
+ * is filled first. */
+#define STEP_M  8
+#define WIDE_W  (BOX_W + 2 * STEP_M)
 #define BAR_H   12
 #define ROOM_Y  BAR_H
 #define ROOM_H  (135 - BAR_H - FOOT_H)
@@ -137,19 +144,8 @@ static struct {
   /* the game */
   int      round, wins, guess, look, reveal;
   uint32_t reveal_at;
-  uint16_t box[BOX_W * BOX_H];
+  uint16_t box[WIDE_W * BOX_H];
 } C;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
-
-static int starts(const char *s, const char *p) {
-  while (*p) { if (*s++ != *p++) return 0; }
-  return 1;
-}
 
 static uint32_t num(const char *s) {
   uint32_t v = 0;
@@ -171,13 +167,13 @@ static Field FIELDS[] = {
 
 static void apply_line(const char *line) {
   int i;
-  if (starts(line, "name=")) { api->fmt(C.name, sizeof C.name, "%s", line + 5); return; }
-  if (starts(line, "born=")) { C.p.born = num(line + 5); return; }
-  if (starts(line, "last=")) { C.p.last = num(line + 5); return; }
-  if (starts(line, "seed=")) { C.p.seed = num(line + 5); return; }
+  if (str_starts(line, "name=")) { api->fmt(C.name, sizeof C.name, "%s", line + 5); return; }
+  if (str_starts(line, "born=")) { C.p.born = num(line + 5); return; }
+  if (str_starts(line, "last=")) { C.p.last = num(line + 5); return; }
+  if (str_starts(line, "seed=")) { C.p.seed = num(line + 5); return; }
   for (i = 0; i < NFIELDS; i++) {
     size_t n = api->str_len(FIELDS[i].key);
-    if (starts(line, FIELDS[i].key) && line[n] == '=') { *FIELDS[i].v = (int)num(line + n + 1); return; }
+    if (str_starts(line, FIELDS[i].key) && line[n] == '=') { *FIELDS[i].v = (int)num(line + n + 1); return; }
   }
 }
 
@@ -259,15 +255,15 @@ static void paint_bar_stat(int x, char label, int v) {
   int w = v * 30 / 100;
   s[0] = label; s[1] = 0;
   api->text((int16_t)x, 2, s, CLR_DIM, CLR_BAR);
-  api->fill(rect(x + 7, 3, 32, 6), CLR_INK);
-  api->fill(rect(x + 8, 4, w, 4), c);
-  if (w < 30) api->fill(rect(x + 8 + w, 4, 30 - w, 4), CLR_INK);
+  api->fill(capp_rect(x + 7, 3, 32, 6), CLR_INK);
+  api->fill(capp_rect(x + 8, 4, w, 4), c);
+  if (w < 30) api->fill(capp_rect(x + 8 + w, 4, 30 - w, 4), CLR_INK);
 }
 
 static void paint_bar(void) {
   char s[20];
   int w;
-  api->fill(rect(0, 0, 240, BAR_H), CLR_BAR);
+  api->fill(capp_rect(0, 0, 240, BAR_H), CLR_BAR);
   if (C.p.stage == PET_GONE || C.p.stage == PET_EGG) {
     api->text(4, 2, C.p.stage == PET_EGG ? "an egg" : "the nest is empty", CLR_DIM, CLR_BAR);
     return;
@@ -280,7 +276,9 @@ static void paint_bar(void) {
   api->text((int16_t)(238 - w), 2, s, C.p.sick ? CLR_BAD : CLR_TEXT, CLR_BAR);
 }
 
-/* The sprite into C.box with the room behind it, then out in one blit. */
+/* The sprite into C.box with the room behind it and STEP_M of room either
+ * side, then out in one blit -- which repaints where it just stepped from
+ * as well, so a step needs nothing else drawn. */
 static void paint_pet(void) {
   const char *const *art = art_of(&C.p);
   Colours col = colours(&C.p);
@@ -291,7 +289,7 @@ static void paint_pet(void) {
   int egg_shift = C.p.stage == PET_EGG ? (C.frame ? 1 : -1) : 0;
   for (j = 0; j < BOX_H; j++) {
     uint16_t v = PET_Y + j >= FLOOR_Y ? fl : bg;
-    for (i = 0; i < BOX_W; i++) C.box[j * BOX_W + i] = v;
+    for (i = 0; i < WIDE_W; i++) C.box[j * WIDE_W + i] = v;
   }
   for (r = 0; r < SPR; r++)
     for (c = 0; c < SPR; c++) {
@@ -317,26 +315,26 @@ static void paint_pet(void) {
       for (j = 0; j < SCALE; j++)
         for (i = 0; i < SCALE; i++) {
           int y = 2 + r * SCALE + j + bob - 2, x = 4 + c * SCALE + i + egg_shift;
-          if (y >= 0 && y < BOX_H && x >= 0 && x < BOX_W) C.box[y * BOX_W + x] = v;
+          if (y >= 0 && y < BOX_H && x >= 0 && x < BOX_W) C.box[y * WIDE_W + STEP_M + x] = v;
         }
     }
-  api->pixels(rect(C.x, PET_Y, BOX_W, BOX_H), C.box);
+  api->pixels(capp_rect(C.x - STEP_M, PET_Y, WIDE_W, BOX_H), C.box);
 }
 
 static void paint_poop(int n) {
   int k;
   for (k = 0; k < n; k++) {
     int x = 196 + (k % 2) * 20, y = FLOOR_Y - 14 - (k / 2) * 14;
-    api->fill(rect(x + 4, y, 4, 3), CLR_POOP);
-    api->fill(rect(x + 2, y + 3, 8, 4), CLR_POOP);
-    api->fill(rect(x, y + 7, 12, 5), CLR_POOP);
+    api->fill(capp_rect(x + 4, y, 4, 3), CLR_POOP);
+    api->fill(capp_rect(x + 2, y + 3, 8, 4), CLR_POOP);
+    api->fill(capp_rect(x, y + 7, 12, 5), CLR_POOP);
   }
 }
 
 static void paint_room(void) {
   uint16_t bg = room_bg(), fl = floor_bg();
-  api->fill(rect(0, ROOM_Y, 240, FLOOR_Y - ROOM_Y), bg);
-  api->fill(rect(0, FLOOR_Y, 240, ROOM_Y + ROOM_H - FLOOR_Y), fl);
+  api->fill(capp_rect(0, ROOM_Y, 240, FLOOR_Y - ROOM_Y), bg);
+  api->fill(capp_rect(0, FLOOR_Y, 240, ROOM_Y + ROOM_H - FLOOR_Y), fl);
   if (C.p.stage == PET_GONE) {
     api->text(60, 50, "the nest is empty", CLR_INK, bg);
     {
@@ -347,7 +345,8 @@ static void paint_room(void) {
     return;
   }
   paint_poop(C.p.poop);
-  if (C.p.asleep) api->text(C.x + BOX_W - 4 > 230 ? 200 : (int16_t)(C.x + BOX_W - 4), PET_Y - 6, "z Z", CLR_TEXT, bg);
+  /* Both above the box's rows, so a step's blit never cuts into them. */
+  if (C.p.asleep) api->text(C.x + BOX_W - 4 > 230 ? 200 : (int16_t)(C.x + BOX_W - 4), PET_Y - 8, "z Z", CLR_TEXT, bg);
   if (C.p.sick) api->text((int16_t)(C.x + 4), PET_Y - 8, "+ ill", CLR_BAD, bg);
   paint_pet();
 }
@@ -370,7 +369,7 @@ static void paint_info(void) {
   uint32_t d = (uint32_t)C.p.age_min / 1440u, h = ((uint32_t)C.p.age_min / 60u) % 24u;
   static const char *const STAGE[] = { "egg", "baby", "child", "teen", "adult", "gone" };
   static const char *const FORM[] = { "bright", "plain", "scruffy" };
-  api->fill(rect(0, ROOM_Y, 240, ROOM_H), CLR_PANEL);
+  api->fill(capp_rect(0, ROOM_Y, 240, ROOM_H), CLR_PANEL);
   api->fmt(s, sizeof s, "%s, %s", C.name, C.p.stage == PET_ADULT ? FORM[C.p.form] : STAGE[C.p.stage]);
   api->text(10, (int16_t)y, s, CLR_TEXT, CLR_PANEL); y += 14;
   api->fmt(s, sizeof s, "age      %lud %luh", (unsigned long)d, (unsigned long)h);
@@ -388,7 +387,7 @@ static void paint_info(void) {
 static void paint_game(void) {
   char s[40];
   uint16_t bg = CLR_PANEL;
-  api->fill(rect(0, ROOM_Y, 240, ROOM_H), bg);
+  api->fill(capp_rect(0, ROOM_Y, 240, ROOM_H), bg);
   api->fmt(s, sizeof s, "round %d of 5   won %d", C.round + 1 > 5 ? 5 : C.round + 1, C.wins);
   api->text(10, ROOM_Y + 6, s, CLR_DIM, bg);
   if (C.round >= 5) {
@@ -408,8 +407,23 @@ static void paint_game(void) {
   }
 }
 
+/* The rect a step marks (app_tick). */
+static CRect step_rect(void) { return capp_rect(C.x - STEP_M, PET_Y - 10, WIDE_W, BOX_H + 10); }
+
+static int inside(CRect a, CRect b) {
+  return a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h;
+}
+
 static void app_paint(void *st, CRect full) {
   (void)st;
+  /* A step's own repaint: only the box, which carries the room it stood
+   * on. Filling the room under it first, as a full paint does, showed the
+   * pet as a patch of wall every 650 ms. The lettering above did not move
+   * (the pet walks only awake and well, when there is none). */
+  if (C.view == V_ROOM && C.p.stage != PET_GONE && inside(api->paint_area(), step_rect())) {
+    paint_pet();
+    return;
+  }
   paint_bar();
   if (C.view == V_INFO) paint_info();
   else if (C.view == V_GAME) paint_game();
@@ -469,8 +483,9 @@ static int app_key(void *st, uint8_t k) {
   if (C.view == V_GAME) { game_key(k); return 1; }
   if (C.view == V_INFO) { if (k == CAPP_KEY_ESC || k == CAPP_KEY_ENTER || k == 'i') C.view = V_ROOM; return 1; }
   if (C.view == V_ASK_NEW) {
-    if (k == 'y' || k == 'Y') { C.view = V_ROOM; new_egg(); tell_os(); }
-    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) C.view = V_ROOM;
+    int a = confirm_key(api, k);
+    if (a != CONFIRM_WAIT) C.view = V_ROOM;
+    if (a == CONFIRM_YES) { new_egg(); tell_os(); }
     return 1;
   }
   if (C.p.stage == PET_GONE) {
@@ -524,9 +539,9 @@ static int app_tick(void *st, uint32_t now) {
       if (C.x < 8) { C.x = 8; C.dir = 1; }
       if (C.x > 186 - BOX_W) { C.x = 186 - BOX_W; C.dir = -1; }
     }
-    /* Only the box moves: the room around it stays as it was. The 4 px
-     * margin covers the step. Lettering above it is redrawn too. */
-    api->damage(rect(C.x - 8, PET_Y - 10, BOX_W + 16, BOX_H + 10));
+    /* Only the box moves: the room around it stays as it was. Its STEP_M
+     * of room either side covers the step (app_paint). */
+    api->damage(step_rect());
     return 1;
   }
   return redraw;

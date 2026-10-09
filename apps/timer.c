@@ -24,6 +24,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
 
@@ -68,12 +69,6 @@ static struct {
    * (and the sliver of bar that moved) instead of the whole clock. */
   int      drawn_mm, drawn_fill, drawn_ok;
 } T;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
 
 static void put_u32(uint8_t *p, uint32_t v) {
   p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
@@ -328,7 +323,7 @@ static int s_font = -1;
 #define COLON_W 12
 
 static void seg_fill(int x, int y, int w, int h, uint16_t fg) {
-  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), fg);
+  if (w > 0 && h > 0) api->fill(capp_rect(x, y, w, h), fg);
 }
 
 /* Segment bits: a top, b top-right, c bottom-right, d bottom, e bottom-left,
@@ -424,7 +419,7 @@ static void draw_time(int cx, int y, int minutes, int seconds, uint16_t fg,
  * what is drawn are filled, and those were background already. */
 
 static void fill_if(int x, int y, int w, int h, uint16_t c) {
-  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), c);
+  if (w > 0 && h > 0) api->fill(capp_rect(x, y, w, h), c);
 }
 
 /* `outer` less `inner`: the four margins round something about to be
@@ -455,8 +450,8 @@ static void paint_set_band(int cx, int y, int h, int pad) {
   if (s_font < 0) {
     /* The segments draw only what is lit, so the block has to be cleared
      * under them; this is the face for a card with no clock56. */
-    api->fill(rect(x0 - pad, y - pad, bw + 2 * pad, h + 2 * pad), CLR_BG);
-    api->fill(rect(fx - pad, y - pad, fw + 2 * pad, h + 2 * pad), CLR_FIELD);
+    api->fill(capp_rect(x0 - pad, y - pad, bw + 2 * pad, h + 2 * pad), CLR_BG);
+    api->fill(capp_rect(fx - pad, y - pad, fw + 2 * pad, h + 2 * pad), CLR_FIELD);
     draw_time(cx, y, T.set_min, T.set_sec, CLR_TEXT, CLR_BG, CLR_BG);
     return;
   }
@@ -506,7 +501,7 @@ static void draw_bar(int cx, int y) {
   int w = block_w(), x = cx - w / 2;
   int fill_w = bar_fill_w(T.remain_ms);
   if (fill_w > w) fill_w = w;
-  if (fill_w > 0) api->fill(rect(x, y, fill_w, BAR_H), bar_colour(T.remain_ms, T.total_ms));
+  if (fill_w > 0) api->fill(capp_rect(x, y, fill_w, BAR_H), bar_colour(T.remain_ms, T.total_ms));
   fill_if(x + fill_w, y, w - fill_w, BAR_H, CLR_BAR_BG);
   T.drawn_fill = fill_w;
 }
@@ -517,7 +512,7 @@ static void draw_bar(int cx, int y) {
 static CRect time_bar_rect(void) {
   int cx = T.at.x + T.at.w / 2;
   int h  = dig_h(), y = T.at.y + T.at.h / 2 - h / 2 - 6;
-  return rect(cx - block_w() / 2, y, block_w(), h + BAR_GAP + BAR_H);
+  return capp_rect(cx - block_w() / 2, y, block_w(), h + BAR_GAP + BAR_H);
 }
 
 /* What a running second changed: the seconds digits, and the sliver of bar
@@ -529,14 +524,14 @@ static void damage_second(int mm) {
   if (s_font < 0 || !T.drawn_ok || mm != T.drawn_mm) { api->damage(r); return; }
   {
     int w2 = api->text_width(s_font, "00"), sx = r.x + w2 + api->text_width(s_font, ":");
-    api->damage(rect(sx, r.y, r.x + r.w - sx, dig_h()));
+    api->damage(capp_rect(sx, r.y, r.x + r.w - sx, dig_h()));
   }
   nf = bar_fill_w(T.remain_ms);
   if (nf > r.w) nf = r.w;
   if (nf != T.drawn_fill) {
     int a = nf < T.drawn_fill ? nf : T.drawn_fill;
     int b = nf < T.drawn_fill ? T.drawn_fill : nf;
-    api->damage(rect(r.x + a, r.y + dig_h() + BAR_GAP, b - a, BAR_H));
+    api->damage(capp_rect(r.x + a, r.y + dig_h() + BAR_GAP, b - a, BAR_H));
   }
 }
 
@@ -563,11 +558,11 @@ static void paint_face(CRect c) {
   /* The label: its row either side of the word, then the word. A longer
    * word before ("running" after "set") is covered by the row's fill. */
   lw = (int)api->str_len(label) * 6;
-  fill_round(rect(c.x, ly, c.w, 8), rect(cx - lw / 2, ly, lw, 8), CLR_BG);
+  fill_round(capp_rect(c.x, ly, c.w, 8), capp_rect(cx - lw / 2, ly, lw, 8), CLR_BG);
   api->text((int16_t)(cx - lw / 2), (int16_t)ly, label, lc, CLR_BG);
 
   /* Either side of the block, the height of the band. */
-  fill_round(rect(c.x, top, c.w, bot - top), rect(x0 - pad, top, bw + 2 * pad, bot - top), CLR_BG);
+  fill_round(capp_rect(c.x, top, c.w, bot - top), capp_rect(x0 - pad, top, bw + 2 * pad, bot - top), CLR_BG);
 
   if (T.state == ST_SET) {
     paint_set_band(cx, y, h, pad);
@@ -577,7 +572,7 @@ static void paint_face(CRect c) {
   {
     int mm, ss;
     remain_mmss(T.remain_ms, &mm, &ss);
-    if (s_font < 0) api->fill(rect(x0, y, bw, h), CLR_BG);   /* segments: see paint_set_band */
+    if (s_font < 0) api->fill(capp_rect(x0, y, bw, h), CLR_BG);   /* segments: see paint_set_band */
     draw_time(cx, y, mm, ss, CLR_TEXT, CLR_BG, CLR_BG);
     fill_if(x0, y + h, bw, BAR_GAP, CLR_BG);
     draw_bar(cx, y + h + BAR_GAP);

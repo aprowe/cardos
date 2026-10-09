@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info noodle_capp_info
 #define capp_main noodle_capp_main
@@ -24,7 +25,6 @@ static uint16_t FB[SCREEN_H][SCREEN_W];
 static uint32_t NOW;
 static int DAMAGED;
 
-static void *n_memset(void *d, int c, size_t n) { return memset(d, c, n); }
 static uint32_t n_ticks(void) { return NOW; }
 static void n_fill(CRect r, uint16_t c) {
   int x, y;
@@ -47,8 +47,7 @@ static void n_damage(CRect r) { (void)r; DAMAGED++; }
 static CRect n_area(void) { CRect r = { 0, 0, SCREEN_W, SCREEN_H }; return r; }
 
 static void setup(void) {
-  memset(&FAKE, 0, sizeof FAKE);
-  FAKE.mem_set = n_memset;
+  fakeapi_init(&FAKE);
   FAKE.ticks_ms = n_ticks;
   FAKE.fill = n_fill;
   FAKE.frame = n_frame;

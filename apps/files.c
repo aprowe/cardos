@@ -22,11 +22,13 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
+#include "apps/dirmodel.h"
 
-#define MAX_ENTRIES  96
-#define PATH_MAX    128
+#define PATH_MAX    DIR_PATH_MAX
 #define ROW_H         9
 #define BAR_H        10          /* the path, along the top */
 
@@ -46,14 +48,7 @@ enum { ASK_NONE = 0, ASK_NEWDIR, ASK_RENAME, ASK_DELETE };
 static const CardApi *api;
 
 static struct {
-  char      cwd[PATH_MAX];
-  CappEntry ent[MAX_ENTRIES];
-  /* The display order, as indices into ent. Sorting the array itself would
-   * mean assigning 72-byte structs, and a struct assignment compiles to a
-   * memcpy an app has nothing to link against -- so the entries stay where
-   * the listing put them and this says what order to read them in. */
-  unsigned char order[MAX_ENTRIES];
-  int       n;
+  DirList   d;                   /* the folder: cwd, the listing, its order */
   int       sel;
   int       top;                 /* first visible row */
   int       rows;                /* how many fit, from the last paint */
@@ -70,30 +65,8 @@ static struct {
   int       have_at;
 } F;
 
-/* ---- small helpers -------------------------------------------------------- */
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
-
-static int str_eq(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
-
-static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
-
-/* Case-insensitive, because a camera writes PHOTO.JPG and a person writing
- * this table thinks in lower case. */
-static int ext_is(const char *ext, const char *want) {
-  for (;;) {
-    if (lower(*ext) != *want) return 0;
-    if (!*want) return 1;
-    ext++; want++;
-  }
-}
+/* The entry at a display position. */
+static const CappEntry *at(int i) { return dir_at(&F.d, i); }
 
 /* ---- what changed ---------------------------------------------------------
  *
@@ -107,13 +80,13 @@ static int list_top(void) { return F.at.y + BAR_H; }
 
 static void damage_row(int idx) {
   if (!F.have_at || idx < F.top || idx >= F.top + F.rows) return;
-  api->damage(rect(F.at.x, list_top() + (idx - F.top) * ROW_H, F.at.w, ROW_H));
+  api->damage(capp_rect(F.at.x, list_top() + (idx - F.top) * ROW_H, F.at.w, ROW_H));
 }
 
 /* The footer, which is also the prompt and the status line. */
 static void damage_footer(void) {
   if (!F.have_at) return;
-  api->damage(rect(F.at.x, F.at.y + F.at.h - FOOT_H, F.at.w, FOOT_H));
+  api->damage(capp_rect(F.at.x, F.at.y + F.at.h - FOOT_H, F.at.w, FOOT_H));
 }
 
 static void damage_all(void) {
@@ -133,130 +106,70 @@ static void unsay(void) {
   damage_footer();
 }
 
-/* Join a directory and a name into a path, without the double slash that a
- * naive concatenation produces at the root. */
-static void join(char *out, size_t n, const char *dir, const char *name) {
-  size_t l = api->str_len(dir);
-  if (l == 1 && dir[0] == '/') api->fmt(out, n, "/%s", name);
-  else api->fmt(out, n, "%s/%s", dir, name);
-}
+/* ---- the listing (apps/dirmodel.h) ------------------------------------------ */
 
-/* The last component of a path, for the title bar. */
-static const char *leaf(const char *path) {
-  const char *p = path, *last = path;
-  for (; *p; p++) if (*p == '/' && p[1]) last = p + 1;
-  return last;
-}
-
-/* Which app opens this, by extension. The whole of the file manager's
- * knowledge about other apps lives here, deliberately: a longer list is a
- * setting, not a rewrite. */
-static const char *opener(const char *name) {
-  size_t l = api->str_len(name);
-  const char *ext = name + l;
-  while (ext > name && *ext != '.') ext--;
-  if (ext == name) return "edit";               /* no extension: text */
-
-  if (ext_is(ext, ".capp")) return NULL;        /* run it, not open it */
-  if (ext_is(ext, ".jpg") || ext_is(ext, ".jpeg") ||
-      ext_is(ext, ".png") || ext_is(ext, ".bmp")) return "photo";
-  if (ext_is(ext, ".cpx")) return "web";
-  return "edit";                                /* txt, c, h, md, cfg, ini */
-}
-
-/* ---- the listing ---------------------------------------------------------- */
-
-/* Directories first, then names, both case-insensitively. An insertion sort:
- * ninety-six entries at most, and it runs when a directory is entered rather
- * than per frame. */
-static int before(const CappEntry *a, const CappEntry *b) {
-  const char *p = a->name, *q = b->name;
-  if (a->is_dir != b->is_dir) return a->is_dir;
-  for (;;) {
-    char x = *p, y = *q;
-    if (x >= 'A' && x <= 'Z') x = (char)(x + 32);
-    if (y >= 'A' && y <= 'Z') y = (char)(y + 32);
-    if (x != y) return x < y;
-    if (!x) return 0;
-    p++; q++;
-  }
-}
-
-/* The entry at a display position. */
-static const CappEntry *at(int i) {
-  return &F.ent[F.order[i]];
-}
-
-static void reload(void) {
-  int i, j;
-
-  F.n = api->list_ex(F.cwd, F.ent, MAX_ENTRIES);
-  if (F.n < 0) { F.n = 0; say("cannot read that folder"); }
-
-  for (i = 0; i < F.n; i++) F.order[i] = (unsigned char)i;
-  for (i = 1; i < F.n; i++) {
-    unsigned char tmp = F.order[i];
-    for (j = i; j > 0 && before(&F.ent[tmp], &F.ent[F.order[j - 1]]); j--)
-      F.order[j] = F.order[j - 1];
-    F.order[j] = tmp;
-  }
-  if (F.sel >= F.n) F.sel = F.n ? F.n - 1 : 0;
+/* After the folder was read again: the selection kept in range, and all of
+ * it marked. */
+static void relisted(void) {
+  if (F.sel >= F.d.n) F.sel = F.d.n ? F.d.n - 1 : 0;
   if (F.sel < 0) F.sel = 0;
   F.top = 0;
   damage_all();
 }
 
+static void reload(void) {
+  if (dir_reload(api, &F.d) < 0) say("cannot read that folder");
+  relisted();
+}
+
 static void go_to(const char *path) {
-  api->fmt(F.cwd, sizeof F.cwd, "%s", path);
   F.sel = 0;
-  reload();
+  if (dir_go(api, &F.d, path) < 0) say("cannot read that folder");
+  relisted();
 }
 
 static void go_up(void) {
-  int i, cut = 0;
-  if (str_eq(F.cwd, "/")) return;
-  for (i = 0; F.cwd[i]; i++) if (F.cwd[i] == '/') cut = i;
-  F.cwd[cut ? cut : 1] = 0;
   F.sel = 0;
-  reload();
+  if (dir_up(api, &F.d)) relisted();
 }
 
 static void enter_selected(void) {
   char path[PATH_MAX];
   const CappEntry *e;
+  const char *app;
+  int how;
 
-  if (!F.n) return;
+  if (!F.d.n) return;
   e = at(F.sel);
-  join(path, sizeof path, F.cwd, e->name);
+  dir_path(api, &F.d, F.sel, path, sizeof path);
 
   if (e->is_dir) { go_to(path); return; }
 
-  {
-    const char *app = opener(e->name);
-    if (!app) {
-      /* A program: run it, rather than showing someone its bytes. */
-      say(api->run(e->name, (const char *)0) == 0 ? "started" : "would not start");
-      return;
-    }
-    if (api->run(app, path) == 0) api->fmt(F.status, sizeof F.status, "%s %s", app, e->name);
-    else api->fmt(F.status, sizeof F.status, "no %s app", app);
-    damage_footer();
+  dir_kind(e->name, &how, &app);
+  if (how == DIR_OPEN_RUN) {
+    /* A program: run it, rather than showing someone its bytes. */
+    say(api->run(e->name, (const char *)0) == 0 ? "started" : "would not start");
+    return;
   }
+  if (how == DIR_OPEN_NONE) { say("nothing here opens that: o shows its bytes"); return; }
+  if (api->run(app, path) == 0) api->fmt(F.status, sizeof F.status, "%s %s", app, e->name);
+  else api->fmt(F.status, sizeof F.status, "no %s app", app);
+  damage_footer();
 }
 
 /* Whatever it is, as text: a .c file opens in the editor rather than being
  * run, and a picture shows its bytes, which is sometimes what you wanted. */
 static void open_in_editor(void) {
   char path[PATH_MAX];
-  if (!F.n || at(F.sel)->is_dir) return;
-  join(path, sizeof path, F.cwd, at(F.sel)->name);
+  if (!F.d.n || at(F.sel)->is_dir) return;
+  dir_path(api, &F.d, F.sel, path, sizeof path);
   if (api->run("edit", path) != 0) say("no edit app");
 }
 
 /* ---- the operations -------------------------------------------------------- */
 
 static void begin_ask(int what) {
-  if (what != ASK_NEWDIR && !F.n) return;
+  if (what != ASK_NEWDIR && !F.d.n) return;
   F.ask = what;
   F.buf[0] = 0;
   F.buf_len = 0;
@@ -274,58 +187,48 @@ static void cancel_ask(void) {
 }
 
 static void finish_ask(void) {
-  char path[PATH_MAX], to[PATH_MAX];
   int what = F.ask;
 
   F.ask = ASK_NONE;
   damage_footer();
   if (what == ASK_NEWDIR && F.buf_len) {
-    join(path, sizeof path, F.cwd, F.buf);
-    say(api->mkdir(path) == 0 ? "folder made" : "could not make it");
-    reload();
-  } else if (what == ASK_RENAME && F.buf_len && F.n) {
-    join(path, sizeof path, F.cwd, at(F.sel)->name);
-    join(to, sizeof to, F.cwd, F.buf);
-    say(api->rename(path, to) == 0 ? "renamed" : "could not rename");
-    reload();
+    say(dir_mkdir(api, &F.d, F.buf));
+    relisted();
+  } else if (what == ASK_RENAME && F.buf_len && F.d.n) {
+    say(dir_rename(api, &F.d, F.sel, F.buf));
+    relisted();
   }
 }
 
 static void mark_for_move(void) {
-  if (!F.n) return;
-  join(F.marked, sizeof F.marked, F.cwd, at(F.sel)->name);
+  if (!F.d.n) return;
+  dir_path(api, &F.d, F.sel, F.marked, sizeof F.marked);
   damage_footer();                     /* the footer says what is held */
 }
 
 static void paste_here(void) {
-  char to[PATH_MAX];
   if (!F.marked[0]) { say("nothing marked: m marks one"); return; }
-  join(to, sizeof to, F.cwd, leaf(F.marked));
-  /* A rename across directories is a move on FAT, and it costs nothing: no
-   * bytes are copied, only the entry. */
-  say(api->rename(F.marked, to) == 0 ? "moved" : "could not move it");
+  say(dir_move_here(api, &F.d, F.marked));
   F.marked[0] = 0;
-  reload();
+  relisted();
 }
 
 static void ask_delete(void) {
-  if (!F.n) return;
+  if (!F.d.n) return;
   F.ask = ASK_DELETE;
   damage_footer();
 }
 
 static void delete_selected(void) {
-  char path[PATH_MAX];
   F.ask = ASK_NONE;
-  if (!F.n) return;
-  join(path, sizeof path, F.cwd, at(F.sel)->name);
-  say(api->remove(path) == 0 ? "deleted" : "could not delete it");
-  reload();
+  if (!F.d.n) return;
+  say(dir_delete(api, &F.d, F.sel));
+  relisted();
 }
 
 /* Moving the selection: the row it left and the row it arrived at. */
 static void select_row(int idx) {
-  if (idx < 0 || idx >= F.n || idx == F.sel) return;
+  if (idx < 0 || idx >= F.d.n || idx == F.sel) return;
   damage_row(F.sel);
   F.sel = idx;
   damage_row(F.sel);
@@ -402,7 +305,7 @@ static void paint_footer(CRect c) {
     short x = (short)(c.x + 4 + lw * 6);
     footer_paint(api, c, label);
     api->text(x, y, F.buf + from, CLR_FG, FOOT_BG);
-    api->fill(rect(x + (F.buf_len - from) * 6, y, 5, 8), CLR_FG);
+    api->fill(capp_rect(x + (F.buf_len - from) * 6, y, 5, 8), CLR_FG);
   } else if (F.ask == ASK_DELETE) {
     /* The name cut short enough that the question still fits. */
     char t[24];
@@ -415,7 +318,7 @@ static void paint_footer(CRect c) {
     footer_paint(api, c, line);
   } else if (F.marked[0]) {
     footer_paint(api, c, 0);
-    api->fmt(line, sizeof line, "v paste %s here", leaf(F.marked));
+    api->fmt(line, sizeof line, "v paste %s here", dir_leaf(F.marked));
     api->text((short)(c.x + 4), y, line, CLR_MARK, FOOT_BG);
   } else {
     footer_paint(api, c, "enter open  n new  e rename  d delete");
@@ -448,21 +351,21 @@ static void app_paint(void *st, CRect full) {
   if (F.sel >= F.top + F.rows) F.top = F.sel - F.rows + 1;
 
   /* The path, always. Knowing where you are is most of a file manager. */
-  api->fill(rect(c.x, c.y, c.w, BAR_H), CLR_BAR);
-  api->text((short)(c.x + 2), (short)(c.y + 1), F.cwd, CLR_FG, CLR_BAR);
+  api->fill(capp_rect(c.x, c.y, c.w, BAR_H), CLR_BAR);
+  api->text((short)(c.x + 2), (short)(c.y + 1), F.d.cwd, CLR_FG, CLR_BAR);
 
-  api->fill(rect(c.x, top, c.w, list_h), CLR_BG);
+  api->fill(capp_rect(c.x, top, c.w, list_h), CLR_BG);
   for (i = 0; i < F.rows; i++) {
     int idx = F.top + i;
     short y = (short)(top + i * ROW_H);
     const CappEntry *e;
     uint16_t fg, bg;
 
-    if (idx >= F.n) break;
+    if (idx >= F.d.n) break;
     e = at(idx);
 
     bg = idx == F.sel ? CLR_SEL : CLR_BG;
-    if (idx == F.sel) api->fill(rect(c.x, y, c.w, ROW_H), CLR_SEL);
+    if (idx == F.sel) api->fill(capp_rect(c.x, y, c.w, ROW_H), CLR_SEL);
     fg = e->is_dir ? CLR_DIR : CLR_FG;
 
     /* A folder gets a slash rather than an icon: at nine pixels a row, one
@@ -481,7 +384,7 @@ static void app_paint(void *st, CRect full) {
     }
   }
 
-  if (!F.n)
+  if (!F.d.n)
     api->text((short)(c.x + 6), (short)(top + 6), "(empty)", CLR_DIM, CLR_BG);
 
   paint_footer(c);
@@ -526,11 +429,12 @@ static int app_key(void *st, unsigned char k) {
   if (handled) return r;
   unsay();
 
-  /* Asked to delete: y does it, and anything else -- n, Escape, Backspace
-   * -- is a no. */
+  /* Asked to delete: y does it; n, Escape or Backspace is a no; anything
+   * else, a held d's repeat included, leaves the question up. */
   if (F.ask == ASK_DELETE) {
-    if (k == 'y' || k == 'Y') delete_selected();
-    else cancel_ask();
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_YES) delete_selected();
+    else if (a == CONFIRM_NO) cancel_ask();
     return 1;
   }
   if (F.ask != ASK_NONE) return key_prompt(k);
@@ -591,7 +495,7 @@ static int app_click(void *st, short x, short y, int button) {
   {
     int row = (y - BAR_H) / ROW_H;
     int idx = F.top + row;
-    if (idx < 0 || idx >= F.n) return 1;
+    if (idx < 0 || idx >= F.d.n) return 1;
 
     /* Second click on the same row opens it -- a double-click without the
      * timing, which on a device with one pointer and no drag is the same
@@ -611,7 +515,7 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
   if (wheel) {
     int want = F.sel - wheel;
     if (want < 0) want = 0;
-    if (want >= F.n) want = F.n ? F.n - 1 : 0;
+    if (want >= F.d.n) want = F.d.n ? F.d.n - 1 : 0;
     select_row(want);
     changed = 1;
   }
@@ -676,11 +580,11 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api->mem_set(&F, 0, sizeof F);
 
   /* Somewhere useful by default, and wherever you say if you say. */
-  api->fmt(F.cwd, sizeof F.cwd, "%s", CAPP_HOME);
+  api->fmt(F.d.cwd, sizeof F.d.cwd, "%s", CAPP_HOME);
   if (argc > 1 && argv[1][0]) {
     CappStat st;
     if (api->stat(argv[1], &st) == 0 && st.is_dir)
-      api->fmt(F.cwd, sizeof F.cwd, "%s", argv[1]);
+      api->fmt(F.d.cwd, sizeof F.d.cwd, "%s", argv[1]);
   }
   reload();
   toolbar_init(api, ACTIONS, NACT, ICONS, 2);

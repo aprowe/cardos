@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info roku_capp_info
 #define capp_main roku_capp_main
@@ -19,7 +20,6 @@ static int t_fmt(char *b, size_t n, const char *f, ...) {
   va_start(ap, f); r = vsnprintf(b, n, f, ap); va_end(ap);
   return r;
 }
-static size_t t_strlen(const char *s) { return strlen(s); }
 static int t_ready(void) { return 1; }
 
 static char s_method[8], s_url[200];
@@ -56,8 +56,8 @@ static int t_poll(char *out, size_t n) {
 static CardApi TF;
 
 static void topen(void) {
-  memset(&TF, 0, sizeof TF);
-  TF.fmt = t_fmt; TF.str_len = t_strlen; TF.net_ready = t_ready;
+  fakeapi_init(&TF);
+  TF.fmt = t_fmt; TF.net_ready = t_ready;
   TF.http = t_http; TF.http_start = t_start; TF.http_poll = t_poll;
   api = &TF;
   memset(&G, 0, sizeof G);

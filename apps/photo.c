@@ -22,7 +22,10 @@
  * should not.
  */
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/safefile.h"
+#include "apps/syncset.h"
+#include "apps/confirm.h"
 
 #define SCR_W 240
 #define SCR_H 135
@@ -77,11 +80,6 @@ static int ends_with(const char *s, const char *suffix) {
   return 1;
 }
 
-static int same(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
-
 static void say(int bad, const char *s) {
   api->fmt(P.status, sizeof P.status, "%s", s);
   P.bad = bad;
@@ -131,10 +129,11 @@ static void index_save(void) {
 /* The synced photo a file is, or -1. */
 static int synced_at(const char *file) {
   int i;
+  if (!str_same(P.dir, DIR)) return -1;     /* opened on a picture elsewhere */
   for (i = 0; i < P.nsynced; i++) {
     char want[24];
     api->fmt(want, sizeof want, "%s.img", P.id[i]);
-    if (same(file, want)) return i;
+    if (str_same(file, want)) return i;
   }
   return -1;
 }
@@ -159,7 +158,7 @@ static void rescan(void) {
     P.count++;
   }
   P.cur = 0;
-  for (i = 0; i < P.count; i++) if (same(P.files[i], keep)) P.cur = i;
+  for (i = 0; i < P.count; i++) if (str_same(P.files[i], keep)) P.cur = i;
 }
 
 /* ---- sync ------------------------------------------------------------------------- */
@@ -174,7 +173,7 @@ static void sync_begin(void) {
 /* Each id in the reply, in order, with its name. */
 static void sync_list(void) {
   char url[160], path[64];
-  int r, i, n = 0, j;
+  int r, i, n = 0, whole, may_delete, kept;
   static char ids[MAXPICS][12], names[MAXPICS][NAMELEN];
   api->fmt(url, sizeof url, "%s/photos", api->proxy());
   r = api->http("GET", url, 0, 0, "", P.reply, sizeof P.reply, 15000);
@@ -184,6 +183,7 @@ static void sync_list(void) {
     P.sync = SYNC_IDLE;
     return;
   }
+  whole = sync_reply(P.reply, r, (int)sizeof P.reply);
   for (i = 0; P.reply[i] && n < MAXPICS; ) {
     int k = 0;
     while (P.reply[i] && P.reply[i] != '\t' && P.reply[i] != '\n' && k < 11) ids[n][k++] = P.reply[i++];
@@ -199,22 +199,33 @@ static void sync_list(void) {
     if (P.reply[i]) i++;
     if (ids[n][0]) n++;
   }
-  /* Gone from the server: gone from here. */
+  /* Gone from the server: gone from here -- but only against the whole
+   * list. One that filled the reply or ran to MAXPICS is not all of it:
+   * what it leaves out stays, on the card and in the index
+   * (apps/syncset.h). */
+  may_delete = sync_may_delete(whole, n, MAXPICS);
+  kept = 0;
   for (i = 0; i < P.nsynced; i++) {
-    for (j = 0; j < n; j++) if (same(P.id[i], ids[j])) break;
-    if (j == n) {
+    if (sync_listed(P.id[i], &ids[0][0], n, (int)sizeof ids[0])) continue;
+    if (may_delete) {
       api->fmt(path, sizeof path, DIR "/%s.img", P.id[i]);
       api->remove(path);
+    } else if (n + kept < MAXPICS) {
+      if (kept != i) {
+        api->mem_cpy(P.id[kept], P.id[i], sizeof P.id[0]);
+        api->mem_cpy(P.name[kept], P.name[i], sizeof P.name[0]);
+      }
+      kept++;
     }
   }
-  /* The new list, and what of it is not here yet. */
-  P.nsynced = n;
+  /* The new list after what was kept, and what of it is not here yet. */
+  P.nsynced = kept + n;
   P.nwant = 0;
-  for (i = 0; i < n; i++) {
+  for (i = kept; i < P.nsynced; i++) {
     CappStat st;
-    api->mem_cpy(P.id[i], ids[i], sizeof P.id[i]);
-    api->mem_cpy(P.name[i], names[i], sizeof P.name[i]);
-    api->fmt(path, sizeof path, DIR "/%s.img", ids[i]);
+    api->mem_cpy(P.id[i], ids[i - kept], sizeof P.id[i]);
+    api->mem_cpy(P.name[i], names[i - kept], sizeof P.name[i]);
+    api->fmt(path, sizeof path, DIR "/%s.img", P.id[i]);
     if (api->stat(path, &st) != 0) P.want[P.nwant++] = i;
   }
   index_save();
@@ -478,8 +489,10 @@ static int do_action(int a) {
 static int app_key(void *st, unsigned char k) {
   (void)st;
   if (P.ask_delete) {
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_WAIT) return 1;
     P.ask_delete = 0;
-    if (k == 'y' || k == 'Y') { delete_current(); return 1; }
+    if (a == CONFIRM_YES) { delete_current(); return 1; }
     return status_changed();     /* the question goes; the picture stays */
   }
   switch (k) {
@@ -513,7 +526,7 @@ static int app_tick(void *st, uint32_t now) {
     if (P.count) api->fmt(keep, sizeof keep, "%s", P.files[P.cur]);
     if (P.sync == SYNC_LIST) sync_list();
     else sync_get();
-    if (P.count != before || (P.count && !same(P.files[P.cur], keep))) return 1;
+    if (P.count != before || (P.count && !str_same(P.files[P.cur], keep))) return 1;
     return status_changed();
   }
   if (P.show && P.count > 1 && (int32_t)(now - P.next_slide) >= 0) {
@@ -569,14 +582,27 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   P.at = rect(0, 0, SCR_W, SCR_H);   /* until the first paint says otherwise */
   api->fmt(P.dir, sizeof P.dir, "%s", DIR);
   index_load();
-  rescan();
-  /* An argument names a picture in /pics to start on. */
+  /* An argument names a picture to start on -- in /pics, or anywhere: Files
+   * opens an .img where it lies, and then that folder is the one shown and
+   * nothing is synced into it. */
   if (argc > 1) {
-    int i;
-    for (i = 0; i < P.count; i++) if (ends_with(argv[1], P.files[i])) P.cur = i;
+    int i, slash = -1;
+    const char *name = argv[1];
+    for (i = 0; argv[1][i]; i++) if (argv[1][i] == '/') slash = i;
+    if (slash > 0) {
+      api->fmt(P.dir, sizeof P.dir, "%.*s", slash, argv[1]);
+      name = argv[1] + slash + 1;
+    } else if (slash == 0) {
+      api->fmt(P.dir, sizeof P.dir, "/");
+      name = argv[1] + 1;
+    }
+    rescan();
+    for (i = 0; i < P.count; i++) if (str_same(name, P.files[i])) P.cur = i;
+  } else {
+    rescan();
   }
   P.sync = SYNC_IDLE;
-  sync_begin();
+  if (str_same(P.dir, DIR)) sync_begin();
   UI.paint = app_paint;
   UI.key = app_key;
   UI.click = app_click;

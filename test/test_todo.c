@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info todo_capp_info
 #define capp_main todo_capp_main
@@ -22,18 +23,6 @@
 #undef capp_main
 
 /* ---- a CardApi that does just enough: files on the host ----------------- */
-
-static int fake_fmt(char *buf, size_t n, const char *fmt, ...) {
-  va_list ap;
-  int r;
-  va_start(ap, fmt);
-  r = vsnprintf(buf, n, fmt, ap);
-  va_end(ap);
-  return r;
-}
-static void *fake_memset(void *d, int c, size_t n)         { return memset(d, c, n); }
-static void *fake_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
-static size_t fake_strlen(const char *s)                   { return strlen(s); }
 
 /* Files on the host, by path. The cache is one file per list now, plus the
  * list of lists, so the fake has to tell paths apart: each becomes a file in
@@ -108,11 +97,7 @@ static int fake_key_repeat(void) { return fake_repeat; }
 static CardApi FAKE;
 
 static void use_fake_api(void) {
-  memset(&FAKE, 0, sizeof FAKE);
-  FAKE.fmt = fake_fmt;
-  FAKE.mem_set = fake_memset;
-  FAKE.mem_cpy = fake_memcpy;
-  FAKE.str_len = fake_strlen;
+  fakeapi_init(&FAKE);
   FAKE.open = fake_open;
   FAKE.read = fake_read;
   FAKE.write = fake_write;
@@ -585,7 +570,6 @@ void test_todo_pending_edits_are_pushed_before_the_sweep_pulls(void) {
   host_clean();
 }
 
-
 /* ---- the overview, and the keys around it -------------------------------- */
 
 /* Everything open, under the list it belongs to. The list on screen comes
@@ -734,7 +718,6 @@ void test_todo_escape_while_typing_abandons_the_draft_only(void) {
   CHECK_EQ(T.n, 0);                       /* not added */
   host_clean();
 }
-
 
 /* Every request goes to the device's own server, which holds the Google
  * login and answers in lines (server/google.py) -- none to Google itself,

@@ -8,6 +8,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 
 #define LINES     7
 #define LINE_MAX  36
@@ -52,12 +53,6 @@ static void stop(void) {
 
 static CRect C;                    /* the rect the last paint was given */
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)(w > 0 ? w : 0); r.h = (int16_t)h;
-  return r;
-}
-
 /* Log lines the screen has room for, ending clear of the request count.
  * Seven were asked for and six fit on 135 rows: the seventh was written
  * over the count. */
@@ -75,13 +70,13 @@ static void line(CRect c, int *cur, int y, const char *s, uint16_t fg) {
   int cols = (c.w - 8) / 6, i = 0;
   if (cols > (int)sizeof buf - 1) cols = (int)sizeof buf - 1;
   if (cols < 0) cols = 0;
-  if (y > *cur) api->fill(rect(c.x, *cur, c.w, y - *cur), CLR_BG);
+  if (y > *cur) api->fill(capp_rect(c.x, *cur, c.w, y - *cur), CLR_BG);
   for (; s && s[i] && i < cols; i++) buf[i] = s[i];
   for (; i < cols; i++) buf[i] = ' ';
   buf[cols] = 0;
-  api->fill(rect(c.x, y, 8, 8), CLR_BG);
+  api->fill(capp_rect(c.x, y, 8, 8), CLR_BG);
   api->text((int16_t)(c.x + 8), (int16_t)y, buf, fg, CLR_BG);
-  api->fill(rect(c.x + 8 + cols * 6, y, c.w - 8 - cols * 6, 8), CLR_BG);
+  api->fill(capp_rect(c.x + 8 + cols * 6, y, c.w - 8 - cols * 6, 8), CLR_BG);
   *cur = y + 8;
 }
 
@@ -107,7 +102,7 @@ static void app_paint(void *st, CRect c) {
          first + i < S.nlog ? S.log[first + i] : "", CLR_FG);
   api->fmt(bar, sizeof bar, "%lu requests", (unsigned long)S.count);
   line(c, &cur, c.y + c.h - 10, bar, CLR_DIM);
-  if (c.y + c.h > cur) api->fill(rect(c.x, cur, c.w, c.y + c.h - cur), CLR_BG);
+  if (c.y + c.h > cur) api->fill(capp_rect(c.x, cur, c.w, c.y + c.h - cur), CLR_BG);
 }
 
 static int app_tick(void *st, uint32_t now) {
@@ -130,8 +125,8 @@ static int app_tick(void *st, uint32_t now) {
    * the lines above the new ones stay where they are; once it scrolls,
    * every log line moved. */
   from = (shown_before >= rows || S.nlog > rows) ? 0 : shown_before;
-  api->damage(rect(C.x, C.y + TOP_LOG + from * PITCH, C.w,
-                   C.h - TOP_LOG - from * PITCH));
+  api->damage(capp_rect(C.x, C.y + TOP_LOG + from * PITCH, C.w,
+                        C.h - TOP_LOG - from * PITCH));
   return 1;
 }
 

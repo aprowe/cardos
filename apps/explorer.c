@@ -23,11 +23,13 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
+#include "apps/dirmodel.h"
 
-#define MAX_ENTRIES 96
-#define PATH_MAX   128
+#define PATH_MAX   DIR_PATH_MAX
 
 #define TOOL_H      16        /* the verbs */
 #define HEAD_H       9        /* Name / Size column headers */
@@ -58,11 +60,7 @@ enum { ASK_NONE = 0, ASK_NEWDIR, ASK_RENAME, ASK_DELETE };
 static const CardApi *api;
 
 static struct {
-  char      cwd[PATH_MAX];
-  CappEntry ent[MAX_ENTRIES];
-  unsigned char order[MAX_ENTRIES];
-  int       n;                  /* everything in cwd */
-  int       nfolders;           /* how many of them are folders */
+  DirList   d;                  /* the folder: cwd, its listing, its order */
   int       sel;                /* index into the display order, or -1 */
   int       top;                /* first row shown in the list pane */
   int       rows;               /* rows the list pane fits */
@@ -79,65 +77,6 @@ static struct {
   int       have_at;
 } X;
 
-/* ---- helpers -------------------------------------------------------------- */
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
-
-static int str_eq(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
-
-static void join(char *out, size_t n, const char *dir, const char *name) {
-  if (api->str_len(dir) == 1 && dir[0] == '/') api->fmt(out, n, "/%s", name);
-  else api->fmt(out, n, "%s/%s", dir, name);
-}
-
-static const char *leaf(const char *path) {
-  const char *p = path, *last = path;
-  for (; *p; p++) if (*p == '/' && p[1]) last = p + 1;
-  return last;
-}
-
-static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
-
-static int ext_is(const char *ext, const char *want) {
-  for (;;) {
-    if (lower(*ext) != *want) return 0;
-    if (!*want) return 1;
-    ext++; want++;
-  }
-}
-
-static const char *ext_of(const char *name) {
-  size_t l = api->str_len(name);
-  const char *ext = name + l;
-  while (ext > name && *ext != '.') ext--;
-  return ext;
-}
-
-/* The Type column, and the app that opens it. Two answers from one table so
- * they cannot disagree about what a file is. */
-static const char *kind_of(const char *name, const char **opener) {
-  const char *e = ext_of(name);
-  if (e == name)            { *opener = "edit";  return "File"; }
-  if (ext_is(e, ".capp"))   { *opener = NULL;    return "Program"; }
-  if (ext_is(e, ".txt") || ext_is(e, ".md") || ext_is(e, ".c") ||
-      ext_is(e, ".h") || ext_is(e, ".cfg") || ext_is(e, ".ini"))
-                            { *opener = "edit";  return "Text"; }
-  if (ext_is(e, ".jpg") || ext_is(e, ".jpeg") || ext_is(e, ".png") ||
-      ext_is(e, ".bmp"))    { *opener = "photo"; return "Image"; }
-  if (ext_is(e, ".cpx"))    { *opener = "web";   return "Page"; }
-  if (ext_is(e, ".wav"))    { *opener = NULL;    return "Sound"; }
-  if (ext_is(e, ".bin"))    { *opener = NULL;    return "Firmware"; }
-  *opener = "edit";
-  return "File";
-}
-
 /* ---- what changed ----------------------------------------------------------
  *
  * The window used to be repainted whole for every key: a selection that moved
@@ -152,28 +91,28 @@ static int body_h(void) { return X.at.h - TOOL_H - FOOT_H; }
 static void damage_all(void) { if (X.have_at) api->damage(X.at); }
 
 static void damage_footer(void) {
-  if (X.have_at) api->damage(rect(X.at.x, X.at.y + X.at.h - FOOT_H, X.at.w, FOOT_H));
+  if (X.have_at) api->damage(capp_rect(X.at.x, X.at.y + X.at.h - FOOT_H, X.at.w, FOOT_H));
 }
 
 static void damage_tools(void) {
-  if (X.have_at) api->damage(rect(X.at.x, X.at.y, X.at.w, TOOL_H));
+  if (X.have_at) api->damage(capp_rect(X.at.x, X.at.y, X.at.w, TOOL_H));
 }
 
 /* The folder pane: a selected folder is highlighted there too. */
 static void damage_tree(void) {
-  if (X.have_at) api->damage(rect(X.at.x + 2, body_y(), TREE_W, body_h()));
+  if (X.have_at) api->damage(capp_rect(X.at.x + 2, body_y(), TREE_W, body_h()));
 }
 
 /* The list pane, headers and all. */
 static void damage_list(void) {
   if (X.have_at)
-    api->damage(rect(X.at.x + TREE_W + 6, body_y(), X.at.w - TREE_W - 9, body_h()));
+    api->damage(capp_rect(X.at.x + TREE_W + 6, body_y(), X.at.w - TREE_W - 9, body_h()));
 }
 
 static void damage_row(int idx) {
   if (!X.have_at || idx < X.top || idx >= X.top + X.rows) return;
-  api->damage(rect(X.at.x + TREE_W + 6, body_y() + HEAD_H + 1 + (idx - X.top) * ROW_H,
-                   X.at.w - TREE_W - 9, ROW_H));
+  api->damage(capp_rect(X.at.x + TREE_W + 6, body_y() + HEAD_H + 1 + (idx - X.top) * ROW_H,
+                        X.at.w - TREE_W - 9, ROW_H));
 }
 
 static void say(const char *s) {
@@ -188,62 +127,31 @@ static void unsay(void) {
   damage_footer();
 }
 
-/* ---- the listing ----------------------------------------------------------- */
+/* ---- the listing (apps/dirmodel.h) ------------------------------------------- */
 
-static int before(const CappEntry *a, const CappEntry *b) {
-  const char *p = a->name, *q = b->name;
-  if (a->is_dir != b->is_dir) return a->is_dir;
-  for (;;) {
-    char x = lower(*p), y = lower(*q);
-    if (x != y) return x < y;
-    if (!x) return 0;
-    p++; q++;
-  }
-}
+static const CappEntry *at(int i) { return dir_at(&X.d, i); }
 
-static const CappEntry *at(int i) { return &X.ent[X.order[i]]; }
-
-static void reload(void) {
-  int i, j;
-
-  X.n = api->list_ex(X.cwd, X.ent, MAX_ENTRIES);
-  if (X.n < 0) { X.n = 0; say("cannot read that folder"); }
-
-  for (i = 0; i < X.n; i++) X.order[i] = (unsigned char)i;
-  for (i = 1; i < X.n; i++) {
-    unsigned char tmp = X.order[i];
-    for (j = i; j > 0 && before(&X.ent[tmp], &X.ent[X.order[j - 1]]); j--)
-      X.order[j] = X.order[j - 1];
-    X.order[j] = tmp;
-  }
-
-  X.nfolders = 0;
-  for (i = 0; i < X.n; i++) if (at(i)->is_dir) X.nfolders++;
-
+/* After the folder was read again: nothing selected, the count said, and
+ * all of it marked. */
+static void relisted(int bad) {
   X.sel = -1;
   X.top = 0;
-  api->fmt(X.status, sizeof X.status, "%d object%s", X.n, X.n == 1 ? "" : "s");
+  if (bad) say("cannot read that folder");
+  else api->fmt(X.status, sizeof X.status, "%d object%s", X.d.n, X.d.n == 1 ? "" : "s");
   damage_all();
 }
 
-static void go_to(const char *path) {
-  api->fmt(X.cwd, sizeof X.cwd, "%s", path);
-  reload();
-}
+static void reload(void) { relisted(dir_reload(api, &X.d) < 0); }
 
-static void go_up(void) {
-  int i, cut = 0;
-  if (str_eq(X.cwd, "/")) return;
-  for (i = 0; X.cwd[i]; i++) if (X.cwd[i] == '/') cut = i;
-  X.cwd[cut ? cut : 1] = 0;
-  reload();
-}
+static void go_to(const char *path) { relisted(dir_go(api, &X.d, path) < 0); }
+
+static void go_up(void) { if (dir_up(api, &X.d)) relisted(0); }
 
 /* Moving the selection: the row it left, the row it reached, and the folder
  * pane, which highlights a selected folder. A selection that scrolls the
  * list marks the list. -1 selects nothing. */
 static void select_idx(int idx) {
-  if (idx < -1 || idx >= X.n || idx == X.sel) return;
+  if (idx < -1 || idx >= X.d.n || idx == X.sel) return;
   damage_row(X.sel);
   X.sel = idx;
   damage_row(X.sel);
@@ -258,17 +166,19 @@ static void open_index(int i) {
   char path[PATH_MAX];
   const CappEntry *e;
   const char *app;
+  int how;
 
-  if (i < 0 || i >= X.n) return;
+  if (i < 0 || i >= X.d.n) return;
   e = at(i);
-  join(path, sizeof path, X.cwd, e->name);
+  dir_path(api, &X.d, i, path, sizeof path);
   if (e->is_dir) { go_to(path); return; }
 
-  kind_of(e->name, &app);
-  if (!app) {
-    say(api->run(e->name, (const char *)0) == 0 ? "started" : "nothing here opens that");
+  dir_kind(e->name, &how, &app);
+  if (how == DIR_OPEN_RUN) {
+    say(api->run(e->name, (const char *)0) == 0 ? "started" : "would not start");
     return;
   }
+  if (how == DIR_OPEN_NONE) { say("nothing here opens that: o shows its bytes"); return; }
   if (api->run(app, path) == 0) api->fmt(X.status, sizeof X.status, "opening %s", e->name);
   else api->fmt(X.status, sizeof X.status, "no %s app", app);
   damage_footer();
@@ -277,7 +187,7 @@ static void open_index(int i) {
 static void open_in_editor(void) {
   char path[PATH_MAX];
   if (X.sel < 0 || at(X.sel)->is_dir) { say("select a file first"); return; }
-  join(path, sizeof path, X.cwd, at(X.sel)->name);
+  dir_path(api, &X.d, X.sel, path, sizeof path);
   if (api->run("edit", path) != 0) say("no edit app");
 }
 
@@ -300,55 +210,49 @@ static void cancel_ask(void) {
   damage_footer();
 }
 
+/* Each operation reads the folder again (dirmodel), and then the count the
+ * status line shows gives way to what happened. */
 static void finish_ask(void) {
-  char path[PATH_MAX], to[PATH_MAX];
-  int what = X.ask, r;
+  const char *said;
+  int what = X.ask;
 
   cancel_ask();
   if (what == ASK_NEWDIR && X.buf_len) {
-    join(path, sizeof path, X.cwd, X.buf);
-    r = api->mkdir(path);
-    reload();
-    say(r == 0 ? "folder created" : "could not create it");
+    said = dir_mkdir(api, &X.d, X.buf);
+    relisted(0);
+    say(said);
   } else if (what == ASK_RENAME && X.buf_len && X.sel >= 0) {
-    join(path, sizeof path, X.cwd, at(X.sel)->name);
-    join(to, sizeof to, X.cwd, X.buf);
-    r = api->rename(path, to);
-    reload();
-    say(r == 0 ? "renamed" : "could not rename it");
+    said = dir_rename(api, &X.d, X.sel, X.buf);
+    relisted(0);
+    say(said);
   }
 }
 
 static void do_delete(void) {
-  char path[PATH_MAX];
-  int r;
+  const char *said;
   cancel_ask();
   if (X.sel < 0) return;
-  join(path, sizeof path, X.cwd, at(X.sel)->name);
-  r = api->remove(path);
-  reload();
-  say(r == 0 ? "deleted" : "could not delete it");
+  said = dir_delete(api, &X.d, X.sel);
+  relisted(0);
+  say(said);
 }
 
 /* The Cut button turns into Paste while something is held, so the strip is
  * marked along with the footer. */
 static void cut_selected(void) {
   if (X.sel < 0) { say("select something to move"); return; }
-  join(X.marked, sizeof X.marked, X.cwd, at(X.sel)->name);
+  dir_path(api, &X.d, X.sel, X.marked, sizeof X.marked);
   damage_tools();
   damage_footer();
 }
 
 static void paste_here(void) {
-  char to[PATH_MAX];
-  int r;
+  const char *said;
   if (!X.marked[0]) { say("nothing cut: m cuts"); return; }
-  join(to, sizeof to, X.cwd, leaf(X.marked));
-  /* A rename across directories is a move on FAT: only the entry moves. */
-  r = api->rename(X.marked, to);
+  said = dir_move_here(api, &X.d, X.marked);
   X.marked[0] = 0;
-  reload();
-  say(r == 0 ? "moved" : "could not move it");
+  relisted(0);
+  say(said);
 }
 
 /* ---- the action table -------------------------------------------------------
@@ -413,50 +317,50 @@ static void raised(CRect r) { api->bevel(r, C_FACE, C_HI, C_DK); }
 static void sunken(CRect r) { api->bevel(r, C_WELL, C_DK, C_HI); }
 
 static void folder_icon(int x, int y, int open) {
-  api->fill(rect(x, y + 2, 8, 5), C_FOLDER);
-  api->fill(rect(x, y + 1, 4, 1), C_FOLDER);
-  api->fill(rect(x, y + 6, 8, 1), C_FOLDTB);
-  if (open) api->fill(rect(x + 1, y + 3, 6, 1), C_HI);
+  api->fill(capp_rect(x, y + 2, 8, 5), C_FOLDER);
+  api->fill(capp_rect(x, y + 1, 4, 1), C_FOLDER);
+  api->fill(capp_rect(x, y + 6, 8, 1), C_FOLDTB);
+  if (open) api->fill(capp_rect(x + 1, y + 3, 6, 1), C_HI);
 }
 
 static void file_icon(int x, int y) {
-  api->fill(rect(x + 1, y + 1, 6, 6), C_PAPER);
-  api->frame(rect(x + 1, y + 1, 6, 6), C_LO);
-  api->fill(rect(x + 2, y + 3, 4, 1), C_LO);
-  api->fill(rect(x + 2, y + 5, 3, 1), C_LO);
+  api->fill(capp_rect(x + 1, y + 1, 6, 6), C_PAPER);
+  api->frame(capp_rect(x + 1, y + 1, 6, 6), C_LO);
+  api->fill(capp_rect(x + 2, y + 3, 4, 1), C_LO);
+  api->fill(capp_rect(x + 2, y + 5, 3, 1), C_LO);
 }
 
 #define TOOLS 5
 static const char *TOOL[TOOLS] = { "Up", "New", "Ren", "Cut", "Del" };
 
 static CRect tool_box(CRect c, int i) {
-  return rect(c.x + 3 + i * 37, c.y + 2, 34, TOOL_H - 4);
+  return capp_rect(c.x + 3 + i * 37, c.y + 2, 34, TOOL_H - 4);
 }
 
 /* ---- painting --------------------------------------------------------------- */
 
 static void paint_tree(CRect c, int y0, int h) {
-  CRect pane = rect(c.x + 2, y0, TREE_W, h);
+  CRect pane = capp_rect(c.x + 2, y0, TREE_W, h);
   int i, row = 0;
 
   sunken(pane);
-  api->fill(rect(pane.x + 1, pane.y + 1, pane.w - 2, pane.h - 2), C_WELL);
+  api->fill(capp_rect(pane.x + 1, pane.y + 1, pane.w - 2, pane.h - 2), C_WELL);
 
   /* The parent, then the folders here. One level either side is all that fits
    * and all anyone needs to navigate with: up, or down into one of these. */
-  if (!str_eq(X.cwd, "/")) {
+  if (!str_same(X.d.cwd, "/")) {
     folder_icon(pane.x + 3, pane.y + 2 + row * ROW_H, 0);
     api->text((short)(pane.x + 13), (short)(pane.y + 2 + row * ROW_H), "..",
               C_TEXT, C_WELL);
     row++;
   }
-  for (i = 0; i < X.n && (row + 1) * ROW_H < pane.h; i++) {
+  for (i = 0; i < X.d.n && (row + 1) * ROW_H < pane.h; i++) {
     const CappEntry *e = at(i);
     short ry;
     if (!e->is_dir) continue;
     ry = (short)(pane.y + 2 + row * ROW_H);
     if (i == X.sel) {
-      api->fill(rect(pane.x + 1, ry - 1, pane.w - 2, ROW_H), C_SEL);
+      api->fill(capp_rect(pane.x + 1, ry - 1, pane.w - 2, ROW_H), C_SEL);
       folder_icon(pane.x + 3, ry, 1);
       api->text((short)(pane.x + 13), ry, e->name, C_SEL_TX, C_SEL);
     } else {
@@ -472,19 +376,19 @@ static void paint_tree(CRect c, int y0, int h) {
 static void paint_list(CRect c, int y0, int h) {
   int lx = c.x + TREE_W + 6;
   int lw = c.w - TREE_W - 9;
-  CRect pane = rect(lx, y0 + HEAD_H, lw, h - HEAD_H);
+  CRect pane = capp_rect(lx, y0 + HEAD_H, lw, h - HEAD_H);
   int i, most;
 
   /* Column headers, which are buttons in the original and are drawn as
    * buttons here even though sorting is not offered -- a header that looks
    * like a label would leave the columns unexplained. */
-  raised(rect(lx, y0, lw - 40, HEAD_H));
-  raised(rect(lx + lw - 40, y0, 40, HEAD_H));
+  raised(capp_rect(lx, y0, lw - 40, HEAD_H));
+  raised(capp_rect(lx + lw - 40, y0, 40, HEAD_H));
   api->text((short)(lx + 3), (short)(y0 + 1), "Name", C_TEXT, C_FACE);
   api->text((short)(lx + lw - 37), (short)(y0 + 1), "Size", C_TEXT, C_FACE);
 
   sunken(pane);
-  api->fill(rect(pane.x + 1, pane.y + 1, pane.w - 2, pane.h - 2), C_WELL);
+  api->fill(capp_rect(pane.x + 1, pane.y + 1, pane.w - 2, pane.h - 2), C_WELL);
 
   X.rows = (pane.h - 2) / ROW_H;
   if (X.rows < 1) X.rows = 1;
@@ -492,7 +396,7 @@ static void paint_list(CRect c, int y0, int h) {
    * wheel do nothing while anything was selected, every scroll undone by the
    * next paint. Selecting scrolls (select_idx); scrolling leaves the
    * selection where it is, off screen if need be. */
-  most = X.n - X.rows;
+  most = X.d.n - X.rows;
   if (X.top > most) X.top = most;
   if (X.top < 0) X.top = 0;
 
@@ -503,11 +407,11 @@ static void paint_list(CRect c, int y0, int h) {
     uint16_t fg = C_TEXT, bg = C_WELL;
     char size[12];
 
-    if (idx >= X.n) break;
+    if (idx >= X.d.n) break;
     e = at(idx);
 
     if (idx == X.sel) {
-      api->fill(rect(pane.x + 1, ry - 1, pane.w - 2, ROW_H), C_SEL);
+      api->fill(capp_rect(pane.x + 1, ry - 1, pane.w - 2, ROW_H), C_SEL);
       fg = C_SEL_TX;
       bg = C_SEL;
     }
@@ -539,7 +443,7 @@ static void paint_footer(CRect c) {
     short x = (short)(c.x + 4 + lw * 6);
     footer_paint(api, c, label);
     api->text(x, y, X.buf + from, C_TYPED, FOOT_BG);
-    api->fill(rect(x + (X.buf_len - from) * 6, y, 5, 8), C_TYPED);
+    api->fill(capp_rect(x + (X.buf_len - from) * 6, y, 5, 8), C_TYPED);
   } else if (X.ask == ASK_DELETE) {
     /* The name cut short enough that the question still fits. */
     char t[24];
@@ -552,7 +456,7 @@ static void paint_footer(CRect c) {
     footer_paint(api, c, line);
   } else if (X.marked[0]) {
     footer_paint(api, c, 0);
-    api->fmt(line, sizeof line, "v paste %s here", leaf(X.marked));
+    api->fmt(line, sizeof line, "v paste %s here", dir_leaf(X.marked));
     api->text((short)(c.x + 4), y, line, C_HELD, FOOT_BG);
   } else {
     footer_paint(api, c, "enter open  n new  e rename  d delete");
@@ -573,7 +477,7 @@ static void app_paint(void *st, CRect full) {
   X.at = c;
   X.have_at = 1;
 
-  api->fill(rect(c.x, c.y, c.w, TOOL_H), C_FACE);
+  api->fill(capp_rect(c.x, c.y, c.w, TOOL_H), C_FACE);
   for (i = 0; i < TOOLS; i++) {
     CRect b = tool_box(c, i);
     raised(b);
@@ -586,13 +490,13 @@ static void app_paint(void *st, CRect full) {
     int room = (c.w - (3 + TOOLS * 37) - 3) / 6;
     if (room > (int)sizeof where - 1) room = (int)sizeof where - 1;
     if (room > 0) {
-      api->fmt(where, (size_t)room + 1, "%s", leaf(X.cwd));
+      api->fmt(where, (size_t)room + 1, "%s", dir_leaf(X.d.cwd));
       api->text((short)(c.x + c.w - 3 - 6 * (int)api->str_len(where)), (short)(c.y + 4),
                 where, C_DIM, C_FACE);
     }
   }
 
-  api->fill(rect(c.x, body_y(), c.w, body_h()), C_FACE);
+  api->fill(capp_rect(c.x, body_y(), c.w, body_h()), C_FACE);
   paint_tree(c, body_y(), body_h());
   paint_list(c, body_y(), body_h());
   paint_footer(c);
@@ -616,11 +520,11 @@ static void do_tool(int i) {
 /* Which entry the nth row of the tree pane is, or -1. */
 static int tree_index(int row) {
   int i, r = 0;
-  if (!str_eq(X.cwd, "/")) {
+  if (!str_same(X.d.cwd, "/")) {
     if (row == 0) return -2;              /* the ".." row */
     r = 1;
   }
-  for (i = 0; i < X.n; i++) {
+  for (i = 0; i < X.d.n; i++) {
     if (!at(i)->is_dir) continue;
     if (r == row) return i;
     r++;
@@ -678,7 +582,7 @@ static int app_click(void *st, short x, short y, int button) {
     if (idx == -2) { go_up(); return 1; }
     if (idx >= 0) {
       char path[PATH_MAX];
-      join(path, sizeof path, X.cwd, at(idx)->name);
+      dir_path(api, &X.d, idx, path, sizeof path);
       go_to(path);
     }
     return 1;
@@ -690,7 +594,7 @@ static int app_click(void *st, short x, short y, int button) {
   {
     int row = (y - by - HEAD_H - 2) / ROW_H;
     int idx = X.top + row;
-    if (row < 0 || idx >= X.n) { select_idx(-1); return 1; }
+    if (row < 0 || idx >= X.d.n) { select_idx(-1); return 1; }
     if (idx == X.sel || button == CAPP_BTN_RIGHT) open_index(idx);
     else select_idx(idx);
   }
@@ -706,7 +610,7 @@ static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
   if (wheel) {
     int was = X.top;
     X.top -= wheel * 2;
-    if (X.top > X.n - X.rows) X.top = X.n - X.rows;
+    if (X.top > X.d.n - X.rows) X.top = X.d.n - X.rows;
     if (X.top < 0) X.top = 0;
     if (X.top != was) { damage_list(); changed = 1; }
   }
@@ -748,17 +652,18 @@ static int app_key(void *st, unsigned char k) {
   unsay();
 
   if (X.ask == ASK_NEWDIR || X.ask == ASK_RENAME) return key_prompt(k);
-  /* Asked to delete: y or Enter does it; n, Escape, Backspace, anything
-   * else, is a no. */
+  /* Asked to delete: y does it; n, Escape or Backspace is a no; anything
+   * else -- Enter included -- leaves the question up (apps/confirm.h). */
   if (X.ask == ASK_DELETE) {
-    if (k == 'y' || k == 'Y' || k == CAPP_KEY_ENTER) do_delete();
-    else cancel_ask();
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_YES) do_delete();
+    else if (a == CONFIRM_NO) cancel_ask();
     return 1;
   }
 
   switch (k) {
-  case CAPP_KEY_UP:    select_idx(X.sel > 0 ? X.sel - 1 : (X.n ? 0 : -1)); return 1;
-  case CAPP_KEY_DOWN:  if (X.sel + 1 < X.n) select_idx(X.sel + 1); return 1;
+  case CAPP_KEY_UP:    select_idx(X.sel > 0 ? X.sel - 1 : (X.d.n ? 0 : -1)); return 1;
+  case CAPP_KEY_DOWN:  if (X.sel + 1 < X.d.n) select_idx(X.sel + 1); return 1;
   case CAPP_KEY_LEFT:
   case CAPP_KEY_BACK:  go_up(); return 1;
   case CAPP_KEY_RIGHT:
@@ -840,11 +745,11 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api->mem_set(&X, 0, sizeof X);
   X.sel = -1;
 
-  api->fmt(X.cwd, sizeof X.cwd, "%s", CAPP_HOME);
+  api->fmt(X.d.cwd, sizeof X.d.cwd, "%s", CAPP_HOME);
   if (argc > 1 && argv[1][0]) {
     CappStat st;
     if (api->stat(argv[1], &st) == 0 && st.is_dir)
-      api->fmt(X.cwd, sizeof X.cwd, "%s", argv[1]);
+      api->fmt(X.d.cwd, sizeof X.d.cwd, "%s", argv[1]);
   }
   reload();
   toolbar_init(api, ACTIONS, NACT, 0, 0);

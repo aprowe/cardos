@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 #include "kernel/sys/printdoc.h"
 
 #define capp_info calc_capp_info
@@ -45,19 +46,7 @@ static void fk_pixels(CRect r, const uint16_t *px) {
   (void)px;
   if (r.x < 0 || r.y < 0 || r.x + r.w > SW || r.y + r.h > SH) OUT_OF_BOUNDS++;
 }
-static void *fk_memset(void *d, int c, size_t n) { return memset(d, c, n); }
-static void *fk_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
-static void *fk_memmove(void *d, const void *s, size_t n) { return memmove(d, s, n); }
-static size_t fk_strlen(const char *s) { return strlen(s); }
 static uint32_t fk_ticks(void) { return 1000; }
-static int fk_fmt(char *buf, size_t n, const char *fmt, ...) {
-  va_list ap;
-  int r;
-  va_start(ap, fmt);
-  r = vsnprintf(buf, n, fmt, ap);
-  va_end(ap);
-  return r;
-}
 static int fk_open(const char *p, int f) { (void)p; (void)f; return -1; }
 static int fk_mkdir(const char *p) { (void)p; return 0; }
 static int fk_stat(const char *p, CappStat *st) { (void)p; (void)st; return -1; }
@@ -78,16 +67,11 @@ static void boot(void) {
   char arg0[] = "calc";
   char *argv[1];
   argv[0] = arg0;
-  memset(&API, 0, sizeof API);
+  fakeapi_init(&API);
   API.version = CAPP_API_VERSION;
   API.fill = fk_fill;
   API.text = fk_text;
   API.pixels = fk_pixels;
-  API.mem_set = fk_memset;
-  API.mem_cpy = fk_memcpy;
-  API.mem_move = fk_memmove;
-  API.str_len = fk_strlen;
-  API.fmt = fk_fmt;
   API.ticks_ms = fk_ticks;
   API.open = fk_open;
   API.mkdir = fk_mkdir;

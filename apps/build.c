@@ -31,12 +31,12 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
+#define TL_LINES   140            /* about eight screens of scrollback */
+#include "apps/termlog.h"
 
-#define COLS        40            /* 240 pixels at six a character */
-#define LINES      140            /* about eight screens of scrollback */
-#define ROW_H        9
-#define BAR_H       10
-#define IN_H        11
+#define BAR_H      TL_BAR_H
+#define IN_H       TL_IN_H
 #define INPUT_MAX  200
 #define QUEUE_MAX    4           /* messages typed while one is running */
 #define REPLY_MAX 4000
@@ -59,10 +59,7 @@ static const CardApi *api;
 enum { WHO_YOU = 0, WHO_CLAUDE, WHO_NOTE, WHO_ERR };
 
 static struct {
-  char  line[LINES][COLS + 1];
-  unsigned char who[LINES];
-  int   nlines;
-  int   scroll;                   /* lines from the bottom */
+  TermLog log;                    /* the lines, who said each, the scroll */
 
   char  input[INPUT_MAX + 1];
   int   in_len;
@@ -91,86 +88,22 @@ static struct {
   int   marked;                   /* something was marked since tick began */
 } C;
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
-
 /* What the next paint has to redraw, said to the shell. A typed character is
  * the input line and nothing else; without this every keystroke redrew the
  * whole window, log and all, which on a 40x12 terminal is visible as a
  * flicker. These were three flags and an expect_paint guess; api->damage
  * says it outright, as apps/claude.c does. Before the first paint there is
  * nowhere to mark, and the shell paints everything anyway. */
-static void mark_bar(void) { C.marked = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
-static void mark_log(void) { C.marked = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
-static void mark_in(void)  { C.marked = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
+static void mark_bar(void) { C.marked = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
+static void mark_log(void) { C.marked = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
+static void mark_in(void)  { C.marked = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
 
-/* ---- the log -------------------------------------------------------------- */
+/* ---- the log (apps/termlog.h) ------------------------------------------------ */
 
-static void push(const char *text, int who) {
-  int i;
-  if (C.nlines == LINES) {
-    /* Oldest out. A ring buffer would save the copying and cost a modulo in
-     * every reader; at 140 lines of 41 bytes this is a memmove of 5 KB, once
-     * per line, on a machine that is otherwise waiting for a network. */
-    for (i = 1; i < LINES; i++) {
-      api->mem_cpy(C.line[i - 1], C.line[i], COLS + 1);
-      C.who[i - 1] = C.who[i];
-    }
-    C.nlines--;
-  }
-  api->fmt(C.line[C.nlines], COLS + 1, "%s", text);
-  C.who[C.nlines] = (unsigned char)who;
-  C.nlines++;
-  mark_log();
-}
-
-/* Word wrap, because forty columns is narrow enough that breaking mid-word
- * makes prose genuinely hard to read. A word longer than a line is broken --
- * there is nothing else to do with a URL. */
+/* All of `text`, word-wrapped, a line per newline. */
 static void push_wrapped(const char *text, int who) {
-  char out[COLS + 1];
-  int n = 0;
-  size_t i = 0, len = api->str_len(text);
-
-  while (i <= len) {
-    char c = text[i];
-
-    if (c == '\n' || c == 0) {
-      out[n] = 0;
-      push(out, who);
-      n = 0;
-      if (c == 0) return;
-      i++;
-      continue;
-    }
-    if (c == '\r') { i++; continue; }
-    if (c == '\t') c = ' ';
-
-    if (n == COLS) {
-      /* Back up to the last space, if there is one worth backing up to. */
-      int brk = n;
-      while (brk > 0 && out[brk - 1] != ' ') brk--;
-      if (brk > COLS / 3) {
-        int keep = n - brk;
-        char tail[COLS + 1];
-        int k;
-        for (k = 0; k < keep; k++) tail[k] = out[brk + k];
-        out[brk ? brk - 1 : 0] = 0;
-        push(out, who);
-        for (k = 0; k < keep; k++) out[k] = tail[k];
-        n = keep;
-      } else {
-        out[n] = 0;
-        push(out, who);
-        n = 0;
-      }
-    }
-    out[n++] = c;
-    i++;
-  }
+  tl_push_text(api, &C.log, text, who, 0);
+  mark_log();
 }
 
 static void note(const char *s) { push_wrapped(s, WHO_NOTE); }
@@ -343,7 +276,7 @@ static void poll_now(void) {
      * will land, so the wait is something to watch rather than dots. */
     while (*s && *s != '\n') s++;
     while (*s == '\n') {
-      char line[COLS * 2 + 1];
+      char line[TL_COLS * 2 + 1];
       s++;
       for (i = 0; s[i] && s[i] != '\n' && i < (int)sizeof line - 1; i++) line[i] = s[i];
       line[i] = 0;
@@ -372,7 +305,7 @@ static void poll_now(void) {
   }
   C.job = 0;
   job_clear();
-  C.scroll = 0;
+  C.log.scroll = 0;
   api->fmt(C.status, sizeof C.status, "%lus",
            (unsigned long)((api->ticks_ms() - C.started) / 1000u));
   C.check_update = 1;               /* on the next tick, not in this one */
@@ -414,23 +347,6 @@ static uint16_t colour_of(int who) {
        : who == WHO_ERR ? CLR_ERR : CLR_DIM;
 }
 
-static void fill_if(int x, int y, int w, int h, uint16_t c) {
-  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), c);
-}
-
-/* `s` padded with spaces to `cols` characters, so a line writes over the
- * one it replaces instead of the row being cleared first: there is no
- * framebuffer, and a fill followed by text is a blink on the panel. */
-static void text_cols(int x, int y, const char *s, int cols, uint16_t fg, uint16_t bg) {
-  char b[64];
-  int n = 0;
-  if (cols > (int)sizeof b - 1) cols = (int)sizeof b - 1;
-  while (s[n] && n < (int)sizeof b - 1) { b[n] = s[n]; n++; }
-  while (n < cols) b[n++] = ' ';
-  b[n] = 0;
-  api->text((short)x, (short)y, b, fg, bg);
-}
-
 /* What the bar says, worked out apart from drawing it so a tick can tell
  * whether a poll changed it. */
 static void bar_text(char *bar, size_t n) {
@@ -452,64 +368,8 @@ static void bar_text(char *bar, size_t n) {
  * filled and then written, and the dots move every poll. */
 static void paint_bar(CRect c) {
   char bar[64];
-  int cols = (c.w - 3 + 5) / 6;          /* the last, cut by the edge, still padded */
-  if (cols > 63) cols = 63;
   bar_text(bar, sizeof bar);
-  fill_if(c.x, c.y, c.w, 1, CLR_BAR);
-  fill_if(c.x, c.y + 9, c.w, BAR_H - 9, CLR_BAR);
-  fill_if(c.x, c.y + 1, 3, 8, CLR_BAR);
-  fill_if(c.x + 3 + cols * 6, c.y + 1, c.w - 3 - cols * 6, 8, CLR_BAR);
-  text_cols(c.x + 3, c.y + 1, bar, cols, CLR_FG, CLR_BAR);
-}
-
-/* The newest line sits just above the input box; scroll moves the window
- * back through the log. Each line is padded to the width and written over
- * the one before it; only the margins, the pixel row under each line and
- * the rows below the last are filled -- clearing the whole log first
- * blinked it on every answer and every log line a poll brought. */
-static void paint_log(CRect c, CRect clip) {
-  int rows = (c.h - BAR_H - IN_H) / ROW_H;
-  int top = c.y + BAR_H, bottom = c.y + c.h - IN_H;
-  int cols = (c.w - 2 + 5) / 6, right;   /* to the edge: a 40-column line reaches it */
-  int first, r, y = top;
-
-  if (cols > 63) cols = 63;
-  right = c.x + 2 + cols * 6;
-  first = C.nlines - rows - C.scroll;
-  if (first < 0) first = 0;
-  fill_if(c.x, top, 2, bottom - top, CLR_BG);
-  fill_if(right, top, c.x + c.w - right, bottom - top, CLR_BG);
-  for (r = 0; r < rows; r++) {
-    int i = first + r;
-    if (i >= C.nlines) break;
-    y = top + r * ROW_H;
-    if (y < clip.y + clip.h && y + ROW_H > clip.y) {
-      text_cols(c.x + 2, y, C.line[i], cols, colour_of(C.who[i]), CLR_BG);
-      fill_if(c.x + 2, y + 8, cols * 6, ROW_H - 8, CLR_BG);
-    }
-    y += ROW_H;
-  }
-  fill_if(c.x + 2, y, cols * 6, bottom - y, CLR_BG);
-}
-
-/* The input line, showing the tail of what has been typed: the prompt, the
- * text, the cursor, then spaces to the end -- each drawn over the last, so
- * a keystroke does not blank the line. */
-static void paint_input(CRect c) {
-  int y = c.y + c.h - IN_H;
-  int vis = (c.w - 12) / 6;
-  int from = C.in_len > vis ? C.in_len - vis : 0;
-  int n = C.in_len - from, cx = c.x + 10 + n * 6, end;
-  fill_if(c.x, y, c.w, 2, CLR_IN);
-  fill_if(c.x, y + 10, c.w, IN_H - 10, CLR_IN);
-  fill_if(c.x, y + 2, 2, 8, CLR_IN);
-  api->text((short)(c.x + 2), (short)(y + 2), ">", CLR_DIM, CLR_IN);
-  fill_if(c.x + 8, y + 2, 2, 8, CLR_IN);
-  api->text((short)(c.x + 10), (short)(y + 2), C.input + from, CLR_FG, CLR_IN);
-  api->fill(rect(cx, y + 2, 5, 8), CLR_FG);
-  text_cols(cx + 5, y + 2, "", vis - n, CLR_FG, CLR_IN);
-  end = cx + 5 + (vis > n ? vis - n : 0) * 6;
-  fill_if(end, y + 2, c.x + c.w - end, 8, CLR_IN);
+  tl_paint_bar(api, c, bar, CLR_FG, CLR_BAR);
 }
 
 /* Painted to the clip the shell hands back: our own marks come back as the
@@ -521,8 +381,10 @@ static void app_paint(void *st, CRect c) {
   C.at = c;
   C.have_at = 1;
   if (clip.y < c.y + BAR_H) paint_bar(c);
-  if (clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + BAR_H) paint_log(c, clip);
-  if (clip.y + clip.h > c.y + c.h - IN_H) paint_input(c);
+  if (clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + BAR_H)
+    tl_paint_log(api, &C.log, c, clip, colour_of, CLR_BG);
+  if (clip.y + clip.h > c.y + c.h - IN_H)
+    tl_paint_input(api, c, ">", C.input, C.in_len, CLR_FG, CLR_DIM, CLR_IN);
 }
 
 /* ---- input ----------------------------------------------------------------- */
@@ -579,7 +441,7 @@ static void submit(void) {
                         : "queued behind the others");
     C.in_len = 0;
     C.input[0] = 0;
-    C.scroll = 0;
+    C.log.scroll = 0;
     mark_bar();
     return;
   }
@@ -588,7 +450,7 @@ static void submit(void) {
   api->fmt(C.pending, sizeof C.pending, "%s", C.input);
   C.in_len = 0;
   C.input[0] = 0;
-  C.scroll = 0;
+  C.log.scroll = 0;
   /* Not sent here: sending blocks for a moment, and doing it on the next tick
    * means the screen has already shown the message and said "thinking". */
   C.sending = 1;
@@ -611,12 +473,12 @@ static int app_key(void *st, unsigned char k) {
    * are the arrow keys on this machine and an address needs full stops. */
   if (!C.in_len) {
     int rows = 12;
-    if (k == CAPP_KEY_UP)   { C.scroll += 3; mark_log(); return 1; }
-    if (k == CAPP_KEY_DOWN) { C.scroll -= 3; if (C.scroll < 0) C.scroll = 0; mark_log(); return 1; }
-    if (k == CAPP_KEY_LEFT) { C.scroll += rows; mark_log(); return 1; }
+    if (k == CAPP_KEY_UP)   { C.log.scroll += 3; mark_log(); return 1; }
+    if (k == CAPP_KEY_DOWN) { C.log.scroll -= 3; if (C.log.scroll < 0) C.log.scroll = 0; mark_log(); return 1; }
+    if (k == CAPP_KEY_LEFT) { C.log.scroll += rows; mark_log(); return 1; }
     if (k == CAPP_KEY_RIGHT) {
-      C.scroll -= rows;
-      if (C.scroll < 0) C.scroll = 0;
+      C.log.scroll -= rows;
+      if (C.log.scroll < 0) C.log.scroll = 0;
       mark_log();
       return 1;
     }
@@ -667,8 +529,8 @@ static int app_wants_text(void *st) {
 static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
   (void)st; (void)x; (void)y; (void)buttons;
   if (!wheel) return 0;
-  C.scroll += wheel * 3;
-  if (C.scroll < 0) C.scroll = 0;
+  C.log.scroll += wheel * 3;
+  if (C.log.scroll < 0) C.log.scroll = 0;
   mark_log();
   return 1;
 }

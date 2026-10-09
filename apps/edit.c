@@ -16,6 +16,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
 #include "apps/safefile.h"
@@ -91,12 +92,6 @@ static struct {
   char page[MAXLINES * (MAXCOL + 1) + 1];
   int  printing;
 } E;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
 
 static void say(const char *m) { api->fmt(E.status, sizeof E.status, "%s", m); }
 
@@ -436,10 +431,10 @@ static void md_fonts(void) {
   int hb, hbb;
   if (M.loaded) return;
   M.loaded = 1;
-  M.body = api->font_load ? api->font_load("ui13") : -1;
-  M.bold = api->font_load ? api->font_load("ui13b") : -1;
-  hb = api->font_height ? api->font_height(M.body) : 8;
-  hbb = api->font_height ? api->font_height(M.bold) : 8;
+  M.body = api->font_load("ui13");
+  M.bold = api->font_load("ui13b");
+  hb = api->font_height(M.body);
+  hbb = api->font_height(M.bold);
   M.line_h = (hb > hbb ? hb : hbb) + 2;
 }
 
@@ -663,7 +658,7 @@ static int md_render(CRect c, int from) {
       if (row++ < from) continue;
       if (y + h > bottom) { E.pmore = 1; continue; }
       if (k == MD_RULE)
-        api->fill(rect(c.x + PG_LEFT, y + 3, c.w - PG_LEFT * 2, 1), CLR_PG_RULE);
+        api->fill(capp_rect(c.x + PG_LEFT, y + 3, c.w - PG_LEFT * 2, 1), CLR_PG_RULE);
       y += h;
       continue;
     }
@@ -677,17 +672,17 @@ static int md_render(CRect c, int from) {
         if (y + h > bottom) E.pmore = 1;
         else {
           if (k == MD_CODE)
-            api->fill(rect(c.x + PG_LEFT, y, c.w - PG_LEFT * 2, h), CLR_PG_CODE);
+            api->fill(capp_rect(c.x + PG_LEFT, y, c.w - PG_LEFT * 2, h), CLR_PG_CODE);
           if (k == MD_QUOTE)
-            api->fill(rect(x0, y, 2, h), CLR_PG_QUOT);
+            api->fill(capp_rect(x0, y, 2, h), CLR_PG_QUOT);
           /* A square, because the font has no bullet and a hyphen reads as a
            * hyphen. On the first row only: the rest hang under the text. */
           if (k == MD_BULLET && first)
-            api->fill(rect(x0 + 1, y + h / 2 - 1, 3, 3), CLR_PG_TX);
+            api->fill(capp_rect(x0 + 1, y + h / 2 - 1, 3, 3), CLR_PG_TX);
           md_draw_run(xtext, y, h, pos, end, heading, fg, bg);
           y += h;
           if (k == MD_H1 && end >= M.n)
-            api->fill(rect(c.x + PG_LEFT, y - 1, c.w - PG_LEFT * 2, 1), CLR_PG_RULE);
+            api->fill(capp_rect(c.x + PG_LEFT, y - 1, c.w - PG_LEFT * 2, 1), CLR_PG_RULE);
         }
       }
       first = 0;
@@ -700,16 +695,16 @@ static int md_render(CRect c, int from) {
 
 static void paint_preview(CRect c) {
   if (E.ptop < 0) E.ptop = 0;
-  api->fill(rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_PG);
-  E.prows = md_render(rect(c.x, c.y + 2, c.w, c.h - FOOT_H - 2), E.ptop);
+  api->fill(capp_rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_PG);
+  E.prows = md_render(capp_rect(c.x, c.y + 2, c.w, c.h - FOOT_H - 2), E.ptop);
 
   /* Clamp here rather than in the key handler: the length is only known once
    * it has been laid out, and laying it out is what this just did. A scroll
    * past the end draws nothing, so it steps back and draws again. */
   if (E.ptop >= E.prows && E.prows > 0) {
     E.ptop = E.prows - 1;
-    api->fill(rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_PG);
-    E.prows = md_render(rect(c.x, c.y + 2, c.w, c.h - FOOT_H - 2), E.ptop);
+    api->fill(capp_rect(c.x, c.y, c.w, c.h - FOOT_H), CLR_PG);
+    E.prows = md_render(capp_rect(c.x, c.y + 2, c.w, c.h - FOOT_H - 2), E.ptop);
   }
 
   footer_paint(api, c, "esc edit  arrows scroll  p print");
@@ -791,7 +786,7 @@ static void paint_edit(CRect c) {
   else scroll_to_cursor(rows, cols);
   shown_rows = rows;
   shown_edit = c;
-  area = api->paint_area ? api->paint_area() : c;
+  area = api->paint_area();
 
   /* No clear, not even of a row. The panel has no framebuffer, so a fill
    * that text then writes over is a blink you can see -- and every visible
@@ -819,8 +814,8 @@ static void paint_edit(CRect c) {
     bg = on_cursor ? CLR_CUR_BG : CLR_BG;
 
     if (i >= E.nlines) {              /* past the end: nothing to draw over */
-      api->fill(rect(c.x, y, GUTTER, ROWH), CLR_GUTTER);
-      api->fill(rect(c.x + GUTTER, y, c.w - GUTTER, ROWH), bg);
+      api->fill(capp_rect(c.x, y, GUTTER, ROWH), CLR_GUTTER);
+      api->fill(capp_rect(c.x + GUTTER, y, c.w - GUTTER, ROWH), bg);
       continue;
     }
 
@@ -833,9 +828,9 @@ static void paint_edit(CRect c) {
       api->fmt(buf, sizeof buf, "%3d", i + 1);
       api->text((short)c.x, y, buf, on_cursor ? CLR_TEXT : CLR_LINENO, CLR_GUTTER);
     } else {
-      api->fill(rect(c.x, y, GUTTER, 8), CLR_GUTTER);
+      api->fill(capp_rect(c.x, y, GUTTER, 8), CLR_GUTTER);
     }
-    api->fill(rect(c.x, y + 8, GUTTER, ROWH - 8), CLR_GUTTER);
+    api->fill(capp_rect(c.x, y + 8, GUTTER, ROWH - 8), CLR_GUTTER);
 
     n = to - from;
     if (n > cols) n = cols;
@@ -846,12 +841,12 @@ static void paint_edit(CRect c) {
       api->text((short)(c.x + GUTTER), y, buf, CLR_TEXT, bg);
     }
     tx = GUTTER + n * CHARW;          /* right of the text */
-    if (c.w > tx) api->fill(rect(c.x + tx, y, c.w - tx, 8), bg);
-    api->fill(rect(c.x + GUTTER, y + 8, c.w - GUTTER, ROWH - 8), bg);
+    if (c.w > tx) api->fill(capp_rect(c.x + tx, y, c.w - tx, 8), bg);
+    api->fill(capp_rect(c.x + GUTTER, y + 8, c.w - GUTTER, ROWH - 8), bg);
 
     if (on_cursor && E.cx >= from && (!E.wrap || E.cx < to || last)) {
       short cxp = (short)(c.x + GUTTER + (E.cx - from) * CHARW);
-      api->fill(rect(cxp, y, 1, 8), CLR_CARET);
+      api->fill(capp_rect(cxp, y, 1, 8), CLR_CARET);
     }
   }
 
@@ -868,19 +863,19 @@ static void paint_edit(CRect c) {
       if (fcols < 0) fcols = 0;
       if ((int)api->str_len(buf) > fcols) buf[fcols] = 0;
       fw = (int)api->str_len(buf) * CHARW;
-      api->fill(rect(c.x, fy, c.w, 2), FOOT_BG);
-      api->fill(rect(c.x, fy + 10, c.w, FOOT_H - 10), FOOT_BG);
+      api->fill(capp_rect(c.x, fy, c.w, 2), FOOT_BG);
+      api->fill(capp_rect(c.x, fy + 10, c.w, FOOT_H - 10), FOOT_BG);
       if (E.dirty) {                  /* round the dot, then the dot */
-        api->fill(rect(c.x, fy + 2, 2, 8), FOOT_BG);
-        api->fill(rect(c.x + 5, fy + 2, 2, 8), FOOT_BG);
-        api->fill(rect(c.x + 2, fy + 2, 3, 2), FOOT_BG);
-        api->fill(rect(c.x + 2, fy + 7, 3, 3), FOOT_BG);
-        api->fill(rect(c.x + 2, fy + 4, 3, 3), CLR_DIRTY);
+        api->fill(capp_rect(c.x, fy + 2, 2, 8), FOOT_BG);
+        api->fill(capp_rect(c.x + 5, fy + 2, 2, 8), FOOT_BG);
+        api->fill(capp_rect(c.x + 2, fy + 2, 3, 2), FOOT_BG);
+        api->fill(capp_rect(c.x + 2, fy + 7, 3, 3), FOOT_BG);
+        api->fill(capp_rect(c.x + 2, fy + 4, 3, 3), CLR_DIRTY);
       } else {
-        api->fill(rect(c.x, fy + 2, 7, 8), FOOT_BG);
+        api->fill(capp_rect(c.x, fy + 2, 7, 8), FOOT_BG);
       }
       api->text((short)(c.x + 7), (short)(fy + 2), buf, FOOT_FG, FOOT_BG);
-      if (c.w > 7 + fw) api->fill(rect(c.x + 7 + fw, fy + 2, c.w - 7 - fw, 8), FOOT_BG);
+      if (c.w > 7 + fw) api->fill(capp_rect(c.x + 7 + fw, fy + 2, c.w - 7 - fw, 8), FOOT_BG);
     }
   }
 }
@@ -893,7 +888,7 @@ static void paint_edit(CRect c) {
 static void damage_after_key(int top0, int left0, int cy0, int n0, int view0) {
   CRect c = shown_edit;
   int a, b;
-  if (!api->damage || c.w == 0 || E.wrap || view0 != VIEW_EDIT || E.view != VIEW_EDIT)
+  if (c.w == 0 || E.wrap || view0 != VIEW_EDIT || E.view != VIEW_EDIT)
     return;
   scroll_to_cursor(shown_rows, shown_cols);   /* what the paint would do */
   if (E.top != top0 || E.leftcol != left0 || E.nlines != n0) return;
@@ -901,8 +896,8 @@ static void damage_after_key(int top0, int left0, int cy0, int n0, int view0) {
   b = (cy0 > E.cy ? cy0 : E.cy) - E.top;
   if (a < 0) a = 0;
   if (b >= shown_rows) b = shown_rows - 1;
-  if (b >= a) api->damage(rect(c.x, c.y + a * ROWH, c.w, (b - a + 1) * ROWH));
-  api->damage(rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H));
+  if (b >= a) api->damage(capp_rect(c.x, c.y + a * ROWH, c.w, (b - a + 1) * ROWH));
+  api->damage(capp_rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H));
 }
 
 /* What this editor can be asked to do. Keys map onto these and so do menu

@@ -20,8 +20,10 @@
  * here. See docs/superpowers/specs/2026-09-13-asm-vm-and-native-compiler-design.md.
  */
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 #include "apps/safefile.h"
 #include "apps/asmvm.h"
 
@@ -100,12 +102,6 @@ static struct {
   char    name[40];
   int     name_len;
 } E;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
 
 static void say(const char *m) { api->fmt(E.status, sizeof E.status, "%s", m); }
 
@@ -377,13 +373,6 @@ static void backspace(void) {
   E.dirty = 1;
 }
 
-/* The name is joined to the folder being browsed, so "notes.txt" lands where
- * you were looking rather than at the root. */
-static int same(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
-
 /* Where Escape, or Backspace on an empty name, goes back to: the screen the
  * prompt was asked for from. */
 static void leave_name(void) {
@@ -402,7 +391,7 @@ static void finish_name(void) {
     E.view = VIEW_BROWSE;
     if (api->rename(old, path) != 0) { say("cannot rename: name taken?"); return; }
     /* The open buffer follows its file, or the next save recreates it. */
-    if (E.path[0] && same(E.path, old))
+    if (E.path[0] && str_same(E.path, old))
       api->fmt(E.path, sizeof E.path, "%s", path);
     rescan();
     say("renamed");
@@ -443,11 +432,11 @@ static void band_text(int bx, int bw, int tx, int y, int h, const char *s,
   if (max < 0) max = 0;
   while (s && s[n] && n < max) { buf[n] = s[n]; n++; }
   buf[n] = 0;
-  if (tx > bx) api->fill(rect(bx, y, tx - bx, 8), bg);
+  if (tx > bx) api->fill(capp_rect(bx, y, tx - bx, 8), bg);
   if (n) api->text((short)tx, (short)y, buf, fg, bg);
   end = tx + n * CHARW;
-  if (bx + bw > end) api->fill(rect(end, y, bx + bw - end, 8), bg);
-  if (h > 8) api->fill(rect(bx, y + 8, bw, h - 8), bg);
+  if (bx + bw > end) api->fill(capp_rect(end, y, bx + bw - end, 8), bg);
+  if (h > 8) api->fill(capp_rect(bx, y + 8, bw, h - 8), bg);
 }
 
 static void paint_browse(CRect c) {
@@ -470,11 +459,11 @@ static void paint_browse(CRect c) {
     else if (i == 0)
       band_text(c.x, c.w, c.x + 3, y, ROWH, "empty", CLR_DIM, CLR_BG);
     else
-      api->fill(rect(c.x, y, c.w, ROWH), CLR_BG);
+      api->fill(capp_rect(c.x, y, c.w, ROWH), CLR_BG);
   }
   below = y0 + rows * ROWH;
   if (c.y + c.h - FOOT_H > below)
-    api->fill(rect(c.x, below, c.w, c.y + c.h - FOOT_H - below), CLR_BG);
+    api->fill(capp_rect(c.x, below, c.w, c.y + c.h - FOOT_H - below), CLR_BG);
 
   if (E.confirm) {
     /* The name cut to fit, so the keys at the end are never what is lost. */
@@ -738,8 +727,8 @@ static void paint_console(CRect c) {
   if (!h) return;
   y0 = (short)(c.y + c.h - FOOT_H - h);
   /* Each line over the last, not a cleared pane and then the lines. */
-  api->fill(rect(c.x, y0, c.w, 1), CLR_SEL);
-  api->fill(rect(c.x, y0 + 1, c.w, 1), CLR_GUTTER);
+  api->fill(capp_rect(c.x, y0, c.w, 1), CLR_SEL);
+  api->fill(capp_rect(c.x, y0 + 1, c.w, 1), CLR_GUTTER);
   for (i = 0; i < CON_LINES; i++)
     band_text(c.x, c.w, c.x + 2, y0 + 2 + i * 8, 8, i < G.nout ? G.out[i] : "",
               CLR_TEXT, CLR_GUTTER);
@@ -762,7 +751,7 @@ static void paint_edit(CRect c) {
   shown_rows = rows;
   shown_cols = cols;
   shown_edit = c;
-  area = api->paint_area ? api->paint_area() : c;
+  area = api->paint_area();
 
   /* No clear, not even of a row. The panel has no framebuffer, so a fill
    * that text then writes over is a blink you can see -- and every visible
@@ -781,8 +770,8 @@ static void paint_edit(CRect c) {
     if (y + ROWH <= area.y || y >= area.y + area.h) continue;
 
     if (i >= E.nlines) {              /* past the end: nothing to draw over */
-      api->fill(rect(c.x, y, GUTTER, ROWH), CLR_GUTTER);
-      api->fill(rect(c.x + GUTTER, y, c.w - GUTTER, ROWH), bg);
+      api->fill(capp_rect(c.x, y, GUTTER, ROWH), CLR_GUTTER);
+      api->fill(capp_rect(c.x + GUTTER, y, c.w - GUTTER, ROWH), bg);
       continue;
     }
 
@@ -791,7 +780,7 @@ static void paint_edit(CRect c) {
      * then written again by the text: a one-pixel stripe down every row. */
     api->fmt(buf, sizeof buf, "%3d", i + 1);
     api->text((short)c.x, y, buf, on_cursor ? CLR_TEXT : CLR_LINENO, CLR_GUTTER);
-    api->fill(rect(c.x, y + 8, GUTTER, ROWH - 8), CLR_GUTTER);
+    api->fill(capp_rect(c.x, y + 8, GUTTER, ROWH - 8), CLR_GUTTER);
 
     n = E.len[i] - E.leftcol;
     if (n > cols) n = cols;
@@ -802,12 +791,12 @@ static void paint_edit(CRect c) {
       api->text((short)(c.x + GUTTER), y, buf, CLR_TEXT, bg);
     }
     tx = GUTTER + n * CHARW;          /* right of the text */
-    if (c.w > tx) api->fill(rect(c.x + tx, y, c.w - tx, 8), bg);
-    api->fill(rect(c.x + GUTTER, y + 8, c.w - GUTTER, ROWH - 8), bg);
+    if (c.w > tx) api->fill(capp_rect(c.x + tx, y, c.w - tx, 8), bg);
+    api->fill(capp_rect(c.x + GUTTER, y + 8, c.w - GUTTER, ROWH - 8), bg);
 
     if (on_cursor) {
       short cxp = (short)(c.x + GUTTER + (E.cx - E.leftcol) * CHARW);
-      api->fill(rect(cxp, y, 1, 8), CLR_CARET);
+      api->fill(capp_rect(cxp, y, 1, 8), CLR_CARET);
     }
   }
 
@@ -823,16 +812,16 @@ static void paint_edit(CRect c) {
       paint_console(c);
     if (fy + FOOT_H > area.y && fy < area.y + area.h) {
       api->fmt(buf, sizeof buf, "%s  %d:%d  %s", E.path, E.cy + 1, E.cx + 1, E.status);
-      api->fill(rect(c.x, fy, c.w, 2), FOOT_BG);
-      api->fill(rect(c.x, fy + 10, c.w, FOOT_H - 10), FOOT_BG);
+      api->fill(capp_rect(c.x, fy, c.w, 2), FOOT_BG);
+      api->fill(capp_rect(c.x, fy + 10, c.w, FOOT_H - 10), FOOT_BG);
       if (E.dirty) {                  /* round the dot, then the dot */
-        api->fill(rect(c.x, fy + 2, 2, 8), FOOT_BG);
-        api->fill(rect(c.x + 5, fy + 2, 2, 8), FOOT_BG);
-        api->fill(rect(c.x + 2, fy + 2, 3, 2), FOOT_BG);
-        api->fill(rect(c.x + 2, fy + 7, 3, 3), FOOT_BG);
-        api->fill(rect(c.x + 2, fy + 4, 3, 3), CLR_DIRTY);
+        api->fill(capp_rect(c.x, fy + 2, 2, 8), FOOT_BG);
+        api->fill(capp_rect(c.x + 5, fy + 2, 2, 8), FOOT_BG);
+        api->fill(capp_rect(c.x + 2, fy + 2, 3, 2), FOOT_BG);
+        api->fill(capp_rect(c.x + 2, fy + 7, 3, 3), FOOT_BG);
+        api->fill(capp_rect(c.x + 2, fy + 4, 3, 3), CLR_DIRTY);
       } else {
-        api->fill(rect(c.x, fy + 2, 7, 8), FOOT_BG);
+        api->fill(capp_rect(c.x, fy + 2, 7, 8), FOOT_BG);
       }
       band_text(c.x + 7, c.w - 7, c.x + 7, fy + 2, 8, buf, FOOT_FG, FOOT_BG);
     }
@@ -846,15 +835,15 @@ static void paint_edit(CRect c) {
 static void damage_after_key(int top0, int left0, int cy0, int n0) {
   CRect c = shown_edit;
   int a, b;
-  if (!api->damage || c.w == 0 || E.view != VIEW_EDIT) return;
+  if (c.w == 0 || E.view != VIEW_EDIT) return;
   scroll_to_cursor(shown_rows, shown_cols);   /* what the paint would do */
   if (E.top != top0 || E.leftcol != left0 || E.nlines != n0) return;
   a = (cy0 < E.cy ? cy0 : E.cy) - E.top;
   b = (cy0 > E.cy ? cy0 : E.cy) - E.top;
   if (a < 0) a = 0;
   if (b >= shown_rows) b = shown_rows - 1;
-  if (b >= a) api->damage(rect(c.x, c.y + a * ROWH, c.w, (b - a + 1) * ROWH));
-  api->damage(rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H));
+  if (b >= a) api->damage(capp_rect(c.x, c.y + a * ROWH, c.w, (b - a + 1) * ROWH));
+  api->damage(capp_rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H));
 }
 
 /* The prompt, each part drawn over itself: a typed letter used to clear
@@ -864,22 +853,22 @@ static void paint_name(CRect c) {
   short y = (short)(c.y + c.h / 2 - 18);
   int bw = c.w - 12, below = y + 37, foot = c.y + c.h - FOOT_H;
 
-  if (y > c.y) api->fill(rect(c.x, c.y, c.w, y - c.y), CLR_BG);
+  if (y > c.y) api->fill(capp_rect(c.x, c.y, c.w, y - c.y), CLR_BG);
   band_text(c.x, c.w, c.x + 8, y, 11,
             E.name_for == NAME_NEW ? "New file" :
             E.name_for == NAME_RENAME ? "Rename" : "Save as", CLR_BAR_FG, CLR_BG);
   band_text(c.x, c.w, c.x + 8, y + 11, 13, E.dir, CLR_DIM, CLR_BG);
 
   /* The field: a line along its top, then the name and its caret. */
-  api->fill(rect(c.x, y + 24, 6, 13), CLR_BG);
-  api->fill(rect(c.x + 6 + bw, y + 24, c.w - 6 - bw, 13), CLR_BG);
-  api->fill(rect(c.x + 6, y + 24, bw, 1), CLR_SEL);
-  api->fill(rect(c.x + 6, y + 25, bw, 2), CLR_CUR_BG);
+  api->fill(capp_rect(c.x, y + 24, 6, 13), CLR_BG);
+  api->fill(capp_rect(c.x + 6 + bw, y + 24, c.w - 6 - bw, 13), CLR_BG);
+  api->fill(capp_rect(c.x + 6, y + 24, bw, 1), CLR_SEL);
+  api->fill(capp_rect(c.x + 6, y + 25, bw, 2), CLR_CUR_BG);
   api->mem_cpy(shown, E.name, (size_t)E.name_len);
   shown[E.name_len] = '_';
   shown[E.name_len + 1] = 0;
   band_text(c.x + 6, bw, c.x + 9, y + 27, 10, shown, CLR_TEXT, CLR_CUR_BG);
-  if (foot > below) api->fill(rect(c.x, below, c.w, foot - below), CLR_BG);
+  if (foot > below) api->fill(capp_rect(c.x, below, c.w, foot - below), CLR_BG);
 
   footer_paint(api, c, "enter ok  esc cancel");
 }
@@ -964,9 +953,9 @@ static void app_paint(void *st, CRect c) {
 static int key_browse(unsigned char k) {
   /* A delete waits for its answer, and nothing else happens meanwhile. */
   if (E.confirm) {
-    if (k == 'y' || k == 'Y') delete_selected();
-    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK)
-      E.confirm = 0;
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_YES) delete_selected();
+    else if (a == CONFIRM_NO) E.confirm = 0;
     return 1;
   }
   switch (k) {

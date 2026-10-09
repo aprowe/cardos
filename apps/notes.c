@@ -36,9 +36,11 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/safefile.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 static const CardApi *api;
 
@@ -83,7 +85,10 @@ typedef struct {
   uint8_t op;
   int8_t  i;                    /* into idx, or -1 */
   int8_t  s;                    /* into srv, or -1 */
-  char    file[FILE_MAX];       /* OP_UP_NEW from a file not yet in the index */
+  /* OP_UP_NEW from a file not yet in the index: which of rowfile. It was
+   * the name itself, 48 bytes in each of 96 ops -- 4.5 KB of a data block
+   * that has to be found in one piece (2026-10-09). */
+  int8_t  f;
 } Op;
 
 static struct {
@@ -118,17 +123,6 @@ static struct {
 
 /* ---- small things -------------------------------------------------------------- */
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
-
-static int same(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
-
 static int ends_md(const char *s) {
   int n = (int)api->str_len(s);
   return n > 3 && s[n - 3] == '.' && s[n - 2] == 'm' && s[n - 1] == 'd';
@@ -145,18 +139,18 @@ static void damage_all(void) { if (N.have_at) api->damage(N.content); }
 
 /* The title line, which carries the status. */
 static void damage_top(void) {
-  if (N.have_at) api->damage(rect(N.content.x, N.content.y, N.content.w, TOP_H));
+  if (N.have_at) api->damage(capp_rect(N.content.x, N.content.y, N.content.w, TOP_H));
 }
 
 static void damage_footer(void) {
   if (N.have_at)
-    api->damage(rect(N.content.x, N.content.y + N.content.h - FOOT_H, N.content.w, FOOT_H));
+    api->damage(capp_rect(N.content.x, N.content.y + N.content.h - FOOT_H, N.content.w, FOOT_H));
 }
 
 static void damage_row(int i) {
   if (!N.have_at || i < N.top || i >= N.top + N.fit) return;
-  api->damage(rect(N.content.x, N.content.y + TOP_H + (i - N.top) * ROW_H,
-                   N.content.w, ROW_H));
+  api->damage(capp_rect(N.content.x, N.content.y + TOP_H + (i - N.top) * ROW_H,
+                        N.content.w, ROW_H));
 }
 
 static void say(int bad, const char *s) {
@@ -173,14 +167,6 @@ static void fnv_hex(const char *s, int n, char out[9]) {
   for (i = 0; i < n; i++) { h ^= (uint8_t)s[i]; h *= 16777619u; }
   for (i = 7; i >= 0; i--) { out[i] = HEX[h & 15]; h >>= 4; }
   out[8] = 0;
-}
-
-/* Field `i` of a tab-separated line. */
-static void field(const char *line, int i, char *out, int n) {
-  int k = 0;
-  while (i > 0 && *line && *line != '\n') { if (*line++ == '\t') i--; }
-  while (*line && *line != '\t' && *line != '\n' && k < n - 1) out[k++] = *line++;
-  out[k] = 0;
 }
 
 static void path_of(const char *file, char *out, int n) {
@@ -248,9 +234,9 @@ static void load_index(void) {
       len = 0;
       if (N.nidx < MAX_NOTES && ln[0]) {
         Idx *x = &N.idx[N.nidx];
-        field(ln, 0, x->id, sizeof x->id);
-        field(ln, 1, x->hash, sizeof x->hash);
-        field(ln, 2, x->file, sizeof x->file);
+        tsv_field(ln, 0, x->id, sizeof x->id);
+        tsv_field(ln, 1, x->hash, sizeof x->hash);
+        tsv_field(ln, 2, x->file, sizeof x->file);
         if (x->id[0] && x->file[0]) N.nidx++;
       }
     }
@@ -270,13 +256,13 @@ static void save_index(void) {
 
 static int idx_by_id(const char *id) {
   int i;
-  for (i = 0; i < N.nidx; i++) if (same(N.idx[i].id, id)) return i;
+  for (i = 0; i < N.nidx; i++) if (str_same(N.idx[i].id, id)) return i;
   return -1;
 }
 
 static int idx_by_file(const char *file) {
   int i;
-  for (i = 0; i < N.nidx; i++) if (same(N.idx[i].file, file)) return i;
+  for (i = 0; i < N.nidx; i++) if (str_same(N.idx[i].file, file)) return i;
   return -1;
 }
 
@@ -359,7 +345,7 @@ static int ask(const char *method, const char *rel, const char *body, char *out,
 static int whole(const Srv *s) {
   char h[9];
   fnv_hex(N.text, (int)api->str_len(N.text), h);
-  if (same(h, s->hash)) return 1;
+  if (str_same(h, s->hash)) return 1;
   api->fmt(N.status, sizeof N.status, "%.24s: too long for here", s->title);
   N.bad = 1;
   return 0;
@@ -372,9 +358,9 @@ static int fetch_list(void) {
   N.nsrv = 0;
   for (p = N.text; *p && N.nsrv < MAX_NOTES; ) {
     Srv *s = &N.srv[N.nsrv];
-    field(p, 0, s->id, sizeof s->id);
-    field(p, 1, s->hash, sizeof s->hash);
-    field(p, 3, s->title, sizeof s->title);
+    tsv_field(p, 0, s->id, sizeof s->id);
+    tsv_field(p, 1, s->hash, sizeof s->hash);
+    tsv_field(p, 3, s->title, sizeof s->title);
     if (s->id[0]) N.nsrv++;
     while (*p && *p != '\n') p++;
     if (*p) p++;
@@ -384,55 +370,58 @@ static int fetch_list(void) {
 
 static int srv_by_id(const char *id) {
   int i;
-  for (i = 0; i < N.nsrv; i++) if (same(N.srv[i].id, id)) return i;
+  for (i = 0; i < N.nsrv; i++) if (str_same(N.srv[i].id, id)) return i;
   return -1;
 }
 
 /* ---- the plan --------------------------------------------------------------------- */
 
-static void add_op(int op, int i, int s, const char *file) {
+static void add_op(int op, int i, int s, int f) {
   Op *o;
   if (N.nop >= MAX_OPS) return;
   o = &N.op[N.nop++];
   o->op = (uint8_t)op;
   o->i = (int8_t)i;
   o->s = (int8_t)s;
-  api->fmt(o->file, sizeof o->file, "%s", file ? file : "");
+  o->f = (int8_t)f;
 }
 
+/* The plan reads the card's files from rowfile, so the list is read again
+ * first. Nothing reloads it while a sync runs -- keys, actions and G0 are
+ * all refused then -- and do_op checks a file is still not indexed before
+ * sending it, so a list that did move cannot send one twice. */
 static void plan(void) {
-  int i, n;
+  int i;
   char h[9];
   N.nop = N.at = 0;
+  load_rows();
   for (i = 0; i < N.nidx; i++) {
     int s = srv_by_id(N.idx[i].id), len = read_file(N.idx[i].file);
     if (len < 0 && !file_exists(N.idx[i].file)) {              /* deleted here */
-      if (s >= 0 && same(N.srv[s].hash, N.idx[i].hash)) add_op(OP_DEL_SRV, i, s, 0);
-      else if (s >= 0) add_op(OP_DOWN, i, s, 0);                /* changed there: back */
-      else add_op(OP_DEL_LOCAL, i, -1, 0);                      /* gone from both */
+      if (s >= 0 && str_same(N.srv[s].hash, N.idx[i].hash)) add_op(OP_DEL_SRV, i, s, -1);
+      else if (s >= 0) add_op(OP_DOWN, i, s, -1);                /* changed there: back */
+      else add_op(OP_DEL_LOCAL, i, -1, -1);                      /* gone from both */
       continue;
     }
     if (len < 0) continue;                                      /* too long to carry */
     fnv_hex(N.text, len, h);
     if (s < 0) {                                                /* deleted there */
-      if (same(h, N.idx[i].hash)) add_op(OP_DEL_LOCAL, i, -1, 0);
-      else add_op(OP_UP_NEW, i, -1, N.idx[i].file);             /* changed here: back */
+      if (str_same(h, N.idx[i].hash)) add_op(OP_DEL_LOCAL, i, -1, -1);
+      else add_op(OP_UP_NEW, i, -1, -1);                       /* changed here: back */
       continue;
     }
     {
-      int here = !same(h, N.idx[i].hash), there = !same(N.srv[s].hash, N.idx[i].hash);
-      if (here && there && !same(h, N.srv[s].hash)) add_op(OP_CONFLICT, i, s, 0);
-      else if (here && !there) add_op(OP_UP, i, s, 0);
-      else if (there && !here) add_op(OP_DOWN, i, s, 0);
+      int here = !str_same(h, N.idx[i].hash), there = !str_same(N.srv[s].hash, N.idx[i].hash);
+      if (here && there && !str_same(h, N.srv[s].hash)) add_op(OP_CONFLICT, i, s, -1);
+      else if (here && !there) add_op(OP_UP, i, s, -1);
+      else if (there && !here) add_op(OP_DOWN, i, s, -1);
       else if (here) api->fmt(N.idx[i].hash, sizeof N.idx[i].hash, "%s", h);  /* the same edit */
     }
   }
   for (i = 0; i < N.nsrv; i++)
-    if (idx_by_id(N.srv[i].id) < 0) add_op(OP_DOWN_NEW, -1, i, 0);
-  n = api->list_ex(DIR, N.ent, MAX_NOTES + 8);
-  for (i = 0; i < n; i++)
-    if (!N.ent[i].is_dir && ends_md(N.ent[i].name) && idx_by_file(N.ent[i].name) < 0)
-      add_op(OP_UP_NEW, -1, -1, N.ent[i].name);
+    if (idx_by_id(N.srv[i].id) < 0) add_op(OP_DOWN_NEW, -1, i, -1);
+  for (i = 0; i < N.nrows; i++)
+    if (idx_by_file(N.rowfile[i]) < 0) add_op(OP_UP_NEW, -1, -1, i);
 }
 
 /* One operation. 0, or <0 with the status saying why. */
@@ -459,17 +448,20 @@ static int do_op(Op *o) {
     if ((len = read_file(x->file)) < 0) return -2;
     api->fmt(rel, sizeof rel, "/notes/note?id=%s", x->id);
     if ((r = ask("POST", rel, N.text, N.line, sizeof N.line)) < 0) return r;
-    field(N.line, 1, h, sizeof h);
+    tsv_field(N.line, 1, h, sizeof h);
     api->fmt(x->hash, sizeof x->hash, "%s", h);
     return 0;
 
   case OP_UP_NEW: {
     char id[12];
-    api->fmt(file, sizeof file, "%s", o->file);
+    if (x) api->fmt(file, sizeof file, "%s", x->file);
+    else if (o->f >= 0 && o->f < N.nrows && idx_by_file(N.rowfile[o->f]) < 0)
+      api->fmt(file, sizeof file, "%s", N.rowfile[o->f]);
+    else return 0;                          /* already sent, or gone: nothing to do */
     if ((len = read_file(file)) < 0) return -2;
     if ((r = ask("POST", "/notes/note", N.text, N.line, sizeof N.line)) < 0) return r;
-    field(N.line, 0, id, sizeof id);
-    field(N.line, 1, h, sizeof h);
+    tsv_field(N.line, 0, id, sizeof id);
+    tsv_field(N.line, 1, h, sizeof h);
     if (x) idx_drop(o->i);                  /* its old id is gone from the server */
     idx_set(id, file, h);
     return 0;
@@ -495,8 +487,8 @@ static int do_op(Op *o) {
     /* Ours goes up as a note of its own, under a name that says so... */
     if ((len = read_file(x->file)) < 0) return -2;
     if ((r = ask("POST", "/notes/note", N.text, N.line, sizeof N.line)) < 0) return r;
-    field(N.line, 0, id, sizeof id);
-    field(N.line, 1, h, sizeof h);
+    tsv_field(N.line, 0, id, sizeof id);
+    tsv_field(N.line, 1, h, sizeof h);
     api->fmt(base, sizeof base, "%s", x->file);
     for (k = 0; base[k]; k++) if (base[k] == '.') { base[k] = 0; break; }
     name_for(base, " (conflict)", file, sizeof file);
@@ -613,7 +605,6 @@ static int words_note(const char *kind, const char *words, char *file_out, int n
 static int memo_to_note(const char *path, char *out, int n) {
   char url[128];
   int r;
-  if (!api->http_upload) { api->fmt(out, (size_t)n, "this firmware cannot send files: update os"); return -1; }
   if (!api->net_ready() && api->net_connect(15000) != 0) { api->fmt(out, (size_t)n, "offline"); return -1; }
   {
     /* Its name -- MMDD-HHMMSS.wav, Memo's clock -- titles the note. */
@@ -627,7 +618,7 @@ static int memo_to_note(const char *path, char *out, int n) {
     else api->fmt(out, (size_t)n, "the server did not take it (%d)", r);
     return -1;
   }
-  field(N.line, 2, N.text, 64);
+  tsv_field(N.line, 2, N.text, 64);
   api->fmt(out, (size_t)n, "noted: %s", N.text);
   return 0;
 }
@@ -649,7 +640,7 @@ static void app_paint(void *st, CRect full) {
   N.content = c;
   N.have_at = 1;
 
-  api->fill(rect(c.x, c.y, c.w, TOP_H), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, TOP_H), CLR_BG);
   api->text((int16_t)(c.x + 6), (int16_t)(c.y + 4), "Notes", CLR_ACC, CLR_BG);
   if (N.status[0]) {
     /* Right of the title and cut to the room there: a long reason from the
@@ -671,15 +662,15 @@ static void app_paint(void *st, CRect full) {
   if (N.sel >= N.top + rows) N.top = N.sel - rows + 1;
   for (i = N.top; i < N.nrows && i - N.top < rows; i++, y += ROW_H) {
     uint16_t bg = i == N.sel ? CLR_SEL : CLR_BG;
-    api->fill(rect(c.x, y, c.w, ROW_H), bg);
+    api->fill(capp_rect(c.x, y, c.w, ROW_H), bg);
     api->text((int16_t)(c.x + 8), (int16_t)(y + 3), N.rows[i], CLR_TEXT, bg);
   }
   if (!N.nrows) {
-    api->fill(rect(c.x, y, c.w, ROW_H * 2), CLR_BG);
+    api->fill(capp_rect(c.x, y, c.w, ROW_H * 2), CLR_BG);
     api->text((int16_t)(c.x + 8), (int16_t)(y + 3), "no notes: n for one, or hold G0", CLR_DIM, CLR_BG);
     y += ROW_H * 2;
   }
-  if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
+  if (y < c.y + c.h - FOOT_H) api->fill(capp_rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
 
   if (N.ask_delete && N.sel < N.nrows) {
     /* The title cut short enough that the question still fits. */
@@ -849,9 +840,10 @@ static int app_key(void *st, uint8_t k) {
     return 1;
   }
   if (N.ask_delete) {
-    /* y deletes; n, Escape, Backspace -- anything else -- is a no. */
-    if (k == 'y' || k == 'Y') delete_selected();
-    else cancel_delete();
+    /* y deletes; n, Escape, Backspace is a no; anything else waits. */
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_YES) delete_selected();
+    else if (a == CONFIRM_NO) cancel_delete();
     return 1;
   }
   switch (k) {
@@ -953,7 +945,7 @@ static int app_tick(void *st, uint32_t now) {
     const char *ps = api->print_status();
     if (!(ps[0] == 's' || ps[0] == 'c' || (ps[0] == 'p' && ps[1] && ps[5] == 'i')))
       N.printing = 0;
-    if (!same(ps, N.status)) { say(0, ps); changed = 1; }
+    if (!str_same(ps, N.status)) { say(0, ps); changed = 1; }
   }
   changed |= sync_tick();
   return changed;

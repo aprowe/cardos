@@ -37,6 +37,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
@@ -91,17 +92,6 @@ static struct {
  * at a time, and three of them were 2 KB this app's data did not need while
  * it loads the apps it asks (2026-09-29). */
 static char s_answer[ANSWER_MAX];
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
-
-static int starts(const char *s, const char *p) {
-  while (*p) { if (*s != *p) return 0; s++; p++; }
-  return 1;
-}
 
 /* ---- the sections ------------------------------------------------------- */
 
@@ -201,7 +191,7 @@ static int with_lists_line(const char *file, const char *line, char *out, int n)
     const char *e = p;
     int is_lists, is_comment;
     while (*e && *e != '\n') e++;
-    is_lists = starts(p, "# todo lists:");
+    is_lists = str_starts(p, "# todo lists:");
     is_comment = p[0] == '#';
     if (!put_in && (!is_comment || !*p) && !is_lists) {
       for (k = 0; line[k]; k++) { if (o >= n - 1) return -1; out[o++] = line[k]; }
@@ -351,11 +341,11 @@ static void gather_one(int i) {
   answer[0] = 0;
   /* Tomorrow's page: "today" -- the whole command or its first word -- is
    * asked as "tomorrow". */
-  if (D.ahead && starts(line, "today") && (line[5] == 0 || line[5] == ' ')) {
+  if (D.ahead && str_starts(line, "today") && (line[5] == 0 || line[5] == ' ')) {
     api->fmt(moved, sizeof moved, "tomorrow%s", line + 5);
     line = moved;
   }
-  if (starts(D.sect[i].app, "daily") && !D.sect[i].app[5])
+  if (str_starts(D.sect[i].app, "daily") && !D.sect[i].app[5])
     rc = daily_answer(D.sect[i].line, answer, ANSWER_MAX);
   else
     rc = api->run_command(D.sect[i].app, line, answer, ANSWER_MAX);
@@ -391,10 +381,6 @@ static void gather_all(void) {
 
 static int font_y(int f, int y, int h) { return y + (h - api->font_height(f)) / 2; }
 
-static int overlaps(CRect a, CRect b) {
-  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-}
-
 /* r in the background, less the part `hole` covers: up to four fills round
  * it. The hole is where something is about to be drawn that paints all of
  * its own pixels -- text_font fills behind its glyphs -- and filling under
@@ -406,17 +392,17 @@ static void fill_round(CRect r, CRect hole) {
   int y1 = hole.y + hole.h < r.y + r.h ? hole.y + hole.h : r.y + r.h;
   if (r.w <= 0 || r.h <= 0) return;
   if (x0 >= x1 || y0 >= y1) { api->fill(r, CLR_BG); return; }
-  if (y0 > r.y) api->fill(rect(r.x, r.y, r.w, y0 - r.y), CLR_BG);
-  if (y1 < r.y + r.h) api->fill(rect(r.x, y1, r.w, r.y + r.h - y1), CLR_BG);
-  if (x0 > r.x) api->fill(rect(r.x, y0, x0 - r.x, y1 - y0), CLR_BG);
-  if (x1 < r.x + r.w) api->fill(rect(x1, y0, r.x + r.w - x1, y1 - y0), CLR_BG);
+  if (y0 > r.y) api->fill(capp_rect(r.x, r.y, r.w, y0 - r.y), CLR_BG);
+  if (y1 < r.y + r.h) api->fill(capp_rect(r.x, y1, r.w, r.y + r.h - y1), CLR_BG);
+  if (x0 > r.x) api->fill(capp_rect(r.x, y0, x0 - r.x, y1 - y0), CLR_BG);
+  if (x1 < r.x + r.w) api->fill(capp_rect(x1, y0, r.x + r.w - x1, y1 - y0), CLR_BG);
 }
 
 /* Text at tx in font f, centred in the row, and the background of
  * [x0, x1) round it -- but not under it. */
 static void row_text(int f, int x0, int x1, int y, int tx, const char *s, uint16_t fg) {
   int fy = font_y(f, y, ROW_H);
-  fill_round(rect(x0, y, x1 - x0, ROW_H), rect(tx, fy, api->text_width(f, s), api->font_height(f)));
+  fill_round(capp_rect(x0, y, x1 - x0, ROW_H), capp_rect(tx, fy, api->text_width(f, s), api->font_height(f)));
   api->text_font(f, (int16_t)tx, (int16_t)fy, s, fg, CLR_BG);
 }
 
@@ -427,7 +413,7 @@ static void paint_line(const char *s, int len, int y, int x, int w) {
   int n = len < (int)sizeof buf - 1 ? len : (int)sizeof buf - 1;
   api->mem_cpy(buf, s, (size_t)n);
   buf[n] = 0;
-  if (starts(buf, "%bar ")) {
+  if (str_starts(buf, "%bar ")) {
     /* "%bar NN label": the label, and a bar filled NN percent on the right. */
     const char *p = buf + 5;
     int pct = 0, bw = 70, bx = x + w - 8 - bw, by = y + ROW_H / 2 - 4, f;
@@ -435,31 +421,31 @@ static void paint_line(const char *s, int len, int y, int x, int w) {
     while (*p == ' ') p++;
     if (pct > 100) pct = 100;
     row_text(D.f_ui, x, bx, y, x + 8, p, CLR_TEXT);
-    fill_round(rect(bx, y, x + w - bx, ROW_H), rect(bx, by, bw, 8));
+    fill_round(capp_rect(bx, y, x + w - bx, ROW_H), capp_rect(bx, by, bw, 8));
     /* The bar's outline, its filled part and the rest, side by side rather
      * than the whole bar and the filled part over it. */
     f = (bw - 2) * pct / 100;
-    api->frame(rect(bx, by, bw, 8), CLR_BOX);
-    if (f > 0) api->fill(rect(bx + 1, by + 1, f, 6), CLR_DONE);
-    if (f < bw - 2) api->fill(rect(bx + 1 + f, by + 1, bw - 2 - f, 6), CLR_BOX);
+    api->frame(capp_rect(bx, by, bw, 8), CLR_BOX);
+    if (f > 0) api->fill(capp_rect(bx + 1, by + 1, f, 6), CLR_DONE);
+    if (f < bw - 2) api->fill(capp_rect(bx + 1 + f, by + 1, bw - 2 - f, 6), CLR_BOX);
     return;
   }
-  if (starts(buf, "## ")) {
+  if (str_starts(buf, "## ")) {
     row_text(D.f_uib, x, x + w, y, x + 6, buf + 3, CLR_ACCENT);
-  } else if (starts(buf, "[ ] ") || starts(buf, "[x] ")) {
+  } else if (str_starts(buf, "[ ] ") || str_starts(buf, "[x] ")) {
     int done = buf[1] == 'x';
     int by = y + (ROW_H - 9) / 2;
-    fill_round(rect(x, y, 22, ROW_H), rect(x + 8, by, 9, 9));
+    fill_round(capp_rect(x, y, 22, ROW_H), capp_rect(x + 8, by, 9, 9));
     if (done) {
-      api->fill(rect(x + 8, by, 9, 9), CLR_DONE);
+      api->fill(capp_rect(x + 8, by, 9, 9), CLR_DONE);
     } else {
-      api->frame(rect(x + 8, by, 9, 9), CLR_BOX);
-      api->fill(rect(x + 9, by + 1, 7, 7), CLR_BG);
+      api->frame(capp_rect(x + 8, by, 9, 9), CLR_BOX);
+      api->fill(capp_rect(x + 9, by + 1, 7, 7), CLR_BG);
     }
     row_text(D.f_ui, x + 22, x + w, y, x + 22, buf + 4, done ? CLR_DIM : CLR_TEXT);
-  } else if (starts(buf, "---")) {
-    fill_round(rect(x, y, w, ROW_H), rect(x + 8, y + ROW_H / 2, w - 16, 1));
-    api->fill(rect(x + 8, y + ROW_H / 2, w - 16, 1), CLR_DIM);
+  } else if (str_starts(buf, "---")) {
+    fill_round(capp_rect(x, y, w, ROW_H), capp_rect(x + 8, y + ROW_H / 2, w - 16, 1));
+    api->fill(capp_rect(x + 8, y + ROW_H / 2, w - 16, 1), CLR_DIM);
   } else if (buf[0] == '(') {
     row_text(D.f_ui, x, x + w, y, x + 8, buf, CLR_WARN);
   } else {
@@ -484,14 +470,14 @@ static void paint_head(const char *title) {
   mid = (tx + tw + sx) / 2;
   if (mid < c.x) mid = c.x;
   if (mid > c.x + c.w) mid = c.x + c.w;
-  fill_round(rect(c.x, c.y, mid - c.x, HEAD_H), rect(tx, ty, tw, th));
-  fill_round(rect(mid, c.y, c.x + c.w - mid, HEAD_H), rect(sx, sy, sw, sh));
+  fill_round(capp_rect(c.x, c.y, mid - c.x, HEAD_H), capp_rect(tx, ty, tw, th));
+  fill_round(capp_rect(mid, c.y, c.x + c.w - mid, HEAD_H), capp_rect(sx, sy, sw, sh));
   api->text_font(D.f_uib, (int16_t)tx, (int16_t)ty, title, CLR_TEXT, CLR_BG);
   api->text_font(D.f_ui, (int16_t)sx, (int16_t)sy, D.status, CLR_DIM, CLR_BG);
 }
 
 static CRect head_rect(void) {
-  return rect(D.content.x, D.content.y, D.content.w, HEAD_H);
+  return capp_rect(D.content.x, D.content.y, D.content.w, HEAD_H);
 }
 
 /* Only the status changed: mark the header, and the shell clips the repaint
@@ -509,14 +495,14 @@ static void paint_page(void) {
   int y = c.y + HEAD_H, row = 0;
 
   /* The title line is the header here; the rest scrolls under it. */
-  if (starts(p, "# ")) {
+  if (str_starts(p, "# ")) {
     const char *e = p;
     while (*e && *e != '\n') e++;
     api->fmt(head, sizeof head, "%.*s", (int)(e - p - 2), p + 2);
     title = head;
     p = *e ? e + 1 : e;
   }
-  if (overlaps(a, head_rect())) paint_head(title);
+  if (capp_overlaps(a, head_rect())) paint_head(title);
 
   D.rows = (c.h - HEAD_H - FOOT_H) / ROW_H;
   D.nlines = 0;
@@ -525,7 +511,7 @@ static void paint_page(void) {
     while (*e && *e != '\n') e++;
     if (e > p) {                          /* blank lines are the printer's */
       if (D.nlines >= D.top && row < D.rows) {
-        if (overlaps(a, rect(c.x, y, c.w, ROW_H))) paint_line(p, (int)(e - p), y, c.x, c.w);
+        if (capp_overlaps(a, capp_rect(c.x, y, c.w, ROW_H))) paint_line(p, (int)(e - p), y, c.x, c.w);
         y += ROW_H;
         row++;
       }
@@ -533,7 +519,7 @@ static void paint_page(void) {
     }
     p = *e ? e + 1 : e;
   }
-  if (y < c.y + c.h - FOOT_H) api->fill(rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
+  if (y < c.y + c.h - FOOT_H) api->fill(capp_rect(c.x, y, c.w, c.y + c.h - FOOT_H - y), CLR_BG);
   paint_foot(D.ahead ? "p print  t today  e edit sections"
                      : "p print  t tomorrow  e edit sections");
 }
@@ -542,7 +528,7 @@ static void paint_page(void) {
 static int body_lines(void) {
   const char *p = D.page;
   int n = 0;
-  if (starts(p, "# ")) {
+  if (str_starts(p, "# ")) {
     while (*p && *p != '\n') p++;
     if (*p) p++;
   }
@@ -564,7 +550,7 @@ static int page_grew(int before) {
   if (D.rows <= 0 || c.w <= 0) return 1;     /* never painted: all of it */
   if (row < 0) row = 0;
   if (row >= D.rows || body_lines() == before) return 0;
-  api->damage(rect(c.x, c.y + HEAD_H + row * ROW_H, c.w, (D.rows - row) * ROW_H));
+  api->damage(capp_rect(c.x, c.y + HEAD_H + row * ROW_H, c.w, (D.rows - row) * ROW_H));
   return 1;
 }
 
@@ -751,10 +737,10 @@ static int app_tick(void *st, uint32_t now) {
   }
   if (D.printing) {
     const char *ps = api->print_status();
-    if (ps[0] && !starts(ps, "printing") && !starts(ps, "connecting") &&
-        !starts(ps, "starting") && !starts(ps, "waiting"))
+    if (ps[0] && !str_starts(ps, "printing") && !str_starts(ps, "connecting") &&
+        !str_starts(ps, "starting") && !str_starts(ps, "waiting"))
       D.printing = 0;
-    if (!starts(D.status, ps)) {
+    if (!str_starts(D.status, ps)) {
       api->fmt(D.status, sizeof D.status, "%s", ps);
       return status_changed();
     }

@@ -36,9 +36,11 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 #define MAX_ITEMS  40
 #define TITLE_MAX  38
@@ -200,12 +202,6 @@ static struct {
   int  printing;              /* mirror the job's status into the strip */
 } T;
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
-
 static void say(const char *s) { api->fmt(T.status, sizeof T.status, "%s", s); }
 
 /* To /cache/app.log, via the kernel. A sync that fails once a day cannot be
@@ -315,16 +311,6 @@ static void cache_load(void) {
   api->close(fd);
 }
 
-/* ---- the lists -----------------------------------------------------------
- *
- * /todo/lists: the current list's id on the first line, then "id name" per
- * list. On the card so that Left and Right work on a train, and so the app
- * opens on the list it was closed on. */
-static int same(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return !*a && !*b;
-}
-
 static int same_ci(const char *a, const char *b) {
   for (;; a++, b++) {
     char x = (*a >= 'A' && *a <= 'Z') ? (char)(*a + 32) : *a;
@@ -383,7 +369,7 @@ static void lists_load(void) {
   }
   api->close(fd);
   for (i = 0; i < T.nlists; i++)
-    if (same(T.lists[i].id, T.list_id)) T.cur = i;
+    if (str_same(T.lists[i].id, T.list_id)) T.cur = i;
 }
 
 /* The lists reply. The current list stays current if it is still there;
@@ -406,7 +392,7 @@ static void absorb_lists(void) {
 
   T.cur = -1;
   for (i = 0; i < count; i++)
-    if (same(T.lists[i].id, T.list_id)) T.cur = i;
+    if (str_same(T.lists[i].id, T.list_id)) T.cur = i;
   if (T.cur < 0) {
     /* The tasks in memory were filed under a list that is not here (or under
      * none). They are refiled under the first list: saved to its file and
@@ -790,7 +776,7 @@ static void sync_begin(void) {
     T.online = 0;
     say("offline -- showing the cache");
     T.next_auto = api->ticks_ms() + RETRY_MS;
-    logf("offline: %s", api->net_status ? api->net_status() : "no radio");
+    logf("offline: %s", api->net_status());
     return;
   }
   /* No Google token here any more: the server holds the login, and the
@@ -1005,17 +991,17 @@ static void paint_list(CRect c) {
     int sel = (i == T.sel);
     uint16_t bg = sel ? CLR_SEL : ((r & 1) ? CLR_ROW : CLR_BG);
 
-    api->fill(rect(c.x, y, c.w, ROW_H), bg);
+    api->fill(capp_rect(c.x, y, c.w, ROW_H), bg);
     if (i >= T.n) continue;
 
     /* The box, and a tick drawn rather than lettered: an x reads as "delete"
      * and a check reads as "done". */
-    api->frame(rect(c.x + 3, y + 2, 7, 7), CLR_DONE);
+    api->frame(capp_rect(c.x + 3, y + 2, 7, 7), CLR_DONE);
     if (T.item[i].done) {
-      api->fill(rect(c.x + 4, y + 6, 2, 2), CLR_TICK);
-      api->fill(rect(c.x + 5, y + 7, 2, 2), CLR_TICK);
-      api->fill(rect(c.x + 6, y + 5, 2, 2), CLR_TICK);
-      api->fill(rect(c.x + 7, y + 3, 2, 2), CLR_TICK);
+      api->fill(capp_rect(c.x + 4, y + 6, 2, 2), CLR_TICK);
+      api->fill(capp_rect(c.x + 5, y + 7, 2, 2), CLR_TICK);
+      api->fill(capp_rect(c.x + 6, y + 5, 2, 2), CLR_TICK);
+      api->fill(capp_rect(c.x + 7, y + 3, 2, 2), CLR_TICK);
     }
 
     api->text((short)(c.x + 14), (short)(y + 2), T.item[i].title,
@@ -1026,16 +1012,16 @@ static void paint_list(CRect c) {
      * like something on its way out rather than something still to do. */
     if (T.item[i].deleted) {
       short w = (short)(api->str_len(T.item[i].title) * 6);
-      api->fill(rect(c.x + 14, y + 5, w, 1), CLR_DONE);
+      api->fill(capp_rect(c.x + 14, y + 5, w, 1), CLR_DONE);
     }
 
     /* A dot for anything the server has not seen yet. */
     if (T.item[i].dirty)
-      api->fill(rect(c.x + c.w - 5, y + 4, 3, 3), CLR_PEND);
+      api->fill(capp_rect(c.x + c.w - 5, y + 4, 3, 3), CLR_PEND);
   }
 
   if (T.n == 0) {
-    api->fill(rect(c.x, c.y, c.w, c.h - ROW_H), CLR_BG);
+    api->fill(capp_rect(c.x, c.y, c.w, c.h - ROW_H), CLR_BG);
     api->text((short)(c.x + 6), (short)(c.y + 6), "nothing to do", CLR_DONE, CLR_BG);
     api->text((short)(c.x + 6), (short)(c.y + 20), "n new  r sync", CLR_DONE, CLR_BG);
   }
@@ -1061,7 +1047,7 @@ static void paint_all(CRect c) {
     top++;
   }
 
-  api->fill(rect(c.x, c.y, c.w, c.h - ROW_H), CLR_BG);
+  api->fill(capp_rect(c.x, c.y, c.w, c.h - ROW_H), CLR_BG);
   for (r = 0; r < T.nover; r++) T.oy[r] = -1;
   y = c.y;
   for (r = top; r < T.nover && y + ROW_H <= c.y + c.h - ROW_H; r++) {
@@ -1075,8 +1061,8 @@ static void paint_all(CRect c) {
     }
     bg = (r == T.osel) ? CLR_SEL : CLR_BG;
     T.oy[r] = (short)y;
-    api->fill(rect(c.x, y, c.w, ROW_H), bg);
-    api->frame(rect(c.x + 8, y + 2, 7, 7), CLR_DONE);
+    api->fill(capp_rect(c.x, y, c.w, ROW_H), bg);
+    api->frame(capp_rect(c.x + 8, y + 2, 7, 7), CLR_DONE);
     api->text((short)(c.x + 19), (short)(y + 2), o->title, CLR_TEXT, bg);
     y += ROW_H;
   }
@@ -1102,9 +1088,9 @@ static void paint_lists(CRect c) {
     short y = (short)(c.y + r * ROW_H);
     int sel = (r == T.psel);
     uint16_t bg = sel ? CLR_SEL : ((r & 1) ? CLR_ROW : CLR_BG);
-    api->fill(rect(c.x, y, c.w, ROW_H), bg);
+    api->fill(capp_rect(c.x, y, c.w, ROW_H), bg);
     /* A dot marks the one whose tasks are on the card right now. */
-    if (r == T.cur) api->fill(rect(c.x + 5, y + 4, 3, 3), CLR_TICK);
+    if (r == T.cur) api->fill(capp_rect(c.x + 5, y + 4, 3, 3), CLR_TICK);
     api->text((short)(c.x + 14), (short)(y + 2), T.lists[r].name, CLR_TEXT, bg);
   }
   if (!T.nlists)
@@ -1121,7 +1107,7 @@ static void paint_add(CRect c) {
   api->text((short)(c.x + 6), (short)(c.y + 10),
             T.draft_list ? "New list" : "New task", CLR_BARFG, CLR_BG);
 
-  api->fill(rect(c.x + 5, c.y + 26, c.w - 10, 14), CLR_ROW);
+  api->fill(capp_rect(c.x + 5, c.y + 26, c.w - 10, 14), CLR_ROW);
   for (i = 0; i < T.draft_len; i++) shown[i] = T.draft[i];
   shown[T.draft_len] = '_';
   shown[T.draft_len + 1] = 0;
@@ -1362,19 +1348,10 @@ static void ask_delete(void) {
 /* The answer. Anything that is not one is swallowed rather than acted on:
  * a stray arrow should not leave the question open over another task. */
 static int key_confirm(unsigned char k) {
-  if (api->key_repeat()) return 1;
-  switch (k) {
-  case 'y': case 'Y':
-    T.confirm = 0;
-    delete_selected();
-    return 1;
-  case 'n': case 'N':
-  case CAPP_KEY_ESC:
-  case CAPP_KEY_BACK:
-    T.confirm = 0;
-    return 1;
-  default: return 1;
-  }
+  int a = confirm_key(api, k);
+  if (a != CONFIRM_WAIT) T.confirm = 0;
+  if (a == CONFIRM_YES) delete_selected();
+  return 1;
 }
 
 /* The one place that knows what anything does. */
@@ -1529,7 +1506,7 @@ static int key_all(unsigned char k) {
  * through the footer's clip and never seen. A handled key says "all of it"
  * out loud instead of relying on having marked nothing. */
 static void damage_all(void) {
-  if (T.full.w > 0 && api->damage) api->damage(T.full);
+  if (T.full.w > 0) api->damage(T.full);
 }
 
 /* The bar first, and it answers for every key while it has them. fn-b puts
@@ -1588,22 +1565,6 @@ static int app_action(void *st, int a) {
   return r;
 }
 
-/* Lower-case compare of `needle` somewhere in `hay`. */
-static int contains(const char *hay, const char *needle) {
-  int i, j;
-  for (i = 0; hay[i]; i++) {
-    for (j = 0; needle[j]; j++) {
-      char a = hay[i + j], b = needle[j];
-      if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
-      if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
-      if (a != b) break;
-    }
-    if (!needle[j]) return 1;
-    if (!hay[i + j]) return 0;
-  }
-  return 0;
-}
-
 static const char *list_name(void) {
   return T.cur >= 0 ? T.lists[T.cur].name : "the list";
 }
@@ -1640,7 +1601,7 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
   case ACT_DONE:
     for (i = 0; i < T.n; i++) {
       if (T.item[i].done || T.item[i].deleted) continue;
-      if (contains(T.item[i].title, argv[0])) { hit = i; hits++; }
+      if (str_contains(T.item[i].title, argv[0], 1)) { hit = i; hits++; }
     }
     if (!hits) {
       api->fmt(out, n, "no open task matches \"%s\"", argv[0]);
@@ -1671,7 +1632,7 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
     int li = -1;
     for (i = 0; i < T.nlists; i++) if (same_ci(T.lists[i].name, argv[0])) li = i;
     if (li < 0)
-      for (i = 0; i < T.nlists; i++) if (contains(T.lists[i].name, argv[0])) { li = i; hits++; }
+      for (i = 0; i < T.nlists; i++) if (str_contains(T.lists[i].name, argv[0], 1)) { li = i; hits++; }
     if (hits > 1) { api->fmt(out, n, "%d lists match \"%s\"; say more", hits, argv[0]); return -1; }
     if (li < 0)   { api->fmt(out, n, "no list matches \"%s\"", argv[0]); return -1; }
     if (li == T.cur) {
@@ -1788,7 +1749,7 @@ static int click_content(short x, short y) {
 static void damage_status(void) {
   CRect c = T.content;
   if (c.w <= 0 || c.h < ROW_H) return;
-  api->damage(rect(c.x, c.y + c.h - ROW_H, c.w, ROW_H));
+  api->damage(capp_rect(c.x, c.y + c.h - ROW_H, c.w, ROW_H));
 }
 
 static int status_changed(void) {
@@ -1842,13 +1803,10 @@ static int app_tick(void *st, uint32_t now_ms) {
   if (was != T.stage || n != T.n) { damage_all(); redraw = 1; }
   if (status_changed()) { damage_status(); redraw = 1; }
   /* The bar's dots animate off the clock, so while one is in the air the bar
-   * asks for itself back -- and only the bar. When there is no bar (no mouse
-   * has appeared) this marks nothing and asks for nothing, which is the
-   * whole fix. */
-  if (T.stage != SYNC_IDLE && toolbar_bar_rect().w) {
-    toolbar_damage_bar();
-    redraw = 1;
-  }
+   * asks for itself back -- and only the bar, and only when the dots have
+   * moved on. When there is no bar (no mouse has appeared) this marks
+   * nothing and asks for nothing, which is the whole fix. */
+  if (T.stage != SYNC_IDLE && toolbar_damage_bar()) redraw = 1;
   return redraw;
 }
 

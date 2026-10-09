@@ -21,6 +21,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 
 static const CardApi *api;
 
@@ -68,12 +69,6 @@ static struct {
     char          sh[SH_MAX];
   } u;
 } R;
-
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)(w > 0 ? w : 0); r.h = (int16_t)h;
-  return r;
-}
 
 /* ---- base64 ------------------------------------------------------------------ */
 
@@ -135,11 +130,6 @@ static int path_ok(const char *p) {
       return 0;
   }
   return 1;
-}
-
-static int same(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
 }
 
 static int to_int(const char *s) {
@@ -248,15 +238,15 @@ static int handle_job(void) {
   R.dirty |= D_COUNTS;              /* and the byte counts, which move with it */
   if (!path_ok(f[2])) { fail("bad path"); return to_int(f[0]); }
 
-  if (same(f[1], "list")) do_list(f[2]);
-  else if (same(f[1], "stat")) {
+  if (str_same(f[1], "list")) do_list(f[2]);
+  else if (str_same(f[1], "stat")) {
     if (api->stat(f[2], &st) != 0) fail("no such file");
     else api->fmt(R.answer, ANS_MAX, "ok %c %lu", st.is_dir ? 'd' : 'f', (unsigned long)st.size);
   }
-  else if (same(f[1], "read")) do_read(f[2], f[3]);
-  else if (same(f[1], "write")) do_write(f[2], f[3], data);
-  else if (same(f[1], "commit")) do_commit(f[2]);
-  else if (same(f[1], "sh")) {
+  else if (str_same(f[1], "read")) do_read(f[2], f[3]);
+  else if (str_same(f[1], "write")) do_write(f[2], f[3], data);
+  else if (str_same(f[1], "commit")) do_commit(f[2]);
+  else if (str_same(f[1], "sh")) {
     /* A console line: its text is the job's data, one line. What it printed
      * comes back whole -- an `update` that runs for minutes answers when it
      * is done, which the server waits for. */
@@ -265,21 +255,20 @@ static int handle_job(void) {
     data[k] = 0;
     note("$", data, -1);
     R.u.sh[0] = 0;
-    if (!api->shell) fail("this firmware has no console for apps: update os");
-    else {
+    {
       int rc = api->shell(data, R.u.sh, SH_MAX);
       api->fmt(R.answer, ANS_MAX, "%s\n%s", rc == 0 ? "ok" : "ok refused", R.u.sh);
     }
   }
-  else if (same(f[1], "mkdir")) {
+  else if (str_same(f[1], "mkdir")) {
     if (api->mkdir(f[2]) != 0) fail("cannot make it");
     else { api->fmt(R.answer, ANS_MAX, "ok"); note("mkdir", f[2], -1); }
   }
-  else if (same(f[1], "rm")) {
+  else if (str_same(f[1], "rm")) {
     if (api->remove(f[2]) != 0) fail("cannot delete (a folder must be empty)");
     else { api->fmt(R.answer, ANS_MAX, "ok"); note("delete", f[2], -1); }
   }
-  else if (same(f[1], "mv")) {
+  else if (str_same(f[1], "mv")) {
     if (!path_ok(f[3])) fail("bad path");
     else if (api->rename(f[2], f[3]) != 0) fail("cannot rename (is the name taken?)");
     else { api->fmt(R.answer, ANS_MAX, "ok"); note("rename", f[3], -1); }
@@ -328,9 +317,9 @@ static int app_tick(void *st, uint32_t now) {
    * repaints one line. An app that returns 1 without saying what changed
    * has its whole screen redrawn, once a poll, every second and a half. */
   if (n && R.have_at) {
-    if (n & D_LINK) api->damage(rect(R.at.x, R.at.y + 34, R.at.w, 8));
-    if (n & D_LOG) api->damage(rect(R.at.x, R.at.y + TOP_LOG, R.at.w, LINES * 10));
-    if (n & D_COUNTS) api->damage(rect(R.at.x, R.at.y + R.at.h - 10, R.at.w, 8));
+    if (n & D_LINK) api->damage(capp_rect(R.at.x, R.at.y + 34, R.at.w, 8));
+    if (n & D_LOG) api->damage(capp_rect(R.at.x, R.at.y + TOP_LOG, R.at.w, LINES * 10));
+    if (n & D_COUNTS) api->damage(capp_rect(R.at.x, R.at.y + R.at.h - 10, R.at.w, 8));
   }
   return n != 0;
 }
@@ -346,13 +335,13 @@ static void line(CRect c, int *cur, int y, const char *s, uint16_t fg) {
   int cols = (c.w - 8) / 6, i = 0;
   if (cols > (int)sizeof buf - 1) cols = (int)sizeof buf - 1;
   if (cols < 0) cols = 0;
-  if (y > *cur) api->fill(rect(c.x, *cur, c.w, y - *cur), CLR_BG);
+  if (y > *cur) api->fill(capp_rect(c.x, *cur, c.w, y - *cur), CLR_BG);
   for (; s && s[i] && i < cols; i++) buf[i] = s[i];
   for (; i < cols; i++) buf[i] = ' ';
   buf[cols] = 0;
-  api->fill(rect(c.x, y, 8, 8), CLR_BG);
+  api->fill(capp_rect(c.x, y, 8, 8), CLR_BG);
   api->text((int16_t)(c.x + 8), (int16_t)y, buf, fg, CLR_BG);
-  api->fill(rect(c.x + 8 + cols * 6, y, c.w - 8 - cols * 6, 8), CLR_BG);
+  api->fill(capp_rect(c.x + 8 + cols * 6, y, c.w - 8 - cols * 6, 8), CLR_BG);
   *cur = y + 8;
 }
 
@@ -376,7 +365,7 @@ static void app_paint(void *st, CRect c) {
   api->fmt(ln, sizeof ln, "%lu jobs  in %lu KB  out %lu KB", (unsigned long)R.jobs,
            (unsigned long)(R.bytes_in / 1024), (unsigned long)(R.bytes_out / 1024));
   line(c, &cur, c.y + c.h - 10, ln, CLR_DIM);
-  if (c.y + c.h > cur) api->fill(rect(c.x, cur, c.w, c.y + c.h - cur), CLR_BG);
+  if (c.y + c.h > cur) api->fill(capp_rect(c.x, cur, c.w, c.y + c.h - cur), CLR_BG);
 }
 
 const CappInfo capp_info = {
@@ -401,7 +390,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   (void)argc; (void)argv;
   api = a;
   api->mem_set(&R, 0, sizeof R);
-  if (api->keep_awake) api->keep_awake(1);    /* it is working while it is open */
+  api->keep_awake(1);                         /* it is working while it is open */
   R.next_try = api->ticks_ms();
   UI.paint = app_paint;
   UI.tick = app_tick;

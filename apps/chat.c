@@ -13,14 +13,15 @@
  * before, padded to the width, nothing cleared first.
  */
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/safefile.h"
 
 #define CONF       "/config/chat.txt"
-#define COLS       40
-#define LINES      90
-#define ROW_H      9
-#define BAR_H      10
-#define IN_H       11
+#define TL_LINES   90
+#include "apps/termlog.h"
+
+#define BAR_H      TL_BAR_H
+#define IN_H       TL_IN_H
 #define INPUT_MAX  200
 #define NAME_MAX   16
 #define REPLY_MAX  6144
@@ -46,9 +47,7 @@ static const CardApi *api;
 enum { REQ_NONE, REQ_GET, REQ_POST };
 
 static struct {
-  char     line[LINES][COLS + 1];
-  uint16_t colour[LINES];
-  int      nlines, scroll;
+  TermLog  log;                    /* the lines, each one's colour, the scroll */
   char     input[INPUT_MAX + 1];
   int      in_len;
   char     name[NAME_MAX + 1];
@@ -66,72 +65,26 @@ static struct {
 
 static char reply[REPLY_MAX];
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
-
 /* Marked, and remembered: tick says so, or a message that arrives while no
  * key is pressed waits for one to be drawn (2026-10-06). */
-static void damage_in(void)  { C.dirty = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
-static void damage_log(void) { C.dirty = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
-static void damage_bar(void) { C.dirty = 1; if (C.have_at) api->damage(rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
-
-static int same(const char *a, const char *b) {
-  while (*a && *a == *b) { a++; b++; }
-  return *a == *b;
-}
+static void damage_in(void)  { C.dirty = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
+static void damage_log(void) { C.dirty = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
+static void damage_bar(void) { C.dirty = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
 
 /* ---- the log ----------------------------------------------------------------- */
 
-static void push(const char *text, uint16_t colour) {
-  int i;
-  if (C.nlines == LINES) {
-    for (i = 1; i < LINES; i++) {
-      api->mem_cpy(C.line[i - 1], C.line[i], COLS + 1);
-      C.colour[i - 1] = C.colour[i];
-    }
-    C.nlines--;
-  }
-  api->fmt(C.line[C.nlines], COLS + 1, "%s", text);
-  C.colour[C.nlines++] = colour;
+/* Word-wrapped at forty columns, continuation lines indented two
+ * (apps/termlog.h). An empty message is no line at all. */
+static void push_wrapped(const char *text, uint16_t colour) {
+  if (*text) tl_push_text(api, &C.log, text, colour, 2);
 }
 
-/* Word-wrapped at forty columns, continuation lines indented two. */
-static void push_wrapped(const char *text, uint16_t colour) {
-  char out[COLS + 1];
-  int n = 0, first = 1;
-  for (;;) {
-    char c = *text;
-    int width = first ? COLS : COLS - 2;
-    if (!c) {
-      out[n] = 0;
-      if (n) push(out, colour);
-      return;
-    }
-    if (n == width) {
-      int brk = n, keep, k;
-      char tail[COLS + 1];
-      while (brk > 0 && out[brk - 1] != ' ') brk--;
-      if (brk < width / 3) brk = n;
-      keep = n - brk;
-      for (k = 0; k < keep; k++) tail[k] = out[brk + k];
-      out[brk && brk < n ? brk - 1 : brk] = 0;
-      push(out, colour);
-      out[0] = ' '; out[1] = ' ';
-      for (k = 0; k < keep; k++) out[2 + k] = tail[k];
-      n = 2 + keep;
-      first = 0;
-    }
-    out[n++] = c;
-    text++;
-  }
-}
+/* The log's tag is the colour itself. */
+static uint16_t colour_is(int tag) { return (uint16_t)tag; }
 
 static uint16_t colour_of(const char *name) {
   uint32_t h = 2166136261u;
-  if (same(name, C.name)) return CLR_ME;
+  if (str_same(name, C.name)) return CLR_ME;
   while (*name) h = (h ^ (uint8_t)*name++) * 16777619u;
   return WHO[h % 6];
 }
@@ -166,18 +119,6 @@ static void ask_name(void) {
 
 /* ---- the server ------------------------------------------------------------------ */
 
-static void url_enc(char *out, int n, const char *s) {
-  static const char HEX[] = "0123456789ABCDEF";
-  int k = 0;
-  for (; *s && k < n - 4; s++) {
-    unsigned char ch = (unsigned char)*s;
-    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_')
-      out[k++] = (char)ch;
-    else { out[k++] = '%'; out[k++] = HEX[ch >> 4]; out[k++] = HEX[ch & 15]; }
-  }
-  out[k] = 0;
-}
-
 static void start_get(void) {
   char url[160];
   api->fmt(url, sizeof url, "%s/msg?since=%d&max=%d", api->proxy(), C.last_id, BATCH);
@@ -199,7 +140,7 @@ static void set_status(const char *s, int bad) {
 
 /* id \t time \t name \t text, a line each. */
 static int take_messages(void) {
-  char *p = reply, name[NAME_MAX + 1], line[COLS * 12];
+  char *p = reply, name[NAME_MAX + 1], line[TL_COLS * 12];
   int got = 0;
   while (*p) {
     char *f[4];
@@ -263,7 +204,7 @@ static void poll_server(uint32_t now) {
   {
     int got = take_messages();
     if (got) {
-      C.scroll = 0;
+      C.log.scroll = 0;
       damage_log();
       seen_save();                            /* the OS does not announce these */
     }
@@ -274,71 +215,11 @@ static void poll_server(uint32_t now) {
 
 /* ---- painting ------------------------------------------------------------------- */
 
-static void fill_if(int x, int y, int w, int h, uint16_t c) {
-  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), c);
-}
-
-static void text_cols(int x, int y, const char *s, int cols, uint16_t fg, uint16_t bg) {
-  char b[64];
-  int n = 0;
-  if (cols > (int)sizeof b - 1) cols = (int)sizeof b - 1;
-  while (s[n] && n < cols) { b[n] = s[n]; n++; }
-  while (n < cols) b[n++] = ' ';
-  b[n] = 0;
-  api->text((int16_t)x, (int16_t)y, b, fg, bg);
-}
-
 static void paint_bar(CRect c) {
   char bar[64];
-  int cols = (c.w - 3 + 5) / 6;
-  if (cols > 63) cols = 63;
   api->fmt(bar, sizeof bar, "Chat  %s%s%s", C.name[0] ? C.name : "",
            C.status[0] ? "  " : "", C.status);
-  fill_if(c.x, c.y, c.w, 1, CLR_BAR);
-  fill_if(c.x, c.y + 9, c.w, BAR_H - 9, CLR_BAR);
-  fill_if(c.x, c.y + 1, 3, 8, CLR_BAR);
-  fill_if(c.x + 3 + cols * 6, c.y + 1, c.w - 3 - cols * 6, 8, CLR_BAR);
-  text_cols(c.x + 3, c.y + 1, bar, cols, C.offline ? CLR_ERR : CLR_FG, CLR_BAR);
-}
-
-static void paint_log(CRect c, CRect clip) {
-  int rows = (c.h - BAR_H - IN_H) / ROW_H;
-  int top = c.y + BAR_H, bottom = c.y + c.h - IN_H;
-  int cols = (c.w - 2 + 5) / 6, right, first, r, y = top;
-  if (cols > 63) cols = 63;
-  right = c.x + 2 + cols * 6;
-  first = C.nlines - rows - C.scroll;
-  if (first < 0) first = 0;
-  fill_if(c.x, top, 2, bottom - top, CLR_BG);
-  fill_if(right, top, c.x + c.w - right, bottom - top, CLR_BG);
-  for (r = 0; r < rows; r++) {
-    int i = first + r;
-    if (i >= C.nlines) break;
-    y = top + r * ROW_H;
-    if (y < clip.y + clip.h && y + ROW_H > clip.y) {
-      text_cols(c.x + 2, y, C.line[i], cols, C.colour[i], CLR_BG);
-      fill_if(c.x + 2, y + 8, cols * 6, ROW_H - 8, CLR_BG);
-    }
-    y += ROW_H;
-  }
-  fill_if(c.x + 2, y, cols * 6, bottom - y, CLR_BG);
-}
-
-static void paint_input(CRect c) {
-  int y = c.y + c.h - IN_H;
-  int vis = (c.w - 12) / 6;
-  int from = C.in_len > vis ? C.in_len - vis : 0;
-  int n = C.in_len - from, cx = c.x + 10 + n * 6, end;
-  fill_if(c.x, y, c.w, 2, CLR_IN);
-  fill_if(c.x, y + 10, c.w, IN_H - 10, CLR_IN);
-  fill_if(c.x, y + 2, 2, 8, CLR_IN);
-  api->text((int16_t)(c.x + 2), (int16_t)(y + 2), C.naming ? "?" : ">", CLR_DIM, CLR_IN);
-  fill_if(c.x + 8, y + 2, 2, 8, CLR_IN);
-  api->text((int16_t)(c.x + 10), (int16_t)(y + 2), C.input + from, CLR_FG, CLR_IN);
-  api->fill(rect(cx, y + 2, 5, 8), CLR_FG);
-  text_cols(cx + 5, y + 2, "", vis - n, CLR_FG, CLR_IN);
-  end = cx + 5 + (vis > n ? vis - n : 0) * 6;
-  fill_if(end, y + 2, c.x + c.w - end, 8, CLR_IN);
+  tl_paint_bar(api, c, bar, C.offline ? CLR_ERR : CLR_FG, CLR_BAR);
 }
 
 static void app_paint(void *st, CRect c) {
@@ -347,8 +228,10 @@ static void app_paint(void *st, CRect c) {
   C.at = c;
   C.have_at = 1;
   if (clip.y < c.y + BAR_H) paint_bar(c);
-  if (clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + BAR_H) paint_log(c, clip);
-  if (clip.y + clip.h > c.y + c.h - IN_H) paint_input(c);
+  if (clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + BAR_H)
+    tl_paint_log(api, &C.log, c, clip, colour_is, CLR_BG);
+  if (clip.y + clip.h > c.y + c.h - IN_H)
+    tl_paint_input(api, c, C.naming ? "?" : ">", C.input, C.in_len, CLR_FG, CLR_DIM, CLR_IN);
 }
 
 /* ---- input ------------------------------------------------------------------------ */
@@ -382,7 +265,7 @@ static void submit(void) {
   } else send(C.input);
   C.in_len = 0;
   C.input[0] = 0;
-  C.scroll = 0;
+  C.log.scroll = 0;
   damage_in();
   damage_log();
 }
@@ -400,10 +283,10 @@ static int app_key(void *st, uint8_t k) {
     return 0;
   }
   if (!C.in_len) {
-    if (k == CAPP_KEY_UP)    { C.scroll += 3; damage_log(); return 1; }
-    if (k == CAPP_KEY_DOWN)  { C.scroll -= 3; if (C.scroll < 0) C.scroll = 0; damage_log(); return 1; }
-    if (k == CAPP_KEY_LEFT)  { C.scroll += 10; damage_log(); return 1; }
-    if (k == CAPP_KEY_RIGHT) { C.scroll -= 10; if (C.scroll < 0) C.scroll = 0; damage_log(); return 1; }
+    if (k == CAPP_KEY_UP)    { C.log.scroll += 3; damage_log(); return 1; }
+    if (k == CAPP_KEY_DOWN)  { C.log.scroll -= 3; if (C.log.scroll < 0) C.log.scroll = 0; damage_log(); return 1; }
+    if (k == CAPP_KEY_LEFT)  { C.log.scroll += 10; damage_log(); return 1; }
+    if (k == CAPP_KEY_RIGHT) { C.log.scroll -= 10; if (C.log.scroll < 0) C.log.scroll = 0; damage_log(); return 1; }
   }
   if (k >= ' ' && k < 0x7F && C.in_len < INPUT_MAX) {
     C.input[C.in_len++] = (char)k;

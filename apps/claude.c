@@ -27,13 +27,14 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/safefile.h"
 
-#define COLS        40
-#define LINES       80            /* the agent keeps ~2 KB; this is its wrap */
-#define ROW_H        9
-#define BAR_H       10
-#define IN_H        11
+#define TL_LINES    80            /* the agent keeps ~2 KB; this is its wrap */
+#include "apps/termlog.h"
+
+#define BAR_H      TL_BAR_H
+#define IN_H       TL_IN_H
 #define INPUT_MAX  200
 
 #define CLR_BG     CAPP_RGB(18, 20, 26)
@@ -51,10 +52,7 @@ static const CappAgent *agent;
 enum { WHO_YOU = 0, WHO_CLAUDE, WHO_TOOL, WHO_ERR };
 
 static struct {
-  char  line[LINES][COLS + 1];
-  unsigned char who[LINES];
-  int   nlines;
-  int   scroll;
+  TermLog log;                    /* the lines, who said each, the scroll */
 
   char  input[INPUT_MAX + 1];
   int   in_len;
@@ -81,68 +79,20 @@ static struct {
 
 static char reply[REPLY_MAX];
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (short)x; r.y = (short)y; r.w = (short)w; r.h = (short)h;
-  return r;
-}
-
 /* ---- the log, rebuilt from the agent's transcript ------------------------ */
 
-static void push(const char *text, int who) {
-  int i;
-  if (C.nlines == LINES) {
-    for (i = 1; i < LINES; i++) {
-      api->mem_cpy(C.line[i - 1], C.line[i], COLS + 1);
-      C.who[i - 1] = C.who[i];
-    }
-    C.nlines--;
-  }
-  api->fmt(C.line[C.nlines], COLS + 1, "%s", text);
-  C.who[C.nlines] = (unsigned char)who;
-  C.nlines++;
-}
+static void push(const char *text, int who) { tl_push(api, &C.log, text, who); }
 
-/* Word wrap: forty columns is narrow enough that breaking mid-word makes
- * prose hard to read. `text` runs to a newline or the end. */
+/* One line of `text`, to a newline or the end, word-wrapped (apps/termlog.h);
+ * what follows it, the end of the text at the end. */
 static const char *push_wrapped(const char *text, int who) {
-  char out[COLS + 1];
-  int n = 0;
-
-  for (;;) {
-    char c = *text;
-    if (c == '\n' || c == 0) {
-      out[n] = 0;
-      push(out, who);
-      return c ? text + 1 : text;
-    }
-    if (c == '\r') { text++; continue; }
-    if (c == '\t') c = ' ';
-    if (n == COLS) {
-      int brk = n;
-      while (brk > 0 && out[brk - 1] != ' ') brk--;
-      if (brk > COLS / 3) {
-        int keep = n - brk, k;
-        char tail[COLS + 1];
-        for (k = 0; k < keep; k++) tail[k] = out[brk + k];
-        out[brk ? brk - 1 : 0] = 0;
-        push(out, who);
-        for (k = 0; k < keep; k++) out[k] = tail[k];
-        n = keep;
-      } else {
-        out[n] = 0;
-        push(out, who);
-        n = 0;
-      }
-    }
-    out[n++] = c;
-    text++;
-  }
+  const char *next = tl_wrap_line(api, &C.log, text, who, 0);
+  return next ? next : text + api->str_len(text);
 }
 
 static void rebuild(void) {
   const char *t = agent->transcript();
-  C.nlines = 0;
+  C.log.n = 0;
   if (C.no_key) {
     push_wrapped("No key. Put an Anthropic API key in /config/claude.key on the card and open this again.", WHO_ERR);
     return;
@@ -164,31 +114,11 @@ static uint16_t colour_of(int who) {
        : who == WHO_ERR ? CLR_ERR : CLR_DIM;
 }
 
-static void fill_if(int x, int y, int w, int h, uint16_t c) {
-  if (w > 0 && h > 0) api->fill(rect(x, y, w, h), c);
-}
-
-/* `s` padded with spaces to `cols` characters, so a line writes over the
- * one it replaces instead of the row being cleared first: there is no
- * framebuffer, and a fill followed by text is a blink on the panel. */
-static void text_cols(int x, int y, const char *s, int cols, uint16_t fg, uint16_t bg) {
-  char b[64];
-  int n = 0;
-  if (cols > (int)sizeof b - 1) cols = (int)sizeof b - 1;
-  while (s[n] && n < (int)sizeof b - 1) { b[n] = s[n]; n++; }
-  while (n < cols) b[n++] = ' ';
-  b[n] = 0;
-  api->text((short)x, (short)y, b, fg, bg);
-}
-
-/* Written over itself, padded to the width, with only the pixel rows above
- * and below the text and its margins filled: the dots move every 400 ms,
- * and filling the bar before writing it blinked it each time. */
+/* Written over itself (apps/termlog.h): the dots move every 400 ms, and
+ * filling the bar before writing it blinked it each time. */
 static void paint_bar(CRect c) {
   char bar[64];
   const char *s = agent->status();
-  int cols = (c.w - 3 + 5) / 6;          /* the last, cut by the edge, still padded */
-  if (cols > 63) cols = 63;
   if (C.talk)
     api->fmt(bar, sizeof bar, "Claude  %s%s%s", C.waiting ? "thinking" : C.name,
              !C.waiting || C.dots == 0 ? "" : C.dots == 1 ? "." : C.dots == 2 ? ".." : "...",
@@ -198,58 +128,7 @@ static void paint_bar(CRect c) {
              C.dots == 0 ? "" : C.dots == 1 ? "." : C.dots == 2 ? ".." : "...");
   else
     api->fmt(bar, sizeof bar, "Claude  api.anthropic.com");
-  fill_if(c.x, c.y, c.w, 1, CLR_BAR);
-  fill_if(c.x, c.y + 9, c.w, BAR_H - 9, CLR_BAR);
-  fill_if(c.x, c.y + 1, 3, 8, CLR_BAR);
-  fill_if(c.x + 3 + cols * 6, c.y + 1, c.w - 3 - cols * 6, 8, CLR_BAR);
-  text_cols(c.x + 3, c.y + 1, bar, cols, CLR_FG, CLR_BAR);
-}
-
-/* Each line padded to the width and written over the one before it; only
- * the margins, the pixel row under each line and the rows below the last
- * are filled. Clearing the whole log first blinked it on every answer. */
-static void paint_log(CRect c, CRect clip) {
-  int rows = (c.h - BAR_H - IN_H) / ROW_H;
-  int top = c.y + BAR_H, bottom = c.y + c.h - IN_H;
-  int cols = (c.w - 2 + 5) / 6, right;   /* to the edge: a 40-column line reaches it */
-  int first, r, y = top;
-
-  if (cols > 63) cols = 63;
-  right = c.x + 2 + cols * 6;
-  first = C.nlines - rows - C.scroll;
-  if (first < 0) first = 0;
-  fill_if(c.x, top, 2, bottom - top, CLR_BG);
-  fill_if(right, top, c.x + c.w - right, bottom - top, CLR_BG);
-  for (r = 0; r < rows; r++) {
-    int i = first + r;
-    if (i >= C.nlines) break;
-    y = top + r * ROW_H;
-    if (y < clip.y + clip.h && y + ROW_H > clip.y) {
-      text_cols(c.x + 2, y, C.line[i], cols, colour_of(C.who[i]), CLR_BG);
-      fill_if(c.x + 2, y + 8, cols * 6, ROW_H - 8, CLR_BG);
-    }
-    y += ROW_H;
-  }
-  fill_if(c.x + 2, y, cols * 6, bottom - y, CLR_BG);
-}
-
-/* The prompt, the text, the cursor, then spaces to the end -- each drawn
- * over the last, so a keystroke does not blank the line. */
-static void paint_input(CRect c) {
-  int y = c.y + c.h - IN_H;
-  int vis = (c.w - 12) / 6;
-  int from = C.in_len > vis ? C.in_len - vis : 0;
-  int n = C.in_len - from, cx = c.x + 10 + n * 6, end;
-  fill_if(c.x, y, c.w, 2, CLR_IN);
-  fill_if(c.x, y + 10, c.w, IN_H - 10, CLR_IN);
-  fill_if(c.x, y + 2, 2, 8, CLR_IN);
-  api->text((short)(c.x + 2), (short)(y + 2), ">", CLR_DIM, CLR_IN);
-  fill_if(c.x + 8, y + 2, 2, 8, CLR_IN);
-  api->text((short)(c.x + 10), (short)(y + 2), C.input + from, CLR_FG, CLR_IN);
-  api->fill(rect(cx, y + 2, 5, 8), CLR_FG);
-  text_cols(cx + 5, y + 2, "", vis - n, CLR_FG, CLR_IN);
-  end = cx + 5 + (vis > n ? vis - n : 0) * 6;
-  fill_if(end, y + 2, c.x + c.w - end, 8, CLR_IN);
+  tl_paint_bar(api, c, bar, CLR_FG, CLR_BAR);
 }
 
 /* Painted to the clip the shell hands back: our own damage marks come back
@@ -260,29 +139,18 @@ static void app_paint(void *st, CRect c) {
   C.at = c;
   C.have_at = 1;
   if (clip.y < c.y + BAR_H) paint_bar(c);
-  if (clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + BAR_H) paint_log(c, clip);
-  if (clip.y + clip.h > c.y + c.h - IN_H) paint_input(c);
+  if (clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + BAR_H)
+    tl_paint_log(api, &C.log, c, clip, colour_of, CLR_BG);
+  if (clip.y + clip.h > c.y + c.h - IN_H)
+    tl_paint_input(api, c, ">", C.input, C.in_len, CLR_FG, CLR_DIM, CLR_IN);
 }
 
-static void damage_in(void)  { if (C.have_at) api->damage(rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
-static void damage_log(void) { if (C.have_at) api->damage(rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
-static void damage_bar(void) { if (C.have_at) api->damage(rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
+static void damage_in(void)  { if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + C.at.h - IN_H, C.at.w, IN_H)); }
+static void damage_log(void) { if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
+static void damage_bar(void) { if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
 
 
 /* ---- about a document ---------------------------------------------------------- */
-
-/* A file name as a query value: letters, digits and . - _ as they are. */
-static void url_enc(char *out, int n, const char *s) {
-  static const char HEX[] = "0123456789ABCDEF";
-  int k = 0;
-  for (; *s && k < n - 4; s++) {
-    unsigned char ch = (unsigned char)*s;
-    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
-        ch == '.' || ch == '-' || ch == '_') out[k++] = (char)ch;
-    else { out[k++] = '%'; out[k++] = HEX[ch >> 4]; out[k++] = HEX[ch & 15]; }
-  }
-  out[k] = 0;
-}
 
 static void say_line(const char *s, int who) {
   while (*s) s = push_wrapped(s, who);
@@ -453,7 +321,7 @@ static void submit(void) {
   damage_in();
 
   if (C.talk) {
-    C.scroll = 0;
+    C.log.scroll = 0;
     talk_say();
     C.in_len = 0; C.input[0] = 0;
     damage_log(); damage_bar();
@@ -469,7 +337,7 @@ static void submit(void) {
 
   rc = agent->ask(C.input);
   C.in_len = 0; C.input[0] = 0;
-  C.scroll = 0;
+  C.log.scroll = 0;
   if (rc == -1) push("(still thinking about the last one)", WHO_ERR);
   else if (rc == -2) { C.no_key = 1; rebuild(); }
   else if (rc == -3) push("no card", WHO_ERR);
@@ -490,10 +358,10 @@ static int app_key(void *st, unsigned char k) {
   }
   if (!C.in_len) {
     int rows = 12;
-    if (k == CAPP_KEY_UP)    { C.scroll += 3; damage_log(); return 1; }
-    if (k == CAPP_KEY_DOWN)  { C.scroll -= 3; if (C.scroll < 0) C.scroll = 0; damage_log(); return 1; }
-    if (k == CAPP_KEY_LEFT)  { C.scroll += rows; damage_log(); return 1; }
-    if (k == CAPP_KEY_RIGHT) { C.scroll -= rows; if (C.scroll < 0) C.scroll = 0; damage_log(); return 1; }
+    if (k == CAPP_KEY_UP)    { C.log.scroll += 3; damage_log(); return 1; }
+    if (k == CAPP_KEY_DOWN)  { C.log.scroll -= 3; if (C.log.scroll < 0) C.log.scroll = 0; damage_log(); return 1; }
+    if (k == CAPP_KEY_LEFT)  { C.log.scroll += rows; damage_log(); return 1; }
+    if (k == CAPP_KEY_RIGHT) { C.log.scroll -= rows; if (C.log.scroll < 0) C.log.scroll = 0; damage_log(); return 1; }
   }
   if (k >= ' ' && k < 0x7F && C.in_len < INPUT_MAX) {
     C.input[C.in_len++] = (char)k;
@@ -521,7 +389,7 @@ static int app_tick(void *st, uint32_t now) {
   agent->seen();
   if (agent->generation() != C.seen_gen) {
     rebuild();
-    C.scroll = 0;
+    C.log.scroll = 0;
     damage_log(); damage_bar();
     changed = 1;
   }
@@ -540,8 +408,8 @@ static int app_wants_text(void *st) { (void)st; return 1; }
 static int app_mouse(void *st, short x, short y, int buttons, int wheel) {
   (void)st; (void)x; (void)y; (void)buttons;
   if (!wheel) return 0;
-  C.scroll += wheel > 0 ? 3 : -3;
-  if (C.scroll < 0) C.scroll = 0;
+  C.log.scroll += wheel > 0 ? 3 : -3;
+  if (C.log.scroll < 0) C.log.scroll = 0;
   damage_log();
   return 1;
 }

@@ -13,24 +13,13 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info habits_capp_info
 #define capp_main habits_capp_main
 #include "apps/habits.c"
 #undef capp_info
 #undef capp_main
-
-static int h_fmt(char *buf, size_t n, const char *fmt, ...) {
-  va_list ap;
-  int r;
-  va_start(ap, fmt);
-  r = vsnprintf(buf, n, fmt, ap);
-  va_end(ap);
-  return r;
-}
-static void *h_memset(void *d, int c, size_t n) { return memset(d, c, n); }
-static void *h_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
-static size_t h_strlen(const char *s) { return strlen(s); }
 
 static FILE *s_hf;
 
@@ -117,8 +106,7 @@ static void wipe(void) {
 
 /* A fresh app on 24 Sep 2026 over whatever files the test wrote. */
 static void open_app(void) {
-  memset(&HF, 0, sizeof HF);
-  HF.fmt = h_fmt; HF.mem_set = h_memset; HF.mem_cpy = h_memcpy; HF.str_len = h_strlen;
+  fakeapi_init(&HF);
   HF.open = h_open; HF.read = h_read; HF.write = h_write; HF.close = h_close;
   HF.mkdir = h_mkdir; HF.remove = h_remove; HF.rename = h_rename; HF.stat = h_stat;
   HF.now = h_now; HF.ticks_ms = h_ticks; HF.key_repeat = h_repeat;
@@ -137,7 +125,7 @@ static void open_app(void) {
   }
 }
 
-static int32_t D(int y, int m, int d) { return days_from_civil(y, m, d); }
+static int32_t D(int y, int m, int d) { return dt_days_from_civil(y, m, d); }
 
 void test_habits_loads_the_old_files(void) {
   wipe();

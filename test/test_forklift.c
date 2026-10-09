@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "tinytest.h"
+#include "fakeapi.h"
 
 #define capp_info forklift_capp_info
 #define capp_main forklift_capp_main
@@ -24,17 +25,6 @@ static uint32_t NOW;
 static struct { char path[96]; char data[4096]; int len, used; } FILES[NFILES];
 static struct { int file, pos, write; } FDS[4];
 
-static int k_fmt(char *buf, size_t n, const char *fmt, ...) {
-  va_list ap;
-  int r;
-  va_start(ap, fmt);
-  r = vsnprintf(buf, n, fmt, ap);
-  va_end(ap);
-  return r;
-}
-static void *k_memset(void *d, int c, size_t n) { return memset(d, c, n); }
-static void *k_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
-static size_t k_strlen(const char *s) { return strlen(s); }
 static uint32_t k_ticks(void) { return NOW; }
 static void k_fill(CRect r, uint16_t c) { (void)r; (void)c; }
 static void k_text(int16_t x, int16_t y, const char *s, uint16_t fg, uint16_t bg) {
@@ -102,11 +92,7 @@ static void fresh_card(void) {
 }
 
 static void boot(void) {
-  memset(&FAKE, 0, sizeof FAKE);
-  FAKE.fmt = k_fmt;
-  FAKE.mem_set = k_memset;
-  FAKE.mem_cpy = k_memcpy;
-  FAKE.str_len = k_strlen;
+  fakeapi_init(&FAKE);
   FAKE.ticks_ms = k_ticks;
   FAKE.fill = k_fill;
   FAKE.frame = k_fill;
@@ -128,6 +114,15 @@ static void boot(void) {
 }
 
 static void steps(int n) { while (n-- > 0) sim_step(); }
+
+/* A file on the pretend card as a string, "" if it is not there. */
+static const char *card_text(const char *path) {
+  static char out[4097];
+  int f = find(path);
+  out[0] = 0;
+  if (f >= 0) { memcpy(out, FILES[f].data, (size_t)FILES[f].len); out[FILES[f].len] = 0; }
+  return out;
+}
 
 static void set_program(const char *src) {
   ed_from_text(src);
@@ -383,14 +378,14 @@ void test_forklift_an_edit_that_does_not_parse_survives_a_restart(void) {
   save_all();
   boot();                                      /* the same card */
   CHECK(strstr(E.line[0], "# half done"));
-  CHECK(strstr(E.good, "# works"));
+  CHECK(strstr(card_text(GOOD_PATH), "# works"));
   CHECK_EQ(1, G.running);                      /* on the one that parsed */
 }
 
 void test_forklift_a_fresh_card_starts_with_a_program_that_works(void) {
   fresh_card();
   boot();
-  CHECK(strstr(E.good, "bot = "));
+  CHECK(strstr(card_text(GOOD_PATH), "bot = "));
   CHECK_EQ(1, G.running);
   CHECK_EQ(0, G.credits);
 }

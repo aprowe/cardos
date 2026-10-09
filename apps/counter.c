@@ -28,9 +28,11 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 static const CardApi *api;
 
@@ -77,18 +79,7 @@ static struct {
   CRect    hero, list, foot;
 } C;
 
-static CRect rect(int x, int y, int w, int h) {
-  CRect r;
-  r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
-  return r;
-}
-
 /* ---- the state ------------------------------------------------------------ */
-
-static int starts_with(const char *s, const char *p) {
-  while (*p) { if (*s != *p) return 0; s++; p++; }
-  return 1;
-}
 
 static const char *read_u32(const char *p, uint32_t *out) {
   uint32_t v = 0;
@@ -105,17 +96,17 @@ static int s_has_d[MAX_LAPS];
 static void apply_line(const char *line) {
   uint32_t v;
   const char *p;
-  if (starts_with(line, "count=")) {
+  if (str_starts(line, "count=")) {
     read_u32(line + 6, &v);
     C.count = v;
-  } else if (starts_with(line, "lap=") && C.nlaps < MAX_LAPS) {
+  } else if (str_starts(line, "lap=") && C.nlaps < MAX_LAPS) {
     Lap *l = &C.laps[C.nlaps];
     p = read_u32(line + 4, &v);
     l->count = v;
     l->delta = 0;
     s_has_d[C.nlaps] = 0;
     while (*p == ' ') p++;
-    if (starts_with(p, "d=")) {
+    if (str_starts(p, "d=")) {
       int neg = 0;
       p += 2;
       if (*p == '-') { neg = 1; p++; }
@@ -257,9 +248,9 @@ static int number_font(void) {
 static void layout(CRect c) {
   int big = api->font_height(C.f_big);
   int hero_h = 6 + big + 2 + api->font_height(C.f_ui) + 4;
-  C.hero = rect(c.x, c.y, c.w, hero_h);
-  C.foot = rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H);
-  C.list = rect(c.x, C.hero.y + C.hero.h, c.w, C.foot.y - (C.hero.y + C.hero.h));
+  C.hero = capp_rect(c.x, c.y, c.w, hero_h);
+  C.foot = capp_rect(c.x, c.y + c.h - FOOT_H, c.w, FOOT_H);
+  C.list = capp_rect(c.x, C.hero.y + C.hero.h, c.w, C.foot.y - (C.hero.y + C.hero.h));
   C.rows = C.list.h / ROW_H;
   if (C.rows < 0) C.rows = 0;
 }
@@ -267,7 +258,7 @@ static void layout(CRect c) {
 /* The line the number sits on, the height of the big font whichever font is
  * drawing -- so a count passing a million does not move the caption. */
 static CRect number_rect(void) {
-  return rect(C.hero.x, C.hero.y + 6, C.hero.w, api->font_height(C.f_big));
+  return capp_rect(C.hero.x, C.hero.y + 6, C.hero.w, api->font_height(C.f_big));
 }
 
 /* The number, and the strips either side of it in the background: the font
@@ -281,11 +272,11 @@ static void paint_number(void) {
   w = api->text_width(f, s);
   x = r.x + (r.w - w) / 2;
   y = r.y + (r.h - h) / 2;
-  if (x > r.x) api->fill(rect(r.x, r.y, x - r.x, r.h), CLR_BG);
-  if (x + w < r.x + r.w) api->fill(rect(x + w, r.y, r.x + r.w - (x + w), r.h), CLR_BG);
+  if (x > r.x) api->fill(capp_rect(r.x, r.y, x - r.x, r.h), CLR_BG);
+  if (x + w < r.x + r.w) api->fill(capp_rect(x + w, r.y, r.x + r.w - (x + w), r.h), CLR_BG);
   if (h < r.h) {
-    api->fill(rect(x, r.y, w, y - r.y), CLR_BG);
-    api->fill(rect(x, y + h, w, r.y + r.h - (y + h)), CLR_BG);
+    api->fill(capp_rect(x, r.y, w, y - r.y), CLR_BG);
+    api->fill(capp_rect(x, y + h, w, r.y + r.h - (y + h)), CLR_BG);
   }
   api->text_font(f, (int16_t)x, (int16_t)y, s, C.flashing ? CLR_ACCENT : CLR_TEXT, CLR_BG);
 }
@@ -300,14 +291,14 @@ static void paint_caption(void) {
   w = api->text_width(C.f_ui, s);
   /* from the bottom of the number's line: the two rows between it and the
    * caption belong to nobody else, and were left showing what was there */
-  api->fill(rect(C.hero.x, y - 2, C.hero.w, C.hero.y + C.hero.h - (y - 2)), CLR_BG);
+  api->fill(capp_rect(C.hero.x, y - 2, C.hero.w, C.hero.y + C.hero.h - (y - 2)), CLR_BG);
   api->text_font(C.f_ui, (int16_t)(C.hero.x + (C.hero.w - w) / 2), (int16_t)y, s,
                  CLR_DIM, CLR_BG);
   (void)h;
 }
 
 static void paint_hero(void) {
-  api->fill(rect(C.hero.x, C.hero.y, C.hero.w, 6), CLR_BG);
+  api->fill(capp_rect(C.hero.x, C.hero.y, C.hero.w, 6), CLR_BG);
   paint_number();
   paint_caption();
 }
@@ -319,7 +310,7 @@ static void paint_list(void) {
     uint16_t bg = (i & 1) ? CLR_ROW_ALT : CLR_ROW;
     char num[8], cnt[12], d[12];
     int ty = y + (ROW_H - api->font_height(C.f_ui)) / 2, sw;
-    api->fill(rect(C.list.x, y, C.list.w, ROW_H), bg);
+    api->fill(capp_rect(C.list.x, y, C.list.w, ROW_H), bg);
     api->fmt(num, sizeof num, "#%d", C.nlaps - i);
     api->fmt(cnt, sizeof cnt, "%u", (unsigned)l->count);
     api->fmt(d, sizeof d, "%+d", (int)l->delta);
@@ -331,7 +322,7 @@ static void paint_list(void) {
                    l->stamp, CLR_DIM, bg);
   }
   if (y < C.list.y + C.list.h)
-    api->fill(rect(C.list.x, y, C.list.w, C.list.y + C.list.h - y), CLR_BG);
+    api->fill(capp_rect(C.list.x, y, C.list.w, C.list.y + C.list.h - y), CLR_BG);
 }
 
 /* The shared hint bar (apps/footer.h). The reset question goes in it too, in
@@ -469,12 +460,11 @@ static int app_key(void *st, uint8_t k) {
   if (a != TB_NONE) return do_action(a);
 
   if (C.ask == ASK_RESET) {
-    if (api->key_repeat()) return 1;
     /* y and only y: Enter is the lap key, and a lap pressed out of habit
      * must not wipe the count. */
-    if (k == 'y' || k == 'Y') { C.ask = ASK_NONE; reset_all(); }
-    else if (k == 'n' || k == 'N' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) C.ask = ASK_NONE;
-    else return 1;
+    int ans = confirm_key(api, k);
+    if (ans != CONFIRM_WAIT) C.ask = ASK_NONE;
+    if (ans == CONFIRM_YES) reset_all();
     return 1;
   }
 
