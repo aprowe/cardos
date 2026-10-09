@@ -4,7 +4,6 @@
 #include "kernel/ui/desktop.h"
 #include "kernel/ui/draw.h"
 #include "kernel/drv/keyboard.h"
-#include "kernel/mem/mem.h"
 #include "kernel/fs/fs.h"
 #include "kernel/ui/app.h"
 #include "kernel/app/launcher.h"

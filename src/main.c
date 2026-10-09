@@ -32,8 +32,6 @@
 #include "kernel/net/link.h"
 #include "kernel/ui/sleepclock.h"
 #include "kernel/drv/imu.h"
-#include "kernel/mem/mem.h"
-#include "kernel/task/sched.h"
 #include "kernel/fs/fs.h"
 #include "shellcmd.h"
 #include "kernel/fs/path.h"
@@ -79,58 +77,11 @@
  * answering "invalid_client". A refresh token is longer still. */
 #define CARDOS_LINE_MAX 200
 
-/* The handle heap. Carved once from the IDF heap at boot; everything CardOS
- * allocates afterwards comes through kmem_alloc. Deliberately not "whatever is
- * left" -- a fixed, stated size is what makes the numbers in `mem` mean
- * something, and CLAUDE.md is emphatic that memory here gets measured rather
- * than assumed. */
-/* The memory manager's arena, reserved at boot.
- *
- * 128 KB when the radios did not exist; 48 KB once they did, because with
- * 128 the two together left 1156 bytes free and the WiFi driver failed buffer
- * allocations in a loop ("wifi:m f null").
- *
- * 16 KB now, and for a blunter reason: measured on the device with Bluetooth
- * up, 79588 bytes of heap were free, WiFi wanted 49792 of them and a TLS
- * handshake about 34000 more -- so Todo and Stocks could not reach the network
- * at all while a mouse was connected. The arena was holding 48 KB for a
- * subsystem that, grepped for, has no caller anywhere outside kernel/mem: the
- * loader allocates app images from the IDF heap, and so does everything else.
- * Reserving a third of the free memory for nothing was the whole shortage.
- *
- * It stays rather than going to zero because the swap allocator and handle
- * table are a real part of the design and 16 KB keeps them exercisable. If
- * something ever does allocate from here in earnest, this number is the one to
- * raise -- and `mem` is where to see that it needs raising.
- *
- * RESERVED ON FIRST USE, NOT AT BOOT (2026-09-18). The size was never the
- * whole story: a 16 KB block taken early sits in the middle of the heap and
- * splits it, and what a TLS handshake needs is not 34 KB of total free space
- * but one contiguous run of about 17 KB. With an app loaded the largest run
- * was 16384 bytes against that threshold, so Calendar's sync was refused --
- * intermittently, because it depended on what else had been loaded. Since
- * nothing outside kernel/mem calls kmem_alloc (grep says so, and a test
- * asserts it), reserving the block up front bought a split heap and nothing
- * else. kmem_ensure() below makes it appear the moment something actually
- * allocates, which is also the moment `mem` starts reporting it. */
-#define CARDOS_HEAP_BYTES (16 * 1024)
-
-static uint8_t *s_heap;
-
-/* The handle arena, brought into existence by the first thing that wants it.
- * Nothing does today, which is exactly why it must not be taken at boot: it
- * would be 16 KB sitting in the middle of the heap, splitting the contiguous
- * run a TLS handshake needs. Every would-be caller of kmem_alloc calls this
- * first; if that ever becomes more than a handful of places, the call belongs
- * inside kmem_alloc rather than in front of it. */
-int kmem_ensure(void) {
-  if (s_heap) return 0;
-  s_heap = heap_caps_malloc(CARDOS_HEAP_BYTES,
-                            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  if (!s_heap) return -1;
-  kmem_init(s_heap, CARDOS_HEAP_BYTES);
-  return 0;
-}
+/* The handle arena (kernel/mem), the swap allocator and the scheduler's
+ * policy half are not in the firmware any more (2026-10-09). Nothing outside
+ * kernel/mem ever allocated from the arena, kmem_ensure had no caller, and
+ * `ps` listed the one task the loop pretended to be. The portable sources and
+ * their host tests stay: they are a design the host suite still runs. */
 static char     s_line[CARDOS_LINE_MAX + 1];
 static int      s_len;
 /* Three shells over the same kernel. The launcher is the one meant for daily
@@ -196,40 +147,8 @@ static void cmd_mem_map(void) {
 
 static void mem_line(const char *line, void *ctx) { (void)ctx; con_printf("%s\n", line); }
 
-/* The same lines the Memory app shows (kernel/sys/memreport.c), and then
- * the handle arena, which only the console reports. */
-static void cmd_mem(void) {
-  mem_report(mem_line, NULL);
-  /* Reported as what it is. "reserved at boot" was true and was also the
-   * bug: the reader had no way to see that the reservation was the thing
-   * standing between a TLS handshake and a contiguous block. */
-  if (s_heap)
-    con_printf("handle arena     %6u B  in use\n", (unsigned)CARDOS_HEAP_BYTES);
-  else
-    con_printf("handle arena          0 B  reserved on first use (%u KB)\n",
-               (unsigned)(CARDOS_HEAP_BYTES / 1024));
-}
-
-static const char *state_name(TaskState st) {
-  switch (st) {
-  case TASK_READY:    return "ready";
-  case TASK_RUNNING:  return "run";
-  case TASK_SLEEPING: return "sleep";
-  case TASK_BLOCKED:  return "block";
-  case TASK_DEAD:     return "dead";
-  default:            return "free";
-  }
-}
-
-static void cmd_ps(void) {
-  TaskInfo info[SCHED_MAX_TASKS];
-  int n = sched_list(info, SCHED_MAX_TASKS), i;
-  con_write("tid  state  slices name\n");
-  for (i = 0; i < n; i++)
-    con_printf("%-4u %-6s %-6u %s\n", (unsigned)info[i].tid,
-               state_name(info[i].state), (unsigned)info[i].slices,
-               info[i].name);
-}
+/* The same lines the Memory app shows (kernel/sys/memreport.c). */
+static void cmd_mem(void) { mem_report(mem_line, NULL); }
 
 /* Grouped by what you are trying to do, and kept next to the dispatcher so the
  * two are edited together -- a help text that drifts is worse than none. */
@@ -246,7 +165,7 @@ static void cmd_help(void) {
   con_write("         print [scan|use N|test|FILE] (bluetooth thermal printer)\n");
   con_write("screens  launch (carousel), desk (windows), escape returns\n");
   con_write("boot     apps, boot NAME, boot! NAME, bootinfo\n");
-  con_write("system   mem ps taskcost flip clear reboot echo\n");
+  con_write("system   mem taskcost flip clear reboot echo\n");
   con_write("         log [N|clear] -- what the apps wrote to the card\n");
   con_write("         time (ntp; no rtc on this board), battery\n");
   con_write("voice    hold the button on top, or type listen\n");
@@ -376,7 +295,6 @@ static void run_builtin(const char *line, char *arg) {
     else if (capprun_action_invoke(a, what) != 0)
       con_printf("%s has no action '%s'\n", a->name, what);
   }
-  else if (!strcmp(line, "ps"))     cmd_ps();
   else if (!strcmp(line, "ls"))     cmd_ls(arg);
   else if (!strcmp(line, "cd"))     cmd_cd(arg);
   else if (!strcmp(line, "pwd"))    cmd_pwd();
@@ -518,7 +436,7 @@ static void run_builtin(const char *line, char *arg) {
 static const char *const COMMANDS[] = {
   "apps", "boot", "boot!", "bootinfo", "cat", "cd", "clear", "df", "desk",
   "echo", "flip", "get", "gui", "help", "launch", "log", "ls", "mem", "mkdir", "motion",
-  "battery", "defaults", "listen", "mouse", "ps", "pwd", "reboot", "rm",
+  "battery", "defaults", "listen", "mouse", "pwd", "reboot", "rm",
   "run", "time",
   "safe",
   "print", "share", "shot", "taskcost", "update", "usbdisk", "volume", "wifi",
@@ -1266,11 +1184,6 @@ static void serial_shot(void) {
     ESP_LOGW("shot", "%s: %s", name, shot_error());
 }
 
-static uint32_t clock_ms(void *ctx) {
-  (void)ctx;
-  return (uint32_t)(esp_timer_get_time() / 1000);
-}
-
 /* The console's own key handling, lifted out of the loop so that anything
  * producing keys -- including a spoken sentence -- reaches the same code
  * rather than a second copy of it that drifts. */
@@ -1374,7 +1287,7 @@ void app_main(void) {
   con_printf("CardOS %s (%s) on %s\n", esp_app_get_description()->version,
              update_flavor(), board_name());
   con_set_color(COLOR_GREY);
-  con_write("kernel core: memory + swap\n\n");
+  con_write("kernel core\n\n");
   con_set_color(COLOR_GREEN);
 
   heap_at_boot = esp_get_free_heap_size();
@@ -1385,11 +1298,6 @@ void app_main(void) {
     con_set_color(COLOR_GREEN);
   }
 
-  /* The handle arena is not taken here any more. See CARDOS_HEAP_BYTES. */
-
-  /* The scheduler's policy half runs now; the Xtensa context switch does not
-   * exist yet, so this loop *is* the shell task rather than being switched to
-   * it. `ps` therefore shows one task. spawn/kill arrive with the switch. */
   /* NVS, before anything reads a setting.
    *
    * It used to be initialised inside wifi_start and the Bluetooth radio, which
@@ -1451,12 +1359,9 @@ void app_main(void) {
   }
 
   env_init();
-  sched_init(clock_ms, NULL);
-  sched_create("shell");
-  sched_next();                  /* mark it running, so it owns its locks */
 
   /* A missing card is a normal condition, not a boot failure: CardOS runs
-   * without one, just without apps or swap. Say which, rather than leaving
+   * without one, just without apps. Say which, rather than leaving
    * the user to guess why `ls` is empty. */
   if (fs_mount() == 0) {
     uint64_t total = 0, freeb = 0;
@@ -1487,14 +1392,12 @@ void app_main(void) {
   } else {
     hotkeys_init(NULL);          /* nothing to bind to, and nowhere to keep it */
     con_set_color(COLOR_GREY);
-    con_write("no sd card: no apps, no swap\n");
+    con_write("no sd card: no apps\n");
     con_set_color(COLOR_GREEN);
   }
 
   /* Success criterion 6: the free heap is reported and understood. */
   con_printf("heap %u KB free at boot\n", (unsigned)(heap_at_boot / 1024));
-  con_printf("handle heap %u KB reserved\n",
-                 (unsigned)(CARDOS_HEAP_BYTES / 1024));
   con_write("type help\n\n");
 
   /* Came back from a firmware the desktop launched: return there, rather than
