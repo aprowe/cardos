@@ -745,23 +745,44 @@ static int ensure_loaded(Run *s) {
   return 0;
 }
 
+/* What goes with an app when it is let go (capprun_on_release). A table
+ * rather than a list of calls here: every module that hands an app
+ * something to own registers its own release, and capprun need not know
+ * them all. The code block Today's commands keep is capprun's own, so it is
+ * the first entry. */
+static void hold_release(const void *owner) {
+  if (owner && owner == s_hold_owner) hold_end();
+}
+
+static void (*s_on_release[CAPPRUN_ON_RELEASE])(const void *owner) = { hold_release };
+static int s_n_on_release = 1;
+
+int capprun_on_release(void (*fn)(const void *owner)) {
+  int i;
+  if (!fn) return -1;
+  for (i = 0; i < s_n_on_release; i++) if (s_on_release[i] == fn) return 0;
+  if (s_n_on_release == CAPPRUN_ON_RELEASE) {
+    ESP_LOGE(TAG, "no room for another release hook: raise CAPPRUN_ON_RELEASE");
+    return -1;
+  }
+  s_on_release[s_n_on_release++] = fn;
+  return 0;
+}
+
 /* Take the program out of memory and forget what it installed, keeping the
  * run: for a restart, where the same AppDef should come back as the same
- * app, as it did when there was only one table. */
+ * app, as it did when there was only one table. Everything it owned goes
+ * first, while its code is still there: a request it started and will never
+ * collect (left in the queue, that reply refused every sync on the device
+ * until the next reboot -- see httpq.h), its fonts, the MIDI port with its
+ * notes stopped, the ESP-NOW link with its partner told, the screen if it
+ * held it on, the share. */
 static void release_image(Run *s) {
-  /* A request it started and will never collect goes with it. Left in the
-   * queue, that reply refused every sync on the device until the next
-   * reboot -- see httpq.h. */
-  httpq_abandon(s);
-  if (s == s_hold_owner) hold_end();
-  fontres_release_owner(s);          /* and the fonts it asked for */
-  midi_release_owner(s);             /* and the MIDI port, its notes stopped */
-  link_release_owner(s);             /* and the ESP-NOW link, its partner told */
-  power_release_owner(s);            /* and the screen, if it held it on */
+  int i;
+  for (i = 0; i < s_n_on_release; i++) s_on_release[i](s);
   if (s->loaded) capp_unload(&s->la);
   s->loaded = 0;
   s->has_ui = 0;
-  share_app_closed(s);
 }
 
 /* Let go of one completely: the image, and the run back to the pool. An entry
@@ -778,10 +799,6 @@ static void release_run(Run *s) {
   }
   s->entry = NULL;
   s->used = 0;
-}
-
-const void *capprun_caller(void) {
-  return s_active ? s_active : s_running;
 }
 
 /* Is a shell still calling into this one? An app that installed an interface

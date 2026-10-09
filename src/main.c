@@ -59,6 +59,9 @@
 #include "kernel/sys/alarm.h"
 #include "kernel/sys/agent.h"
 #include "kernel/net/httpq.h"
+#include "kernel/net/share.h"
+#include "kernel/ui/fontres.h"
+#include "kernel/sys/midi.h"
 #include "kernel/net/update.h"
 #include "kernel/sys/power.h"
 #include "kernel/drv/battery.h"
@@ -1548,6 +1551,13 @@ void app_main(void) {
    * does: through the launcher. */
   capprun_set_opener(launchui_run);
   capprun_set_shell(shell_remote);
+  /* What an app owns goes with it (capprun_on_release). */
+  capprun_on_release(httpq_abandon);         /* a request it will never collect */
+  capprun_on_release(fontres_release_owner); /* the fonts it asked for */
+  capprun_on_release(midi_release_owner);    /* the MIDI port, its notes stopped */
+  capprun_on_release(link_release_owner);    /* the ESP-NOW link, its partner told */
+  capprun_on_release(power_release_owner);   /* the screen, if it held it on */
+  capprun_on_release(share_app_closed);      /* the share, if it started it */
   {
     static const SerlinkHooks hooks = { shell_remote, ser_open, ser_state, repaint_all };
     serlink_init(&hooks);
