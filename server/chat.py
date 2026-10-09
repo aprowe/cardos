@@ -72,6 +72,11 @@ TURN_TIMEOUT = STEP_TIMEOUT        # old name; the test stubs still read it
 # A request becomes at most this many steps, each its own turn.
 MAX_STEPS = 6
 
+# A job is dropped when its answer is read; one never read (Build was shut
+# and "Build done" came as a notification, or the device restarted) goes
+# after a day. Six steps at the step cap are two and a half hours.
+JOB_TTL = 86400
+
 PLAN_PROMPT = """\
 Split the request below into steps for a coding agent working in this
 repository (CardOS; CLAUDE.md describes it). Each step must be small enough to
@@ -294,7 +299,8 @@ class ChatService:
         # fenced Build at its next step.
         self.generations = {}
         self._turn = threading.local()   # whose turn this thread is running
-        self.jobs = {}
+        from . import jobs
+        self.jobs = jobs.Table(JOB_TTL)      # id -> job, owned by whoever asked
         self.next_id = 1
         self.lock = threading.Lock()
         self.run_lock = threading.Lock()
@@ -307,8 +313,8 @@ class ChatService:
         with self.lock:
             jid = self.next_id
             self.next_id += 1
-            self.jobs[jid] = {"state": "pending", "reply": "", "status": "",
-                              "log": [], "at": time.time(), "user": user}
+            self.jobs.put(jid, {"state": "pending", "reply": "", "status": "",
+                                "log": [], "at": time.time(), "user": user}, owner=user)
         t = threading.Thread(target=self._run, args=(jid, text, user), daemon=True)
         t.start()
         return jid
@@ -316,16 +322,15 @@ class ChatService:
     def poll(self, jid):
         from . import accounts
         with self.lock:
-            job = self.jobs.get(jid)
-            # One person's answers are not another's to read.
-            if not job or job.get("user") != accounts.current():
+            job = self.jobs.get(jid)       # one person's answers are not another's to read
+            if not job:
                 return "error", "no such request"
             if job["state"] == "pending":
                 return "pending", job.get("status", "")
             # Answers are read once and dropped: the device has them now, and
             # holding every reply of every conversation is a leak with a very
             # slow fuse.
-            self.jobs.pop(jid, None)
+            self.jobs.pop(jid)
             return job["state"], job["reply"]
 
     def progress(self, jid, since=0):
@@ -333,8 +338,6 @@ class ChatService:
         from . import accounts
         with self.lock:
             job = self.jobs.get(jid) or {}
-            if job.get("user") != accounts.current():
-                job = {}
             return job.get("status", ""), list(job.get("log", [])[max(0, since):])
 
     def reset(self, user=None):
@@ -344,14 +347,12 @@ class ChatService:
         if user is not None and accounts.fenced(user):
             with self.lock:
                 self.sessions.pop(user, None)
-                for j in [j for j, v in self.jobs.items() if v.get("user") == user]:
-                    self.jobs.pop(j, None)
+                self.jobs.remove_if(lambda owner, job: owner == user)
                 self.generations[user] = self.generations.get(user, 0) + 1
             return
         with self.lock:
             self.session_id = None
-            for j in [j for j, v in self.jobs.items() if not accounts.fenced(v.get("user"))]:
-                self.jobs.pop(j, None)
+            self.jobs.remove_if(lambda owner, job: not accounts.fenced(owner))
             # A turn already running belongs to the conversation just
             # forgotten. It used to finish a minute later and put its session
             # id back, and the next "new" conversation was resumed into it.
@@ -424,23 +425,31 @@ class ChatService:
         return state, reply
 
     def _run(self, jid, text, user=None):
+        from . import jobs
+
+        def mine():                           # this thread is nobody's request
+            job = self.jobs.get(jid, owner=jobs.ANY)
+            return job if job and job["state"] == "pending" else None
+
         def report(line):
             with self.lock:
-                if jid in self.jobs and self.jobs[jid]["state"] == "pending":
-                    self.jobs[jid]["status"] = line[:60]
+                job = mine()
+                if job:
+                    job["status"] = line[:60]
+
         def log(line):
             with self.lock:
-                if jid in self.jobs and self.jobs[jid]["state"] == "pending":
-                    self.jobs[jid]["log"].append(line)
+                job = mine()
+                if job:
+                    job["log"].append(line)
         self._turn.user = user
         try:
             state, reply = self.run_turn(text, report=report, log=log)
         finally:
             self._turn.user = None
         with self.lock:
-            if jid in self.jobs:
-                self.jobs[jid] = {"state": state, "reply": reply, "status": "",
-                                  "at": time.time(), "user": user}
+            self.jobs.replace(jid, {"state": state, "reply": reply, "status": "",
+                                    "at": time.time(), "user": user})
         # The device's Build app may be shut, and nothing on it is polling
         # for this job then: the notification watcher there polls for this.
         try:

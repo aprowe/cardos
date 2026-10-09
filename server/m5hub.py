@@ -24,6 +24,8 @@ import time
 import urllib.parse
 import urllib.request
 
+from . import jobs
+
 API = "https://api.launcherhub.net/firmwares"
 CDN = "https://m5burner-cdn.m5stack.com/firmware/"
 CATEGORY = "cardputer"
@@ -33,7 +35,7 @@ CACHE_S = 600
 
 _FILE = re.compile(r"^[A-Za-z0-9._-]{1,80}\.bin$")
 _FID = re.compile(r"^[0-9a-f]{8,64}$")
-_cache = {}
+_cache = jobs.LRU(64)            # url -> (when, the catalog's answer)
 
 
 def _flat(s, n=60):

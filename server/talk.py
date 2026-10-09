@@ -26,9 +26,8 @@ import secrets
 import subprocess
 import sys
 import threading
-import time
 
-from . import midi
+from . import jobs, midi
 
 DOC_MAX = 24000
 SAY_MAX = 2000
@@ -52,8 +51,8 @@ SONG = """
 The document is a song for a small MIDI sequencer, in this format:
 """ + midi.FORMAT.split("Example:")[0].split("\n", 2)[2]
 
-_sessions = {}
-_lock = threading.Lock()
+_sessions = jobs.Table(IDLE_S)  # id -> Session, gone after IDLE_S untouched
+_lock = threading.Lock()         # a Session's fields, between a request and its thread
 _FENCE = re.compile(r"```doc[^\n]*\n(.*?)```", re.S)
 
 
@@ -67,7 +66,6 @@ class Session:
         self.state = "idle"           # idle | pending | reply | error
         self.answer = ""
         self.rev_new = False
-        self.touched = time.time()
 
 
 def _claude(chat, prompt, sid):
@@ -133,15 +131,7 @@ def _run(chat, s, said):
 
 
 def _session(args):
-    sid = (args.get("s") or [""])[0]
-    with _lock:
-        now = time.time()
-        for k in [k for k, v in _sessions.items() if now - v.touched > IDLE_S]:
-            del _sessions[k]
-        s = _sessions.get(sid)
-        if s:
-            s.touched = now
-        return s
+    return _sessions.get((args.get("s") or [""])[0], touch=True)
 
 
 def post_start(h, path, args):
@@ -150,8 +140,7 @@ def post_start(h, path, args):
     name = ((args.get("name") or ["document"])[0] or "document")[:80]
     kind = (args.get("kind") or ["text"])[0]
     sid = secrets.token_hex(5)
-    with _lock:
-        _sessions[sid] = Session(name, kind, doc)
+    _sessions.put(sid, Session(name, kind, doc))
     h.text(sid + "\n")
 
 

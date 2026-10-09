@@ -20,7 +20,8 @@ import secrets
 import subprocess
 import sys
 import threading
-import time
+
+from . import jobs
 
 
 FORMAT = r"""You write songs for a tiny MIDI sequencer. Output ONLY the song, in this
@@ -67,8 +68,7 @@ loop
 COMMANDS = {"tempo", "ch", "prog", "n", "cc", "ramp", "bend", "loop"}
 _PITCH = re.compile(r"^(?:\d{1,3}|[A-Ga-g][#b]?-?\d)$")
 _BEAT = re.compile(r"^\d+(?:\.\d+)?(?:/\d+)?$")
-_jobs = {}
-_lock = threading.Lock()
+_jobs = jobs.Table(1800)       # id -> (state, song or why); gone half an hour after
 
 
 def check(song):
@@ -148,8 +148,7 @@ def _run(jid, chat, request):
         result = ("ok", song)
     except Exception as e:                      # subprocess, JSON, the check
         result = ("error", str(e))
-    with _lock:
-        _jobs[jid] = (time.time(),) + result
+    _jobs.replace(jid, result)
     sys.stderr.write("midi: %s %s\n" % (jid, result[0]))
 
 
@@ -160,11 +159,7 @@ def post_compose(h, path, args):
         h.text("error what should it write?\n", 400)
         return
     jid = secrets.token_hex(5)
-    now = time.time()
-    with _lock:
-        for k in [k for k, v in _jobs.items() if now - v[0] > 1800]:
-            del _jobs[k]
-        _jobs[jid] = (now, "pending", "")
+    _jobs.put(jid, ("pending", ""))
     threading.Thread(target=_run, args=(jid, h.chat, request), daemon=True).start()
     h.text(jid + "\n")
 
@@ -172,12 +167,11 @@ def post_compose(h, path, args):
 def get_compose(h, path, args):
     """the song, once it is written"""
     jid = (args.get("id") or [""])[0]
-    with _lock:
-        job = _jobs.get(jid)
+    job = _jobs.get(jid)
     if not job:
         h.text("error no such request\n", 404)
         return
-    _, state, body = job
+    state, body = job
     if state == "pending":
         h.text("pending\n")
     elif state == "ok":
