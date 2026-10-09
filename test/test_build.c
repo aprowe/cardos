@@ -153,11 +153,11 @@ void test_build_shows_what_the_server_is_doing(void) {
   CHECK_EQ(C.log_seen, 0);
 
   {
-    int before = C.nlines;
+    int before = C.log.n;
     HTTP_REPLY = "pending\nstep 1/2: reading\nread kernel/app/capp.h\n> using memo.c";
     poll_now();
     CHECK_EQ(C.log_seen, 2);                    /* both lines, counted */
-    CHECK(C.nlines >= before + 2);              /* and in the window */
+    CHECK(C.log.n >= before + 2);              /* and in the window */
     CHECK(strcmp(C.progress, "step 1/2: reading") == 0);
 
     HTTP_REPLY = "pending\nstep 1/2: writing\nwrite apps/timer.c";
@@ -232,7 +232,7 @@ void test_build_installs_a_ui(void) {
   CHECK(INST.paint != NULL);
   CHECK(INST.key != NULL);
   CHECK(INST.tick != NULL);
-  CHECK(C.nlines > 0);                    /* the greeting */
+  CHECK(C.log.n > 0);                    /* the greeting */
 }
 
 /* Typing a character changes the input line and nothing else, so that is
@@ -296,6 +296,6 @@ void test_build_scrolling_repaints_the_log(void) {
   for (i = 0; i < 30; i++) note("a line of scrollback to move through");
   paint_now();
   n = press(CAPP_KEY_UP);
-  CHECK(C.scroll > 0);
+  CHECK(C.log.scroll > 0);
   CHECK(n > 5);                           /* many log lines, not one input line */
 }
