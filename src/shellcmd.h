@@ -50,12 +50,6 @@ void cmd_run(const char *arg);
  * set NAME=VALUE -- set one, or unset it with an empty value */
 void cmd_env(void);
 
-/* google                    -- what is stored, and whether it works
- * google pull               -- fetch the dashboard's sign-in (env DASH)
- * google id|secret|token X  -- set one field (tools/google_auth.py sends these)
- * google test               -- fetch an access token now
- * google forget             -- erase them */
-void cmd_google(const char *arg);
 void cmd_set(const char *arg);
 
 /* hotkey            -- list the Opt+letter shortcuts

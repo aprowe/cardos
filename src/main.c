@@ -43,7 +43,6 @@
 #include "kernel/app/cmdline.h"
 #include "kernel/app/capp.h"
 #include "kernel/net/wifi.h"
-#include "kernel/net/gauth.h"
 #include "kernel/ui/shell.h"
 #include "kernel/sys/env.h"
 #include "kernel/sys/sio.h"
@@ -346,7 +345,6 @@ static void run_builtin(const char *line, char *arg) {
   else if (!strcmp(line, "env"))  cmd_env();
   else if (!strcmp(line, "set"))  cmd_set(arg);
   else if (!strcmp(line, "hotkey")) cmd_hotkey(arg);
-  else if (!strcmp(line, "google")) cmd_google(arg);
   else if (!strcmp(line, "run")) {
     /* cmd_run starts it; the mode has to change here, where the loop is. */
     cmd_run(arg);
@@ -1123,6 +1121,24 @@ static int factory_is_newer(const esp_partition_t *self) {
   return build_stamp(&theirs) > build_stamp(ours);
 }
 
+/* The device held a Google login once (kernel/net/gauth.c, gone 2026-10-09):
+ * a client secret and a refresh token in NVS, mirrored in plain text to
+ * /config/google.txt on a card anyone can take out. The server holds the
+ * login now, so a leftover copy of either is only a secret lying about. */
+static void forget_google(void) {
+  nvs_handle_t h;
+  if (fs_remove(CAPP_CONFIG "/google.txt") == 0)
+    applogf("google", "deleted the old /config/google.txt");
+  /* Read-only first: opening a namespace for writing creates it. */
+  if (nvs_open("cardosg", NVS_READONLY, &h) != ESP_OK) return;
+  nvs_close(h);
+  if (nvs_open("cardosg", NVS_READWRITE, &h) == ESP_OK) {
+    nvs_erase_all(h);
+    nvs_commit(h);
+    nvs_close(h);
+  }
+}
+
 /* The serial link's hooks (kernel/sys/serlink.h): a PC working on the
  * device over USB, whatever is on screen. */
 static int ser_open(const char *name, const char *args) {
@@ -1313,7 +1329,7 @@ void app_main(void) {
        * once, and until it was written down it looked like Google forgetting
        * the device for no reason, over and over. */
       con_set_color(COLOR_RED);
-      con_printf("nvs %s: erasing it. wifi, google and settings are gone;\n"
+      con_printf("nvs %s: erasing it. wifi and settings are gone;\n"
                  "whatever /config mirrors comes back below.\n",
                  err == ESP_ERR_NVS_NO_FREE_PAGES ? "is full" : "is another version");
       con_set_color(COLOR_GREEN);
@@ -1377,7 +1393,7 @@ void app_main(void) {
      * or repeating the Google consent dance. */
     if (nvs_erased) applogf("nvs", "erased at boot: %s", nvs_erased);
     if (wifi_restore_from_card())  con_write("wifi: network restored from /config/wifi.txt\n");
-    if (gauth_restore_from_card()) con_write("google: credentials restored from /config/google.txt\n");
+    forget_google();
     if (env_restore_from_card())   con_write("env: variables restored from /config/env.txt\n");
     /* Everything else small (prefs.h). Brightness was read before the card
      * was up, so a restored one is applied now; the rest are read later. */

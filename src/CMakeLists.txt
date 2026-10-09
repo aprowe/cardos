@@ -81,7 +81,6 @@ idf_component_register(
     "../kernel/sys/audio.c"
     "../kernel/net/wifi.c"
     "../kernel/net/http.c"
-    "../kernel/net/gauth.c"
     "../kernel/net/manifest.c"
     "../kernel/net/update.c"
     "../kernel/fs/fs_fat.c"

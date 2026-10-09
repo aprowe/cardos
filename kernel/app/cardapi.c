@@ -17,7 +17,6 @@
 #include "kernel/net/httpq.h"
 #include "kernel/sys/notify.h"
 #include "kernel/net/wifi.h"
-#include "kernel/net/gauth.h"
 #include "kernel/net/update.h"
 #include "kernel/net/share.h"
 #include "kernel/sys/printq.h"
@@ -219,8 +218,12 @@ static int api_http(const char *method, const char *url, const char *body,
                       out_size, timeout_ms);
 }
 
-static const char *api_google_token(void)  { return gauth_token(); }
-static const char *api_google_status(void) { return gauth_status(); }
+/* The device does not hold a Google login any more: Calendar and Todo ask
+ * the server, which does (server/google.py). The two entries stay in the
+ * table so its layout, and CAPP_API_VERSION, do not move; an app that still
+ * asks is told no and why. */
+static const char *api_google_token(void)  { return NULL; }
+static const char *api_google_status(void) { return "Google goes through the server now"; }
 
 static void api_ui(const CappUi *ui) { capprun_install_ui(ui); }
 
