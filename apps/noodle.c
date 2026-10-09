@@ -690,7 +690,7 @@ static int app_key(void *st, unsigned char k) {
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
-  CAPP_FULLSCREEN,
+  CAPP_FULLSCREEN | CAPP_PAINT_DIRECT,   /* composes its own bands */
   "Noodle",
   /* 16x16: a tube man, arms up, on his fan. */
   { 0x01, 0x80, 0x03, 0xC0, 0x03, 0xC0, 0x41, 0x82,

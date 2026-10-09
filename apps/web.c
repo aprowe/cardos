@@ -442,7 +442,7 @@ static int app_action(void *st, int a) { (void)st; (void)a; return 0; }
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
-  CAPP_NEEDS_PROXY,   /* a window by default; the title bar's box fills the screen */
+  CAPP_NEEDS_PROXY | CAPP_PAINT_DIRECT,   /* paint reads the page off the card; a window by default */
   "Web",
   /* 16x16: a globe. */
   { 0x07, 0xE0, 0x18, 0x18, 0x24, 0x24, 0x4A, 0x52,

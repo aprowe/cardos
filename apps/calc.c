@@ -1610,7 +1610,7 @@ static const CappAction ACTIONS[] = {
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
-  CAPP_FULLSCREEN,
+  CAPP_FULLSCREEN | CAPP_PAINT_DIRECT,   /* the graph is its own strips */
   "Calc",
   /* 16x16: a calculator, a screen over three rows of keys. */
   { 0x3F, 0xFC, 0x20, 0x04, 0x2F, 0xF4, 0x28, 0x14,

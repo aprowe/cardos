@@ -354,8 +354,10 @@ static void paint_room(void) {
 
 static void paint_foot(CRect full) {
   char s[48];
-  if (C.msg[0] && api->ticks_ms() - C.msg_at < MSG_MS) { footer_paint(api, full, C.msg); return; }
-  C.msg[0] = 0;
+  /* The tick lets a message go when its time is up, and repaints. Not
+   * here: paint runs once per strip of a full repaint, and a message that
+   * expired between two strips was half drawn and then forgotten. */
+  if (C.msg[0]) { footer_paint(api, full, C.msg); return; }
   if (C.view == V_ASK_NEW) { footer_paint(api, full, "a new egg, and this pet goes? y/n"); return; }
   if (C.p.stage == PET_GONE) { footer_paint(api, full, "n a new egg"); return; }
   api->fmt(s, sizeof s, "< %s >  enter do  spc light", ACT_NAME[C.sel]);
