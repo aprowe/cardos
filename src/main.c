@@ -964,9 +964,6 @@ static void volume_panel_tick(void) {
   if (overlay_showing_volume()) overlay_close();
 }
 
-/* The loop's pause: 5 ms while someone is there; 40 once the screen sleeps,
- * when a keypress need only wake it -- an eighth of the polling. */
-static int rest_ms(void) { return power_asleep() ? 40 : 5; }
 
 /* A key at the lock screen -- the clock or black, one lock with two faces.
  * c shows the clock, o turns it black (fn-c and fn-o too); opt-backspace
@@ -1333,6 +1330,29 @@ static void dispatch_key(uint8_t k) {
     }
     return;
   }
+}
+
+/* How long the loop rests between passes: one policy, whichever shell is up.
+ *
+ * 5 ms while something is happening: the pointer has to keep up with the
+ * hand. But outside the moment somebody is pressing a key, a carousel or a
+ * prompt is static, and two hundred keyboard scans a second to discover that
+ * nothing has changed is work for its own sake -- the launcher did exactly
+ * that, idle, while the console already dropped to 25 ms.
+ *
+ * So after two seconds of quiet the pass drops to 25 ms. The cost is that the
+ * first keypress after a pause can be noticed 25 ms late, which is under what
+ * anyone perceives, and the very next pass is back to 5 ms because that
+ * keypress reset the clock. An app on screen with a tick handler keeps the
+ * 5 ms, because its tick is the only way it moves on its own (Kart is steered
+ * by tilt, Noodle by breath; neither presses a key). 40 ms once the screen
+ * sleeps, when a keypress need only wake it -- an eighth of the polling. */
+static int rest_ms(void) {
+  const AppDef *a;
+  if (power_asleep()) return 40;
+  if (bg_idle_ms() <= 2000) return 5;
+  a = notify_center_active() ? NULL : ops_running_app();
+  return a && a->tick ? 5 : 25;
 }
 
 void app_main(void) {
@@ -1709,26 +1729,6 @@ void app_main(void) {
       }
     }
 
-    /* How hard to poll.
-     *
-     * 5 ms while something is happening: the pointer has to keep up with the
-     * hand. But outside the moment somebody is pressing a key this screen is
-     * static -- the clock ticks once a second and nothing else moves -- and
-     * two hundred keyboard scans a second to discover that nothing has
-     * changed is work for its own sake.
-     *
-     * After two seconds of quiet the poll drops to 25 ms. The cost is that
-     * the first keypress after a pause can be noticed 25 ms late, which is
-     * under what anyone perceives, and the very next pass is back to 5 ms
-     * because that keypress reset the clock. Radios and the background task
-     * get the machine in between. */
-    {
-      uint32_t quiet = bg_idle_ms();
-      int ms = 10;
-      if (quiet > 2000) ms = 25;
-      if (power_asleep()) ms = 40;
-      if (ui_shell() != UI_NONE || notify_center_active()) ms = rest_ms();
-      vTaskDelay(pdMS_TO_TICKS(ms));
-    }
+    vTaskDelay(pdMS_TO_TICKS(rest_ms()));
   }
 }
