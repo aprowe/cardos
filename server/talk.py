@@ -20,15 +20,12 @@ else is text.
 Short calls, as everywhere the device is concerned: the shell is one loop,
 and a minute's wait is a frozen screen.
 """
-import json
 import re
 import secrets
-import subprocess
 import sys
 import threading
-import time
 
-from . import midi, notes
+from . import jobs, midi
 
 DOC_MAX = 24000
 SAY_MAX = 2000
@@ -52,8 +49,8 @@ SONG = """
 The document is a song for a small MIDI sequencer, in this format:
 """ + midi.FORMAT.split("Example:")[0].split("\n", 2)[2]
 
-_sessions = {}
-_lock = threading.Lock()
+_sessions = jobs.Table(IDLE_S)  # id -> Session, gone after IDLE_S untouched
+_lock = threading.Lock()         # a Session's fields, between a request and its thread
 _FENCE = re.compile(r"```doc[^\n]*\n(.*?)```", re.S)
 
 
@@ -67,22 +64,11 @@ class Session:
         self.state = "idle"           # idle | pending | reply | error
         self.answer = ""
         self.rev_new = False
-        self.touched = time.time()
 
 
 def _claude(chat, prompt, sid):
-    if not chat or not chat.claude:
-        raise RuntimeError("this server runs without Claude")
-    cmd = [chat.claude, "-p", prompt, "--output-format", "json",
-           "--allowed-tools", "", "--permission-mode", "dontAsk"]
-    if sid:
-        cmd += ["--resume", sid]
-    r = subprocess.run(cmd, cwd=chat.cwd, capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=300, env=chat._child_env())
-    j = json.loads(r.stdout or "{}")
-    if j.get("is_error") or not j.get("result"):
-        raise RuntimeError((j.get("result") or r.stderr or "Claude did not answer")[:160])
-    return j["result"], j.get("session_id") or sid
+    from .chat import ask_once
+    return ask_once(chat, prompt, 300, resume=sid)
 
 
 def split(answer):
@@ -125,7 +111,7 @@ def _run(chat, s, said):
             s.rev_new = rev is not None
             s.answer = words or ("(revised)" if rev else "(no answer)")
             s.state = "reply"
-    except Exception as e:                         # subprocess, JSON
+    except Exception as e:                         # Claude (ClaudeError), mostly
         with _lock:
             s.answer = str(e)
             s.state = "error"
@@ -133,34 +119,21 @@ def _run(chat, s, said):
 
 
 def _session(args):
-    sid = (args.get("s") or [""])[0]
-    with _lock:
-        now = time.time()
-        for k in [k for k, v in _sessions.items() if now - v.touched > IDLE_S]:
-            del _sessions[k]
-        s = _sessions.get(sid)
-        if s:
-            s.touched = now
-        return s
+    return _sessions.get((args.get("s") or [""])[0], touch=True)
 
 
 def post_start(h, path, args):
     """a document to talk about; the session id"""
-    if not notes._allowed(h):
-        return
     doc = h.body(DOC_MAX).decode("utf-8", "replace")
     name = ((args.get("name") or ["document"])[0] or "document")[:80]
     kind = (args.get("kind") or ["text"])[0]
     sid = secrets.token_hex(5)
-    with _lock:
-        _sessions[sid] = Session(name, kind, doc)
+    _sessions.put(sid, Session(name, kind, doc))
     h.text(sid + "\n")
 
 
 def post_say(h, path, args):
     """something said about the document; poll for the answer"""
-    if not notes._allowed(h):
-        return
     s = _session(args)
     if not s:
         h.text("error that conversation is over\n", 404)
@@ -180,8 +153,6 @@ def post_say(h, path, args):
 
 def get_poll(h, path, args):
     """the answer, once there is one"""
-    if not notes._allowed(h):
-        return
     s = _session(args)
     if not s:
         h.text("error that conversation is over\n", 404)
@@ -201,8 +172,6 @@ def get_poll(h, path, args):
 
 def get_doc(h, path, args):
     """the latest revision of the document"""
-    if not notes._allowed(h):
-        return
     s = _session(args)
     if not s or s.revision is None:
         h.text("error no revision\n", 404)
@@ -211,8 +180,8 @@ def get_doc(h, path, args):
 
 
 ROUTES = [
-    ("POST", "/talk/start", post_start, "open"),
-    ("POST", "/talk/say", post_say, "open"),
-    ("GET", "/talk/poll", get_poll, "open"),
-    ("GET", "/talk/doc", get_doc, "open"),
+    ("POST", "/talk/start", post_start, "device_or_dash"),
+    ("POST", "/talk/say", post_say, "device_or_dash"),
+    ("GET", "/talk/poll", get_poll, "device_or_dash"),
+    ("GET", "/talk/doc", get_doc, "device_or_dash"),
 ]

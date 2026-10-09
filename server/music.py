@@ -28,7 +28,8 @@ import sys
 import tempfile
 import time
 
-from . import accounts, dash, notes
+from . import accounts
+from .routes import arg, text_route
 
 MAX_IN = 60 << 20                  # half an hour at 22050 mono, or a long MP3
 RATE = 22050
@@ -150,30 +151,18 @@ def remove(tid):
 
 # ---- routes ---------------------------------------------------------------------------
 
-def _route(fn):
-    def wrapped(h, path, args):
-        if not notes._allowed(h):
-            return
-        try:
-            fn(h, args)
-        except ValueError as e:
-            h.text(_route_err % e, 400)
-    wrapped.__doc__ = fn.__doc__
-    return wrapped
-
-
 def _id(args):
-    return (args.get("id") or [""])[0]
+    return arg(args, "id")
 
 
-@_route
+@text_route
 def get_list(h, args):
     """every track: id, title, length, size"""
     h.text("".join("%s\t%s\t%d\t%d\n" % (m["id"], m["title"], m["ms"], m["bytes"])
                    for m in all_tracks()))
 
 
-@_route
+@text_route
 def get_track(h, args):
     """a track's WAV"""
     path = os.path.join(_dir(_id(args)), "track.wav")
@@ -193,7 +182,7 @@ def get_track(h, args):
             h.wfile.write(chunk)
 
 
-@_route
+@text_route
 def delete_track(h, args):
     """delete a track, here and so on the device at its next sync"""
     if not remove(_id(args)):
@@ -204,8 +193,6 @@ def delete_track(h, args):
 
 def post_music_upload(h, path, args):
     """a track in any format, converted and kept (the device's token)"""
-    if not notes._allowed(h):
-        return
     try:
         meta = add(h.body(MAX_IN), (args.get("title") or ["track"])[0])
     except ValueError as e:
@@ -216,17 +203,11 @@ def post_music_upload(h, path, args):
 
 def get_dash_list(h, path, args):
     """every track, as JSON"""
-    if not dash.logged_in(h):
-        h._send(403, "application/json", '{"error": "signed out"}', ())
-        return
     h._send(200, "application/json", json.dumps(all_tracks()), (("Cache-Control", "no-store"),))
 
 
 def post_upload(h, path, args):
     """a track, converted here if it needs it, kept"""
-    if not dash.logged_in(h):
-        h._send(403, "application/json", '{"error": "signed out"}', ())
-        return
     try:
         meta = add(h.body(MAX_IN), (args.get("title") or ["track"])[0])
     except ValueError as e:
@@ -236,12 +217,12 @@ def post_upload(h, path, args):
 
 
 ROUTES = [
-    ("GET", "/music", get_list, "open"),
-    ("GET", "/music/track", get_track, "open"),
-    ("DELETE", "/music/track", delete_track, "open"),
-    ("POST", "/music/upload", post_music_upload, "open"),
-    ("GET", "/dash/music", get_dash_list, "open"),
-    ("POST", "/dash/music/upload", post_upload, "open"),
-    ("GET", "/dash/music/track", get_track, "open"),
-    ("DELETE", "/dash/music/track", delete_track, "open"),
+    ("GET", "/music", get_list, "device_or_dash"),
+    ("GET", "/music/track", get_track, "device_or_dash"),
+    ("DELETE", "/music/track", delete_track, "device_or_dash"),
+    ("POST", "/music/upload", post_music_upload, "device_or_dash"),
+    ("GET", "/dash/music", get_dash_list, "dash"),
+    ("POST", "/dash/music/upload", post_upload, "dash"),
+    ("GET", "/dash/music/track", get_track, "device_or_dash"),
+    ("DELETE", "/dash/music/track", delete_track, "device_or_dash"),
 ]

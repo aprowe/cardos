@@ -27,11 +27,13 @@ import threading
 import urllib.request
 import zoneinfo
 
+from . import jobs
+
 # Keyless and HTTPS; about a thousand lookups a day for free, and the device
 # asks once, ever, unless TZ is cleared.
 GEO_URL = "https://ipapi.co/%sjson/"
 
-CACHE = {}
+CACHE = jobs.LRU(256)            # address -> (rule, zone)
 _lock = threading.Lock()
 
 

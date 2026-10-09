@@ -19,8 +19,6 @@ A save with no text deletes nothing -- an empty note is still a note. Last
 write wins: the device keeps a conflicting copy of its own rather than
 asking the server to merge.
 """
-import hmac
-import json
 import os
 import re
 import secrets
@@ -28,7 +26,8 @@ import sys
 import threading
 import time
 
-from . import accounts, dash
+from . import accounts, store
+from .routes import arg, text_route
 
 MAX_TEXT = 64 * 1024
 _lock = threading.Lock()
@@ -60,15 +59,10 @@ def _path(nid):
 
 
 def load(nid):
-    try:
-        with open(_path(nid), encoding="utf-8") as f:
-            return json.load(f)
-    except OSError:
-        return None
+    return store.read_json(_path(nid))
 
 
 def save(nid, text):
-    os.makedirs(notes_dir(), mode=0o700, exist_ok=True)
     now = int(time.time())
     with _lock:
         old = load(nid) if nid else None
@@ -76,10 +70,7 @@ def save(nid, text):
             nid = secrets.token_hex(5)
         n = {"id": nid, "text": text, "title": title_of(text), "hash": fnv(text),
              "updated": now, "created": (old or {}).get("created", now)}
-        tmp = _path(nid) + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(n, f)
-        os.replace(tmp, _path(nid))
+        store.write_json(_path(nid), n)
     return n
 
 
@@ -108,46 +99,20 @@ def all_notes():
 
 # ---- routes ------------------------------------------------------------------------
 
-def _allowed(h):
-    """The device's bearer or the dashboard's cookie; a 403 otherwise."""
-    if dash.logged_in(h):
-        return True
-    tok = h.chat.token if h.chat else None
-    if not tok:
-        return True
-    if accounts.enabled():
-        return h.authorised()               # says whose, or answers 403
-    auth = h.headers.get("Authorization", "")
-    if auth.startswith("Bearer ") and hmac.compare_digest(tok, auth[7:]):
-        return True
-    h.text("error signed out\n", 403)
-    return False
-
-
-def _route(fn):
-    def wrapped(h, path, args):
-        if not _allowed(h):
-            return
-        try:
-            fn(h, args)
-        except ValueError as e:
-            h.text("error %s\n" % e, 400)
-    wrapped.__doc__ = fn.__doc__
-    return wrapped
-
+# Who may call each is its ROUTES entry: the device or the dashboard.
 
 def _id(args):
-    return (args.get("id") or [""])[0]
+    return arg(args, "id")
 
 
-@_route
+@text_route
 def get_list(h, args):
     """every note: id, hash, updated, title"""
     h.text("".join("%s\t%s\t%d\t%s\n" % (n["id"], n["hash"], n["updated"], n["title"])
                    for n in all_notes()))
 
 
-@_route
+@text_route
 def get_note(h, args):
     """one note's text"""
     n = load(_id(args))
@@ -157,7 +122,7 @@ def get_note(h, args):
     h.text(n["text"])
 
 
-@_route
+@text_route
 def post_note(h, args):
     """save a note's text; no id makes a new one"""
     text = h.body(MAX_TEXT).decode("utf-8", "replace")
@@ -169,7 +134,7 @@ def post_note(h, args):
     h.text("%s\t%s\n" % (n["id"], n["hash"]))
 
 
-@_route
+@text_route
 def delete_note(h, args):
     """delete a note"""
     if not delete(_id(args)):
@@ -192,7 +157,7 @@ def memo_title(name):
     return "Voice memo, " + stem if stem else "Voice memo"
 
 
-@_route
+@text_route
 def post_audio(h, args):
     """a voice memo, transcribed into a new note"""
     wav = h.body(16 << 20)
@@ -216,25 +181,20 @@ def post_audio(h, args):
 
 def get_dash_list(h, path, args):
     """every note, as JSON, for the dashboard"""
-    if not dash.logged_in(h):
-        h._send(403, "application/json", '{"error": "signed out"}', ())
-        return
-    h._send(200, "application/json", json.dumps(
-        [{"id": n["id"], "title": n["title"], "updated": n["updated"]} for n in all_notes()]),
-        (("Cache-Control", "no-store"),))
+    h.json([{"id": n["id"], "title": n["title"], "updated": n["updated"]} for n in all_notes()])
 
 
 ROUTES = [
-    ("GET", "/notes", get_list, "open"),
-    ("GET", "/notes/note", get_note, "open"),
-    ("POST", "/notes/note", post_note, "open"),
-    ("DELETE", "/notes/note", delete_note, "open"),
-    ("POST", "/notes/audio", post_audio, "open"),
-    ("GET", "/dash/notes", get_dash_list, "open"),
+    ("GET", "/notes", get_list, "device_or_dash"),
+    ("GET", "/notes/note", get_note, "device_or_dash"),
+    ("POST", "/notes/note", post_note, "device_or_dash"),
+    ("DELETE", "/notes/note", delete_note, "device_or_dash"),
+    ("POST", "/notes/audio", post_audio, "device_or_dash"),
+    ("GET", "/dash/notes", get_dash_list, "dash"),
     # The same, under /dash: on the public name nginx passes only /dash*, so
     # the page's /notes/note calls never reached here -- the list loaded and
     # every note clicked was an error (2026-10-02).
-    ("GET", "/dash/notes/note", get_note, "open"),
-    ("POST", "/dash/notes/note", post_note, "open"),
-    ("DELETE", "/dash/notes/note", delete_note, "open"),
+    ("GET", "/dash/notes/note", get_note, "device_or_dash"),
+    ("POST", "/dash/notes/note", post_note, "device_or_dash"),
+    ("DELETE", "/dash/notes/note", delete_note, "device_or_dash"),
 ]

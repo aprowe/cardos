@@ -30,13 +30,15 @@ def _json(h, obj, code=200, headers=()):
 
 
 def _api(fn):
-    """Signed in, or a 403 the page turns into the sign-in screen."""
+    """fn(h, args) as a route. Signed in already: every route here is
+    "dash", which app._dispatch checks -- a 403 the page turns into the
+    sign-in screen. And refused, as it always was, on a server without
+    --token and DASH_PASSWORD, even with a cookie (one made by name, with
+    accounts, needs no DASH_PASSWORD)."""
     def wrapped(h, path, args):
-        if not dash.password() or not dash._server_token(h):
-            _json(h, {"error": "the dashboard needs --token and DASH_PASSWORD"}, 503)
-            return
-        if not dash.logged_in(h):
-            _json(h, {"error": "signed out"}, 403)
+        from . import app
+        if not app.dash_configured(h):
+            _json(h, {"error": app.DASH_UNCONFIGURED}, 503)
             return
         fn(h, args)
     wrapped.__doc__ = fn.__doc__
@@ -183,8 +185,10 @@ def get_state(h, args):
 @_api
 def post_google_forget(h, args):
     """sign out of Google and revoke"""
+    from . import google
     c = dash.load_creds()
     dash.forget_creds()
+    google.forget_access()
     msg = "Signed out of Google."
     if c and c.get("refresh_token"):
         try:
@@ -213,7 +217,9 @@ def post_toggl_token(h, args):
     except toggl.TogglError as e:
         _json(h, {"error": e.why}, 400)
         return
-    toggl.save({"token": token, "name": name, "workspace": wid, "saved_at": int(time.time())})
+    # Merged, not replaced: the targets live in the same file.
+    toggl.update(lambda c: c.update(token=token, name=name, workspace=wid,
+                                    saved_at=int(time.time())))
     sys.stderr.write("dash: toggl connected\n")
     _json(h, {"ok": True, "name": name})
 
@@ -460,23 +466,23 @@ def post_user_remove(h, args):
 
 
 ROUTES = [
-    ("GET", "/dash/api/me", get_me, "open"),
-    ("POST", "/dash/api/device", post_device, "open"),
-    ("POST", "/dash/api/device/remove", post_device_remove, "open"),
-    ("POST", "/dash/api/device/token", post_device_token, "open"),
-    ("POST", "/dash/api/password", post_password, "open"),
-    ("POST", "/dash/api/user", post_user, "open"),
-    ("POST", "/dash/api/user/remove", post_user_remove, "open"),
-    ("GET", "/dash/api/claude", get_claude, "open"),
-    ("POST", "/dash/api/claude/start", post_claude_start, "open"),
-    ("POST", "/dash/api/claude/code", post_claude_code, "open"),
-    ("POST", "/dash/api/claude/token", post_claude_token, "open"),
-    ("POST", "/dash/api/claude/forget", post_claude_forget, "open"),
-    ("GET", "/dash/api/state", get_state, "open"),
-    ("POST", "/dash/api/google/forget", post_google_forget, "open"),
-    ("POST", "/dash/api/toggl/token", post_toggl_token, "open"),
-    ("POST", "/dash/api/toggl/forget", post_toggl_forget, "open"),
-    ("GET", "/dash/api/toggl/targets", get_toggl_targets, "open"),
-    ("POST", "/dash/api/toggl/target", post_toggl_target, "open"),
+    ("GET", "/dash/api/me", get_me, "dash"),
+    ("POST", "/dash/api/device", post_device, "dash"),
+    ("POST", "/dash/api/device/remove", post_device_remove, "dash"),
+    ("POST", "/dash/api/device/token", post_device_token, "dash"),
+    ("POST", "/dash/api/password", post_password, "dash"),
+    ("POST", "/dash/api/user", post_user, "dash"),
+    ("POST", "/dash/api/user/remove", post_user_remove, "dash"),
+    ("GET", "/dash/api/claude", get_claude, "dash"),
+    ("POST", "/dash/api/claude/start", post_claude_start, "dash"),
+    ("POST", "/dash/api/claude/code", post_claude_code, "dash"),
+    ("POST", "/dash/api/claude/token", post_claude_token, "dash"),
+    ("POST", "/dash/api/claude/forget", post_claude_forget, "dash"),
+    ("GET", "/dash/api/state", get_state, "dash"),
+    ("POST", "/dash/api/google/forget", post_google_forget, "dash"),
+    ("POST", "/dash/api/toggl/token", post_toggl_token, "dash"),
+    ("POST", "/dash/api/toggl/forget", post_toggl_forget, "dash"),
+    ("GET", "/dash/api/toggl/targets", get_toggl_targets, "dash"),
+    ("POST", "/dash/api/toggl/target", post_toggl_target, "dash"),
     ("POST", "/dash/api/logout", post_logout, "open"),
 ]

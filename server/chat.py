@@ -72,6 +72,11 @@ TURN_TIMEOUT = STEP_TIMEOUT        # old name; the test stubs still read it
 # A request becomes at most this many steps, each its own turn.
 MAX_STEPS = 6
 
+# A job is dropped when its answer is read; one never read (Build was shut
+# and "Build done" came as a notification, or the device restarted) goes
+# after a day. Six steps at the step cap are two and a half hours.
+JOB_TTL = 86400
+
 PLAN_PROMPT = """\
 Split the request below into steps for a coding agent working in this
 repository (CardOS; CLAUDE.md describes it). Each step must be small enough to
@@ -257,6 +262,57 @@ def parse_plan(text, request):
     return steps[:MAX_STEPS] or [request]
 
 
+class ClaudeError(RuntimeError):
+    """A one-shot call that gave no answer; why, in a line. timed_out says
+    whether it was the clock."""
+
+    def __init__(self, why, timed_out=False):
+        RuntimeError.__init__(self, why)
+        self.why = why
+        self.timed_out = timed_out
+
+
+def ask_once(chat, prompt, timeout, resume=None, system=None, model=False):
+    """One question to the CLI with no tools, outside Build's conversation:
+    (answer, session id). The daily lines, a MIDI song, a talk about a
+    document, a voice command, the dashboard's "does Claude answer" check.
+
+    `system` is appended to the system prompt; `resume` continues a session
+    of these (talk's); `model` passes the server's --model, which only the
+    voice translator has ever done -- the rest use the CLI's default, and
+    which model a call uses is not changed here. Raises ClaudeError."""
+    cli = chat.claude if chat else None
+    if not cli:
+        raise ClaudeError("this server runs without Claude")
+    cmd = [cli, "-p", prompt]
+    if system:
+        cmd += ["--append-system-prompt", system]
+    cmd += ["--output-format", "json", "--allowed-tools", "", "--permission-mode", "dontAsk"]
+    if model and chat.model:
+        cmd += ["--model", chat.model]
+    if resume:
+        cmd += ["--resume", resume]
+    try:
+        r = subprocess.run(cmd, cwd=chat.cwd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=timeout,
+                           env=chat._child_env())
+    except subprocess.TimeoutExpired:
+        raise ClaudeError("no answer in %d s" % timeout, timed_out=True)
+    except OSError as e:
+        raise ClaudeError(str(e))
+    try:
+        j = json.loads(r.stdout or "{}")
+    except ValueError:
+        raise ClaudeError(((r.stdout or "").strip() or (r.stderr or "").strip()
+                           or "Claude did not answer")[:200])
+    if not isinstance(j, dict):
+        j = {}
+    text = j.get("result")
+    if j.get("is_error") or not (isinstance(text, str) and text):
+        raise ClaudeError((text or (r.stderr or "").strip() or "Claude did not answer")[:200])
+    return text, j.get("session_id") or resume
+
+
 def _find_claude():
     for name in ("claude", "claude.cmd", "claude.exe"):
         p = shutil.which(name)
@@ -287,9 +343,15 @@ class ChatService:
         self.use_api_key = use_api_key
         self.session_id = None     # the owner's conversation
         self.sessions = {}         # everyone else's, by name: one each, never shared
-        self.generation = 0        # bumped by reset(); see _claude
+        # Bumped by reset(), one count per conversation: None is the
+        # owner's, a name is that fenced person's. A turn remembers the count
+        # it started under and stops (and does not keep its session) once it
+        # moves. One count for everyone let the owner's /chat/new stop every
+        # fenced Build at its next step.
+        self.generations = {}
         self._turn = threading.local()   # whose turn this thread is running
-        self.jobs = {}
+        from . import jobs
+        self.jobs = jobs.Table(JOB_TTL)      # id -> job, owned by whoever asked
         self.next_id = 1
         self.lock = threading.Lock()
         self.run_lock = threading.Lock()
@@ -302,8 +364,8 @@ class ChatService:
         with self.lock:
             jid = self.next_id
             self.next_id += 1
-            self.jobs[jid] = {"state": "pending", "reply": "", "status": "",
-                              "log": [], "at": time.time(), "user": user}
+            self.jobs.put(jid, {"state": "pending", "reply": "", "status": "",
+                                "log": [], "at": time.time(), "user": user}, owner=user)
         t = threading.Thread(target=self._run, args=(jid, text, user), daemon=True)
         t.start()
         return jid
@@ -311,16 +373,15 @@ class ChatService:
     def poll(self, jid):
         from . import accounts
         with self.lock:
-            job = self.jobs.get(jid)
-            # One person's answers are not another's to read.
-            if not job or job.get("user") != accounts.current():
+            job = self.jobs.get(jid)       # one person's answers are not another's to read
+            if not job:
                 return "error", "no such request"
             if job["state"] == "pending":
                 return "pending", job.get("status", "")
             # Answers are read once and dropped: the device has them now, and
             # holding every reply of every conversation is a leak with a very
             # slow fuse.
-            self.jobs.pop(jid, None)
+            self.jobs.pop(jid)
             return job["state"], job["reply"]
 
     def progress(self, jid, since=0):
@@ -328,8 +389,6 @@ class ChatService:
         from . import accounts
         with self.lock:
             job = self.jobs.get(jid) or {}
-            if job.get("user") != accounts.current():
-                job = {}
             return job.get("status", ""), list(job.get("log", [])[max(0, since):])
 
     def reset(self, user=None):
@@ -339,17 +398,20 @@ class ChatService:
         if user is not None and accounts.fenced(user):
             with self.lock:
                 self.sessions.pop(user, None)
-                for j in [j for j, v in self.jobs.items() if v.get("user") == user]:
-                    self.jobs.pop(j, None)
+                self.jobs.remove_if(lambda owner, job: owner == user)
+                self.generations[user] = self.generations.get(user, 0) + 1
             return
         with self.lock:
             self.session_id = None
-            for j in [j for j, v in self.jobs.items() if not accounts.fenced(v.get("user"))]:
-                self.jobs.pop(j, None)
+            self.jobs.remove_if(lambda owner, job: not accounts.fenced(owner))
             # A turn already running belongs to the conversation just
             # forgotten. It used to finish a minute later and put its session
             # id back, and the next "new" conversation was resumed into it.
-            self.generation += 1
+            self.generations[None] = self.generations.get(None, 0) + 1
+
+    def generation(self):
+        """The count for the conversation this thread's turn belongs to."""
+        return self.generations.get(self.fenced_user(), 0)
 
     # ---- running the agent ------------------------------------------------
 
@@ -362,7 +424,7 @@ class ChatService:
         running. `report(line)` hears the status as it changes."""
         report = report or (lambda line: None)
         log = log or (lambda line: None)
-        generation = self.generation
+        generation = self.generation()
         fence_note = self._fence_note()
         if fence_note:
             text = fence_note + text
@@ -382,7 +444,7 @@ class ChatService:
 
         state, results, failed = "done", [], None
         for k, step in enumerate(steps, 1):
-            if self.generation != generation:
+            if self.generation() != generation:
                 break                    # /chat/new: this job is not wanted now
             prefix = "step %d/%d" % (k, n) if n > 1 else ""
             report(prefix or "working")
@@ -414,23 +476,31 @@ class ChatService:
         return state, reply
 
     def _run(self, jid, text, user=None):
+        from . import jobs
+
+        def mine():                           # this thread is nobody's request
+            job = self.jobs.get(jid, owner=jobs.ANY)
+            return job if job and job["state"] == "pending" else None
+
         def report(line):
             with self.lock:
-                if jid in self.jobs and self.jobs[jid]["state"] == "pending":
-                    self.jobs[jid]["status"] = line[:60]
+                job = mine()
+                if job:
+                    job["status"] = line[:60]
+
         def log(line):
             with self.lock:
-                if jid in self.jobs and self.jobs[jid]["state"] == "pending":
-                    self.jobs[jid]["log"].append(line)
+                job = mine()
+                if job:
+                    job["log"].append(line)
         self._turn.user = user
         try:
             state, reply = self.run_turn(text, report=report, log=log)
         finally:
             self._turn.user = None
         with self.lock:
-            if jid in self.jobs:
-                self.jobs[jid] = {"state": state, "reply": reply, "status": "",
-                                  "at": time.time(), "user": user}
+            self.jobs.replace(jid, {"state": state, "reply": reply, "status": "",
+                                    "at": time.time(), "user": user})
         # The device's Build app may be shut, and nothing on it is polling
         # for this job then: the notification watcher there polls for this.
         try:
@@ -552,13 +622,13 @@ class ChatService:
         cmd += self._fence_args(env)
         if self._session():
             cmd += ["--resume", self._session()]
-        generation = self.generation
+        generation = self.generation()
         who = self.fenced_user()
 
         def keep(sid):
             # A turn already running belongs to the conversation it started
             # in; after /chat/new its session id must not come back.
-            if not sid or generation != self.generation:
+            if not sid or generation != self.generation():
                 return
             if who:
                 self.sessions[who] = sid

@@ -187,32 +187,17 @@ class Voice:
         a system prompt that admits one line of output. The agent that edits
         the tree is the wrong tool for "open notes" -- it would think about it.
         """
-        cli = chat.claude if chat else None
-        if not cli:
+        from .chat import ClaudeError, ask_once
+        if not (chat and chat.claude):
             return "none no claude on this machine"
-
-        cmd = [cli, "-p", text,
-               "--append-system-prompt", system_prompt(),
-               "--output-format", "json",
-               # Nothing to read, nothing to write: this turn is a translation.
-               "--allowed-tools", "",
-               "--permission-mode", "dontAsk"]
-        if self.model and chat.model:
-            cmd += ["--model", chat.model]
-
+        # Nothing to read, nothing to write: this turn is a translation. The
+        # one call here that has always used the server's --model.
         try:
-            r = subprocess.run(cmd, cwd=chat.cwd, capture_output=True,
-                               text=True, encoding="utf-8", errors="replace",
-                               timeout=60, env=chat._child_env())
-        except subprocess.TimeoutExpired:
-            return "none the translator timed out"
-
-        body = (r.stdout or "").strip()
-        try:
-            obj = json.loads(body)
-            line = obj.get("result") or ""
-        except ValueError:
-            line = body
+            line, _ = ask_once(chat, text, 60, system=system_prompt(), model=True)
+        except ClaudeError as e:
+            if e.timed_out:
+                return "none the translator timed out"
+            line = "none " + e.why
 
         # One line, whatever it said. A model that explains itself gets its
         # explanation dropped rather than sent to a device that would refuse

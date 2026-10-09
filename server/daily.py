@@ -8,17 +8,13 @@ page shows the same two all day however often it is gathered. The device
 sends its own date, so "the day" is its day, not the server's. Without
 Claude (or if the call fails) a few written here stand in, chosen by date.
 """
-import json
 import os
-import subprocess
 import sys
-import threading
 import time
 import zlib
 
-from . import accounts, dash
+from . import accounts, dash, store
 
-_lock = threading.Lock()
 
 PROMPT = (
     "Write two short lines for someone's printed morning page. "
@@ -53,20 +49,7 @@ def path():
 
 
 def _load():
-    try:
-        with open(path(), encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
-
-
-def _save(d):
-    os.makedirs(accounts.user_dir(), mode=0o700, exist_ok=True)
-    keep = dict(sorted(d.items())[-14:])          # two weeks is plenty
-    tmp = path() + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(keep, f)
-    os.replace(tmp, path())
+    return store.read_json(path(), {})
 
 
 def fallback(date):
@@ -79,20 +62,12 @@ def fallback(date):
 
 def generate(date, chat):
     """Ask Claude for the day's two lines; the fallback if it cannot."""
-    cli = chat.claude if chat else None
-    if not cli:
+    from .chat import ClaudeError, ask_once
+    if not (chat and chat.claude):
         return fallback(date)
-    cmd = [cli, "-p", PROMPT % date, "--output-format", "json",
-           "--allowed-tools", "", "--permission-mode", "dontAsk"]
     try:
-        r = subprocess.run(cmd, cwd=chat.cwd, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=90,
-                           env=chat._child_env())
-        j = json.loads(r.stdout or "{}")
-        if j.get("is_error"):
-            raise ValueError(j.get("result") or "claude failed")
-        out = j.get("result") or ""
-    except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+        out, _ = ask_once(chat, PROMPT % date, 90)
+    except ClaudeError as e:
         sys.stderr.write("daily: %s\n" % e)
         return fallback(date)
     got = {}
@@ -107,18 +82,17 @@ def generate(date, chat):
 
 
 def for_date(date, chat):
-    with _lock:
-        d = _load()
-        if date in d:
-            return d[date]
+    d = _load()
+    if date in d:
+        return d[date]
     day = generate(date, chat)
     if day.get("fallback"):
         return day
-    with _lock:
-        d = _load()
-        d.setdefault(date, day)
-        _save(d)
-        return d[date]
+
+    def keep(d):
+        d.setdefault(date, day)                   # someone else's, if it got there first
+        return dict(sorted(d.items())[-14:])      # two weeks is plenty
+    return store.update_json(path(), keep, {})[date]
 
 
 def get_daily(h, path, args):

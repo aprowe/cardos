@@ -14,15 +14,13 @@ What comes back is checked by check() below, a reading of the same format
 as midiseq.h; a song with a mistake goes back to Claude once with the line
 and the reason, rather than to the device to fail there.
 """
-import json
 import re
 import secrets
-import subprocess
 import sys
 import threading
-import time
 
-from . import notes
+from . import jobs
+
 
 FORMAT = r"""You write songs for a tiny MIDI sequencer. Output ONLY the song, in this
 exact text format, inside one ```song fenced block, and nothing else.
@@ -68,8 +66,7 @@ loop
 COMMANDS = {"tempo", "ch", "prog", "n", "cc", "ramp", "bend", "loop"}
 _PITCH = re.compile(r"^(?:\d{1,3}|[A-Ga-g][#b]?-?\d)$")
 _BEAT = re.compile(r"^\d+(?:\.\d+)?(?:/\d+)?$")
-_jobs = {}
-_lock = threading.Lock()
+_jobs = jobs.Table(1800)       # id -> (state, song or why); gone half an hour after
 
 
 def check(song):
@@ -107,16 +104,8 @@ def extract(text):
 
 
 def _claude(chat, prompt):
-    if not chat or not chat.claude:
-        raise RuntimeError("this server runs without Claude")
-    cmd = [chat.claude, "-p", prompt, "--output-format", "json",
-           "--allowed-tools", "", "--permission-mode", "dontAsk"]
-    r = subprocess.run(cmd, cwd=chat.cwd, capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=240, env=chat._child_env())
-    j = json.loads(r.stdout or "{}")
-    if j.get("is_error") or not j.get("result"):
-        raise RuntimeError((j.get("result") or r.stderr or "Claude did not answer")[:160])
-    return j["result"]
+    from .chat import ask_once
+    return ask_once(chat, prompt, 240)[0]
 
 
 SONG_MARK = "---song---"
@@ -147,42 +136,32 @@ def _run(jid, chat, request):
     try:
         song = compose(chat, request)
         result = ("ok", song)
-    except Exception as e:                      # subprocess, JSON, the check
+    except Exception as e:                      # Claude, the check
         result = ("error", str(e))
-    with _lock:
-        _jobs[jid] = (time.time(),) + result
+    _jobs.replace(jid, result)
     sys.stderr.write("midi: %s %s\n" % (jid, result[0]))
 
 
 def post_compose(h, path, args):
     """ask Claude for a song; the id to ask after"""
-    if not notes._allowed(h):
-        return
     request = h.body(16000).decode("utf-8", "replace").strip()
     if not request:
         h.text("error what should it write?\n", 400)
         return
     jid = secrets.token_hex(5)
-    now = time.time()
-    with _lock:
-        for k in [k for k, v in _jobs.items() if now - v[0] > 1800]:
-            del _jobs[k]
-        _jobs[jid] = (now, "pending", "")
+    _jobs.put(jid, ("pending", ""))
     threading.Thread(target=_run, args=(jid, h.chat, request), daemon=True).start()
     h.text(jid + "\n")
 
 
 def get_compose(h, path, args):
     """the song, once it is written"""
-    if not notes._allowed(h):
-        return
     jid = (args.get("id") or [""])[0]
-    with _lock:
-        job = _jobs.get(jid)
+    job = _jobs.get(jid)
     if not job:
         h.text("error no such request\n", 404)
         return
-    _, state, body = job
+    state, body = job
     if state == "pending":
         h.text("pending\n")
     elif state == "ok":
@@ -192,6 +171,6 @@ def get_compose(h, path, args):
 
 
 ROUTES = [
-    ("POST", "/midi/compose", post_compose, "open"),
-    ("GET", "/midi/compose", get_compose, "open"),
+    ("POST", "/midi/compose", post_compose, "device_or_dash"),
+    ("GET", "/midi/compose", get_compose, "device_or_dash"),
 ]

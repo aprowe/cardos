@@ -44,7 +44,8 @@ import time
 import urllib.parse
 from collections import deque
 
-from . import accounts, dash
+from . import accounts, wire
+from .routes import arg as _arg
 
 CHUNK = 3072                 # bytes a job carries: 4096 of base64
 POLL_WAIT = 1.5              # how long an idle poll is held open
@@ -183,19 +184,9 @@ def _json(h, obj, code=200):
     h._send(code, "application/json", json.dumps(obj), (("Cache-Control", "no-store"),))
 
 
-def _arg(args, k):
-    return (args.get(k) or [""])[0]
-
-
 def _browser(fn):
-    """Behind the dashboard's cookie; the device's errors as JSON."""
+    """The device's errors as JSON (the cookie is the route's auth, "dash")."""
     def wrapped(h, path, args):
-        if not dash.logged_in(h):
-            if path == "/dash/files":
-                h.redirect("/dash")
-            else:
-                _json(h, {"error": "signed out: open /dash"}, 403)
-            return
         try:
             fn(h, args)
         except DeviceGone as e:
@@ -279,7 +270,7 @@ def post_mv(h, args):
 
 def run_line(line):
     """A console line on the device: (refused, output)."""
-    line = " ".join((line or "").replace("\t", " ").split())
+    line = wire.flat(line)
     if not line:
         raise ValueError("an empty line")
     if len(line) > LINE_MAX:
@@ -311,13 +302,13 @@ def post_poll(h, path, args):
 
 ROUTES = [
     ("GET", "/dash/files", get_page, "open"),
-    ("GET", "/dash/files/status", get_status, "open"),
-    ("GET", "/dash/files/ls", get_ls, "open"),
-    ("GET", "/dash/files/get", get_file, "open"),
-    ("POST", "/dash/files/put", post_put, "open"),
-    ("POST", "/dash/files/mkdir", post_mkdir, "open"),
-    ("POST", "/dash/files/rm", post_rm, "open"),
-    ("POST", "/dash/files/mv", post_mv, "open"),
-    ("POST", "/dash/term", post_term, "open"),
+    ("GET", "/dash/files/status", get_status, "dash"),
+    ("GET", "/dash/files/ls", get_ls, "dash"),
+    ("GET", "/dash/files/get", get_file, "dash"),
+    ("POST", "/dash/files/put", post_put, "dash"),
+    ("POST", "/dash/files/mkdir", post_mkdir, "dash"),
+    ("POST", "/dash/files/rm", post_rm, "dash"),
+    ("POST", "/dash/files/mv", post_mv, "dash"),
+    ("POST", "/dash/term", post_term, "dash"),
     ("POST", "/files/poll", post_poll),
 ]

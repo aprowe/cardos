@@ -3,6 +3,7 @@
 import struct
 import sys
 import os
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))             # the repository root
@@ -46,9 +47,18 @@ def test_scale_is_nearest_neighbour():
     assert img.getpixel((3, 0)) == (0, 0, 255)
 
 
+class Shots(unittest.TestCase):
+    """The functions above, for `unittest discover`, which runs only these."""
+
+    def test_decodes_big_endian_rgb565_rows_as_the_panel_is_sent_them(self):
+        test_decodes_big_endian_rgb565_rows_as_the_panel_is_sent_them()
+
+    def test_rejects_short_files(self):
+        test_rejects_short_files()
+
+    def test_scale_is_nearest_neighbour(self):
+        test_scale_is_nearest_neighbour()
+
+
 if __name__ == "__main__":
-    n = 0
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn(); n += 1
-    print("%d tests ok" % n)
+    unittest.main()

@@ -31,7 +31,8 @@ import sys
 import threading
 import time
 
-from . import accounts, dash, images, notes
+from . import accounts, images
+from .routes import arg, text_route
 
 MAX_IN = 24 << 20
 PRINT_W = 384                      # the printer's dots across
@@ -167,20 +168,8 @@ def remove(pid):
 
 # ---- routes ---------------------------------------------------------------------------
 
-def _route(fn):
-    def wrapped(h, path, args):
-        if not notes._allowed(h):
-            return
-        try:
-            fn(h, args)
-        except ValueError as e:
-            h.text("error %s\n" % e, 400)
-    wrapped.__doc__ = fn.__doc__
-    return wrapped
-
-
 def _id(args):
-    return (args.get("id") or [""])[0]
+    return arg(args, "id")
 
 
 def _send_file(h, path, ctype):
@@ -197,31 +186,31 @@ def _send_file(h, path, ctype):
     h.wfile.write(data)
 
 
-@_route
+@text_route
 def get_list(h, args):
     """every photo: id, name, when"""
     h.text("".join("%s\t%s\t%d\n" % (m["id"], m["name"], m["created"]) for m in all_photos()))
 
 
-@_route
+@text_route
 def get_img(h, args):
     """a photo as the device shows it"""
     _send_file(h, os.path.join(_dir(_id(args)), "screen.img"), "application/octet-stream")
 
 
-@_route
+@text_route
 def get_print(h, args):
     """a photo as the printer prints it"""
     _send_file(h, os.path.join(_dir(_id(args)), "print.txt"), "text/plain; charset=utf-8")
 
 
-@_route
+@text_route
 def get_thumb(h, args):
     """a small JPEG, for the dashboard"""
     _send_file(h, os.path.join(_dir(_id(args)), "thumb.jpg"), "image/jpeg")
 
 
-@_route
+@text_route
 def delete_photo(h, args):
     """delete a photo, here and so on the device at its next sync"""
     if not remove(_id(args)):
@@ -232,17 +221,11 @@ def delete_photo(h, args):
 
 def get_dash_list(h, path, args):
     """every photo, as JSON"""
-    if not dash.logged_in(h):
-        h._send(403, "application/json", '{"error": "signed out"}', ())
-        return
     h._send(200, "application/json", json.dumps(all_photos()), (("Cache-Control", "no-store"),))
 
 
 def post_upload(h, path, args):
     """a picture, kept and converted"""
-    if not dash.logged_in(h):
-        h._send(403, "application/json", '{"error": "signed out"}', ())
-        return
     try:
         meta = add(h.body(MAX_IN), (args.get("name") or ["photo"])[0])
     except ValueError as e:
@@ -252,12 +235,12 @@ def post_upload(h, path, args):
 
 
 ROUTES = [
-    ("GET", "/photos", get_list, "open"),
-    ("GET", "/photos/img", get_img, "open"),
-    ("GET", "/photos/print", get_print, "open"),
-    ("DELETE", "/photos/photo", delete_photo, "open"),
-    ("GET", "/dash/photos", get_dash_list, "open"),
-    ("POST", "/dash/photos/upload", post_upload, "open"),
-    ("GET", "/dash/photos/thumb", get_thumb, "open"),
-    ("DELETE", "/dash/photos/photo", delete_photo, "open"),
+    ("GET", "/photos", get_list, "device_or_dash"),
+    ("GET", "/photos/img", get_img, "device_or_dash"),
+    ("GET", "/photos/print", get_print, "device_or_dash"),
+    ("DELETE", "/photos/photo", delete_photo, "device_or_dash"),
+    ("GET", "/dash/photos", get_dash_list, "dash"),
+    ("POST", "/dash/photos/upload", post_upload, "dash"),
+    ("GET", "/dash/photos/thumb", get_thumb, "device_or_dash"),
+    ("DELETE", "/dash/photos/photo", delete_photo, "device_or_dash"),
 ]
