@@ -47,6 +47,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/datetime.h"
 #include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
@@ -121,43 +122,9 @@ static struct {
 
 /* ---- dates -------------------------------------------------------------------
  *
- * Howard Hinnant's civil-date algorithm, as apps/calendar.c uses: a date to
- * a day count from 1970-01-01 and back. Every date here is a day number;
+ * Howard Hinnant's civil-date algorithm (apps/datetime.h): a date to a day
+ * count from 1970-01-01 and back. Every date here is a day number;
  * YYYYMMDD exists only in the files. */
-
-static int32_t days_from_civil(int y, int m, int d) {
-  int era;
-  unsigned yoe, doy, doe;
-  y -= (m <= 2);
-  era = (y >= 0 ? y : y - 399) / 400;
-  yoe = (unsigned)(y - era * 400);
-  doy = (unsigned)((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1);
-  doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  return (int32_t)era * 146097 + (int32_t)doe - 719468;
-}
-
-static void civil_from_days(int32_t z, int *yy, int *mm, int *dd) {
-  int era, y;
-  unsigned doe, yoe, doy, mp, d, m;
-  z += 719468;
-  era = (int)((z >= 0 ? z : z - 146096) / 146097);
-  doe = (unsigned)(z - (int32_t)era * 146097);
-  yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-  y = (int)yoe + era * 400;
-  doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-  mp = (5 * doy + 2) / 153;
-  d = doy - (153 * mp + 2) / 5 + 1;
-  m = mp + (mp < 10 ? 3 : (unsigned)-9);
-  *yy = y + (int)(m <= 2);
-  *mm = (int)m;
-  *dd = (int)d;
-}
-
-/* 0 = Sunday; 1970-01-01 was a Thursday. */
-static int weekday(int32_t z) {
-  int32_t w = (z + 4) % 7;
-  return (int)(w < 0 ? w + 7 : w);
-}
 
 /* "20260924" -> day number, or 0 with *ok 0 for anything that is not a date. */
 static int32_t parse_ymd(const char *s, int *ok) {
@@ -170,12 +137,12 @@ static int32_t parse_ymd(const char *s, int *ok) {
   d = (s[6] - '0') * 10 + (s[7] - '0');
   if (m < 1 || m > 12 || d < 1 || d > 31 || y < 1900) return 0;
   *ok = 1;
-  return days_from_civil(y, m, d);
+  return dt_days_from_civil(y, m, d);
 }
 
 static void format_ymd(int32_t z, char *out, size_t n) {
   int y, m, d;
-  civil_from_days(z, &y, &m, &d);
+  dt_civil_from_days(z, &y, &m, &d);
   api->fmt(out, n, "%04d%02d%02d", y, m, d);
 }
 
@@ -188,8 +155,8 @@ static void day_label(int32_t z, char *out, size_t n) {
   int y, m, d;
   if (z == H.today) { api->fmt(out, n, "Today"); return; }
   if (z == H.today - 1) { api->fmt(out, n, "Yesterday"); return; }
-  civil_from_days(z, &y, &m, &d);
-  api->fmt(out, n, "%s %d %s", WDAY[weekday(z)], d, MON[m - 1]);
+  dt_civil_from_days(z, &y, &m, &d);
+  api->fmt(out, n, "%s %d %s", WDAY[dt_weekday(z)], d, MON[m - 1]);
 }
 
 /* ---- the window: one bit a day ----------------------------------------------- */
@@ -618,7 +585,7 @@ static void paint_today(void) {
 /* The first day (a Sunday) of the leftmost column: the grid ends with the
  * week holding today. */
 static int32_t grid_start(void) {
-  return H.today - weekday(H.today) - 7 * (HEAT_WEEKS - 1);
+  return H.today - dt_weekday(H.today) - 7 * (HEAT_WEEKS - 1);
 }
 
 #define CELL 6
@@ -646,7 +613,7 @@ static CRect grid_rect(void) {
 
 static void paint_cell(int32_t z) {
   CRect g = grid_rect();
-  int col = (int)((z - grid_start()) / 7), row = weekday(z);
+  int col = (int)((z - grid_start()) / 7), row = dt_weekday(z);
   int x = g.x + col * (CELL + GAP), y = g.y + row * (CELL + GAP);
   if (col < 0 || col >= HEAT_WEEKS) return;
   if (z == H.cursor) {
@@ -954,7 +921,7 @@ static int key_today(uint8_t k) {
 /* The cell a day is drawn in, with the ring the cursor draws round it. */
 static CRect cell_rect(int32_t z) {
   CRect g = grid_rect();
-  int col = (int)((z - grid_start()) / 7), row = weekday(z);
+  int col = (int)((z - grid_start()) / 7), row = dt_weekday(z);
   return capp_rect(g.x + col * (CELL + GAP) - 1, g.y + row * (CELL + GAP) - 1, CELL + 2, CELL + 2);
 }
 
@@ -1087,7 +1054,7 @@ static void read_clock(int32_t *today, int *ok) {
   CappTime t;
   api->now(&t);
   *ok = t.synced && t.year >= 2024;
-  *today = *ok ? days_from_civil(t.year, t.month, t.day) : days_from_civil(2026, 1, 1);
+  *today = *ok ? dt_days_from_civil(t.year, t.month, t.day) : dt_days_from_civil(2026, 1, 1);
 }
 
 /* Past midnight with the app open, or a clock that arrived after it opened:

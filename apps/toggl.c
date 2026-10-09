@@ -31,6 +31,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/datetime.h"
 #include "apps/str.h"
 #include "apps/footer.h"
 
@@ -110,16 +111,6 @@ static long to_long(const char *s) {
   long v = 0;
   while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0');
   return v;
-}
-
-static void hms(uint32_t secs, char *out, int n) {
-  api->fmt(out, (size_t)n, "%lu:%02lu:%02lu", (unsigned long)(secs / 3600),
-           (unsigned long)(secs / 60 % 60), (unsigned long)(secs % 60));
-}
-
-static void hm(uint32_t secs, char *out, int n) {
-  api->fmt(out, (size_t)n, "%lu:%02lu", (unsigned long)(secs / 3600),
-           (unsigned long)(secs / 60 % 60));
 }
 
 /* ---- what the server says ------------------------------------------------------ */
@@ -387,7 +378,7 @@ static void paint_timer(void) {
     G.t_str[0] = 0;
     return;
   }
-  hms(secs, t, sizeof t);
+  dt_hms(api, secs, t, sizeof t);
   w = width(f, t);
   h = height(f);
   x = timer_screen() ? r.x + (r.w - w) / 2 : r.x + 8;
@@ -411,7 +402,7 @@ static void paint_timer(void) {
 static CRect timer_damage(uint32_t secs) {
   char t[16];
   int n;
-  hms(secs, t, sizeof t);
+  dt_hms(api, secs, t, sizeof t);
   n = (int)api->str_len(t);
   if (G.t_str[0] && n == (int)api->str_len(G.t_str) && n > 2) {
     int i;
@@ -696,38 +687,18 @@ static int failed(int n, char *out, size_t sz) {
   return -1;
 }
 
-/* Days since 1970 to a date: Howard Hinnant's civil_from_days. */
-static void civil(long z, int *y, int *m, int *d) {
-  long era, yoe, doy, mp;
-  z += 719468;
-  era = (z >= 0 ? z : z - 146096) / 146097;
-  yoe = z - era * 146097;
-  yoe = (yoe - yoe / 1460 + yoe / 36524 - yoe / 146096) / 365;
-  doy = z - era * 146097 - (365 * yoe + yoe / 4 - yoe / 100);
-  mp = (5 * doy + 2) / 153;
-  *d = (int)(doy - (153 * mp + 2) / 5 + 1);
-  *m = (int)(mp < 10 ? mp + 3 : mp - 9);
-  *y = (int)(yoe + era * 400 + (*m <= 2));
-}
-
 static void rfc3339(uint32_t t, char *out, int n) {
   int y, m, d;
-  civil((long)(t / 86400), &y, &m, &d);
+  dt_civil_from_days((int32_t)(t / 86400), &y, &m, &d);
   api->fmt(out, (size_t)n, "%04d-%02d-%02dT%02lu:%02lu:%02luZ", y, m, d,
            (unsigned long)(t / 3600 % 24), (unsigned long)(t / 60 % 60), (unsigned long)(t % 60));
 }
 
 /* Local seconds minus UTC seconds, from the kernel's two clocks. */
 static long utc_offset(void) {
-  CappTime lt;
-  long local, utc, off;
-  api->now(&lt);
-  local = lt.hour * 3600L + lt.min * 60L + lt.sec;
-  utc = (long)(api->epoch() % 86400);
-  off = local - utc;
-  if (off > 14 * 3600L) off -= 86400;
-  if (off < -12 * 3600L) off += 86400;
-  return off;
+  int32_t off;
+  dt_utc_offset(api, &off);
+  return (long)off;
 }
 
 static int cmd_today(char *out, size_t n) {
@@ -750,13 +721,13 @@ static int cmd_today(char *out, size_t n) {
     tsv_field(p, 0, a, sizeof a);
     tsv_field(p, 1, b, sizeof b);
     if (str_starts(p, "total\t")) {
-      hm((uint32_t)to_long(b), tbuf, sizeof tbuf);
+      dt_hm(api, (uint32_t)to_long(b), tbuf, sizeof tbuf);
       o += (size_t)api->fmt(out + o, n - o, "%stotal %s", any ? "" : "nothing tracked\n", tbuf);
     } else if (a[0] >= '0' && a[0] <= '9' && o + 100 < n) {
       long ls = (long)to_long(a) + off;
       tsv_field(p, 2, desc, sizeof desc);
       tsv_field(p, 3, proj, sizeof proj);
-      hm((uint32_t)to_long(b), tbuf, sizeof tbuf);
+      dt_hm(api, (uint32_t)to_long(b), tbuf, sizeof tbuf);
       api->fmt(line, sizeof line, "%02ld:%02ld %s%s%s%s %s\n", ls / 3600 % 24, ls / 60 % 60,
                desc[0] ? desc : "(no description)", proj[0] ? " (" : "", proj,
                proj[0] ? ")" : "", tbuf);
@@ -803,7 +774,7 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
     absorb_status();
     now = elapsed();
     if (!G.running) { api->fmt(out, n, "not running"); return 0; }
-    hm(now, t, sizeof t);
+    dt_hm(api, now, t, sizeof t);
     api->fmt(out, n, "running: %s%s%s%s, %s", G.desc[0] ? G.desc : "(no description)",
              G.proj[0] ? " (" : "", G.proj, G.proj[0] ? ")" : "", t);
     return 0;
@@ -822,7 +793,7 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
       char secs[16], desc[DESC_MAX];
       tsv_field(G.reply, 1, secs, sizeof secs);
       tsv_field(G.reply, 2, desc, sizeof desc);
-      hm((uint32_t)to_long(secs), t, sizeof t);
+      dt_hm(api, (uint32_t)to_long(secs), t, sizeof t);
       api->fmt(out, n, "stopped %s after %s", desc[0] ? desc : "(no description)", t);
     }
     return 0;

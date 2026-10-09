@@ -137,7 +137,7 @@ static void open_app(void) {
   }
 }
 
-static int32_t D(int y, int m, int d) { return days_from_civil(y, m, d); }
+static int32_t D(int y, int m, int d) { return dt_days_from_civil(y, m, d); }
 
 void test_habits_loads_the_old_files(void) {
   wipe();

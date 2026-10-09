@@ -57,6 +57,7 @@
  */
 
 #include "kernel/app/capp.h"
+#include "apps/datetime.h"
 #include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/safefile.h"
@@ -230,57 +231,13 @@ static const char *MON[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
 
 /* ---- the calendar itself -------------------------------------------------
  *
- * Howard Hinnant's civil-date algorithms, which are the short exact way to do
- * this in integers. Day 0 is 1970-01-01. Everything else here -- the grid, the
- * agenda's day headers, the RFC 3339 in and out -- is these two functions and
- * some formatting. They are also the part most likely to be wrong, which is
- * why test/test_calendar.c hammers them across leap years and century
- * boundaries rather than trusting the transcription. */
-
-static int is_leap(int y) {
-  return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-}
-
-static int days_in_month(int y, int m) {
-  static const int LEN[13] = { 0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
-  if (m == 2 && is_leap(y)) return 29;
-  if (m < 1 || m > 12) return 30;
-  return LEN[m];
-}
-
-static int32_t days_from_civil(int y, int m, int d) {
-  int era;
-  unsigned yoe, doy, doe;
-  y -= (m <= 2);
-  era = (y >= 0 ? y : y - 399) / 400;
-  yoe = (unsigned)(y - era * 400);
-  doy = (unsigned)((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1);
-  doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  return (int32_t)era * 146097 + (int32_t)doe - 719468;
-}
-
-static void civil_from_days(int32_t z, int *yy, int *mm, int *dd) {
-  int era, y;
-  unsigned doe, yoe, doy, mp, d, m;
-  z += 719468;
-  era = (int)((z >= 0 ? z : z - 146096) / 146097);
-  doe = (unsigned)(z - (int32_t)era * 146097);
-  yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-  y = (int)yoe + era * 400;
-  doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-  mp = (5 * doy + 2) / 153;
-  d = doy - (153 * mp + 2) / 5 + 1;
-  m = mp + (mp < 10 ? 3 : (unsigned)-9);
-  *yy = y + (m <= 2);
-  *mm = (int)m;
-  *dd = (int)d;
-}
-
-/* 0 = Sunday. Day 0 was a Thursday, hence the 4. */
-static int weekday_of_day(int32_t z) {
-  int32_t w = (z + 4) % 7;
-  return (int)(w < 0 ? w + 7 : w);
-}
+ * Howard Hinnant's civil-date algorithms (apps/datetime.h), which are the
+ * short exact way to do this in integers. Day 0 is 1970-01-01. Everything
+ * else here -- the grid, the agenda's day headers, the RFC 3339 in and out --
+ * is dt_days_from_civil, dt_civil_from_days and some formatting. They are
+ * also the part most likely to be wrong, which is why test/test_calendar.c
+ * hammers them across leap years and century boundaries rather than trusting
+ * the transcription. */
 
 /* ---- RFC 3339 ------------------------------------------------------------
  *
@@ -311,7 +268,7 @@ static int rfc3339_parse(const char *s, uint32_t *out, int *all_day) {
     /* A bare date: an all-day event, which Google states with no zone at all.
      * Treated as midnight UTC so it sorts and groups with everything else. */
     if (all_day) *all_day = 1;
-    secs = days_from_civil(y, m, d) * (int32_t)DAY_SECS;
+    secs = dt_days_from_civil(y, m, d) * (int32_t)DAY_SECS;
     *out = (uint32_t)secs;
     return 0;
   }
@@ -329,7 +286,7 @@ static int rfc3339_parse(const char *s, uint32_t *out, int *all_day) {
     if (s[19] == '-') off = -off;
   }
 
-  secs = days_from_civil(y, m, d) * (int32_t)DAY_SECS
+  secs = dt_days_from_civil(y, m, d) * (int32_t)DAY_SECS
        + (int32_t)hh * 3600 + mi * 60 + ss - off;
   if (secs < 0) return -1;
   *out = (uint32_t)secs;
@@ -341,7 +298,7 @@ static int rfc3339_parse(const char *s, uint32_t *out, int *all_day) {
 static void rfc3339_utc(uint32_t t, char *out, int n) {
   int y, m, d;
   uint32_t rem = t % DAY_SECS;
-  civil_from_days((int32_t)(t / DAY_SECS), &y, &m, &d);
+  dt_civil_from_days((int32_t)(t / DAY_SECS), &y, &m, &d);
   api->fmt(out, (size_t)n, "%04d-%02d-%02dT%02d:%02d:%02dZ",
            y, m, d, (int)(rem / 3600u), (int)(rem / 60u % 60u), (int)(rem % 60u));
 }
@@ -352,16 +309,9 @@ static void rfc3339_utc(uint32_t t, char *out, int n) {
  * one from the other is the zone offset without a zone database. */
 static void refresh_clock(void) {
   CappTime t;
-  uint32_t utc = api->epoch();
-  int32_t local;
-
+  C.have_clock = dt_utc_offset(api, &C.offset);
+  if (!C.have_clock) return;
   api->now(&t);
-  C.have_clock = t.synced && utc;
-  if (!C.have_clock) { C.offset = 0; return; }
-
-  local = days_from_civil(t.year, t.month, t.day) * (int32_t)DAY_SECS
-        + (int32_t)t.hour * 3600 + t.min * 60 + t.sec;
-  C.offset = local - (int32_t)utc;
   C.today_y = t.year;
   C.today_m = t.month;
   C.today_d = t.day;
@@ -395,7 +345,7 @@ static int32_t ev_key(const Event *e) {
 
 static int32_t today_day(void) {
   if (!C.have_clock) return 0;
-  return days_from_civil(C.today_y, C.today_m, C.today_d);
+  return dt_days_from_civil(C.today_y, C.today_m, C.today_d);
 }
 
 /* ---- the server's replies ---------------------------------------------------- */
@@ -585,7 +535,7 @@ static int sending_index(void) {
 /* "2026-09-25", the whole of an all-day event's start or end. */
 static void rfc3339_date(uint32_t t, char *out, int n) {
   int y, m, d;
-  civil_from_days((int32_t)(t / DAY_SECS), &y, &m, &d);
+  dt_civil_from_days((int32_t)(t / DAY_SECS), &y, &m, &d);
   api->fmt(out, (size_t)n, "%04d-%02d-%02d", y, m, d);
 }
 
@@ -895,7 +845,7 @@ static void begin_add(void) {
   /* Whichever day is on screen: adding from the day view means adding to the
    * day you are looking at, not to the one the grid was last left on. */
   C.draft_day = (C.view == VIEW_DAY) ? C.day_shown
-              : (C.have_clock ? days_from_civil(C.cur_y, C.cur_m, C.cur_d) : 0);
+              : (C.have_clock ? dt_days_from_civil(C.cur_y, C.cur_m, C.cur_d) : 0);
   C.draft_hour = 9;
   C.draft_min = 0;
   C.form_back = C.view;
@@ -1068,10 +1018,10 @@ static void delete_asked(void) {
 static void day_label(int32_t day, char *out, int n) {
   int y, m, d;
   int32_t t = today_day();
-  civil_from_days(day, &y, &m, &d);
+  dt_civil_from_days(day, &y, &m, &d);
   if (C.have_clock && day == t)     { api->fmt(out, (size_t)n, "Today"); return; }
   if (C.have_clock && day == t + 1) { api->fmt(out, (size_t)n, "Tomorrow"); return; }
-  api->fmt(out, (size_t)n, "%s %d %s", WDAY[weekday_of_day(day)], d, MON[m - 1]);
+  api->fmt(out, (size_t)n, "%s %d %s", WDAY[dt_weekday(day)], d, MON[m - 1]);
 }
 
 /* The footer: the status line -- what the last sync or edit did -- or,
@@ -1152,13 +1102,13 @@ static void paint_agenda(CRect c) {
  * point of this view is to be sure which day you are looking at. */
 static void day_heading(int32_t day, char *out, int n) {
   int y, m, d;
-  civil_from_days(day, &y, &m, &d);
+  dt_civil_from_days(day, &y, &m, &d);
   if (C.have_clock && day == today_day())
     api->fmt(out, (size_t)n, "Today -- %s %d %s %d",
-             WDAY[weekday_of_day(day)], d, MON[m - 1], y);
+             WDAY[dt_weekday(day)], d, MON[m - 1], y);
   else
     api->fmt(out, (size_t)n, "%s %d %s %d",
-             WDAY[weekday_of_day(day)], d, MON[m - 1], y);
+             WDAY[dt_weekday(day)], d, MON[m - 1], y);
 }
 
 #define DAY_HEAD_H 13
@@ -1229,8 +1179,8 @@ static void paint_day(CRect c) {
 
 static void paint_month(CRect c) {
   int col, row, i;
-  int first = weekday_of_day(days_from_civil(C.cur_y, C.cur_m, 1));
-  int len = days_in_month(C.cur_y, C.cur_m);
+  int first = dt_weekday(dt_days_from_civil(C.cur_y, C.cur_m, 1));
+  int len = dt_days_in_month(C.cur_y, C.cur_m);
   int cw = c.w / 7;
   int top = c.y + 22;
   int ch = (c.h - BAR_H - 22) / 6;
@@ -1245,7 +1195,7 @@ static void paint_month(CRect c) {
 
   for (i = 1; i <= len; i++) {
     int idx = first + i - 1;
-    int32_t day = days_from_civil(C.cur_y, C.cur_m, i);
+    int32_t day = dt_days_from_civil(C.cur_y, C.cur_m, i);
     int x, yy;
     char num[4];
     uint16_t bg = CLR_BG, fg = CLR_TEXT;
@@ -1274,7 +1224,7 @@ static void paint_add(CRect c) {
   int i;
   static const char *LABEL[FIELD_COUNT] = { "what", "when", "time" };
 
-  civil_from_days(C.draft_day, &y, &m, &d);
+  dt_civil_from_days(C.draft_day, &y, &m, &d);
   api->fill(capp_rect(c.x, c.y, c.w, c.h - BAR_H), CLR_BG);
   api->text((short)(c.x + 4), (short)(c.y + 3),
             C.form_edit ? "Edit event" : "New event", CLR_HEAD, CLR_BG);
@@ -1289,7 +1239,7 @@ static void paint_add(CRect c) {
                C.field == FIELD_TITLE ? "_" : "");
     else if (i == FIELD_DATE)
       api->fmt(line, sizeof line, "%s %d %s %d",
-               WDAY[weekday_of_day(C.draft_day)], d, MON[m - 1], y);
+               WDAY[dt_weekday(C.draft_day)], d, MON[m - 1], y);
     else if (C.draft_all_day)
       api->fmt(line, sizeof line, "%s", "all day");
     else
@@ -1446,7 +1396,7 @@ static void page_agenda(void) {
 static void print_page(void) {
   int rc;
   if (C.view == VIEW_DAY) page_day(C.day_shown);
-  else if (C.view == VIEW_MONTH) page_day(days_from_civil(C.cur_y, C.cur_m, C.cur_d));
+  else if (C.view == VIEW_MONTH) page_day(dt_days_from_civil(C.cur_y, C.cur_m, C.cur_d));
   else page_agenda();
   rc = api->print_fonts(C.page, "print24", "print24b", "print34b");
   if (rc == 0)       { C.printing = 1; say("printing..."); }
@@ -1459,7 +1409,7 @@ static void print_page(void) {
  * on the first event, rather than on 1970. */
 static void goto_month(void) {
   if (!C.have_clock && C.n)
-    civil_from_days(ev_day(&C.ev[0]), &C.cur_y, &C.cur_m, &C.cur_d);
+    dt_civil_from_days(ev_day(&C.ev[0]), &C.cur_y, &C.cur_m, &C.cur_d);
   C.view = VIEW_MONTH;
 }
 
@@ -1521,7 +1471,7 @@ static int do_action(int a) {
     /* From the grid the highlighted cell is the day; from anywhere else it is
      * whatever the agenda is sitting on. */
     open_day(C.view == VIEW_MONTH
-               ? days_from_civil(C.cur_y, C.cur_m, C.cur_d)
+               ? dt_days_from_civil(C.cur_y, C.cur_m, C.cur_d)
                : day_for_selection(),
              C.view == VIEW_MONTH ? VIEW_MONTH : VIEW_AGENDA);
     return 1;
@@ -1557,8 +1507,8 @@ static void app_paint(void *st, CRect c) {
 /* ---- input ----------------------------------------------------------------- */
 
 static void month_step(int days) {
-  int32_t d = days_from_civil(C.cur_y, C.cur_m, C.cur_d) + days;
-  civil_from_days(d, &C.cur_y, &C.cur_m, &C.cur_d);
+  int32_t d = dt_days_from_civil(C.cur_y, C.cur_m, C.cur_d) + days;
+  dt_civil_from_days(d, &C.cur_y, &C.cur_m, &C.cur_d);
 }
 
 static void scroll_to_sel(void) {
@@ -1637,7 +1587,7 @@ static int key_day(unsigned char k) {
     /* Back where it came from, on the day it ended on -- paging five days
      * forward and then leaving should not undo the paging. */
     if (C.day_back == VIEW_MONTH) {
-      civil_from_days(C.day_shown, &C.cur_y, &C.cur_m, &C.cur_d);
+      dt_civil_from_days(C.day_shown, &C.cur_y, &C.cur_m, &C.cur_d);
       C.view = VIEW_MONTH;
     } else {
       int idx = day_event_at(C.day_shown, C.day_sel);
@@ -1808,14 +1758,14 @@ static int32_t parse_day(const char *s, int32_t today) {
   if (starts_with(s, "today")) return today;
   if (starts_with(s, "tom")) return today + 1;
   for (i = 0; i < 7; i++)
-    if (starts_with(s, DAYS[i])) return today + (i - weekday_of_day(today) + 7) % 7;
+    if (starts_with(s, DAYS[i])) return today + (i - dt_weekday(today) + 7) % 7;
   while (*p >= '0' && *p <= '9') m = m * 10 + (*p++ - '0');
   if ((*p != '/' && *p != '-') || m < 1 || m > 12) return -1;
   for (p++; *p >= '0' && *p <= '9'; p++) d = d * 10 + (*p - '0');
   if (*p || d < 1 || d > 31) return -1;
   y = C.today_y;
-  if (days_from_civil(y, m, d) < today) y++;
-  return days_from_civil(y, m, d);
+  if (dt_days_from_civil(y, m, d) < today) y++;
+  return dt_days_from_civil(y, m, d);
 }
 
 /* "15:00", "3pm", "3:30pm", "9" (24-hour). 0 and the hour and minute, or -1. */

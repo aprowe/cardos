@@ -15,6 +15,7 @@
  * the app lets the track that is playing finish; nothing follows it.
  */
 #include "kernel/app/capp.h"
+#include "apps/datetime.h"
 #include "apps/str.h"
 #include "apps/footer.h"
 #include "apps/confirm.h"
@@ -166,11 +167,6 @@ static int list_rows(void) { return (M.c.h - TOP_H - NOW_H - FOOT_H) / ROW_H; }
 static CRect now_rect(void) { return capp_rect(M.c.x, M.c.y + M.c.h - FOOT_H - NOW_H, M.c.w, NOW_H); }
 static CRect top_rect(void) { return capp_rect(M.c.x, M.c.y, M.c.w, TOP_H); }
 
-static void mmss(uint32_t ms, char *out, int n) {
-  uint32_t s = ms / 1000;
-  api->fmt(out, (size_t)n, "%lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
-}
-
 static void paint_top(void) {
   char line[48];
   CRect r = top_rect();
@@ -191,7 +187,7 @@ static void paint_row(int i, int y) {
   char line[64], len[12];
   uint16_t bg = i == M.sel ? CLR_SEL : CLR_BG;
   int w;
-  mmss(M.ms[i], len, sizeof len);
+  dt_mmss(api, M.ms[i], len, sizeof len);
   api->fmt(line, sizeof line, "%s%-30.30s", i == M.playing ? "> " : "  ", M.title[i]);
   api->text((int16_t)(M.c.x + 4), (int16_t)(y + 2), line, i == M.playing ? CLR_ACC : CLR_TEXT, bg);
   w = (int)api->str_len(len) * 6;
@@ -233,8 +229,8 @@ static void paint_now(void) {
   else if (M.playing >= 0) api->fmt(line, sizeof line, "%-36.36s", M.title[M.playing]);
   else api->fmt(line, sizeof line, "%-36s", "stopped");
   api->text((int16_t)(r.x + 6), (int16_t)(r.y + 3), line, M.ask_delete ? CLR_BAD : CLR_TEXT, CLR_NOW);
-  mmss(pos, a, sizeof a);
-  mmss(tot ? tot : (M.playing >= 0 ? M.ms[M.playing] : 0), b, sizeof b);
+  dt_mmss(api, pos, a, sizeof a);
+  dt_mmss(api, tot ? tot : (M.playing >= 0 ? M.ms[M.playing] : 0), b, sizeof b);
   api->fmt(line, sizeof line, "%s / %s%s%s  vol %d", a, b, paused ? "  paused" : "",
            M.shuffle ? "  shuffle" : "", au ? au->volume() : 0);
   w = (int)api->str_len(line) * 6;

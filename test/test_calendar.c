@@ -80,35 +80,35 @@ static void use_fake_api(void) {
 void test_the_epoch_is_the_first_of_january_1970(void) {
   int y, m, d;
   use_fake_api();
-  CHECK_EQ(0, days_from_civil(1970, 1, 1));
-  civil_from_days(0, &y, &m, &d);
+  CHECK_EQ(0, dt_days_from_civil(1970, 1, 1));
+  dt_civil_from_days(0, &y, &m, &d);
   CHECK_EQ(1970, y);
   CHECK_EQ(1, m);
   CHECK_EQ(1, d);
   /* 1970-01-01 was a Thursday. Everything else keys off this. */
-  CHECK_EQ(4, weekday_of_day(0));
+  CHECK_EQ(4, dt_weekday(0));
 }
 
 void test_dates_worked_out_by_hand(void) {
   use_fake_api();
-  CHECK_EQ(-1, days_from_civil(1969, 12, 31));
-  CHECK_EQ(365, days_from_civil(1971, 1, 1));
+  CHECK_EQ(-1, dt_days_from_civil(1969, 12, 31));
+  CHECK_EQ(365, dt_days_from_civil(1971, 1, 1));
   /* 1970 and 1971 are 365 days each, so 1972 opens on day 730. 1972 is then
    * a leap year, which is why 1973 is 366 further on and not 365. */
-  CHECK_EQ(730, days_from_civil(1972, 1, 1));
-  CHECK_EQ(1096, days_from_civil(1973, 1, 1));
+  CHECK_EQ(730, dt_days_from_civil(1972, 1, 1));
+  CHECK_EQ(1096, dt_days_from_civil(1973, 1, 1));
   /* 2000-01-01, the usual reference point: 10957 days after the epoch. */
-  CHECK_EQ(10957, days_from_civil(2000, 1, 1));
+  CHECK_EQ(10957, dt_days_from_civil(2000, 1, 1));
   /* 2026-09-13, a date this app was written on. */
-  CHECK_EQ(20709, days_from_civil(2026, 9, 13));
+  CHECK_EQ(20709, dt_days_from_civil(2026, 9, 13));
 }
 
 void test_the_weekday_of_some_known_days(void) {
   use_fake_api();
   /* 2000-01-01 was a Saturday, 2026-09-13 a Sunday. */
-  CHECK_EQ(6, weekday_of_day(days_from_civil(2000, 1, 1)));
-  CHECK_EQ(0, weekday_of_day(days_from_civil(2026, 9, 13)));
-  CHECK_EQ(1, weekday_of_day(days_from_civil(2026, 9, 14)));
+  CHECK_EQ(6, dt_weekday(dt_days_from_civil(2000, 1, 1)));
+  CHECK_EQ(0, dt_weekday(dt_days_from_civil(2026, 9, 13)));
+  CHECK_EQ(1, dt_weekday(dt_days_from_civil(2026, 9, 14)));
 }
 
 void test_every_day_of_two_centuries_round_trips(void) {
@@ -116,11 +116,11 @@ void test_every_day_of_two_centuries_round_trips(void) {
   int bad = 0;
   use_fake_api();
   /* 1900-01-01 to 2100-01-01, which covers both kinds of century year. */
-  for (z = days_from_civil(1900, 1, 1); z < days_from_civil(2100, 1, 1); z++) {
+  for (z = dt_days_from_civil(1900, 1, 1); z < dt_days_from_civil(2100, 1, 1); z++) {
     int y, m, d;
-    civil_from_days(z, &y, &m, &d);
-    if (days_from_civil(y, m, d) != z) bad++;
-    if (m < 1 || m > 12 || d < 1 || d > days_in_month(y, m)) bad++;
+    dt_civil_from_days(z, &y, &m, &d);
+    if (dt_days_from_civil(y, m, d) != z) bad++;
+    if (m < 1 || m > 12 || d < 1 || d > dt_days_in_month(y, m)) bad++;
   }
   CHECK_EQ(0, bad);
 }
@@ -129,34 +129,34 @@ void test_the_weekday_advances_by_one_every_day(void) {
   int32_t z;
   int bad = 0;
   use_fake_api();
-  for (z = days_from_civil(1999, 1, 1); z < days_from_civil(2031, 1, 1); z++)
-    if (weekday_of_day(z + 1) != (weekday_of_day(z) + 1) % 7) bad++;
+  for (z = dt_days_from_civil(1999, 1, 1); z < dt_days_from_civil(2031, 1, 1); z++)
+    if (dt_weekday(z + 1) != (dt_weekday(z) + 1) % 7) bad++;
   CHECK_EQ(0, bad);
 }
 
 void test_leap_years_and_month_lengths(void) {
   use_fake_api();
-  CHECK_EQ(1, is_leap(2024));
-  CHECK_EQ(0, is_leap(2025));
-  CHECK_EQ(1, is_leap(2000));   /* divisible by 400 */
-  CHECK_EQ(0, is_leap(1900));   /* divisible by 100, not 400 */
-  CHECK_EQ(29, days_in_month(2024, 2));
-  CHECK_EQ(28, days_in_month(2025, 2));
-  CHECK_EQ(29, days_in_month(2000, 2));
-  CHECK_EQ(28, days_in_month(1900, 2));
-  CHECK_EQ(31, days_in_month(2026, 1));
-  CHECK_EQ(30, days_in_month(2026, 4));
+  CHECK_EQ(1, dt_is_leap(2024));
+  CHECK_EQ(0, dt_is_leap(2025));
+  CHECK_EQ(1, dt_is_leap(2000));   /* divisible by 400 */
+  CHECK_EQ(0, dt_is_leap(1900));   /* divisible by 100, not 400 */
+  CHECK_EQ(29, dt_days_in_month(2024, 2));
+  CHECK_EQ(28, dt_days_in_month(2025, 2));
+  CHECK_EQ(29, dt_days_in_month(2000, 2));
+  CHECK_EQ(28, dt_days_in_month(1900, 2));
+  CHECK_EQ(31, dt_days_in_month(2026, 1));
+  CHECK_EQ(30, dt_days_in_month(2026, 4));
 }
 
 void test_the_day_after_a_leap_day_is_the_first_of_march(void) {
   int y, m, d;
   use_fake_api();
-  civil_from_days(days_from_civil(2024, 2, 29) + 1, &y, &m, &d);
+  dt_civil_from_days(dt_days_from_civil(2024, 2, 29) + 1, &y, &m, &d);
   CHECK_EQ(2024, y);
   CHECK_EQ(3, m);
   CHECK_EQ(1, d);
   /* And in a non-leap year February simply stops at the 28th. */
-  civil_from_days(days_from_civil(2025, 2, 28) + 1, &y, &m, &d);
+  dt_civil_from_days(dt_days_from_civil(2025, 2, 28) + 1, &y, &m, &d);
   CHECK_EQ(3, m);
   CHECK_EQ(1, d);
 }
@@ -164,7 +164,7 @@ void test_the_day_after_a_leap_day_is_the_first_of_march(void) {
 void test_the_day_after_new_years_eve_is_new_years_day(void) {
   int y, m, d;
   use_fake_api();
-  civil_from_days(days_from_civil(2026, 12, 31) + 1, &y, &m, &d);
+  dt_civil_from_days(dt_days_from_civil(2026, 12, 31) + 1, &y, &m, &d);
   CHECK_EQ(2027, y);
   CHECK_EQ(1, m);
   CHECK_EQ(1, d);
@@ -226,7 +226,7 @@ void test_formatting_and_parsing_are_inverses(void) {
   for (i = 0; i < 400; i++) {
     /* Every 37 hours from the start of 2026, which walks days, months and a
      * year boundary without landing on the same time of day twice. */
-    uint32_t t = (uint32_t)(days_from_civil(2026, 1, 1) * 86400) + (uint32_t)i * 133200u;
+    uint32_t t = (uint32_t)(dt_days_from_civil(2026, 1, 1) * 86400) + (uint32_t)i * 133200u;
     uint32_t back = 0;
     char buf[32];
     rfc3339_utc(t, buf, sizeof buf);
@@ -343,14 +343,14 @@ void test_a_day_label_names_today_and_tomorrow(void) {
   use_fake_api();
   C.have_clock = 1;
   C.today_y = 2026; C.today_m = 9; C.today_d = 13;
-  day_label(days_from_civil(2026, 9, 13), buf, sizeof buf);
+  day_label(dt_days_from_civil(2026, 9, 13), buf, sizeof buf);
   CHECK(strcmp(buf, "Today") == 0);
-  day_label(days_from_civil(2026, 9, 14), buf, sizeof buf);
+  day_label(dt_days_from_civil(2026, 9, 14), buf, sizeof buf);
   CHECK(strcmp(buf, "Tomorrow") == 0);
-  day_label(days_from_civil(2026, 9, 15), buf, sizeof buf);
+  day_label(dt_days_from_civil(2026, 9, 15), buf, sizeof buf);
   CHECK(strcmp(buf, "Tue 15 Sep") == 0);
   /* Yesterday is a date, not "Yesterday" -- the past is not a special case. */
-  day_label(days_from_civil(2026, 9, 12), buf, sizeof buf);
+  day_label(dt_days_from_civil(2026, 9, 12), buf, sizeof buf);
   CHECK(strcmp(buf, "Sat 12 Sep") == 0);
 }
 
@@ -358,7 +358,7 @@ void test_without_a_clock_nothing_claims_to_be_today(void) {
   char buf[24];
   use_fake_api();
   C.have_clock = 0;
-  day_label(days_from_civil(2026, 9, 13), buf, sizeof buf);
+  day_label(dt_days_from_civil(2026, 9, 13), buf, sizeof buf);
   CHECK(strcmp(buf, "Sun 13 Sep") == 0);
 }
 
@@ -387,9 +387,9 @@ void test_a_week_step_lands_on_the_same_weekday(void) {
   use_fake_api();
   C.cur_y = 2026; C.cur_m = 1; C.cur_d = 1;
   for (i = 0; i < 60; i++) {
-    int before = weekday_of_day(days_from_civil(C.cur_y, C.cur_m, C.cur_d));
+    int before = dt_weekday(dt_days_from_civil(C.cur_y, C.cur_m, C.cur_d));
     month_step(7);
-    if (weekday_of_day(days_from_civil(C.cur_y, C.cur_m, C.cur_d)) != before) bad++;
+    if (dt_weekday(dt_days_from_civil(C.cur_y, C.cur_m, C.cur_d)) != before) bad++;
   }
   CHECK_EQ(0, bad);
 }
@@ -398,9 +398,9 @@ void test_the_grid_starts_the_month_on_the_right_column(void) {
   use_fake_api();
   /* 1 September 2026 was a Tuesday, so it sits in column 2 counting from
    * Sunday -- which is what the grid's `first` is. */
-  CHECK_EQ(2, weekday_of_day(days_from_civil(2026, 9, 1)));
+  CHECK_EQ(2, dt_weekday(dt_days_from_civil(2026, 9, 1)));
   /* 1 February 2026 was a Sunday: column 0, the first cell. */
-  CHECK_EQ(0, weekday_of_day(days_from_civil(2026, 2, 1)));
+  CHECK_EQ(0, dt_weekday(dt_days_from_civil(2026, 2, 1)));
 }
 
 void test_every_month_of_a_decade_fits_in_six_rows(void) {
@@ -411,8 +411,8 @@ void test_every_month_of_a_decade_fits_in_six_rows(void) {
    * check that no month in a decade actually does. */
   for (y = 2020; y < 2040; y++) {
     for (m = 1; m <= 12; m++) {
-      int first = weekday_of_day(days_from_civil(y, m, 1));
-      if (first + days_in_month(y, m) - 1 > 41) bad++;
+      int first = dt_weekday(dt_days_from_civil(y, m, 1));
+      if (first + dt_days_in_month(y, m) - 1 > 41) bad++;
     }
   }
   CHECK_EQ(0, bad);
@@ -422,12 +422,12 @@ void test_a_day_with_an_event_is_marked(void) {
   use_fake_api();
   C.offset = 0;
   parse_reply(REPLY);
-  CHECK_EQ(1, day_has_event(days_from_civil(2026, 9, 13)));
-  CHECK_EQ(1, day_has_event(days_from_civil(2026, 9, 14)));
-  CHECK_EQ(0, day_has_event(days_from_civil(2026, 9, 15)));
+  CHECK_EQ(1, day_has_event(dt_days_from_civil(2026, 9, 13)));
+  CHECK_EQ(1, day_has_event(dt_days_from_civil(2026, 9, 14)));
+  CHECK_EQ(0, day_has_event(dt_days_from_civil(2026, 9, 15)));
   /* A deleted event stops marking its day. */
   C.ev[2].deleted = 1;
-  CHECK_EQ(0, day_has_event(days_from_civil(2026, 9, 14)));
+  CHECK_EQ(0, day_has_event(dt_days_from_civil(2026, 9, 14)));
 }
 
 /* ---- the cache line --------------------------------------------------------- */
@@ -491,7 +491,7 @@ void test_calendar_enter_opens_the_day_of_the_selected_event(void) {
   C.sel = 2;                                  /* the birthday, on the 14th */
   CHECK_EQ(1, key_agenda(CAPP_KEY_ENTER));
   CHECK_EQ(VIEW_DAY, C.view);
-  CHECK_EQ(days_from_civil(2026, 9, 14), (int)C.day_shown);
+  CHECK_EQ(dt_days_from_civil(2026, 9, 14), (int)C.day_shown);
   CHECK_EQ(1, day_event_count(C.day_shown));
 }
 
@@ -506,13 +506,13 @@ void test_calendar_left_and_right_page_through_the_week(void) {
   three_events_no_zone();
   C.sel = 0;
   key_agenda(CAPP_KEY_ENTER);
-  CHECK_EQ(days_from_civil(2026, 9, 13), (int)C.day_shown);
+  CHECK_EQ(dt_days_from_civil(2026, 9, 13), (int)C.day_shown);
   CHECK_EQ(1, key_day(CAPP_KEY_RIGHT));
-  CHECK_EQ(days_from_civil(2026, 9, 14), (int)C.day_shown);
+  CHECK_EQ(dt_days_from_civil(2026, 9, 14), (int)C.day_shown);
   key_day(CAPP_KEY_LEFT);
   key_day(CAPP_KEY_LEFT);
   /* The 12th is a day the agenda never draws, and the point of the view. */
-  CHECK_EQ(days_from_civil(2026, 9, 12), (int)C.day_shown);
+  CHECK_EQ(dt_days_from_civil(2026, 9, 12), (int)C.day_shown);
   CHECK_EQ(0, day_event_count(C.day_shown));
   CHECK_EQ(0, C.day_sel);
 }
@@ -552,7 +552,7 @@ void test_calendar_enter_on_the_month_grid_opens_that_day(void) {
   C.cur_y = 2026; C.cur_m = 9; C.cur_d = 14;
   CHECK_EQ(1, key_month(CAPP_KEY_ENTER));
   CHECK_EQ(VIEW_DAY, C.view);
-  CHECK_EQ(days_from_civil(2026, 9, 14), (int)C.day_shown);
+  CHECK_EQ(dt_days_from_civil(2026, 9, 14), (int)C.day_shown);
   /* Paged forward, then back to the grid -- which should be sitting on the
    * day the paging ended on, not on the one it started from. */
   key_day(CAPP_KEY_RIGHT);
@@ -581,7 +581,7 @@ void test_calendar_adding_from_the_day_view_adds_to_that_day(void) {
   key_day(CAPP_KEY_RIGHT);
   key_day('a');
   CHECK_EQ(VIEW_ADD, C.view);
-  CHECK_EQ(days_from_civil(2026, 9, 14), (int)C.draft_day);
+  CHECK_EQ(dt_days_from_civil(2026, 9, 14), (int)C.draft_day);
 }
 
 /* ---- the sync, driven end to end ------------------------------------------
@@ -912,7 +912,7 @@ void test_calendar_e_opens_the_form_on_the_selected_event(void) {
   CHECK(strcmp(C.draft, "Dentist") == 0);
   CHECK_EQ(13, C.draft_hour);
   CHECK_EQ(0, C.draft_min);
-  CHECK_EQ(days_from_civil(2026, 9, 13), (int)C.draft_day);
+  CHECK_EQ(dt_days_from_civil(2026, 9, 13), (int)C.draft_day);
 }
 
 void test_calendar_an_edit_is_sent_as_a_patch_and_keeps_the_length(void) {
@@ -936,7 +936,7 @@ void test_calendar_an_edit_is_sent_as_a_patch_and_keeps_the_length(void) {
 
 void test_calendar_a_new_event_is_still_a_post(void) {
   use_sync_api();
-  add_event("Lunch", days_from_civil(2026, 9, 13), 12, 0);
+  add_event("Lunch", dt_days_from_civil(2026, 9, 13), 12, 0);
   sync_begin("s");
   CHECK(strcmp(LAST_METHOD, "POST") == 0);
   CHECK(strstr(LAST_URL, "?id=") == NULL);
@@ -1036,9 +1036,9 @@ void test_calendar_a_failed_patch_keeps_the_edit(void) {
 void test_calendar_an_all_day_event_is_on_its_own_date_anywhere(void) {
   synced_three_events();
   C.offset = -7 * 3600;                       /* Pacific daylight time */
-  CHECK_EQ(days_from_civil(2026, 9, 14), (int)ev_day(&C.ev[2]));
+  CHECK_EQ(dt_days_from_civil(2026, 9, 14), (int)ev_day(&C.ev[2]));
   C.offset = 9 * 3600;                        /* Tokyo */
-  CHECK_EQ(days_from_civil(2026, 9, 14), (int)ev_day(&C.ev[2]));
+  CHECK_EQ(dt_days_from_civil(2026, 9, 14), (int)ev_day(&C.ev[2]));
 }
 
 void test_calendar_edit_is_one_of_the_apps_declared_actions(void) {
@@ -1102,7 +1102,7 @@ void test_calendar_view_chords_do_nothing_in_the_form(void) {
  * second deleted the agenda's selection -- the first. It must ask about the
  * one highlighted on screen, and only y deletes it. */
 void test_calendar_delete_in_the_day_view_asks_about_that_days_event(void) {
-  int32_t a = days_from_civil(2026, 9, 13), b = days_from_civil(2026, 9, 14);
+  int32_t a = dt_days_from_civil(2026, 9, 13), b = dt_days_from_civil(2026, 9, 14);
   use_fake_api();
   C.offset = 0;
   add_event("First", a, 9, 0);

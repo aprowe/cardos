@@ -12,6 +12,7 @@
  * which the card takes without noticing. */
 
 #include "kernel/app/capp.h"
+#include "apps/datetime.h"
 #include "apps/str.h"
 #include "apps/toolbar.h"
 #include "apps/footer.h"
@@ -71,12 +72,6 @@ static void say(const char *s) { api->fmt(M.status, sizeof M.status, "%s", s); }
 
 static void path_of(const Memo *m, char *out, size_t n) {
   api->fmt(out, n, "%s/%s", DIR, m->name);
-}
-
-/* m:ss, for a length or a clock. */
-static void mmss(uint32_t ms, char *out, size_t n) {
-  uint32_t s = ms / 1000;
-  api->fmt(out, n, "%u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
 }
 
 /* ---- the list ------------------------------------------------------------ */
@@ -201,7 +196,7 @@ static void paint_rows(CRect c, int list_h) {
     int sel = i == M.sel;
     unsigned short bg = sel ? CLR_SEL : CLR_BG;
     char len[12], line[48];
-    mmss(m->bytes / (BYTES_PER_SEC / 1000), len, sizeof len);
+    dt_mmss(api, m->bytes / (BYTES_PER_SEC / 1000), len, sizeof len);
     api->fill(capp_rect(c.x, y, c.w, ROW_H), bg);
     api->fmt(line, sizeof line, "%s", m->name);
     api->text((short)(c.x + 6), (short)(y + 1), line, sel ? CLR_BAR_FG : CLR_TEXT, bg);
@@ -227,7 +222,7 @@ static void paint_strip(CRect c) {
     int lvl = au->level();
     int mw = c.w - 60, tw;
     int w = mw * (lvl < 0 ? 0 : lvl) / 100;
-    mmss(api->ticks_ms() - M.started_ms, clock, sizeof clock);
+    dt_mmss(api, api->ticks_ms() - M.started_ms, clock, sizeof clock);
     tw = 6 * (int)api->str_len(clock);
     api->fill(capp_rect(s.x, s.y, 4, STRIP_H), CLR_BAR);
     api->fill(capp_rect(s.x + 4, s.y, 8, 2), CLR_BAR);
@@ -251,7 +246,7 @@ static void paint_strip(CRect c) {
     uint32_t p = au->pos_ms(), t = au->total_ms();
     int tw, bx = s.x + 4 + 6 * 11 + 6, bw = c.w - (4 + 6 * 11 + 6) - 4;
     int w = t ? (int)((uint32_t)bw * p / t) : 0;
-    mmss(p, pos, sizeof pos); mmss(t, tot, sizeof tot);
+    dt_mmss(api, p, pos, sizeof pos); dt_mmss(api, t, tot, sizeof tot);
     api->fmt(both, sizeof both, "%s / %s", pos, tot);
     tw = 6 * (int)api->str_len(both);
     if (tw > 6 * 11) tw = 6 * 11;
@@ -378,7 +373,7 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
   case ACT_LIST:
     if (!M.n) { api->fmt(out, n, "no memos yet"); return 0; }
     for (i = 0; i < M.n && o + 8 < n; i++) {
-      mmss(M.memo[i].bytes / 32, len, sizeof len);    /* 16 kHz mono 16-bit */
+      dt_mmss(api, M.memo[i].bytes / 32, len, sizeof len);    /* 16 kHz mono 16-bit */
       o += (size_t)api->fmt(out + o, n - o, "- %s (%s)\n", M.memo[i].name, len);
     }
     return 0;
@@ -530,7 +525,7 @@ static int app_tick(void *st, uint32_t now_ms) {
           const char *slash = M.recording, *p;
           for (p = M.recording; *p; p++) if (*p == '/') slash = p + 1;
           for (i = 0; i < M.n; i++) if (!name_cmp(M.memo[i].name, slash)) { M.sel = i; M.top = 0; break; }
-          mmss((uint32_t)bytes / (BYTES_PER_SEC / 1000), len, sizeof len);
+          dt_mmss(api, (uint32_t)bytes / (BYTES_PER_SEC / 1000), len, sizeof len);
           api->fmt(line, sizeof line, "saved, %s", len);
           say(line);
         } else {
