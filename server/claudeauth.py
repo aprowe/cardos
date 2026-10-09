@@ -52,12 +52,8 @@ def save_token(token, how):
     token = token.strip()
     if not TOKEN_RE.fullmatch(token.encode()):
         raise ValueError("that does not look like a Claude token (sk-ant-oat...)")
-    os.makedirs(dash.state_dir(), mode=0o700, exist_ok=True)
-    tmp = path() + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({"token": token, "since": int(time.time()), "how": how}, f)
-    os.replace(tmp, path())
+    from . import store
+    store.write_json(path(), {"token": token, "since": int(time.time()), "how": how})
     _status_cache["at"] = 0
 
 

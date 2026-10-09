@@ -89,21 +89,14 @@ _lock = threading.Lock()
 
 
 def load_creds():
-    try:
-        with open(creds_path()) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
+    from . import store
+    return store.read_json(creds_path())
 
 
 def save_creds(c):
     """Owner-only, and written whole: a half-written file is a lost login."""
-    os.makedirs(os.path.dirname(creds_path()), mode=0o700, exist_ok=True)
-    tmp = creds_path() + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(c, f, indent=1)
-    os.replace(tmp, creds_path())
+    from . import store
+    store.write_json(creds_path(), c, indent=1)
 
 
 def forget_creds():

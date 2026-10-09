@@ -28,7 +28,7 @@ import sys
 import threading
 import time
 
-from . import accounts, dash
+from . import accounts, dash, store
 
 MAX_TEXT = 64 * 1024
 _lock = threading.Lock()
@@ -60,15 +60,10 @@ def _path(nid):
 
 
 def load(nid):
-    try:
-        with open(_path(nid), encoding="utf-8") as f:
-            return json.load(f)
-    except OSError:
-        return None
+    return store.read_json(_path(nid))
 
 
 def save(nid, text):
-    os.makedirs(notes_dir(), mode=0o700, exist_ok=True)
     now = int(time.time())
     with _lock:
         old = load(nid) if nid else None
@@ -76,10 +71,7 @@ def save(nid, text):
             nid = secrets.token_hex(5)
         n = {"id": nid, "text": text, "title": title_of(text), "hash": fnv(text),
              "updated": now, "created": (old or {}).get("created", now)}
-        tmp = _path(nid) + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(n, f)
-        os.replace(tmp, _path(nid))
+        store.write_json(_path(nid), n)
     return n
 
 

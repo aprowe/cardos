@@ -53,7 +53,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import accounts, dash
+from . import accounts, dash, store
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 CAL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
@@ -108,11 +108,7 @@ def _ids_load():
     u = accounts.current()
     have = _ids if u is None else _ids_by.get(u)
     if have is None:
-        try:
-            with open(_ids_path()) as f:
-                have = json.load(f)
-        except (OSError, ValueError):
-            have = {}
+        have = store.read_json(_ids_path(), {})
         if u is None:
             _ids = have
         else:
@@ -125,11 +121,7 @@ def _ids_save():
     ids = _ids_load()
     for k in [k for k, v in ids.items() if now - v[1] > KEEP_IDS]:
         del ids[k]
-    os.makedirs(accounts.user_dir(), mode=0o700, exist_ok=True)
-    tmp = _ids_path() + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(ids, f)
-    os.replace(tmp, _ids_path())
+    store.write_json(_ids_path(), ids)          # under _lock, as every caller holds it
 
 
 def short_ids(longs):

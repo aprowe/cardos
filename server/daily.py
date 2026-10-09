@@ -12,13 +12,11 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
 import zlib
 
-from . import accounts, dash
+from . import accounts, dash, store
 
-_lock = threading.Lock()
 
 PROMPT = (
     "Write two short lines for someone's printed morning page. "
@@ -53,20 +51,7 @@ def path():
 
 
 def _load():
-    try:
-        with open(path(), encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
-
-
-def _save(d):
-    os.makedirs(accounts.user_dir(), mode=0o700, exist_ok=True)
-    keep = dict(sorted(d.items())[-14:])          # two weeks is plenty
-    tmp = path() + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(keep, f)
-    os.replace(tmp, path())
+    return store.read_json(path(), {})
 
 
 def fallback(date):
@@ -107,18 +92,17 @@ def generate(date, chat):
 
 
 def for_date(date, chat):
-    with _lock:
-        d = _load()
-        if date in d:
-            return d[date]
+    d = _load()
+    if date in d:
+        return d[date]
     day = generate(date, chat)
     if day.get("fallback"):
         return day
-    with _lock:
-        d = _load()
-        d.setdefault(date, day)
-        _save(d)
-        return d[date]
+
+    def keep(d):
+        d.setdefault(date, day)                   # someone else's, if it got there first
+        return dict(sorted(d.items())[-14:])      # two weeks is plenty
+    return store.update_json(path(), keep, {})[date]
 
 
 def get_daily(h, path, args):

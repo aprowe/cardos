@@ -80,12 +80,8 @@ def load():
 
 
 def _save(d):
-    os.makedirs(dash.state_dir(), mode=0o700, exist_ok=True)
-    tmp = _path() + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(d, f, indent=1)
-    os.replace(tmp, _path())
+    from . import store
+    store.write_json(_path(), d, indent=1)
 
 
 # ---- passwords ----------------------------------------------------------------------

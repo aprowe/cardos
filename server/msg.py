@@ -14,12 +14,11 @@ CARDOS_STATE/chat.json, the last KEEP messages.
 Lines, not JSON, because the device parses them with no library. A tab or
 a newline in a message becomes a space.
 """
-import json
 import os
 import threading
 import time
 
-from . import accounts, dash, notes
+from . import accounts, dash, notes, store
 
 KEEP = 500
 SHOW = 40
@@ -34,19 +33,7 @@ def _path():
 
 
 def load():
-    try:
-        with open(_path(), encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return []
-
-
-def _save(msgs):
-    os.makedirs(dash.state_dir(), exist_ok=True)
-    tmp = _path() + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(msgs, f)
-    os.replace(tmp, _path())
+    return store.read_json(_path(), [])
 
 
 def _flat(s, n):
@@ -60,12 +47,14 @@ def post(name, text):
         raise ValueError("who is this?")
     if not text:
         raise ValueError("say something")
-    with _lock:
-        msgs = load()
-        mid = (msgs[-1]["id"] + 1) if msgs else 1
-        msgs.append({"id": mid, "t": int(time.time()), "name": name, "text": text})
-        _save(msgs[-KEEP:])
-    return mid
+    mid = []
+
+    def add(msgs):
+        mid.append((msgs[-1]["id"] + 1) if msgs else 1)
+        msgs.append({"id": mid[0], "t": int(time.time()), "name": name, "text": text})
+        return msgs[-KEEP:]
+    store.update_json(_path(), add, [])
+    return mid[0]
 
 
 def since(sid, most=SHOW):

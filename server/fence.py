@@ -24,11 +24,12 @@ perfect:
      the fence is put back as git has it (enforce) -- folders.txt line by
      line.
 """
-import json
 import os
 import re
 import subprocess
 import threading
+
+from . import store
 
 _STEM = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
 _lock = threading.Lock()
@@ -41,20 +42,12 @@ def owners_path(state_dir):
 
 
 def load(state_dir):
-    try:
-        with open(owners_path(state_dir), encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d.get("files"), dict) else {"files": {}}
-    except (OSError, ValueError):
-        return {"files": {}}
+    d = store.read_json(owners_path(state_dir))
+    return d if isinstance(d, dict) and isinstance(d.get("files"), dict) else {"files": {}}
 
 
 def _save(state_dir, d):
-    os.makedirs(state_dir, exist_ok=True)
-    tmp = owners_path(state_dir) + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(d, f, indent=1, sort_keys=True)
-    os.replace(tmp, owners_path(state_dir))
+    store.write_json(owners_path(state_dir), d, indent=1, sort_keys=True)
 
 
 def rel(root, path):
