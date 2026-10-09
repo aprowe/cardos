@@ -113,12 +113,13 @@ build_and_publish() {
 }
 
 update() {
-  git push -q droplet master
+  # Tags too: the droplet's builds take their version from `git describe`.
+  git push -q --follow-tags droplet master
   ssh "$HOST" "chgrp -R cardos $BARE && chmod -R g+w $BARE"
   # Build's own commits are on `remote`, so this is a real merge, and the
   # service user has no git identity -- server/build.py passes one per
   # command for the same reason.
-  as_cardos "set -e; cd $CLONE; git fetch -q origin
+  as_cardos "set -e; cd $CLONE; git fetch -q --tags origin
     git -c user.name='CardOS droplet' -c user.email=cardos@droplet.invalid \
       merge -q --no-edit origin/master
     git log --oneline -1"
@@ -149,7 +150,7 @@ sync() {
   git fetch -q origin
   git merge --no-edit origin/main          # anything pushed to GitHub directly
   update
-  git push -q origin master:main
+  git push -q --follow-tags origin master:main
   echo "in sync: $(git log --oneline -1)"
 }
 

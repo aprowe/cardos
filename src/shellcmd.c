@@ -32,6 +32,7 @@
 #include "kernel/fs/fs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "kernel/drv/bthid.h"
@@ -253,6 +254,8 @@ static void boot_progress(void *ctx, int percent) {
 void cmd_bootinfo(void) {
   LauncherInfo info;
   launcher_info(&info);
+  con_printf("CardOS %s, built %s %s\n", esp_app_get_description()->version,
+             esp_app_get_description()->date, esp_app_get_description()->time);
   con_printf("board: %s\n", board_name());
   con_printf("running from %s, %s build\n", info.running[0] ? info.running : "?",
              update_flavor());

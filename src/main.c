@@ -1385,7 +1385,11 @@ void app_main(void) {
    * the original the probe must be done with pins 8 and 9 before the matrix
    * takes them. See kernel/drv/board.h. */
   board_detect();
-  con_printf("CardOS 0.1 (%s) on %s\n", update_flavor(), board_name());
+  /* The version is ESP-IDF's `git describe` of the tree it was built from
+   * (v0.9.0, or v0.9.0-3-gabc1234 between tags; -dirty with uncommitted
+   * changes): the tags are the release numbers. */
+  con_printf("CardOS %s (%s) on %s\n", esp_app_get_description()->version,
+             update_flavor(), board_name());
   con_set_color(COLOR_GREY);
   con_write("kernel core: memory + swap\n\n");
   con_set_color(COLOR_GREEN);

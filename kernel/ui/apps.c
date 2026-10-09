@@ -13,6 +13,7 @@
 #include "kernel/fs/fs.h"
 #include "kernel/mem/mem.h"
 #include "esp_system.h"
+#include "esp_app_desc.h"
 #include "esp_timer.h"
 
 #include <stdio.h>
@@ -30,7 +31,8 @@ static void about_paint(void *state, Rect c) {
   char buf[40];
   (void)state;
   draw_rect(c, C_WHITE);
-  line(c, 0, "CardOS 0.1");
+  snprintf(buf, sizeof buf, "CardOS %s", esp_app_get_description()->version);
+  line(c, 0, buf);
   line(c, 1, "M5Stack Cardputer");
   snprintf(buf, sizeof buf, "heap %uK free",
            (unsigned)(esp_get_free_heap_size() / 1024));
