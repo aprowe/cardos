@@ -164,6 +164,75 @@ def loaded_bytes(path):
     return out
 
 
+def code_data(path):
+    """(.code, .data) as the loader allocates them: .code is linked at 0 and
+    goes to executable RAM, .data (with .bss) at 0x10000000 to the heap --
+    each one block, which is what has to be found free."""
+    import struct
+    data = open(path, "rb").read()
+    e_shoff, = struct.unpack_from("<I", data, 0x20)
+    e_shentsize, e_shnum = struct.unpack_from("<HH", data, 0x2E)
+    code = dat = 0
+    for i in range(e_shnum):
+        s = struct.unpack_from("<10I", data, e_shoff + i * e_shentsize)
+        if not s[2] & 2:                                  # SHF_ALLOC
+            continue
+        if s[3] >= 0x10000000:
+            dat += s[5]
+        else:
+            code += s[5]
+    return code, dat
+
+
+# The size budget. An app's data is one heap block and its code one block of
+# executable RAM, found at load time in a heap that breaks up over hours
+# (CLAUDE.md, "An app's data is one block"): after a day the largest free
+# piece was 39 KB. Past these an app may build fine and then not open.
+DATA_BUDGET = 28 * 1024
+TOTAL_BUDGET = 44 * 1024
+
+# Apps allowed over the budget for now, each with why. Take one off as soon
+# as it is back under -- the build says when.
+OVER_BUDGET = {
+    "forklift": "the Forklang cell arena and node pool; E.good and FlCell.next are the way back",
+    "notes": "file[48] in every queued Op; an index into the rows is the way back",
+    "midi": "a second copy of the song list in load_list's raw[]",
+}
+
+
+def check_budget(built):
+    """Print code and data per app, write build/apps/sizes.txt, and refuse an
+    app over budget that is not in OVER_BUDGET."""
+    rows, bad = [], []
+    for name, elf in built:
+        code, dat = code_data(elf)
+        over = []
+        if dat > DATA_BUDGET:
+            over.append("data %d > %d" % (dat, DATA_BUDGET))
+        if code + dat > TOTAL_BUDGET:
+            over.append("code+data %d > %d" % (code + dat, TOTAL_BUDGET))
+        rows.append((name, code, dat, over))
+    with open(os.path.join(OUT, "sizes.txt"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("# app        code    data   total  (bytes; budget data %d, total %d)\n"
+                % (DATA_BUDGET, TOTAL_BUDGET))
+        for name, code, dat, over in rows:
+            f.write("%-10s %7d %7d %7d%s\n" % (name, code, dat, code + dat,
+                                              "  OVER" if over else ""))
+    print("  %s" % os.path.relpath(os.path.join(OUT, "sizes.txt"), ROOT))
+    for name, code, dat, over in rows:
+        if over and name in OVER_BUDGET:
+            print("  warning: %s is over budget (%s), allowed: %s"
+                  % (name, "; ".join(over), OVER_BUDGET[name]))
+        elif over:
+            bad.append("%s: %s" % (name, "; ".join(over)))
+        elif name in OVER_BUDGET:
+            print("  note: %s is under budget now -- take it out of OVER_BUDGET" % name)
+    if bad:
+        raise SystemExit(
+            "over the app size budget (an app's data must be one free heap block; "
+            "see OVER_BUDGET in tools/build_apps.py):\n  " + "\n  ".join(bad))
+
+
 def check_image(elf, name):
     """Refuse anything the on-device loader could not load."""
     text = run([READELF, "-r", "-s", "--wide", elf])
@@ -385,7 +454,8 @@ def build(src):
         raise SystemExit("%s: stripping relocations changed the loaded image" % name)
 
     size = os.path.getsize(elf)
-    print("  %-8s %6d bytes" % (name + ".capp", size))
+    code, dat = code_data(elf)
+    print("  %-14s %6d bytes  code %6d  data %6d" % (name + ".capp", size, code, dat))
     return name, elf
 
 
@@ -478,6 +548,7 @@ def main():
     missing = [n for n in EMBED if n not in dict(built)]
     if missing:
         raise SystemExit("EMBED names apps that were not built: %s" % ", ".join(missing))
+    check_budget(built)
     emit_header([b for b in built if b[0] in EMBED])
     emit_catalog(built)
 
