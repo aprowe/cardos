@@ -473,7 +473,7 @@ def get_google_callback(h, path, args):
     # died minutes later with "Token has been expired or revoked"
     # (2026-10-01). A replaced token simply goes unused.
     from . import google
-    google._access.update(token=None, until=0)   # the old login's access token
+    google.forget_access()                       # the old login's access token
     sys.stderr.write("dash: google signed in\n")
     back("Signed in to Google. Calendar and Todo use this login.")
 
@@ -485,8 +485,10 @@ def post_google_forget(h, path, args):
     if not logged_in(h):
         h.redirect("/dash")
         return
+    from . import google
     c = load_creds()
     forget_creds()
+    google.forget_access()
     msg = "Signed out."
     if c and c.get("refresh_token"):
         try:

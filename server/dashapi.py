@@ -183,8 +183,10 @@ def get_state(h, args):
 @_api
 def post_google_forget(h, args):
     """sign out of Google and revoke"""
+    from . import google
     c = dash.load_creds()
     dash.forget_creds()
+    google.forget_access()
     msg = "Signed out of Google."
     if c and c.get("refresh_token"):
         try:
@@ -213,7 +215,9 @@ def post_toggl_token(h, args):
     except toggl.TogglError as e:
         _json(h, {"error": e.why}, 400)
         return
-    toggl.save({"token": token, "name": name, "workspace": wid, "saved_at": int(time.time())})
+    # Merged, not replaced: the targets live in the same file.
+    toggl.update(lambda c: c.update(token=token, name=name, workspace=wid,
+                                    saved_at=int(time.time())))
     sys.stderr.write("dash: toggl connected\n")
     _json(h, {"ok": True, "name": name})
 

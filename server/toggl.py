@@ -55,8 +55,8 @@ PROJECTS_MAX = 20
 PROJECTS_FOR = 600
 ENTRIES_FOR = 60
 
-_lock = threading.Lock()
-_cache = {}                     # key -> (until, value)
+_lock = threading.Lock()         # the cache, and every read-modify-write of toggl.json
+_cache = {}                     # (user, key) -> (until, value)
 
 
 class TogglError(Exception):
@@ -87,7 +87,19 @@ def save(c):
     with os.fdopen(fd, "w") as f:
         json.dump(c, f)
     os.replace(tmp, path())
-    _cache.clear()
+    _drop_mine()
+
+
+def update(fn):
+    """Change toggl.json in place under the lock: fn(c) edits the dict (an
+    empty one if there is no file) and may raise to leave it as it was.
+    toggl.json holds the targets beside the token, so a writer that replaces
+    the whole file -- the dashboard saving a new token, once -- loses them."""
+    with _lock:
+        c = load() or {}
+        fn(c)
+        save(c)
+    return c
 
 
 def forget():
@@ -95,7 +107,14 @@ def forget():
         os.remove(path())
     except OSError:
         pass
-    _cache.clear()
+    _drop_mine()
+
+
+def _drop_mine():
+    """The current person's cached answers, nobody else's."""
+    me = accounts.current()
+    for k in [k for k in list(_cache) if k[0] == me]:
+        _cache.pop(k, None)
 
 
 # ---- the network, in one place, so the tests can stand in for Toggl -------------
@@ -168,9 +187,9 @@ def check_token(token):
 def workspace():
     c = load() or {}
     if not c.get("workspace"):
-        _, wid = check_token(c.get("token"))
-        c["workspace"] = wid
-        save(c)
+        _, wid = check_token(c.get("token"))       # the network, outside the lock
+        update(lambda c: c.__setitem__("workspace", wid))
+        return wid
     return c["workspace"]
 
 
@@ -316,10 +335,9 @@ def targets():
 
 def set_target(project, kind, hours, since=None):
     """Add, change (same project and kind) or, with hours 0, remove a target."""
-    c = load()
-    if not c:
+    if not load():
         raise TogglError(401, "no Toggl token: connect Toggl at /dash")
-    names = projects()
+    names = projects()                  # may ask Toggl: before the lock, not under it
     pid = None
     if str(project).isdigit() and int(project) in names:
         pid = int(project)
@@ -340,14 +358,18 @@ def set_target(project, kind, hours, since=None):
     if kind == "total":
         since = since or time.strftime("%Y-%m-%d")
         datetime.strptime(since, "%Y-%m-%d")         # a date, or ValueError
-    ts = [t for t in c.get("targets") or [] if not (t["project"] == pid and t["kind"] == kind)]
-    if hours > 0:
-        t = {"project": pid, "kind": kind, "hours": hours}
-        if kind == "total":
-            t["since"] = since
-        ts.append(t)
-    c["targets"] = ts
-    save(c)
+
+    def change(c):
+        if not c.get("token"):
+            raise TogglError(401, "no Toggl token: connect Toggl at /dash")
+        ts = [t for t in c.get("targets") or [] if not (t["project"] == pid and t["kind"] == kind)]
+        if hours > 0:
+            t = {"project": pid, "kind": kind, "hours": hours}
+            if kind == "total":
+                t["since"] = since
+            ts.append(t)
+        c["targets"] = ts
+    update(change)
     return pid
 
 

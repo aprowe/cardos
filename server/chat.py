@@ -287,7 +287,12 @@ class ChatService:
         self.use_api_key = use_api_key
         self.session_id = None     # the owner's conversation
         self.sessions = {}         # everyone else's, by name: one each, never shared
-        self.generation = 0        # bumped by reset(); see _claude
+        # Bumped by reset(), one count per conversation: None is the
+        # owner's, a name is that fenced person's. A turn remembers the count
+        # it started under and stops (and does not keep its session) once it
+        # moves. One count for everyone let the owner's /chat/new stop every
+        # fenced Build at its next step.
+        self.generations = {}
         self._turn = threading.local()   # whose turn this thread is running
         self.jobs = {}
         self.next_id = 1
@@ -341,6 +346,7 @@ class ChatService:
                 self.sessions.pop(user, None)
                 for j in [j for j, v in self.jobs.items() if v.get("user") == user]:
                     self.jobs.pop(j, None)
+                self.generations[user] = self.generations.get(user, 0) + 1
             return
         with self.lock:
             self.session_id = None
@@ -349,7 +355,11 @@ class ChatService:
             # A turn already running belongs to the conversation just
             # forgotten. It used to finish a minute later and put its session
             # id back, and the next "new" conversation was resumed into it.
-            self.generation += 1
+            self.generations[None] = self.generations.get(None, 0) + 1
+
+    def generation(self):
+        """The count for the conversation this thread's turn belongs to."""
+        return self.generations.get(self.fenced_user(), 0)
 
     # ---- running the agent ------------------------------------------------
 
@@ -362,7 +372,7 @@ class ChatService:
         running. `report(line)` hears the status as it changes."""
         report = report or (lambda line: None)
         log = log or (lambda line: None)
-        generation = self.generation
+        generation = self.generation()
         fence_note = self._fence_note()
         if fence_note:
             text = fence_note + text
@@ -382,7 +392,7 @@ class ChatService:
 
         state, results, failed = "done", [], None
         for k, step in enumerate(steps, 1):
-            if self.generation != generation:
+            if self.generation() != generation:
                 break                    # /chat/new: this job is not wanted now
             prefix = "step %d/%d" % (k, n) if n > 1 else ""
             report(prefix or "working")
@@ -552,13 +562,13 @@ class ChatService:
         cmd += self._fence_args(env)
         if self._session():
             cmd += ["--resume", self._session()]
-        generation = self.generation
+        generation = self.generation()
         who = self.fenced_user()
 
         def keep(sid):
             # A turn already running belongs to the conversation it started
             # in; after /chat/new its session id must not come back.
-            if not sid or generation != self.generation:
+            if not sid or generation != self.generation():
                 return
             if who:
                 self.sessions[who] = sid

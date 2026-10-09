@@ -43,7 +43,9 @@ def wav(seconds=0.5):
     return b"RIFF" + struct.pack("<I", len(body)) + body
 
 
-class Accounts(unittest.TestCase):
+class Server(unittest.TestCase):
+    """A server with accounts on: the owner made from a single-person state."""
+
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         os.environ["CARDOS_STATE"] = self.dir
@@ -95,6 +97,19 @@ class Accounts(unittest.TestCase):
         _, tok = accounts.add_device("sam", "her Cardputer")
         return tok
 
+    def wait(self, jid, tok):
+        import time
+        for _ in range(50):
+            s, _, body = self.req("GET", "/chat?id=" + jid, bearer=tok)
+            if not body.startswith("pending"):
+                return body
+            time.sleep(0.1)
+        return body
+
+
+
+class Accounts(Server):
+
     def test_the_first_start_makes_the_owner(self):
         self.assertTrue(accounts.is_admin("alex"))
         self.assertEqual(accounts.user_for_token(TOKEN), "alex")
@@ -125,15 +140,6 @@ class Accounts(unittest.TestCase):
         tok = self.her()
         self.assertEqual(self.req("GET", "/chat/new", bearer=tok)[0], 403)
         self.assertEqual(self.req("GET", "/chat/new", bearer=TOKEN)[0], 200)
-
-    def wait(self, jid, tok):
-        import time
-        for _ in range(50):
-            s, _, body = self.req("GET", "/chat?id=" + jid, bearer=tok)
-            if not body.startswith("pending"):
-                return body
-            time.sleep(0.1)
-        return body
 
     def test_build_given_to_someone_is_fenced_and_their_own(self):
         tok = self.her()
@@ -224,6 +230,147 @@ class Accounts(unittest.TestCase):
         self.assertEqual(self.req("GET", "/dash/api/me", cookie=mine)[0], 200)      # mine untouched
         self.assertEqual(self.req("POST", "/dash/api/password", cookie=fresh,
                                   js={"old": "wrong", "new": "whatever"})[0], 403)
+
+
+class PerPerson(Server):
+    """State kept per person, checked with accounts on -- how the bugs these
+    pin got through: every other test of Google and Toggl runs single-person."""
+
+    def as_me(self, name="alex"):
+        accounts.set_current(name)
+        self.addCleanup(accounts.set_current, None)
+
+    def google(self):
+        from server import google
+        os.environ.update(GOOGLE_CLIENT_ID="cid", GOOGLE_CLIENT_SECRET="csec",
+                          DASH_URL="https://dash.example")
+        refreshes = []
+
+        def fake_http(method, url, body=None, headers=None, form=False):
+            refreshes.append(body["refresh_token"])
+            return 200, {"access_token": "AT%d" % len(refreshes), "expires_in": 3600}
+        for name, fake in (("http", fake_http),):
+            self.addCleanup(setattr, google, name, getattr(google, name))
+            setattr(google, name, fake)
+        self.addCleanup(setattr, dash, "exchange_code", dash.exchange_code)
+        dash.exchange_code = lambda code, *a: {"refresh_token": "r-" + code, "scope": "tasks"}
+        self.addCleanup(setattr, dash, "revoke", dash.revoke)
+        dash.revoke = lambda token: None
+        google._access_by.clear()
+        self.addCleanup(google._access_by.clear)
+        return google, refreshes
+
+    def sign_in(self, cookie, code):
+        _, hdrs, _ = self.req("GET", "/dash/google/start", cookie=cookie)
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(hdrs["Location"]).query)
+        s, hdrs, _ = self.req("GET", "/dash/google/callback?" + urllib.parse.urlencode(
+            {"state": q["state"][0], "code": code}), cookie=cookie)
+        self.assertIn("Signed%20in", hdrs["Location"])
+
+    def test_a_google_sign_in_drops_that_persons_access_token(self):
+        google, refreshes = self.google()
+        mine = self.login("alex", PASSWORD)
+        self.sign_in(mine, "one")
+        self.as_me()
+        self.assertEqual(google.access_token(), "AT1")
+        self.assertEqual(google.access_token(), "AT1")          # cached
+        # Signing in again (to add the Tasks scope, say) is a new login: the
+        # next call must use it, not the hour-long token from the old one.
+        self.sign_in(mine, "two")
+        self.assertEqual(google.access_token(), "AT2")
+        self.assertEqual(refreshes, ["r-one", "r-two"])
+
+    def test_signing_out_of_google_drops_the_access_token(self):
+        google, _ = self.google()
+        mine = self.login("alex", PASSWORD)
+        for route in ("/dash/api/google/forget", "/dash/google/forget"):
+            self.sign_in(mine, "x")
+            self.as_me()
+            google.access_token()
+            self.assertTrue(google._access_by["alex"]["token"])
+            self.req("POST", route, js={}, cookie=mine)
+            self.assertIsNone(google._access_by["alex"]["token"], route)
+            with self.assertRaises(google.GoogleError):
+                google.access_token()
+
+    def test_pushed_google_creds_drop_the_access_token(self):
+        google, _ = self.google()
+        self.as_me()
+        google.save_creds("cid", "csec", "r-a")
+        self.assertEqual(google.access_token(), "AT1")
+        google.save_creds("cid", "csec", "r-b")
+        self.assertEqual(google.access_token(), "AT2")
+
+    def test_a_new_toggl_token_keeps_the_targets(self):
+        from server import toggl
+        self.as_me()
+        target = {"project": 7, "kind": "week", "hours": 5}
+        toggl.save({"token": "old", "name": "Alex", "workspace": 5, "targets": [target]})
+        self.addCleanup(setattr, toggl, "check_token", toggl.check_token)
+        toggl.check_token = lambda token: ("Alex", 6)
+        s, _, _ = self.req("POST", "/dash/api/toggl/token", js={"token": "new"},
+                           cookie=self.login("alex", PASSWORD))
+        self.assertEqual(s, 200)
+        c = toggl.load()
+        self.assertEqual((c["token"], c["workspace"]), ("new", 6))
+        self.assertEqual(c["targets"], [target])
+
+    def test_a_toggl_save_drops_only_that_persons_cache(self):
+        from server import toggl
+        toggl._cache.clear()
+        self.addCleanup(toggl._cache.clear)
+        toggl._cache[("sam", "projects")] = (1e12, {"sams": 1})
+        self.as_me()
+        toggl._cache[("alex", "projects")] = (1e12, {"mine": 1})
+        toggl.save({"token": "t"})
+        self.assertEqual(list(toggl._cache), [("sam", "projects")])
+
+    def chat_two_steps(self, during_first):
+        """A two-step turn for whoever posts it; `during_first(env)` runs
+        inside its first step. The env of every step run, in order."""
+        seen = []
+
+        def fake_stream(cmd, env, cwd, on_status, idle, cap, on_log=None):
+            seen.append(dict(env))
+            if len(seen) == 1:
+                during_first(env)
+            return "ok", "sid-" + env.get("FENCE_USER", "owner")
+        self.addCleanup(setattr, chatmod, "run_stream", chatmod.run_stream)
+        chatmod.run_stream = fake_stream
+        app.Handler.chat._plan = lambda text: ["one", "two"]
+        return seen
+
+    def test_the_owners_new_conversation_does_not_stop_her_build(self):
+        tok = self.her()
+        accounts.set_build("sam", True)
+        seen = self.chat_two_steps(lambda env: self.req("GET", "/chat/new", bearer=TOKEN))
+        jid = self.req("POST", "/chat", body=b"make me a maze game", bearer=tok)[2].split()[1]
+        body = self.wait(jid, tok)
+        self.assertTrue(body.startswith("done"), body)
+        self.assertEqual([e.get("FENCE_USER") for e in seen], ["sam", "sam"])
+        self.assertIn("[x] 2. two", body)
+        self.assertEqual(app.Handler.chat.sessions.get("sam"), "sid-sam")
+
+    def test_her_new_conversation_does_not_stop_the_owners(self):
+        tok = self.her()
+        accounts.set_build("sam", True)
+        seen = self.chat_two_steps(lambda env: self.req("GET", "/chat/new", bearer=tok))
+        jid = self.req("POST", "/chat", body=b"fix the kernel", bearer=TOKEN)[2].split()[1]
+        body = self.wait(jid, TOKEN)
+        self.assertEqual(len(seen), 2, body)
+        self.assertEqual(app.Handler.chat.session_id, "sid-owner")
+
+    def test_her_own_new_conversation_stops_her_build(self):
+        tok = self.her()
+        accounts.set_build("sam", True)
+        chat = app.Handler.chat
+        seen = self.chat_two_steps(lambda env: self.req("GET", "/chat/new", bearer=tok))
+        done, real = threading.Event(), chat._run
+        chat._run = lambda *a: (real(*a), done.set())
+        self.req("POST", "/chat", body=b"make me a maze game", bearer=tok)
+        self.assertTrue(done.wait(10))
+        self.assertEqual(len(seen), 1)                           # step two never ran
+        self.assertIsNone(chat.sessions.get("sam"))              # nor came back
 
 
 class Passwords(unittest.TestCase):

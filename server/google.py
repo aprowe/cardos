@@ -72,6 +72,17 @@ def _acc():
     return _access_by.setdefault(u, {"token": None, "until": 0.0})
 
 
+def forget_access():
+    """Drop the current person's cached access token, so the next call
+    refreshes with whatever login is saved now. Every change of login calls
+    this: a sign-in that adds the Tasks scope, a sign-out. The dashboard's
+    callback once cleared the single-person slot instead, and with accounts
+    on the old token -- without Tasks -- went on being used for an hour."""
+    with _lock:
+        a = _acc()
+        a["token"], a["until"] = None, 0.0
+
+
 class GoogleError(Exception):
     def __init__(self, status, why):
         Exception.__init__(self, why)
@@ -182,8 +193,7 @@ def save_creds(client_id, secret, refresh):
     dash.save_creds({"client_id": client_id, "client_secret": secret,
                      "refresh_token": refresh, "issued_at": int(time.time()),
                      "email": "", "scope": "pushed from the device"})
-    with _lock:
-        _acc()["token"] = None
+    forget_access()
 
 
 def access_token():
