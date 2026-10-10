@@ -66,6 +66,8 @@ static int kill(XipCache *c, uint32_t off) {
          ? 0 : XIP_ERR_IO;
 }
 
+int xip_kill(XipCache *c, uint32_t off) { return kill(c, off); }
+
 static int in_use(const XipCache *c, uint32_t off) {
   int i;
   for (i = 0; i < XIP_INUSE_MAX; i++)
@@ -107,6 +109,15 @@ static int code_crc(XipCache *c, uint32_t off, uint32_t n, uint32_t *crc) {
   }
   *crc = x;
   return 0;
+}
+
+int xip_verify(XipCache *c, uint32_t off) {
+  XipHdr h;
+  uint32_t crc;
+  if (off > c->f.size || c->f.read(c->f.ctx, off, &h, sizeof h) != 0) return XIP_ERR_IO;
+  if (!committed(c, &h, off)) return XIP_ERR_STATE;
+  if (code_crc(c, off, h.key.code_size, &crc) != 0) return XIP_ERR_IO;
+  return crc == h.crc ? XIP_OK : XIP_ERR_IO;
 }
 
 struct lookup { const XipKey *k; uint32_t off; };
@@ -191,7 +202,12 @@ int xip_commit(XipCache *c, const XipKey *k, uint32_t crc, const char *path) {
   if (c->head >= c->f.size) c->head = 0;
   c->next_seq++;
   c->pend_len = 0;
-  return walk(c, kill_same, &s) < 0 ? XIP_ERR_IO : XIP_OK;
+  /* The commit word is down, so the new entry is valid whatever happens
+   * next. A failure killing the old ones is not a failed commit: they stay
+   * live but stale (their key names the old file), xip_find skips them, and
+   * the next forget or commit for this path tries again. */
+  (void)walk(c, kill_same, &s);
+  return XIP_OK;
 }
 
 void xip_abandon(XipCache *c) { c->pend_len = 0; }

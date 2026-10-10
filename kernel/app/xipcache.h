@@ -71,9 +71,17 @@ int  xip_begin(XipCache *c, uint32_t code_size, uint32_t *off);
 /* Code bytes at `at` into the begun entry. */
 int  xip_write(XipCache *c, uint32_t at, const void *buf, uint32_t n);
 /* Header, then the commit word; then every other live entry for the same
- * path is killed. */
+ * path is killed. XIP_OK once the commit word is written, even if a kill
+ * fails: the new entry is valid from that moment. */
 int  xip_commit(XipCache *c, const XipKey *k, uint32_t crc, const char *path);
 void xip_abandon(XipCache *c);
+/* The entry at off reads back as it was written: its code matches the CRC
+ * in its header. What the loader asks before running code it has just
+ * written, since a write that went wrong is otherwise found only on a later
+ * launch, by xip_find, after the app has already run it. */
+int  xip_verify(XipCache *c, uint32_t off);
+/* Kill the entry at off (its code stays until the ring comes round). */
+int  xip_kill(XipCache *c, uint32_t off);
 /* A loaded app maps the entry at off: never erase it until unref. */
 int  xip_ref(XipCache *c, uint32_t off);
 void xip_unref(XipCache *c, uint32_t off);

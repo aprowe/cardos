@@ -957,6 +957,9 @@ void test_xip_too_big_is_full(void);
 void test_xip_one_write_at_a_time(void);
 void test_xip_wipe(void);
 void test_xip_soak_every_live_entry_checks(void);
+void test_xip_verify_reads_the_code_back(void);
+void test_xip_kill_makes_find_miss(void);
+void test_xip_commit_stands_when_the_kill_walk_fails(void);
 
 int main(void) {
   /* Unbuffered, so a crash is reported next to the test that caused it
@@ -1998,5 +2001,8 @@ int main(void) {
   RUN(test_xip_one_write_at_a_time);
   RUN(test_xip_wipe);
   RUN(test_xip_soak_every_live_entry_checks);
+  RUN(test_xip_verify_reads_the_code_back);
+  RUN(test_xip_kill_makes_find_miss);
+  RUN(test_xip_commit_stands_when_the_kill_walk_fails);
   return tt_report();
 }

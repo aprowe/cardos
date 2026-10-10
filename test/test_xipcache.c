@@ -312,3 +312,45 @@ void test_xip_soak_every_live_entry_checks(void) {
   CHECK_EQ(s_soak_bad, 0);
   CHECK_EQ(s_bad_writes, 0);
 }
+
+/* What the loader does after a commit: read the code back. A byte that
+ * did not program the way it was asked is caught before anything runs it. */
+void test_xip_verify_reads_the_code_back(void) {
+  XipCache c;
+  long off;
+  reset(&c);
+  off = install(&c, "/apps/jar.capp", JAR, 1, 0x5A);
+  CHECK(off >= 0);
+  CHECK_EQ(xip_verify(&c, (uint32_t)off), XIP_OK);
+  s_flash[(uint32_t)off + XIP_HDR + 1234] ^= 0x01;
+  CHECK(xip_verify(&c, (uint32_t)off) != XIP_OK);
+  CHECK(xip_verify(&c, (uint32_t)off + XIP_SECTOR) != XIP_OK);   /* no entry there */
+}
+
+void test_xip_kill_makes_find_miss(void) {
+  XipCache c;
+  long off;
+  reset(&c);
+  off = install(&c, "/apps/jar.capp", JAR, 1, 0x5A);
+  CHECK(install(&c, "/apps/todo.capp", 15044, 1, 0x11) > 0);
+  CHECK(off >= 0);
+  CHECK_EQ(xip_kill(&c, (uint32_t)off), XIP_OK);
+  CHECK(!found(&c, "/apps/jar.capp", JAR, 1, NULL));
+  CHECK(found(&c, "/apps/todo.capp", 15044, 1, NULL));
+  CHECK_EQ(s_bad_writes, 0);
+}
+
+/* Once the commit word is down the new entry is valid; a write that fails
+ * while killing the old one does not make the commit a failure. The old
+ * entry stays live, and the next commit or forget tries again. */
+void test_xip_commit_stands_when_the_kill_walk_fails(void) {
+  XipCache c;
+  reset(&c);
+  CHECK(install(&c, "/apps/jar.capp", JAR, 1, 0x5A) >= 0);
+  s_fail_after = 3;                 /* code, header, commit; then the kill */
+  CHECK(install(&c, "/apps/jar.capp", JAR, 2, 0x22) >= 0);
+  s_fail_after = -1;
+  CHECK(found(&c, "/apps/jar.capp", JAR, 2, NULL));
+  reboot(&c);
+  CHECK(found(&c, "/apps/jar.capp", JAR, 2, NULL));
+}
