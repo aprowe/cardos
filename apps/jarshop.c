@@ -13,11 +13,14 @@
  *                   (grown beds), "shelf TAG,..." (the shelved items'
  *                   tags), "owned NAME,..." (up to 40), "tz ZONE"
  *   GET  /jar/day   again every 3 s while it says "pending", until
- *                   "ok DATE\ntags ...\nitems N" ("error WHY" gives up)
+ *                   "ok DATE\ntags ...\nitems N" ("error WHY" gives up);
+ *                   a "more" line after it says the server, which makes
+ *                   them one at a time, has more coming: ask again in 4 s
  *   GET  /jar/item?i=K  for K in 0..N-1: one line of base64, a signed
  *                   record, checked against the key pinned in
  *                   /var/jar/server.pub (GET /jar/pubkey the first time)
- * and the batch replaces the old one only once it is whole. Offline, or on
+ * and each item goes on show as it comes, the new batch replacing the old
+ * one from its first item. Offline, or on
  * any failure, yesterday's stays; before any batch there is the hand-made
  * one built into the app. A record carries no price: jst_price works one
  * out from the item, the same everywhere.
@@ -53,6 +56,9 @@ static struct {
   char shelf_names[JS_SHELF][JI_NAME + 1];
   char shelf_tags[64];
   int k, nitems, polls, tried, again;
+  /* The server makes a stock one item at a time and says "more" until it is
+   * done: `more` is that, `live` that this batch is already on show. */
+  int more, live;
   uint32_t wait_until;
 } G;
 
@@ -213,37 +219,63 @@ static void start_day(void) {
   s_fresh = 0;
 }
 
+/* The batch so far goes on show: it replaces the old stock, whose records
+ * go. What was bought from it stays bought (its sold bits are the shop's). */
+static void show_batch(void) {
+  char p[48];
+  int i, old = S.gen;
+  NS.sold = G.live ? S.sold : 0;
+  ji_copy(&S, &NS, (int)sizeof S);
+  jst_stock_save(api, &S, TEXT, sizeof TEXT);
+  if (old != S.gen)
+    for (i = 0; i < JST_STOCK_N; i++) { jst_stock_path(api, old, i, p, sizeof p); api->remove(p); }
+  G.live = 1;
+  if (G.sel >= S.n) G.sel = G.top = 0;
+  if (G.view == V_STOCK) load_page();
+}
+
 static void next_item(void) {
   char p[40];
   if (G.k >= G.nitems || G.k >= JST_STOCK_N) {
-    /* The new batch is whole: it replaces the old one, whose records go. */
-    int i, old = S.gen;
-    ji_copy(&S, &NS, (int)sizeof S);
-    jst_stock_save(api, &S, TEXT, sizeof TEXT);
-    if (old != S.gen)
-      for (i = 0; i < JST_STOCK_N; i++) { jst_stock_path(api, old, i, p, sizeof p); api->remove(p); }
+    if (G.more && G.k < JST_STOCK_N) {                   /* the rest is being made */
+      api->fmt(p, sizeof p, "%d here, more being made", S.n);
+      net_status(p);
+      G.wait_until = api->ticks_ms() + 4000;
+      G.again = 1;
+      return;
+    }
+    show_batch();
     net_status("");
     say(S.n ? "Today's stock is in" : "No stock today");
-    if (G.view == V_STOCK) { G.sel = G.top = 0; load_page(); }
     return;
   }
   api->fmt(p, sizeof p, "/jar/item?i=%d", G.k);
   if (send(N_ITEM, "GET", p, 0) != 0) G.wait_until = api->ticks_ms() + 500;
 }
 
-/* "ok DATE\ntags ...\nitems N": 1 if that is what NET holds. */
+/* "ok DATE\ntags ...\nitems N[\nmore]": 1 if that is what NET holds.
+ * "more" says the server is still making the rest: the N so far are
+ * fetched and shown, and it is asked again. */
 static int day_reply(void) {
   const char *p = NET;
   char date[12], *c;
+  int going_on;
   if (!str_starts(p, "ok")) return 0;
   tsv_field(p + (p[2] ? 3 : 2), 0, date, sizeof date);
   for (c = date; *c; c++) if (*c == ' ') *c = 0;
-  ji_zero(&NS, (int)sizeof NS);
-  ji_copy(NS.date, date, (int)sizeof NS.date);
+  /* the same batch, grown: carry on from the items already here */
+  going_on = G.more && str_same(NS.date, date);
+  if (!going_on) {
+    ji_zero(&NS, (int)sizeof NS);
+    ji_copy(NS.date, date, (int)sizeof NS.date);
+    G.live = 0;
+  }
   G.nitems = -1;
+  G.more = 0;
   for (p = tsv_next_line(p); *p; p = tsv_next_line(p)) {
     if (str_starts(p, "tags ")) tsv_field(p + 5, 0, NS.tags, sizeof NS.tags);
     else if (str_starts(p, "items ")) { const char *q = p + 6; G.nitems = (int)str_uint(&q); }
+    else if (str_starts(p, "more")) G.more = 1;
   }
   /* No count is not a count of none: an older server answered a POST for a
    * stock it had already made with "ok DATE" alone, and that replaced the
@@ -251,6 +283,7 @@ static int day_reply(void) {
   if (G.nitems < 0) { G.nitems = 0; return 0; }
   /* The batch's records are kept under a number that names the day, so a
    * stock file only ever points at records of its own day. */
+  if (going_on) return 1;
   NS.gen = (uint8_t)today_gen();
   G.k = 0;
   return 1;
@@ -269,7 +302,11 @@ static void net_reply(int n) {
   case N_DAY_POLL:
     if (n < 0) { net_status(""); failed("Today's stock", n); return; }
     if (refused("Today's stock")) { net_status(""); return; }
-    if (day_reply()) { net_status("fetching today's things"); next_item(); return; }
+    if (day_reply()) {
+      if (G.k < G.nitems) net_status("fetching today's things");
+      next_item();
+      return;
+    }
     if (str_starts(NET, "ok")) {                          /* made, but no count: GET it */
       G.wait_until = api->ticks_ms();
       G.again = 1;
@@ -289,6 +326,8 @@ static void net_reply(int n) {
         NS.id[NS.n] = IO.it.id;
         NS.price[NS.n] = (uint16_t)jst_price(&IO.it);
         NS.n++;
+        show_batch();                                      /* on show as it comes */
+        G.polls = 0;
       }
     }
     G.k++;

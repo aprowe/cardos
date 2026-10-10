@@ -116,9 +116,11 @@ class Stub:
                     raise b
                 return {"items": b}
             out = []
+            kinds = schema["properties"]["items"]["items"]["properties"]["kind"]["enum"]
             for _ in range(n):
                 self.serial += 1
-                out.append(raw_item("Thing %d" % self.serial))
+                out.append(raw_item("Thing %d" % self.serial, kind=kinds[0] if len(kinds) == 1
+                                    else "critter"))
             return {"items": out}
 
 
@@ -456,11 +458,19 @@ class Generate(unittest.TestCase):
 
     def test_a_good_batch(self):
         stub = Stub()
-        tags, recs = self.run_with(stub)
+        got = []
+        p = mock.patch("server.ask.ask_shape", stub)
+        p.start()
+        self.addCleanup(p.stop)
+        tags, recs = jar.generate(None, "alex", self.req, self.date, now=1791590400,
+                                  on_item=lambda k, rec: got.append((k, rec)))
         self.assertEqual(len(recs), 8)
-        self.assertEqual(len(stub.calls), 1)
+        self.assertEqual(got, list(enumerate(recs)))           # each as it was made
+        self.assertEqual(len(stub.calls), 8)                    # one item a call
+        self.assertEqual([c[0] for c in stub.calls], [1] * 8)
         n, prompt, kw = stub.calls[0]
-        self.assertEqual(n, 8)
+        self.assertIn("Make it a critter", prompt)              # its kind, given
+        self.assertIn("Thing 1", stub.calls[1][1])              # what is already made
         self.assertIn("rainy", prompt)
         self.assertIn("cosy", prompt)
         self.assertIn("Moth", prompt)                          # owned: not again
@@ -480,38 +490,53 @@ class Generate(unittest.TestCase):
             self.assertEqual(st.get(jar.NS, "own/%d" % it["id"]), b"alex")
             ids.add(it["id"])
         self.assertEqual(len(ids), 8)
+        kinds = [jar.decode(r)["kind"] for r in recs]
+        e = jar.enums()["kinds"]
+        self.assertEqual(kinds, [e[k] for k in jar.KIND_PLAN])
 
     def test_failures_are_asked_for_again(self):
         flat = [r.replace("3", "2").replace("7", "2").replace("1", "2") for r in sprite()]
-        first = [raw_item("Good %d" % i) for i in range(6)] + \
-                [raw_item("Flat", frames=[flat]), raw_item("Damn Shit")]
-        stub = Stub(first)
+        stub = Stub([raw_item("Good 0")], [raw_item("Flat", frames=[flat])],
+                    [raw_item("Damn Shit")])
         tags, recs = self.run_with(stub)
         self.assertEqual(len(recs), 8)
-        self.assertEqual([c[0] for c in stub.calls], [8, 2])     # only the two again
+        self.assertEqual(len(stub.calls), 10)                    # the two again
         names = [jar.decode(r)["name"] for r in recs]
         self.assertNotIn("Flat", names)
         self.assertNotIn("Damn Shit", names)
-        self.assertIn("Good 0", stub.calls[1][1])                # not those names again
+        self.assertIn("Good 0", stub.calls[3][1])                # not those names again
 
     def test_bounded_and_fewer_is_fine(self):
         bad = [raw_item("Bad", frames=[["0" * 16] * 16])]
-        stub = Stub([raw_item("One")] + bad * 7, bad * 4, ask.Invalid("did not fit"))
+        stub = Stub([raw_item("One")], bad, bad, ask.Invalid("did not fit"), bad)
         tags, recs = self.run_with(stub)
         self.assertEqual(len(recs), 1)
-        self.assertEqual(len(stub.calls), jar.MAX_ROUNDS)
+        self.assertEqual(len(stub.calls), 1 + jar.MAX_FAILS)
+
+    def test_out_of_asks_keeps_what_came(self):
+        stub = Stub([raw_item("One")], [raw_item("Two")], ask.RateLimited("the day's limit"))
+        tags, recs = self.run_with(stub)
+        self.assertEqual(len(recs), 2)
 
     def test_nothing_at_all_is_an_error(self):
-        stub = Stub(ask.Invalid("x"), ask.Invalid("y"), ask.Invalid("z"))
+        stub = Stub(*[ask.Invalid("x")] * jar.MAX_FAILS)
         with self.assertRaises(ask.Invalid):
             self.run_with(stub)
+
+    def test_a_hint_goes_to_a_few_items(self):
+        self.req["hint"] = "more red things"
+        stub = Stub()
+        self.run_with(stub)
+        hinted = [k for k, c in enumerate(stub.calls) if "more red things" in c[1]]
+        self.assertEqual(hinted, list(jar.HINTED))
 
     def test_a_full_moon_adds_one(self):
         self.date = datetime.date(2026, 10, 26)
         stub = Stub()
         tags, recs = self.run_with(stub)
         self.assertEqual(len(recs), 9)
-        self.assertIn("special", stub.calls[0][1])
+        self.assertIn("special", stub.calls[8][1])                # the last one
+        self.assertNotIn("special", stub.calls[0][1])
         self.assertIn("full-moon", tags)
 
 
@@ -584,11 +609,11 @@ class Routes(unittest.TestCase):
     def make_day(self, tok):
         s, body = self.req("POST", "/jar/day", tok, "garden mushroom=2\nshelf odd\nowned \ntz UTC0\n")
         self.assertEqual(s, 200)
-        self.assertIn(body, ("pending\n",))
+        self.assertTrue(body == "pending\n" or body.endswith("more\n"), body)
         deadline = time.time() + 10
         while time.time() < deadline:
             s, body = self.req("GET", "/jar/day", tok)
-            if body != "pending\n":
+            if body != "pending\n" and not body.endswith("more\n"):
                 break
             time.sleep(0.02)
         return s, body
@@ -622,22 +647,51 @@ class Routes(unittest.TestCase):
         self.assertEqual(self.req("GET", "/jar/item?i=0", self.sam)[0], 404)   # sam's own: none
         self.assertEqual(self.req("GET", "/jar/day", None)[0], 403)
 
+    def test_items_show_as_they_are_made(self):
+        # One item a call: the first is fetchable while the rest are being
+        # made, and the day says "more" until it is whole.
+        gate, first = threading.Event(), threading.Event()
+        inner = Stub()
+
+        def slow(chat, prompt, schema, **kw):
+            if inner.calls:
+                first.set()
+                gate.wait(10)
+            return inner(chat, prompt, schema, **kw)
+
+        with mock.patch("server.ask.ask_shape", slow):
+            self.req("POST", "/jar/day", self.alex, "")
+            self.assertTrue(first.wait(10))
+            s, body = self.req("GET", "/jar/day", self.alex)
+            self.assertTrue(body.startswith("ok ") and body.endswith("\nitems 1\nmore\n"), body)
+            self.assertEqual(self.req("POST", "/jar/day", self.alex, ""), (200, body))
+            self.item(self.alex, 0)
+            self.assertEqual(self.req("GET", "/jar/item?i=1", self.alex)[0], 404)
+            gate.set()
+            for _ in range(500):
+                s, body = self.req("GET", "/jar/day", self.alex)
+                if not body.endswith("more\n"):
+                    break
+                time.sleep(0.02)
+        self.assertTrue(body.endswith("\nitems 8\n"), body)
+
     def test_fresh_makes_a_new_stock_the_same_day(self):
         # The shop's r, for trying things out: a new batch even though today's
         # is made. Without it a POST makes nothing more.
         self.make_day(self.alex)
         first = jar.decode(self.item(self.alex, 0))["id"]
-        self.assertEqual(self.req("POST", "/jar/day?fresh=1", self.alex, ""), (200, "pending\n"))
+        s, body = self.req("POST", "/jar/day?fresh=1", self.alex, "")
+        self.assertTrue(body == "pending\n" or body.endswith("more\n"), body)
         for _ in range(200):
             s, body = self.req("GET", "/jar/day", self.alex)
-            if not body.startswith("pending"):
+            if not body.startswith("pending") and not body.endswith("more\n"):
                 break
             time.sleep(0.02)
         self.assertTrue(body.startswith("ok "), body)
         self.assertNotEqual(jar.decode(self.item(self.alex, 0))["id"], first)
 
     def test_a_failed_day_says_why_and_a_post_tries_again(self):
-        with mock.patch("server.ask.ask_shape", Stub(*[ask.Invalid("did not fit")] * 3)):
+        with mock.patch("server.ask.ask_shape", Stub(*[ask.Invalid("did not fit")] * jar.MAX_FAILS)):
             s, body = self.make_day(self.alex)
         self.assertEqual(body, "error did not fit\n")
         s, body = self.make_day(self.alex)

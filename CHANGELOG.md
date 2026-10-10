@@ -11,6 +11,19 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.11.5 -- 2026-10-10
+
+- **The shop's stock arrives one item at a time.** The server asks Claude
+  for one item per call and stores each as soon as it passes the checks.
+  `/jar/day` answers with the items made so far plus a `more` line until
+  the stock is whole, and Jar Shop shows each item as it lands. Anything
+  bought meanwhile stays bought. On the laptop the first item took 38 s,
+  where all eight used to take 105 s together. Each call is told its kind
+  (3 critters, 3 floor decor, 2 hanging) and the names already made, so
+  the mix and the variety hold. A hint goes to items 2, 5 and 7. A call
+  that comes to nothing is tried again, up to 4 times. If the day's asks
+  run out partway, the stock keeps what was made.
+
 ## v0.11.4 -- 2026-10-10
 
 - **Fix: the shop's stock could vanish.** Once the day's stock was already

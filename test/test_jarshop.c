@@ -358,6 +358,42 @@ void test_jarshop_an_ok_without_a_count_does_not_empty_the_shop(void) {
   CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "item 9002") != 0);
 }
 
+/* The server makes a stock one item at a time: "more" until it is whole. */
+static int GROW;
+static int grow_server(const char *m, const char *path, const char *body, char *out, int cap) {
+  if (!strcmp(path, "/jar/day") && strcmp(m, "POST")) {
+    GROW++;
+    if (GROW == 1) return snprintf(out, (size_t)cap, "ok 2027-01-15\ntags rainy\nitems 1\nmore\n");
+    return snprintf(out, (size_t)cap, "ok 2027-01-15\ntags rainy\nitems 3\n");
+  }
+  DAY_POLLS = 5;
+  return day_server(m, path, body, out, cap);
+}
+
+void test_jarshop_items_show_as_they_are_made(void) {
+  card(500);
+  jf_handler = grow_server;
+  GROW = 0;
+  FORGE = 0;
+  launch("shop");
+  tick(3200);                                 /* the POST's pending, then the first */
+  tick(100);
+  CHECK_EQ(GROW, 1);
+  CHECK_EQ(S.n, 1);                           /* on show already */
+  CHECK(strcmp(S.date, "2027-01-15") == 0);
+  CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "item 9000") != 0);
+  key(CAPP_KEY_ENTER);                        /* bought while the rest is made */
+  CHECK(js_owns(&J, 9000));
+  key(CAPP_KEY_ESC);
+  tick(4200);
+  tick(100);
+  CHECK_EQ(GROW, 2);
+  CHECK_EQ(S.n, 3);
+  CHECK_EQ(jf_count("/jar/item?i="), 3);      /* each fetched once */
+  CHECK(jst_sold(&S, &J, 0));                 /* still sold */
+  CHECK(!jst_sold(&S, &J, 1));
+}
+
 void test_jarshop_a_word_to_the_shopkeeper(void) {
   const JfReq *r;
   const char *s;

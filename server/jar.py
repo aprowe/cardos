@@ -65,9 +65,14 @@ NS = "srv/jar"
 MAKER = "Jar Works"
 ID_BASE = 100                 # built-ins are 1..12; the server's start past them
 ITEMS = 8                     # a day's stock
-MAX_ROUNDS = 3                # Claude calls a day's stock may take
-RETRY_BATCH = 4               # a retry asks for at most this many
-GEN_TIMEOUT = 900             # one Claude call: 8 sprites took 391 s on the droplet (105 on the laptop)
+# A stock is made one item a call, each stored the moment it passes, so the
+# shop shows the first in under a minute instead of all eight after six or
+# seven (one call for all 8 took 391 s on the droplet). Each call is told its
+# kind, so the mix holds without one call seeing the whole batch.
+KIND_PLAN = ("critter", "floor", "hanging", "floor", "critter", "hanging", "floor", "critter")
+HINTED = (1, 4, 6)            # the items a word to the shopkeeper leans
+MAX_FAILS = 4                 # calls that may come to nothing before the day settles for less
+GEN_TIMEOUT = 600             # one Claude call, one item
 SCRIPT_SRC_MAX = 1200         # a script's source, as Claude writes it
 STOCK_TTL = 3 * 86400
 FRIENDS_MAX = 64
@@ -619,10 +624,13 @@ def item_schema():
     }
 
 
-def batch_schema(n):
+def batch_schema(n, kind=None):
+    one = item_schema()
+    if kind:
+        one = dict(one, properties=dict(one["properties"], kind={"enum": [kind]}))
     return {"type": "object", "required": ["items"], "additionalProperties": False,
             "properties": {"items": {"type": "array", "minItems": 1, "maxItems": n,
-                                     "items": item_schema()}}}
+                                     "items": one}}}
 
 
 def _numbered(d):
@@ -632,7 +640,11 @@ def _numbered(d):
 HINT_LEN = 40
 
 
-def prompt_for(n, tags, facts, owned, special=None, avoid=(), hint=""):
+KIND_WORDS = {"critter": "a critter (it roams)", "floor": "floor decor (it stands on the soil)",
+              "hanging": "hanging decor (it hangs from the lid)"}
+
+
+def prompt_for(n, tags, facts, owned, special=None, avoid=(), hint="", kind=None):
     e = enums()
     day = "%s, %s, %s" % (facts["date"], facts["season"], facts["moon"])
     if facts.get("weather"):
@@ -646,25 +658,32 @@ def prompt_for(n, tags, facts, owned, special=None, avoid=(), hint=""):
         "twigs), mossy plants, worker critters called mosslings and a snail who carries "
         "the jars out. Its shop sells collectible items the player places in the jar.",
         "",
-        "Invent %d new shop items for today. Today's tags: %s. The day: %s." % (
-            n, ", ".join(tags), day),
-        "Each item should clearly fit one or more of the tags. Mix the kinds: about a third "
-        "critters (they roam), the rest floor decor (stands on the soil) and hanging decor "
-        "(hangs from the lid).",
+        ("Invent one new shop item for today. Today's tags: %s. The day: %s." % (
+            ", ".join(tags), day)) if n == 1 else
+        ("Invent %d new shop items for today. Today's tags: %s. The day: %s." % (
+            n, ", ".join(tags), day)),
+        ("It should clearly fit one or more of the tags." if n == 1 else
+         "Each item should clearly fit one or more of the tags.") + (
+            " Make it %s." % KIND_WORDS[kind] if kind else
+            " Mix the kinds: about a third critters (they roam), the rest floor decor "
+            "(stands on the soil) and hanging decor (hangs from the lid)."),
     ]
+    if avoid:
+        lines.append("Today's shop already has: %s. Make something different from those."
+                     % ", ".join(avoid))
     if special:
-        lines.append("Today is special (%s): make the last item a rare, special one about it."
-                     % special)
+        lines.append("Today is special (%s): make %s a rare, special one about it."
+                     % (special, "this item" if n == 1 else "the last item"))
     if hint:
         # A word to the shopkeeper. He is a junk dealer who knows people, not a
         # genie: it nudges what turns up, it does not order it.
         lines.append(
             "The shopkeeper is a junk dealer with connections, not a wish-granter. The "
             "player mentioned to him in passing: \"%s\". Treat it as a loose guideline, "
-            "the way a dealer would: let it lean two or three of today's items that way, "
-            "loosely and in the spirit of the tags and the day, and leave the rest as they "
-            "would have been. Do not make an item that simply is the request, and do not "
-            "mention the request in any item's text." % hint)
+            "the way a dealer would: let this find lean that way, loosely and in the "
+            "spirit of the tags and the day -- something he turned up through a contact, "
+            "not made to order. Do not make an item that simply is the request, and do "
+            "not mention the request in its text." % hint)
     if owned or avoid:
         lines.append("Do not reuse these names: %s." % ", ".join(list(owned) + list(avoid)))
     lines += [
@@ -794,10 +813,12 @@ def to_item(raw, item_id, made, tags, log=None):
     }
 
 
-def generate(chat, person, req, date, store=None, signer=None, now=None, log=None):
+def generate(chat, person, req, date, store=None, signer=None, now=None, log=None,
+             on_tags=None, on_item=None):
     """A day's stock for `person`: (tags, [signed records]). Asks Claude for
-    ITEMS (one more on a special day) in one call, checks each, and asks again
-    only for the ones that failed, at most MAX_ROUNDS calls in all; fewer
+    ITEMS (one more on a special day) one item a call, in KIND_PLAN's kinds,
+    sealing each as it passes and handing it to on_item(k, record); a call
+    that comes to nothing is tried again, MAX_FAILS of them in all. Fewer
     than asked for is a smaller stock, not a failure. Raises if Claude
     cannot be asked at all (the day's limit, no Claude, ...) and nothing
     came of it."""
@@ -812,49 +833,48 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
         special = "the first day of %s" % facts["season"]
     want = ITEMS + (1 if special else 0)
     owned = [n.lower() for n in req.get("owned", [])]
-    good, last_error = [], None
-    for rnd in range(MAX_ROUNDS):
-        need = want - len(good)
-        if need <= 0:
-            break
-        n = need if rnd == 0 else min(need, RETRY_BATCH)
-        taken = set(owned) | {g["name"].strip().lower() for g in good}
-        sp = special if special and not any(g.get("_special") for g in good) and \
-            len(good) + n >= want else None
+    hint = req.get("hint", "")
+    rtags = record_tags(tags)
+    if on_tags:
+        on_tags(tags)
+    names, records, last_error, fails = [], [], None, 0
+    while len(records) < want and fails < MAX_FAILS:
+        k = len(records)
+        sp = special if special and k == want - 1 else None
+        kind = None if sp else KIND_PLAN[k % len(KIND_PLAN)]
+        taken = set(owned) | {n.strip().lower() for n in names}
         try:
-            got = ask.ask_shape(chat, prompt_for(n, tags, facts, req.get("owned", []), sp,
-                                                 [g["name"] for g in good],
-                                                 req.get("hint", "")),
-                                batch_schema(n), user=person, limit=ask.DAILY,
+            got = ask.ask_shape(chat, prompt_for(1, tags, facts, req.get("owned", []), sp, names,
+                                                 hint if k in HINTED else "", kind),
+                                batch_schema(1, kind), user=person, limit=ask.DAILY,
                                 timeout=GEN_TIMEOUT, store=st)
         except ask.RateLimited:
-            raise
-        except Exception as e:                         # one round lost, not the day
-            last_error = e
-            if log:
-                log("round %d: %s" % (rnd + 1, e))
-            continue
-        for k, raw in enumerate(got.get("items") or []):
-            why = check_item(raw, taken)
-            if why:
-                if log:
-                    log("refused %r: %s" % (raw.get("name"), "; ".join(why[:3])))
-                continue
-            if sp and k == len(got["items"]) - 1:
-                raw = dict(raw, _special=True)
-            taken.add(raw["name"].strip().lower())
-            good.append(raw)
-            if len(good) >= want:
+            if records:                                # the day's asks ran out: what came
                 break
-    if not good:
-        raise last_error or ValueError("no item passed the checks")
-    records = []
-    rtags = record_tags(tags)
-    for raw in good:
+            raise
+        except Exception as e:                         # one item lost, not the day
+            last_error = e
+            fails += 1
+            if log:
+                log("item %d: %s" % (k + 1, e))
+            continue
+        raw = (got.get("items") or [None])[0]
+        why = check_item(raw, taken) if isinstance(raw, dict) else ["no item"]
+        if why:
+            fails += 1
+            if log:
+                log("refused %r: %s" % (raw.get("name") if isinstance(raw, dict) else raw,
+                                        "; ".join(why[:3])))
+            continue
+        names.append(raw["name"])
         item_id = ID_BASE + st.incr(NS, "next_id")
         rec = seal(encode(to_item(raw, item_id, now, rtags, log)), signer)
         st.put(NS, "own/%d" % item_id, person.encode())
         records.append(rec)
+        if on_item:
+            on_item(k, rec)
+    if not records:
+        raise last_error or ValueError("no item passed the checks")
     return tags, records
 
 
@@ -883,11 +903,21 @@ def _set_day(person, state, store=None):
 
 def _make_day(chat, person, req, date, store):
     key = (person, date.isoformat())
+    made = {"tags": []}
+
+    def on_tags(tags):
+        made["tags"] = tags
+
+    def on_item(k, rec):
+        # on show the moment it is made: the day stays "pending", with a count
+        store.put(NS, "stock/%s/%d" % (person, k), rec, ttl=STOCK_TTL)
+        _set_day(person, {"state": "pending", "date": key[1], "tags": made["tags"],
+                          "n": k + 1}, store)
+
     try:
-        tags, records = generate(chat, person, req, date, store=store,
+        tags, records = generate(chat, person, req, date, store=store, on_tags=on_tags,
+                                 on_item=on_item,
                                  log=lambda s: sys.stderr.write("jar: %s: %s\n" % (person, s)))
-        for i, rec in enumerate(records):
-            store.put(NS, "stock/%s/%d" % (person, i), rec, ttl=STOCK_TTL)
         _set_day(person, {"state": "ok", "date": key[1], "tags": tags, "n": len(records)}, store)
         sys.stderr.write("jar: %s: %d items for %s\n" % (person, len(records), key[1]))
     except Exception as e:                              # noqa: BLE001 - reported to the device
@@ -1036,14 +1066,18 @@ def post_day(h, args):
         return
     state, date = start_day(h.chat, kv.me(), parse_request(body),
                             fresh=(args.get("fresh") or ["0"])[0] == "1")
-    cur = day_state(kv.me()) if state == "ok" else None
     # The whole answer, as GET gives it: "ok DATE" alone was read by the shop
     # as a stock of no items, and replaced the one it had with nothing.
-    h.text(_day_text(cur) if cur and cur.get("state") == "ok" else "pending\n")
+    h.text(_day_text(day_state(kv.me())) or "pending\n")
 
 
 def _day_text(cur):
-    return "ok %s\ntags %s\nitems %d\n" % (cur["date"], ", ".join(cur["tags"]), cur["n"])
+    """What /jar/day answers for a stock with something in it, or None: "ok",
+    then "more" while the rest is still being made."""
+    if not cur or not cur.get("n") or cur.get("state") not in ("ok", "pending"):
+        return None
+    return "ok %s\ntags %s\nitems %d\n%s" % (cur["date"], ", ".join(cur["tags"]), cur["n"],
+                                              "more\n" if cur["state"] == "pending" else "")
 
 
 @kv_route
@@ -1052,10 +1086,10 @@ def get_day(h, args):
     cur = day_state(kv.me())
     if not cur:
         raise NotFound("no stock yet: POST /jar/day")
-    if cur["state"] == "pending":
-        h.text("pending\n")
-    elif cur["state"] == "ok":
-        h.text(_day_text(cur))
+    if cur["state"] == "ok" and not cur.get("n"):
+        h.text("ok %s\ntags %s\nitems 0\n" % (cur["date"], ", ".join(cur["tags"])))
+    elif cur["state"] in ("ok", "pending"):
+        h.text(_day_text(cur) or "pending\n")
     else:
         h.text("error %s\n" % cur.get("why", "it failed"))
 
