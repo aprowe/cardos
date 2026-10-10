@@ -32,7 +32,7 @@
  *   192    12  who gifted it, empty if nobody
  *   204     1  signature length, 0..64 (0 for built-ins)
  *   205     2  script length, 0..256 (0 in phase 1)
- *   207     1  reserved, 0
+ *   207     1  price / 5, chosen by the server (0: worked out on the device)
  *   208        signature bytes, then script bytes, then frames x 96
  *
  * A frame is 16x16 at 3 bits a pixel, 96 bytes: pixel i (row-major) is bits
@@ -126,6 +126,7 @@ typedef struct {
   uint8_t  sig_len;
   uint8_t  sig[JI_SIG_MAX];
   uint16_t script_len;
+  uint8_t  price5;                       /* the price in fives; 0 none given */
   uint8_t  script[JI_SCRIPT_MAX];
   uint8_t  frames[JI_MAX_FRAMES][JI_FRAME_BYTES];
 } JItem;
@@ -231,6 +232,7 @@ static JI_OPT int jitem_encode(const JItem *it, uint8_t *out, int cap) {
   ji_put_str(out + 192, it->gifted, JI_WHO);
   out[204] = it->sig_len;
   ji_put16(out + 205, it->script_len);
+  out[207] = it->price5;
   o = JI_HDR;
   ji_copy(out + o, it->sig, it->sig_len);       o += it->sig_len;
   ji_copy(out + o, it->script, it->script_len); o += it->script_len;
@@ -260,6 +262,7 @@ static JI_OPT int jitem_decode(JItem *it, const uint8_t *in, int n) {
     return -3;
   it->sig_len = in[204];
   it->script_len = (uint16_t)ji_get16(in + 205);
+  it->price5 = in[207];
   if (hdr + it->sig_len + it->script_len + it->nframes * JI_FRAME_BYTES != total) return -2;
 
   ji_get_str(it->name, in + 12, JI_NAME);

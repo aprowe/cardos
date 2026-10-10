@@ -1,8 +1,8 @@
-/* Jar Shop -- Jar Factory's shop, My Stuff, upgrades, garden and shelf.
+/* Jar Shop -- Jar Factory's shop, My Stuff, upgrades and garden.
  *
  * Opened from the jar (apps/jar.c) with api->run("Jar Shop", SCREEN): shop,
- * stuff, decor (My Stuff, picking something to put in the jar), up, garden,
- * shelf. Esc at a top screen, or fn-`, goes back to the jar. What it shares
+ * stuff, decor (My Stuff, picking something to put in the jar), up, garden.
+ * Esc at a top screen, or fn-`, goes back to the jar. What it shares
  * with Jar Post (apps/jarpost.c) is apps/jarui.h; the files are
  * apps/jarstore.h's.
  *
@@ -13,11 +13,14 @@
  *                   (grown beds), "shelf TAG,..." (the shelved items'
  *                   tags), "owned NAME,..." (up to 40), "tz ZONE"
  *   GET  /jar/day   again every 3 s while it says "pending", until
- *                   "ok DATE\ntags ...\nitems N" ("error WHY" gives up)
+ *                   "ok DATE\ntags ...\nitems N" ("error WHY" gives up);
+ *                   a "more" line after it says the server, which makes
+ *                   them one at a time, has more coming: ask again in 4 s
  *   GET  /jar/item?i=K  for K in 0..N-1: one line of base64, a signed
  *                   record, checked against the key pinned in
  *                   /var/jar/server.pub (GET /jar/pubkey the first time)
- * and the batch replaces the old one only once it is whole. Offline, or on
+ * and each item goes on show as it comes, the new batch replacing the old
+ * one from its first item. Offline, or on
  * any failure, yesterday's stays; before any batch there is the hand-made
  * one built into the app. A record carries no price: jst_price works one
  * out from the item, the same everywhere.
@@ -33,57 +36,63 @@
 
 #define C_SOIL CAPP_RGB(0x4a, 0x34, 0x24)
 
-enum { V_STOCK = 0, V_STUFF, V_CARD, V_UP, V_GARDEN, V_PLANT, V_SHELF };
-enum { P_BROWSE = 0, P_DECOR, P_SHELF };                 /* what My Stuff is picking for */
+enum { V_STOCK = 0, V_STUFF, V_CARD, V_UP, V_GARDEN, V_PLANT };
+enum { P_BROWSE = 0, P_DECOR };                          /* what My Stuff is picking for */
 enum { N_DAY_POST = N_APP, N_DAY_POLL, N_ITEM };
 
 static JStock S;                                          /* the stock on show */
-/* A word to the shopkeeper ("could use more red things"): kept on the card,
- * sent with every day's request; the server treats it as a nudge to a dealer
- * with connections, not a wish. e in the shop edits it. */
-static char HINT[JST_HINT_MAX + 1], HIN[JST_HINT_MAX + 1];
-static int hint_editing;
+/* Tibbs's line of the day (server/shopkeep.py), and seeds in hand. Talking to
+ * him is Jar Post's ("talk"); t opens it. */
+static char SAY[144];
+static int SEEDS[JPL_KINDS];
 static JStock NS;                                         /* the day's batch, arriving */
 
 static struct {
   int view, back, pick, slot, sel, top, ntile;
   int up_sel, bed, plant, asking;
   Tile tile[8];
-  Tile shelf[JS_SHELF];
-  char shelf_names[JS_SHELF][JI_NAME + 1];
-  char shelf_tags[64];
   int k, nitems, polls, tried, again;
+  /* The server makes a stock one item at a time and says "more" until it is
+   * done: `more` is that, `live` that this batch is already on show. */
+  int more, live, got, quiet, dropped;
   uint32_t wait_until;
 } G;
 
 static const char *const UP_NAME[JU_KINDS] = { "Another mossling", "Another machine", "Faster belt", "Another bed" };
-static const char *const FLAVOUR[JPL_KINDS] = { "sweet, round, food", "soft, sleepy, cosy", "odd, glowing, spooky",
-                                               "fancy, dressed-up", "spiky, deserty, tough" };
-static const uint16_t MIX_C[JPL_KINDS] = { CAPP_RGB(0xd2, 0x38, 0x5a), CAPP_RGB(0x5a, 0xa8, 0x48),
-                                           CAPP_RGB(0xb0, 0x6a, 0xe0), CAPP_RGB(0xff, 0x8f, 0xab),
-                                           CAPP_RGB(0x4f, 0xae, 0x6a) };
 static const int PLANT_SPR[JPL_KINDS] = { SPR_BUSH, SPR_FERN, SPR_SHROOM, SPR_FLOWER, SPR_CACTUS };
 static const char *const SHORT[JPL_KINDS] = { "berry", "fern", "shroom", "flower", "cactus" };
 
 /* ---- the grids ------------------------------------------------------------------- */
 
 static int stuff_mode(void) { return G.view == V_STUFF; }
-static int page_count(void) { return stuff_mode() ? J.nowned : S.n; }
+static int page_count(void) { return stuff_mode() ? J.nowned : S.n + (S.seed ? 1 : 0); }
+
+/* The seed packet is the stock's last tile. */
+static void seed_tile(Tile *t) {
+  api->mem_set(t, 0, sizeof *t);
+  t->seed = S.seed;
+  t->price = S.seed_price;
+  t->sold = S.seed_sold;
+  t->ok = !S.seed_sold;
+}
 
 /* What the grid shows, and the selected one's words. Card I/O: from key
  * handlers and tick, never from paint. */
 static void load_page(void) {
   int i, n = page_count();
-  for (i = 0; i < 8; i++) G.tile[i].ok = 0;
+  /* whole tiles, not just .ok: a seed tile's mark once stayed on the item after it */
+  api->mem_set(G.tile, 0, sizeof G.tile);
   G.ntile = 0;
   for (i = 0; i < 8 && G.top * 4 + i < n; i++) {
-    int k = G.top * 4 + i;
-    int ok = stuff_mode() ? jst_item_read(api, J.owned[k], &IO) >= 0 : jst_stock_read(api, &S, k, &IO) >= 0;
+    int k = G.top * 4 + i, ok;
+    if (!stuff_mode() && k == S.n) { seed_tile(&G.tile[i]); G.ntile = i + 1; continue; }
+    ok = stuff_mode() ? jst_item_read(api, J.owned[k], &IO) >= 0 : jst_stock_read(api, &S, k, &IO) >= 0;
     if (ok) {
       tile_from(&G.tile[i], &IO.it);
       if (!stuff_mode()) {
         G.tile[i].price = S.price[k];
         G.tile[i].sold = (uint8_t)jst_sold(&S, &J, k);
+        G.tile[i].held = (uint8_t)(S.held >> k & 1);
         G.tile[i].ok = !G.tile[i].sold;
       }
     }
@@ -91,7 +100,11 @@ static void load_page(void) {
   }
   U.card.ok = 0;
   i = G.sel - G.top * 4;
-  if (i >= 0 && i < G.ntile && G.tile[i].ok) {
+  if (i >= 0 && i < G.ntile && G.tile[i].ok && G.tile[i].seed) {
+    ji_copy(&U.card, &G.tile[i], (int)sizeof U.card);
+    api->fmt(U.name, sizeof U.name, "%s seeds", JS_PLANT_NAME[G.tile[i].seed - 1]);
+    api->fmt(U.line, sizeof U.line, "Plant them in the Garden");
+  } else if (i >= 0 && i < G.ntile && G.tile[i].ok) {
     ji_copy(&U.card, &G.tile[i], (int)sizeof U.card);
     if (stuff_mode()) jst_item_read(api, G.tile[i].id, &IO);
     else jst_stock_read(api, &S, G.sel, &IO);
@@ -124,26 +137,6 @@ static void open_card(uint32_t id, int back) {
   U.dirty = 1;
 }
 
-static void load_shelf(void) {
-  int i, k = 0;
-  G.shelf_tags[0] = 0;
-  for (i = 0; i < JS_SHELF; i++) {
-    G.shelf[i].ok = 0;
-    G.shelf_names[i][0] = 0;
-    if (J.shelf[i] && jst_item_read(api, J.shelf[i], &IO) >= 0) {
-      tile_from(&G.shelf[i], &IO.it);
-      ji_copy(G.shelf_names[i], IO.it.name, JI_NAME + 1);
-      if (IO.it.tags[0]) {
-        if (k) k = put(G.shelf_tags, k, sizeof G.shelf_tags, ", ");
-        k = put(G.shelf_tags, k, sizeof G.shelf_tags, IO.it.tags);
-      }
-    }
-  }
-  U.dirty = 1;
-}
-
-static void go_shelf(void) { G.view = V_SHELF; load_shelf(); }
-
 /* ---- the daily stock ---------------------------------------------------------------- */
 
 static uint32_t today(void) { return api->epoch() / 86400u; }
@@ -165,21 +158,19 @@ static void tz_of(char *out, int n) {
     }
 }
 
-/* The day's request into NET: garden, shelf, owned, tz. Its length. */
+/* The day's request into NET: what is in the jar (Tibbs knows it), what is
+ * owned (not to be made again), tz, and what was bought and held. Its length. */
 static int day_body(void) {
-  static const int ORDER[JPL_KINDS] = { JPL_SHROOM, JPL_BERRY, JPL_FERN, JPL_FLOWER, JPL_CACTUS };
   char tz[48];
-  int mix[JPL_KINDS], k, i, first;
+  int k, i, first;
   tz_of(tz, sizeof tz);
-  js_garden_mix(&J, mix);
-  k = put(NET, 0, sizeof NET, "garden ");
-  for (i = 0; i < JPL_KINDS; i++)
-    k += api->fmt(NET + k, sizeof NET - (size_t)k, "%s%s=%d", i ? "," : "", JS_PLANT_NAME[ORDER[i]], mix[ORDER[i]]);
-  k = put(NET, k, sizeof NET, "\nshelf ");
-  for (i = 0, first = 1; i < JS_SHELF; i++)
-    if (J.shelf[i] && jst_item_read(api, J.shelf[i], &IO) >= 0 && IO.it.tags[0]) {
+  k = put(NET, 0, sizeof NET, "jar ");
+  for (i = 0, first = 1; i < J.nwant && i < 16 && k < (int)sizeof NET - 400; i++)
+    if (jst_item_read(api, J.want[i].id, &IO) >= 0) {
+      char *c;
+      for (c = IO.it.name; *c; c++) if (*c == ',') *c = ' ';
       if (!first) k = put(NET, k, sizeof NET, ",");
-      k = put(NET, k, sizeof NET, IO.it.tags);
+      k = put(NET, k, sizeof NET, IO.it.name);
       first = 0;
     }
   k = put(NET, k, sizeof NET, "\nowned ");
@@ -193,19 +184,41 @@ static int day_body(void) {
     }
   k = put(NET, k, sizeof NET, "\n");
   if (tz[0]) { k = put(NET, k, sizeof NET, "tz "); k = put(NET, k, sizeof NET, tz); k = put(NET, k, sizeof NET, "\n"); }
-  if (HINT[0]) { k = put(NET, k, sizeof NET, "hint "); k = put(NET, k, sizeof NET, HINT); k = put(NET, k, sizeof NET, "\n"); }
+  /* The stock on show: what was bought from it is ours now, what is held
+   * stays in the next one; the server puts the rest back in the pool. */
+  if (S.date[0]) {
+    int pass;
+    for (pass = 0; pass < 2; pass++) {
+      first = 1;
+      for (i = 0; i < S.n; i++)
+        if ((pass ? S.held : S.sold) >> i & 1) {
+          k += api->fmt(NET + k, sizeof NET - (size_t)k, "%s%u", first ? (pass ? "held " : "bought ") : ",",
+                        (unsigned)S.id[i]);
+          first = 0;
+        }
+      if (!first) k = put(NET, k, sizeof NET, "\n");
+    }
+  }
   return k;
 }
 
-/* Ask for today's stock: once a session, and only when the stock here is
- * not today's. Without a clock there is no "today", so nothing. */
+/* Ask for today's stock, once a session. When the stock here is already
+ * today's, only ask how it stands (a GET): the rest of a stock that was still
+ * being made, or a new one, is picked up then -- quietly, saying nothing if
+ * nothing changed or the server cannot be reached. Without a clock there is
+ * no "today", so nothing. */
 static int s_fresh;                               /* r: a new batch now, not tomorrow */
 
 static void start_day(void) {
   if (G.tried || U.net || !api->epoch()) return;
-  if (!s_fresh && S.date[0] && S.gen == today_gen()) return;
   if (need_pub()) return;                        /* the key first; then here again */
   G.tried = 1;
+  G.quiet = 0;
+  if (!s_fresh && S.date[0] && S.gen == today_gen()) {
+    G.quiet = 1;
+    if (send(N_DAY_POLL, "GET", "/jar/day", 0) != 0) G.tried = 0;
+    return;
+  }
   day_body();
   if (send(N_DAY_POST, "POST", s_fresh ? "/jar/day?fresh=1" : "/jar/day", NET) == 0)
     net_status(s_fresh ? "asking for a new stock" : "asking for today's stock");
@@ -213,46 +226,120 @@ static void start_day(void) {
   s_fresh = 0;
 }
 
+/* The batch so far goes on show: it replaces the old stock, whose records
+ * go. What was bought from it stays bought (its sold bits are the shop's). */
+static void show_batch(void) {
+  char p[48];
+  int i, j, old = S.gen;
+  NS.sold = G.live ? S.sold : 0;
+  if (G.live && NS.seed == S.seed) NS.seed_sold = S.seed_sold;
+  if (G.live) NS.held = S.held;
+  else                                            /* a new stock: held ones, by id */
+    for (NS.held = 0, i = 0; i < NS.n; i++)
+      for (j = 0; j < S.n; j++)
+        if (S.date[0] && NS.id[i] == S.id[j] && (S.held >> j & 1)) NS.held = (uint8_t)(NS.held | 1u << i);
+  ji_copy(&S, &NS, (int)sizeof S);
+  jst_stock_save(api, &S, TEXT, sizeof TEXT);
+  if (old != S.gen)
+    for (i = 0; i < JST_STOCK_N; i++) { jst_stock_path(api, old, i, p, sizeof p); api->remove(p); }
+  G.live = 1;
+  if (G.sel >= S.n) G.sel = G.top = 0;
+  if (G.view == V_STOCK) load_page();
+}
+
 static void next_item(void) {
   char p[40];
   if (G.k >= G.nitems || G.k >= JST_STOCK_N) {
-    /* The new batch is whole: it replaces the old one, whose records go. */
-    int i, old = S.gen;
-    ji_copy(&S, &NS, (int)sizeof S);
-    jst_stock_save(api, &S, TEXT, sizeof TEXT);
-    if (old != S.gen)
-      for (i = 0; i < JST_STOCK_N; i++) { jst_stock_path(api, old, i, p, sizeof p); api->remove(p); }
+    if (G.more && G.k < JST_STOCK_N) {                   /* the rest is being made */
+      api->fmt(p, sizeof p, "%d here, more being made", S.n);
+      net_status(p);
+      G.wait_until = api->ticks_ms() + 4000;
+      G.again = 1;
+      return;
+    }
     net_status("");
-    say(S.n ? "Today's stock is in" : "No stock today");
-    if (G.view == V_STOCK) { G.sel = G.top = 0; load_page(); }
+    if (!G.got && G.live) { G.quiet = 0; return; }   /* asked how it stands: as it was */
+    show_batch();
+    if (G.dropped) {                               /* never quietly: it looks like no stock */
+      api->fmt(p, sizeof p, "%d failed the check (log)", G.dropped);
+      say(p);
+    } else say(S.n ? "Today's stock is in" : "No stock today");
+    G.quiet = 0;
     return;
   }
   api->fmt(p, sizeof p, "/jar/item?i=%d", G.k);
   if (send(N_ITEM, "GET", p, 0) != 0) G.wait_until = api->ticks_ms() + 500;
 }
 
-/* "ok DATE\ntags ...\nitems N": 1 if that is what NET holds. */
+/* "ok DATE\ntags ...\nitems N\nbatch B[\nmore]": 1 if that is what NET
+ * holds. "more" says the server is still making the rest: the N so far are
+ * fetched and shown, and it is asked again. The batch number says whether
+ * it is the stock on show (carry on from what is here) or a new one. */
 static int day_reply(void) {
   const char *p = NET;
-  char date[12], *c;
+  char date[12], tags[sizeof NS.tags], *c;
+  uint32_t batch = 0;
+  int was_more, seed = 0, seed_price = 0;
   if (!str_starts(p, "ok")) return 0;
   tsv_field(p + (p[2] ? 3 : 2), 0, date, sizeof date);
   for (c = date; *c; c++) if (*c == ' ') *c = 0;
-  ji_zero(&NS, (int)sizeof NS);
-  ji_copy(NS.date, date, (int)sizeof NS.date);
+  was_more = G.more;                              /* this session is mid-batch */
   G.nitems = -1;
+  G.more = 0;
+  tags[0] = 0;
   for (p = tsv_next_line(p); *p; p = tsv_next_line(p)) {
-    if (str_starts(p, "tags ")) tsv_field(p + 5, 0, NS.tags, sizeof NS.tags);
+    if (str_starts(p, "tags ")) tsv_field(p + 5, 0, tags, sizeof tags);
     else if (str_starts(p, "items ")) { const char *q = p + 6; G.nitems = (int)str_uint(&q); }
+    else if (str_starts(p, "batch ")) { const char *q = p + 6; batch = str_uint(&q); }
+    else if (str_starts(p, "say ")) {                    /* Tibbs's line: kept as it comes */
+      int i = 0;
+      const char *q = p + 4;
+      while (*q && *q != '\n' && i < (int)sizeof SAY - 1) SAY[i++] = *q++;
+      SAY[i] = 0;
+      jst_clean(SAY);
+      jst_put(api, JST_SAY, SAY, i);
+    } else if (str_starts(p, "seed ")) {
+      char name[16];
+      const char *q;
+      int j;
+      tsv_field(p + 5, 0, name, sizeof name);
+      for (q = name; *q && *q != ' '; q++) {}
+      seed = 0;
+      for (j = 0; j < JPL_KINDS; j++)
+        if (str_starts(name, JS_PLANT_NAME[j]) && (name[slen(JS_PLANT_NAME[j])] == ' ')) seed = j + 1;
+      if (*q == ' ') { q++; seed_price = (int)str_uint(&q); }
+    }
+    else if (str_starts(p, "more")) G.more = 1;
   }
   /* No count is not a count of none: an older server answered a POST for a
    * stock it had already made with "ok DATE" alone, and that replaced the
    * stock with nothing. Ask for the whole answer instead. */
   if (G.nitems < 0) { G.nitems = 0; return 0; }
-  /* The batch's records are kept under a number that names the day, so a
-   * stock file only ever points at records of its own day. */
-  NS.gen = (uint8_t)today_gen();
-  G.k = 0;
+  G.got = 0;
+  if (was_more && NS.batch == batch && str_same(NS.date, date)) {
+    /* the batch this session is fetching, grown: on from where it got to,
+     * even past items that were refused (they are not fetched again) */
+  } else if (S.date[0] && str_same(S.date, date) && S.batch == batch) {
+    G.dropped = 0;
+    /* the stock on show: fetch only what is not here yet */
+    ji_copy(&NS, &S, (int)sizeof NS);
+    G.k = S.next > S.n ? S.next : S.n;
+    G.live = 1;
+  } else {
+    G.dropped = 0;
+    ji_zero(&NS, (int)sizeof NS);
+    ji_copy(NS.date, date, (int)sizeof NS.date);
+    NS.batch = batch;
+    /* The batch's records are kept under a number that names the day, so a
+     * stock file only ever points at records of its own day. */
+    NS.gen = (uint8_t)today_gen();
+    G.k = 0;
+    G.live = 0;
+  }
+  ji_copy(NS.tags, tags, (int)sizeof NS.tags);
+  if (seed != NS.seed) NS.seed_sold = 0;
+  NS.seed = (uint8_t)seed;
+  NS.seed_price = (uint16_t)seed_price;
   return 1;
 }
 
@@ -267,31 +354,42 @@ static void net_reply(int n) {
     return;
   case N_DAY_POST:
   case N_DAY_POLL:
+    if (G.quiet && (n < 0 || str_starts(NET, "error"))) { net_status(""); G.quiet = 0; return; }
     if (n < 0) { net_status(""); failed("Today's stock", n); return; }
     if (refused("Today's stock")) { net_status(""); return; }
-    if (day_reply()) { net_status("fetching today's things"); next_item(); return; }
+    if (day_reply()) {
+      if (G.k < G.nitems) net_status("fetching today's things");
+      next_item();
+      return;
+    }
     if (str_starts(NET, "ok")) {                          /* made, but no count: GET it */
       G.wait_until = api->ticks_ms();
       G.again = 1;
       return;
     }
-    if (++G.polls > 60) { net_status(""); say("The stock is late today"); return; }
+    /* 15 minutes with nothing new: the server's turns are slow, not dead */
+    if (++G.polls > 300) { net_status(""); say("The stock is late today"); return; }
     G.wait_until = api->ticks_ms() + 3000;                /* "pending": ask again */
     G.again = 1;
     net_status("today's stock is being made");
     return;
   case N_ITEM:
     if (n < 0) { net_status(""); failed("Today's things", n); return; }
-    if (take_record(NET, "stock") > 0 && NS.n < JST_STOCK_N) {
+    G.k++;
+    if (take_record(NET, "stock") <= 0) G.dropped++;
+    else if (NS.n < JST_STOCK_N) {
       char p[48];
       jst_stock_path(api, NS.gen, NS.n, p, sizeof p);
       if (jst_put(api, p, IO.raw, (int)ji_get16(IO.raw + 2)) == 0) {
         NS.id[NS.n] = IO.it.id;
         NS.price[NS.n] = (uint16_t)jst_price(&IO.it);
         NS.n++;
+        NS.next = (uint8_t)G.k;
+        G.got++;
+        show_batch();                                      /* on show as it comes */
+        G.polls = 0;
       }
     }
-    G.k++;
     next_item();
     return;
   }
@@ -323,16 +421,20 @@ static void detail(int x) {
             "Sold. More with the next batch.", 17, 4, C_DIM, C_PANEL);
     return;
   }
-  pic(t->frame, t->pal, 1, 16, 16, x + 36, BAR + 5, 2, C_PANEL);
+  if (t->seed) spr(PLANT_SPR[t->seed - 1], x + 38, BAR + 5, 2, C_PANEL);
+  else pic(t->frame, t->pal, 1, 16, 16, x + 36, BAR + 5, 2, C_PANEL);
   textn(x + 2, BAR + 41, U.name, 17, C_TEXT, C_PANEL);
   wrapped(x + 2, BAR + 51, U.line, 17, 2, C_DIM, C_PANEL);
-  api->fmt(b, sizeof b, "%s, %s", t->kind == JK_CRITTER ? "critter" : t->kind == JK_HANGING ? "hanging" : "floor",
-           MOVE_NAME[t->move % JM_KINDS]);
+  if (t->seed) api->fmt(b, sizeof b, "you have %d", SEEDS[t->seed - 1]);
+  else api->fmt(b, sizeof b, "%s, %s", t->kind == JK_CRITTER ? "critter" : t->kind == JK_HANGING ? "hanging" : "floor",
+                MOVE_NAME[t->move % JM_KINDS]);
   textn(x + 2, BAR + 71, b, 17, C_TRAIT, C_PANEL);
   if (stuff_mode())
-    text(x + 2, BAR + 84, t->in_jar ? "in the jar" : t->shelved ? "on the shelf" : "in My Stuff",
-         t->in_jar ? C_GOLD : t->shelved ? C_TRAIT : C_DIM, C_PANEL);
-  else price(x + 2, BAR + 84, t->price, t->price > J.coins, C_PANEL);
+    text(x + 2, BAR + 84, t->in_jar ? "in the jar" : "in My Stuff", t->in_jar ? C_GOLD : C_DIM, C_PANEL);
+  else {
+    price(x + 2, BAR + 84, t->price, t->price > J.coins, C_PANEL);
+    if (t->held) text(SW - 6 - 4 * 6, BAR + 84, "held", C_TRAIT, C_PANEL);
+  }
 }
 
 static void new_stock_in(char *b, int n) {
@@ -355,21 +457,27 @@ static void paint_grid(void) {
     int x = 4 + (i % 4) * 30, y = BAR + 13 + (i / 4) * 30;
     box(x, y, 28, 28, C_PANEL);
     if (i < G.ntile && t->ok) {
-      pic(t->frame, t->pal, 1, 16, 16, x + 6, y + 2, 1, C_PANEL);
+      if (t->seed) spr(PLANT_SPR[t->seed - 1], x + 8, y + 2, 1, C_PANEL);
+      else pic(t->frame, t->pal, 1, 16, 16, x + 6, y + 2, 1, C_PANEL);
       if (stuff) {
         if (t->in_jar) box(x + 23, y + 2, 3, 3, C_GOLD);
-        if (t->shelved) box(x + 23, y + 7, 3, 3, C_TRAIT);
       } else {
         api->fmt(b, sizeof b, "%u", (unsigned)t->price);
         text(x + 14 - slen(b) * 3, y + 19, b, t->price > J.coins ? C_WARN : C_GOLD, C_PANEL);
+        if (t->held) { box(x + 22, y + 2, 4, 4, C_TRAIT); box(x + 23, y + 3, 2, 2, C_PANEL); }
       }
     }
     if (i == G.sel - G.top * 4) outline(x - 1, y - 1, 30, 30, C_GOLD);
   }
   if (!stuff) {
-    box(4, BAR + 76, 118, 30, C_PANEL);
-    text(8, BAR + 79, S.date[0] ? "Today" : "Today (hand-made)", C_TRAIT, C_PANEL);
-    wrapped(8, BAR + 88, S.tags[0] ? S.tags : "-", 18, 2, C_DIM, C_PANEL);
+    box(4, BAR + 76, 118, 31, C_PANEL);
+    if (SAY[0]) {                                         /* Tibbs, as far as it fits: t for all */
+      text(7, BAR + 78, "Tibbs:", C_GOLD, C_PANEL);
+      wrapped(7, BAR + 87, SAY, 19, 2, C_DIM, C_PANEL);
+    } else {
+      text(7, BAR + 78, S.date[0] ? "Tibbs's shop" : "The hand-made stock", C_TRAIT, C_PANEL);
+      wrapped(7, BAR + 87, "t to talk to him", 19, 2, C_DIM, C_PANEL);
+    }
   } else if (J.nowned > 8) {
     api->fmt(b, sizeof b, "%d/%d", G.top + 1, (J.nowned + 3) / 4 - 1);
     text(122 - slen(b) * 6, BAR + 3, b, C_DIM, C_BG);
@@ -411,7 +519,7 @@ static void paint_up(void) {
 }
 
 static void paint_garden(void) {
-  int i, mix[JPL_KINDS], tot, x;
+  int i, x;
   char b[40];
   box(0, BAR, SW, BODY, C_BG);
   for (i = 0; i < JS_MAX_BEDS; i++) {
@@ -434,23 +542,17 @@ static void paint_garden(void) {
     } else text(bx + 4, y + 26, "U:buy", C_DIM, C_PANEL);
     if (i == G.bed) outline(bx - 1, y - 1, 38, 64, C_GOLD);
   }
-  /* The flavour mix: what the grown beds ask of the shop. */
-  tot = js_garden_mix(&J, mix);
-  text(6, BAR + 71, "The shop leans", C_DIM, C_BG);
-  box(6, BAR + 81, SW - 12, 6, C_PANEL);
-  for (i = 0, x = 6; i < JPL_KINDS && tot; i++) {
-    int w = (SW - 12) * mix[i] / tot;
-    if (!mix[i]) continue;
-    box(x, BAR + 81, w, 6, MIX_C[i]);
-    x += w;
+  /* Seeds in hand: the shop sells packets now and then. */
+  text(6, BAR + 71, "Seeds:", C_DIM, C_BG);
+  for (i = 0, x = 6 + 7 * 6; i < JPL_KINDS; i++) {
+    char b[8];
+    spr(PLANT_SPR[i], x, BAR + 68, 1, C_BG);
+    api->fmt(b, sizeof b, "%d", SEEDS[i]);
+    text(x + 13, BAR + 71, b, SEEDS[i] ? C_GOLD : C_DIM, C_BG);
+    x += 36;
   }
-  if (tot) {
-    int best = 0;
-    for (i = 1; i < JPL_KINDS; i++) if (mix[i] > mix[best]) best = i;
-    text(6 + 15 * 6, BAR + 71, FLAVOUR[best], MIX_C[best], C_BG);
-  } else text(6 + 15 * 6, BAR + 71, "nowhere yet", C_DIM, C_BG);
-  text(6, BAR + 91, "Plants take 3 real days. Grown", C_DIM, C_BG);
-  text(6, BAR + 99, "ones make jam and steer the stock.", C_DIM, C_BG);
+  text(6, BAR + 91, "Plants take 3 real days; grown", C_DIM, C_BG);
+  text(6, BAR + 99, "ones make jam. Seeds: the shop.", C_DIM, C_BG);
 }
 
 static void paint_plant(void) {
@@ -465,8 +567,8 @@ static void paint_plant(void) {
     if (i == G.plant) outline(4, y, SW - 8, 17, C_GOLD);
     pic(SPRITES[PLANT_SPR[i]].px, SPRITES[PLANT_SPR[i]].pal, 0, 12, 14, 7, y + 1, 1, C_PANEL);
     text(24, y + 1, JS_PLANT_NAME[i], C_TEXT, C_PANEL);
-    text(24, y + 9, FLAVOUR[i], MIX_C[i], C_PANEL);
-    price(SW - 40, y + 5, JS_PLANT_COST[i], JS_PLANT_COST[i] > J.coins, C_PANEL);
+    api->fmt(b, sizeof b, "%d seed%s", SEEDS[i], SEEDS[i] == 1 ? "" : "s");
+    text(SW - 10 - slen(b) * 6, y + 5, b, SEEDS[i] ? C_GOLD : C_DIM, C_PANEL);
   }
   if (G.asking) {
     box(20, BAR + 40, SW - 40, 30, C_BG);
@@ -477,52 +579,25 @@ static void paint_plant(void) {
   }
 }
 
-static void paint_shelf(void) {
-  int i;
-  char b[80];
-  box(0, BAR, SW, BODY, C_BG);
-  box(4, BAR + 52, SW - 8, 4, CAPP_RGB(0x8a, 0x5a, 0x32));    /* the plank */
-  for (i = 0; i < JS_SHELF; i++) {
-    int x = 8 + i * 57, y = BAR + 8;
-    const Tile *t = &G.shelf[i];
-    box(x, y, 52, 44, C_PANEL);
-    if (t->ok) {
-      pic(t->frame, t->pal, 1, 16, 16, x + 10, y + 6, 2, C_PANEL);
-      textn(x + 1, y + 50, G.shelf_names[i], 8, C_TEXT, C_BG);
-    } else text(x + 11, y + 18, "empty", C_DIM, C_PANEL);
-    if (i == G.slot) outline(x - 1, y - 1, 54, 46, C_GOLD);
-  }
-  text(6, BAR + 72, "The shelf steers what the shop", C_DIM, C_BG);
-  text(6, BAR + 81, "makes next:", C_DIM, C_BG);
-  api->fmt(b, sizeof b, "%s", G.shelf_tags[0] ? G.shelf_tags : "nothing yet");
-  wrapped(6 + 12 * 6, BAR + 81, b, 26, 2, C_TRAIT, C_BG);
-}
-
 static void app_paint(void *st, CRect c) {
-  static const char *const H_STOCK[] = { "Ent", "buy", "G", "gift", "E", "hint", "Tab", "stuff", 0 };
-  static const char *const H_HINT[] = { "Ent", "tell him", "Esc", "never mind", 0 };
+  static const char *const H_STOCK[] = { "Ent", "buy", "Spc", "hold", "T", "Tibbs", "Tab", "stuff", 0 };
   static const char *const H_STUFF[] = { "Ent", "open", "G", "gift", "Tab", "shop", "Esc", "jar", 0 };
   static const char *const H_PICK[] = { "Ent", "choose", "Esc", "back", 0 };
-  static const char *const H_CARD[] = { "Ent", "in jar", "H", "shelf", "G", "gift", "Esc", "back", 0 };
+  static const char *const H_CARD[] = { "Ent", "in jar", "G", "gift", "Esc", "back", 0 };
   static const char *const H_UP[] = { "^v", "pick", "Ent", "buy", "Esc", "jar", 0 };
   static const char *const H_GARDEN[] = { "<>", "bed", "Ent", "plant", "Esc", "jar", 0 };
   static const char *const H_PLANT[] = { "^v", "pick", "Ent", "plant", "Esc", "back", 0 };
-  static const char *const H_SHELF[] = { "<>", "slot", "Ent", "fill", "X", "clear", "Esc", "jar", 0 };
   const char *const *h = H_STOCK;
   const char *where = "Shop";
   (void)st; (void)c;
   switch (G.view) {
-  case V_STOCK:
-    paint_grid();
-    if (hint_editing) { input_box("A word to the shopkeeper:", HIN); h = H_HINT; }
-    break;
+  case V_STOCK:  paint_grid(); break;
   case V_STUFF:  paint_grid(); h = G.pick ? H_PICK : H_STUFF;
-                 where = G.pick == P_DECOR ? "Add to the jar" : G.pick == P_SHELF ? "Put on the shelf" : "My Stuff"; break;
+                 where = G.pick == P_DECOR ? "Add to the jar" : "My Stuff"; break;
   case V_CARD:   paint_card(0, 0); h = H_CARD; where = "Item"; break;
   case V_UP:     paint_up(); h = H_UP; where = "Upgrades"; break;
   case V_GARDEN: paint_garden(); h = H_GARDEN; where = "Garden"; break;
   case V_PLANT:  paint_plant(); h = H_PLANT; where = "Garden"; break;
-  case V_SHELF:  paint_shelf(); h = H_SHELF; where = "Shelf"; break;
   }
   top_bar(where);
   hints(h);
@@ -546,6 +621,19 @@ static uint32_t buy(void) {
   int k = G.sel, n;
   uint32_t id;
   char p[48];
+  if (k == S.n && S.seed && !S.seed_sold) {              /* the seed packet: seeds, not a thing */
+    if (J.coins < S.seed_price) return 0;
+    js_spend(&J, S.seed_price);
+    SEEDS[S.seed - 1]++;
+    jst_seeds_save(api, SEEDS, TEXT, sizeof TEXT);
+    S.seed_sold = 1;
+    jst_stock_save(api, &S, TEXT, sizeof TEXT);
+    save();
+    api->fmt(p, sizeof p, "%s seeds: plant them in the Garden", JS_PLANT_NAME[S.seed - 1]);
+    say(p);
+    load_page();
+    return 0;
+  }
   if (k >= S.n || jst_sold(&S, &J, k)) return 0;
   if (J.coins < S.price[k]) return 0;             /* the price is in red already */
   n = jst_stock_read(api, &S, k, &IO);
@@ -557,7 +645,11 @@ static uint32_t buy(void) {
   if (jst_put(api, p, IO.raw, n) != 0) { J.nowned--; say("Could not write to the card"); return 0; }
   js_spend(&J, S.price[k]);
   if (!S.date[0]) J.sold |= 1u << (id & 31);
-  else { S.sold = (uint8_t)(S.sold | (1u << k)); jst_stock_save(api, &S, TEXT, sizeof TEXT); }
+  else {
+    S.sold = (uint8_t)(S.sold | (1u << k));
+    S.held = (uint8_t)(S.held & ~(1u << k));          /* bought: no longer held */
+    jst_stock_save(api, &S, TEXT, sizeof TEXT);
+  }
   save();
   load_page();
   return id;
@@ -582,8 +674,20 @@ static int key_grid(int k) {
     else if (!G.pick) go_stock();
     return 1;
   case CAPP_KEY_ESC:
-    if (G.pick == P_SHELF) { G.pick = 0; go_shelf(); }
-    else to_jar();
+    to_jar();
+    return 1;
+  case ' ':
+    /* Hold: it stays in the shop, through new stocks, until let go or bought.
+     * Only the server's stock: the hand-made one never changes anyway. */
+    if (G.view == V_STOCK && U.card.ok && S.date[0] && G.sel < S.n) {
+      int k = G.sel, n = 0, i;
+      for (i = 0; i < S.n; i++) n += S.held >> i & 1;
+      if (!(S.held >> k & 1) && n >= 4) { say("You can hold 4"); return 1; }
+      S.held = (uint8_t)(S.held ^ (1u << k));
+      jst_stock_save(api, &S, TEXT, sizeof TEXT);
+      say(S.held >> k & 1 ? "Held: it stays till you let go" : "Let go: it may move on");
+      load_page();
+    }
     return 1;
   case 'g': case 'G':
     if (G.view == V_STOCK) { uint32_t id = U.card.ok ? buy() : 0; if (id) gift(id); }
@@ -593,15 +697,6 @@ static int key_grid(int k) {
     if (!U.card.ok) return 1;
     if (G.view == V_STOCK) { uint32_t id = buy(); if (id) open_card(id, V_STOCK); return 1; }
     if (G.pick == P_DECOR) { J.decor = U.card.id; to_jar(); return 1; }
-    if (G.pick == P_SHELF) {
-      int at = js_on_shelf(&J, U.card.id);
-      if (at >= 0) J.shelf[at] = 0;
-      J.shelf[G.slot] = U.card.id;
-      save();
-      G.pick = 0;
-      go_shelf();
-      return 1;
-    }
     open_card(U.card.id, V_STUFF);
     return 1;
   }
@@ -635,7 +730,9 @@ static int key_up(int k) {
 
 static void do_plant(void) {
   int t = G.plant;
-  if (js_spend(&J, JS_PLANT_COST[t])) { say("Not enough coins yet"); return; }
+  if (SEEDS[t] <= 0) { say("No seeds: the shop has them now and then"); return; }
+  SEEDS[t]--;
+  jst_seeds_save(api, SEEDS, TEXT, sizeof TEXT);
   js_plant(&J, G.bed, t, api->epoch());
   save();
   say(api->epoch() ? "Planted: grown in 3 days" : "Planted: it grows once there is a clock");
@@ -655,7 +752,7 @@ static int key_garden(int k) {
     case CAPP_KEY_DOWN: if (G.plant < JPL_KINDS - 1) G.plant++; return 1;
     case CAPP_KEY_ESC:  G.view = V_GARDEN; return 1;
     case CAPP_KEY_ENTER:
-      if (J.coins < JS_PLANT_COST[G.plant]) { say("Not enough coins yet"); return 1; }
+      if (SEEDS[G.plant] <= 0) { say("No seeds: the shop has them now and then"); return 1; }
       if (!J.bed[G.bed].young) G.asking = 1;     /* a grown plant: ask first */
       else do_plant();
       return 1;
@@ -675,46 +772,13 @@ static int key_garden(int k) {
   return 1;
 }
 
-static int key_shelf(int k) {
-  switch (k) {
-  case CAPP_KEY_LEFT:  if (G.slot > 0) G.slot--; return 1;
-  case CAPP_KEY_RIGHT: if (G.slot < JS_SHELF - 1) G.slot++; return 1;
-  case CAPP_KEY_ENTER:
-    if (!J.nowned) { say("Nothing to put there yet"); return 1; }
-    go_stuff(P_SHELF);
-    return 1;
-  case 'x': case 'X': case CAPP_KEY_BACK:
-    J.shelf[G.slot] = 0;
-    save();
-    load_shelf();
-    return 1;
-  case CAPP_KEY_ESC: to_jar(); return 1;
-  }
-  return 1;
-}
-
 static int app_key(void *st, uint8_t k) {
   (void)st;
   U.dirty = 1;
   if (U.msg[0]) U.msg[0] = 0;
-  if (hint_editing) {
-    int n = slen(HIN);
-    if (k == CAPP_KEY_ESC) { hint_editing = 0; return 1; }
-    if (k == CAPP_KEY_ENTER) {
-      hint_editing = 0;
-      jst_clean(HIN);
-      ji_copy(HINT, HIN, (int)sizeof HINT);
-      if (HINT[0]) { jst_put(api, JST_HINT, HINT, slen(HINT)); say("He says he'll ask around"); }
-      else { api->remove(JST_HINT); say("Nothing in particular, then"); }
-      return 1;
-    }
-    if (k == CAPP_KEY_BACK) { if (n) HIN[n - 1] = 0; return 1; }
-    if (k >= 32 && k < 127 && n < JST_HINT_MAX) { HIN[n] = (char)k; HIN[n + 1] = 0; }
-    return 1;
-  }
-  if ((k == 'e' || k == 'E') && G.view == V_STOCK) {
-    ji_copy(HIN, HINT, (int)sizeof HIN);
-    hint_editing = 1;
+  if ((k == 't' || k == 'T') && (G.view == V_STOCK || G.view == V_STUFF)) {
+    save();                                       /* Tibbs is Jar Post's */
+    if (api->run("Jar Post", "talk") != 0) say("No Jar Post app");
     return 1;
   }
   /* For trying things out: r asks the server for a new stock now (it makes
@@ -738,7 +802,6 @@ static int app_key(void *st, uint8_t k) {
   case V_CARD:    return key_card(k);
   case V_UP:      return key_up(k);
   case V_GARDEN: case V_PLANT: return key_garden(k);
-  case V_SHELF:   return key_shelf(k);
   }
   return 0;
 }
@@ -764,13 +827,12 @@ const CappInfo capp_info = {
     0x55, 0x55, 0x40, 0x02, 0x40, 0x02, 0x4C, 0xCA,
     0x5E, 0xDE, 0x52, 0x92, 0x5E, 0xDE, 0x7F, 0xFE,
     0x40, 0x02, 0x40, 0x02, 0x40, 0x02, 0x7F, 0xFE },
-  "Jar Factory's shop, garden and shelf\n"
+  "Jar Factory's shop and garden\n"
   "Tab\tStock and My Stuff\n"
   "Enter\tbuy; on an item, put it in the jar\n"
   "G\tsend as a gift (Jar Post), in the shop, My Stuff or a card\n"
-  "H\tput on the shelf\n"
-  "E\ta word to the shopkeeper: \"could use more red\".\n"
-  "\the knows people; it nudges what turns up\n"
+  "Space\thold: it stays in the shop until you buy it or let go (4 at most)\n"
+  "T\ttalk to Tibbs, the shopkeeper\n"
   "r\ta new stock from the server now (testing)\n"
   "$\t1000 coins (testing)\n"
   "Esc\tback to the jar\n",
@@ -784,14 +846,14 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api->mem_set(&G, 0, sizeof G);
   api->mem_set(&U, 0, sizeof U);
   if (ui_load()) return 0;
-  hint_editing = 0;
-  if (jst_get(api, JST_HINT, HINT, sizeof HINT) < 0) HINT[0] = 0;
-  jst_clean(HINT);
+  if (jst_get(api, JST_SAY, SAY, sizeof SAY) < 0) SAY[0] = 0;
+  jst_clean(SAY);
+  jst_seeds_load(api, SEEDS, TEXT, sizeof TEXT);
   if (str_same(s, "stuff")) go_stuff(P_BROWSE);
   else if (str_same(s, "decor")) go_stuff(P_DECOR);
   else if (str_same(s, "up")) G.view = V_UP;
   else if (str_same(s, "garden")) G.view = V_GARDEN;
-  else if (str_same(s, "shelf")) go_shelf();
+  else if (str_same(s, "shelf")) go_stuff(P_BROWSE);   /* the shelf is gone */
   else go_stock();
   UI.paint = app_paint;
   UI.key = app_key;

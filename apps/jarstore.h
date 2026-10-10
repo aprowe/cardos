@@ -42,8 +42,8 @@
 #define JST_MAILDIR   CAPP_VAR "/jar/mail"
 #define JST_FRIENDS   CAPP_VAR "/jar/friends.txt"
 #define JST_PUB       CAPP_VAR "/jar/server.pub"
-#define JST_HINT      CAPP_VAR "/jar/hint.txt"   /* a word to the shopkeeper */
-#define JST_HINT_MAX  34
+#define JST_SAY       CAPP_VAR "/jar/say.txt"    /* Tibbs's line of the day */
+#define JST_SEEDS     CAPP_VAR "/jar/seeds.txt"  /* seed packets: a count a plant */
 
 #define JST_POSTAGE   10
 #define JST_NOTE      24
@@ -165,6 +165,7 @@ static JST_OPT const JBuiltin *jst_builtin(uint32_t id) {
  * of animation. */
 static JST_OPT int jst_price(const JItem *it) {
   uint32_t h = it->id * 2654435761u;
+  if (it->price5) return it->price5 * 5;          /* the server chose it */
   int p = 45 + (int)((h >> 24) % 70u);
   if (it->kind == JK_CRITTER) p += 45;
   p += (it->nframes > 1 ? it->nframes - 1 : 0) * 12;
@@ -198,6 +199,11 @@ typedef struct {
   char     date[12];                   /* the server's day; "" the built-in batch */
   char     tags[48];                   /* the Today card */
   uint8_t  n, gen, sold;               /* sold: a bit per slot */
+  uint8_t  held;                       /* a bit per slot: kept into the next stock */
+  uint8_t  next;                       /* the server's items fetched (some may be refused) */
+  uint32_t batch;                      /* the server's number for this stock */
+  uint8_t  seed, seed_sold;            /* a seed packet: plant + 1, 0 none */
+  uint16_t seed_price;
   uint32_t id[JST_STOCK_N];
   uint16_t price[JST_STOCK_N];
 } JStock;
@@ -241,6 +247,15 @@ static JST_OPT void jst_stock_load(const CardApi *api, JStock *s, char *text, in
     else if (js_word_is(w, "tags")) jst_word(&p, s->tags, sizeof s->tags);
     else if (js_word_is(w, "gen")) s->gen = (uint8_t)js_num(&p);
     else if (js_word_is(w, "sold")) s->sold = (uint8_t)js_num(&p);
+    else if (js_word_is(w, "held")) s->held = (uint8_t)js_num(&p);
+    else if (js_word_is(w, "next")) s->next = (uint8_t)js_num(&p);
+    else if (js_word_is(w, "batch")) s->batch = js_num(&p);
+    else if (js_word_is(w, "seed")) {
+      s->seed = (uint8_t)js_num(&p);
+      s->seed_price = (uint16_t)js_num(&p);
+      s->seed_sold = (uint8_t)js_num(&p);
+      if (s->seed > JPL_KINDS) s->seed = 0;
+    }
     else if (js_word_is(w, "item") && s->n < JST_STOCK_N) {
       s->id[s->n] = js_num(&p);
       s->price[s->n] = (uint16_t)js_num(&p);
@@ -254,8 +269,12 @@ static JST_OPT void jst_stock_load(const CardApi *api, JStock *s, char *text, in
 
 static JST_OPT int jst_stock_save(const CardApi *api, const JStock *s, char *text, int cap) {
   int n, i;
-  n = api->fmt(text, (size_t)cap, "date %s\ntags %s\ngen %u\nsold %u\n", s->date, s->tags,
-               (unsigned)s->gen, (unsigned)s->sold);
+  n = api->fmt(text, (size_t)cap, "date %s\ntags %s\ngen %u\nsold %u\nheld %u\nnext %u\nbatch %u\n",
+               s->date, s->tags, (unsigned)s->gen, (unsigned)s->sold, (unsigned)s->held,
+               (unsigned)s->next, (unsigned)s->batch);
+  if (s->seed)
+    n += api->fmt(text + n, (size_t)(cap - n), "seed %u %u %u\n", (unsigned)s->seed,
+                  (unsigned)s->seed_price, (unsigned)s->seed_sold);
   for (i = 0; i < s->n && n < cap - 32; i++)
     n += api->fmt(text + n, (size_t)(cap - n), "item %u %u\n", (unsigned)s->id[i], (unsigned)s->price[i]);
   return jst_put(api, JST_STOCK, text, n);
@@ -281,6 +300,26 @@ static JST_OPT int jst_stock_read(const CardApi *api, const JStock *s, int k, JI
   }
   jst_stock_path(api, s->gen, k, p, sizeof p);
   return jst_read_rec(api, p, io);
+}
+
+/* ---- seed packets ------------------------------------------------------------------ */
+
+/* Seeds in hand, a count a plant, into s. A card that has never had the file
+ * starts with one of each (the garden used to be planted for coins). */
+static JST_OPT void jst_seeds_load(const CardApi *api, int *s, char *text, int cap) {
+  const char *p = text;
+  int i;
+  if (jst_get(api, JST_SEEDS, text, cap) <= 0) {
+    for (i = 0; i < JPL_KINDS; i++) s[i] = 1;
+    return;
+  }
+  for (i = 0; i < JPL_KINDS; i++) s[i] = (int)js_num(&p);
+}
+
+static JST_OPT int jst_seeds_save(const CardApi *api, const int *s, char *text, int cap) {
+  int n = 0, i;
+  for (i = 0; i < JPL_KINDS; i++) n += api->fmt(text + n, (size_t)(cap - n), "%d ", s[i]);
+  return jst_put(api, JST_SEEDS, text, n);
 }
 
 /* ---- mail ----------------------------------------------------------------------- */

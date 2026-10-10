@@ -1,5 +1,5 @@
 /* Jar Factory's world on the host: apps/jarsim.h. Where coins come from,
- * away time and its cap, upgrades, items and their habits, the save. */
+ * that time away makes nothing, upgrades, items and their habits, the save. */
 #include <stdio.h>
 #include <string.h>
 
@@ -68,31 +68,27 @@ void test_jarsim_starts_at_about_three_a_minute(void) {
   CHECK(js_rate_ph(&J) <= 220);
 }
 
-void test_jarsim_away_earnings_are_a_pile_the_snail_ships(void) {
-  uint32_t jars;
-  int32_t rate;
+/* Nothing is made off screen: hours away leave the coins, the dock and the
+ * berries as they were; only `seen` moves. */
+void test_jarsim_time_away_makes_nothing(void) {
+  int i;
+  int32_t grow[JS_MAX_BEDS];
+  uint8_t ready[JS_MAX_BEDS];
   fresh(3);
-  rate = js_rate_ph(&J);
+  J.coins = 123;
+  J.dock = 2;
   J.seen = T0;
-  jars = js_away(&J, T0 + 1800);
-  CHECK_EQ(jars, (uint32_t)rate / 2);
-  CHECK_EQ(J.dock, jars);
-  CHECK_EQ(J.coins, 0);                   /* nothing until it has left */
-  CHECK_EQ(J.seen, T0 + 1800);
-  /* shipped out quickly: well inside two minutes */
-  run_s(120);
-  CHECK(J.coins >= jars);
-  CHECK_EQ(J.coins, J.shipped * JS_JAR_VALUE);
-  CHECK(J.dock < 4);
-}
-
-void test_jarsim_away_is_capped_at_eight_hours(void) {
-  fresh(3);
-  J.seen = T0;
-  CHECK_EQ(js_away(&J, T0 + 2 * 86400), (uint32_t)js_rate_ph(&J) * 8);
-  /* the plants grew while away */
-  CHECK(J.bed[0].ready);
-  CHECK(J.bed[1].ready);
+  for (i = 0; i < JS_MAX_BEDS; i++) { grow[i] = J.bed[i].grow; ready[i] = J.bed[i].ready; }
+  CHECK_EQ(js_away(&J, T0 + 1800), 0);
+  CHECK_EQ(js_away(&J, T0 + 2 * 86400), 0);
+  CHECK_EQ(J.coins, 123);
+  CHECK_EQ(J.dock, 2);
+  CHECK_EQ(J.shipped, 0);
+  CHECK_EQ(J.seen, T0 + 2 * 86400);
+  for (i = 0; i < JS_MAX_BEDS; i++) {
+    CHECK_EQ(J.bed[i].grow, grow[i]);
+    CHECK_EQ(J.bed[i].ready, ready[i]);
+  }
 }
 
 void test_jarsim_no_clock_no_away(void) {
@@ -372,4 +368,153 @@ void test_jarsim_a_snail_load_in_flight_is_saved_as_on_the_dock(void) {
   js_init(&k, 1);
   js_load(&k, buf);
   CHECK_EQ(k.dock, 3);
+}
+
+/* ---- levels: the ledges ---------------------------------------------------- */
+
+void test_jarsim_floor_decor_goes_on_a_ledge(void) {
+  static JItem it;
+  int i, lo, hi, y0;
+  fresh(31);
+  mk_item(&it, 40, JK_FLOOR, JM_SITS);
+  CHECK_EQ(js_place(&J, &it, 150, 0), 0);
+  y0 = js_item_y(&J, 0);
+  CHECK_EQ(js_set_level(&J, 0, 1), 1);
+  CHECK_EQ(J.placed[0].level, 1);
+  CHECK_EQ(J.placed[0].level, 1);
+  CHECK_EQ(J.placed[0].lift, JS_LEDGE_H[1]);
+  CHECK_EQ(J.placed[0].home_x, JS_LEDGE_HI[1]);       /* kept on the ruler */
+  CHECK_EQ(js_item_y(&J, 0), y0 - JS_LEDGE_H[1]);
+  CHECK_EQ(js_sense(&J, 0, JSN_ZONE), JZ_HIGH);
+  js_move_to(&J, 0, 0, 0);                            /* along the ledge, not off it */
+  CHECK_EQ(J.placed[0].home_x, JS_LEDGE_LO[1]);
+  js_move_to(&J, 0, 300, 0);
+  CHECK_EQ(J.placed[0].home_x, JS_LEDGE_HI[1]);
+  js_range(&J.placed[0], &lo, &hi);
+  CHECK(lo >= JS_LEDGE_LO[1] && hi <= JS_LEDGE_HI[1]);
+  CHECK_EQ(js_set_level(&J, 0, 9), JS_LEVELS - 1);    /* there is no higher */
+  CHECK_EQ(js_set_level(&J, 0, 0), 0);
+  CHECK_EQ(J.placed[0].lift, 0);
+  /* hanging things and fliers stay as they are */
+  mk_item(&it, 41, JK_HANGING, JM_SWAYS);
+  i = js_place(&J, &it, 100, 20);
+  CHECK_EQ(js_set_level(&J, i, 2), 0);
+  CHECK_EQ(J.placed[i].lift, 0);
+  mk_item(&it, 42, JK_CRITTER, JM_FLOATS);
+  i = js_place(&J, &it, 100, 0);
+  CHECK_EQ(js_set_level(&J, i, 1), 0);
+  /* a hopping frog up there hops along the ledge, never off it */
+  mk_item(&it, 43, JK_FLOOR, JM_HOPS);
+  i = js_place(&J, &it, 120, 0);
+  js_set_level(&J, i, 2);
+  for (y0 = 0; y0 < 60 * JS_HZ; y0++) {
+    js_step(&J);
+    CHECK(J.placed[i].x / JS_FX >= JS_LEDGE_LO[2] && J.placed[i].x / JS_FX <= JS_LEDGE_HI[2]);
+    CHECK_EQ(J.placed[i].level, 2);
+  }
+}
+
+void test_jarsim_levels_are_saved_and_an_old_save_is_on_the_soil(void) {
+  static JItem it;
+  static char buf[2048];
+  static Jar k;
+  fresh(33);
+  mk_item(&it, 50, JK_FLOOR, JM_SITS);
+  js_place(&J, &it, 40, 0);
+  js_set_level(&J, 0, 1);
+  mk_item(&it, 51, JK_FLOOR, JM_SITS);
+  js_place(&J, &it, 160, 0);
+  mk_item(&it, 52, JK_CRITTER, JM_WANDERS);
+  js_place(&J, &it, 100, 0);
+  js_set_level(&J, 2, 2);
+  js_save(&J, buf, sizeof buf);
+  CHECK(strstr(buf, "place 50 40 0 1\n") != 0);
+  CHECK(strstr(buf, "place 51 160 0\n") != 0);      /* on the soil: the line as it always was */
+  CHECK(strstr(buf, "place 52 100 0 2\n") != 0);
+  memset(&k, 0, sizeof k);
+  js_init(&k, 1);
+  CHECK_EQ(js_load(&k, buf), 0);
+  CHECK_EQ(k.nwant, 3);
+  CHECK_EQ(k.want[0].lv, 1);
+  CHECK_EQ(k.want[1].lv, 0);
+  CHECK_EQ(k.want[2].lv, 2);
+  /* a companion that loads and saves without placing keeps the levels */
+  js_save(&k, buf, sizeof buf);
+  CHECK(strstr(buf, "place 50 40 0 1\n") != 0);
+  CHECK(strstr(buf, "place 52 100 0 2\n") != 0);
+  /* a save from before levels: everything on the soil */
+  memset(&k, 0, sizeof k);
+  js_init(&k, 1);
+  CHECK_EQ(js_load(&k, "jar 1\ncoins 5\nplace 50 40 0\nplace 77 120 33\n"), 0);
+  CHECK_EQ(k.nwant, 2);
+  CHECK_EQ(k.want[0].lv, 0);
+  CHECK_EQ(k.want[1].lv, 0);
+  CHECK_EQ(k.want[1].y, 33);
+  /* and a level from the future, or nonsense, is the top or the soil */
+  memset(&k, 0, sizeof k);
+  js_init(&k, 1);
+  js_load(&k, "jar 1\nplace 50 40 0 7\n");
+  CHECK_EQ(k.want[0].lv, JS_LEVELS - 1);
+}
+
+/* A critter that likes it high climbs a ledge, potters about up there and
+ * comes down again; one that does not goes up now and then. Never off the
+ * ledge while up, and the climb is at the ledge's climb. */
+void test_jarsim_critters_climb_up_and_come_down(void) {
+  static JItem it;
+  int s, up = 0, downs = 0, was = 0, other_up = 0, bad = 0;
+  fresh(35);
+  mk_item(&it, 60, JK_CRITTER, JM_WANDERS);
+  it.zone = JZ_HIGH;
+  CHECK_EQ(js_place(&J, &it, 150, 0), 0);
+  mk_item(&it, 61, JK_CRITTER, JM_HOPS);
+  it.zone = JZ_GARDEN;
+  CHECK_EQ(js_place(&J, &it, 40, 0), 1);
+  for (s = 0; s < 30 * 60 * JS_HZ; s++) {
+    const JPlaced *p = &J.placed[0];
+    int x;
+    js_step(&J);
+    x = p->x / JS_FX;
+    if (p->climb == JC_UP && x != JS_LEDGE_UP[p->goal]) bad++;
+    if (p->climb == JC_DOWN && x != JS_LEDGE_UP[p->level]) bad++;
+    if (p->level && !p->climb) {
+      if (x < JS_LEDGE_LO[p->level] || x > JS_LEDGE_HI[p->level]) bad++;
+      if (p->lift != JS_LEDGE_H[p->level]) bad++;
+      up++;
+    }
+    if (was == JC_DOWN && !p->level && !p->climb) downs++;   /* down, and off */
+    was = p->climb;
+    if (J.placed[1].level && !J.placed[1].climb) other_up++;
+  }
+  printf("      30 min: up %d%% of the time, came down %d times; the other up %d%%\n",
+         up * 100 / (30 * 60 * JS_HZ), downs, other_up * 100 / (30 * 60 * JS_HZ));
+  CHECK_EQ(bad, 0);
+  CHECK(up > 30 * 60 * JS_HZ / 4);          /* it likes it up there */
+  CHECK(downs >= 2);                         /* ... and comes down */
+  CHECK(other_up > 0);                       /* a garden hopper goes up now and then */
+  CHECK(other_up < 30 * 60 * JS_HZ / 2);     /* ... but not for long */
+  /* "walk high" in a recipe is a climb; "walk garden" from a ledge, down */
+  fresh(36);
+  mk_item(&it, 62, JK_CRITTER, JM_SITS);
+  it.move = JM_WANDERS;
+  js_place(&J, &it, 50, 0);
+  J.placed[0].t = 30000;                     /* no wandering of its own */
+  CHECK_EQ(js_act(&J, 0, JA_WALK, JZ_HIGH), 0);
+  CHECK_EQ(J.placed[0].climb, JC_TO_UP);
+  CHECK_EQ(J.placed[0].goal, 1);             /* the nearer ledge */
+  for (s = 0; s < 20 * JS_HZ && J.placed[0].climb; s++) js_step(&J);
+  CHECK_EQ(J.placed[0].level, 1);
+  CHECK_EQ(J.placed[0].lift, JS_LEDGE_H[1]);
+  J.placed[0].t = 30000;
+  CHECK_EQ(js_act(&J, 0, JA_WALK, JZ_GARDEN), 0);
+  CHECK_EQ(J.placed[0].climb, JC_TO_DOWN);
+  for (s = 0; s < 20 * JS_HZ && J.placed[0].climb; s++) js_step(&J);
+  CHECK_EQ(J.placed[0].level, 0);
+  CHECK_EQ(J.placed[0].lift, 0);
+  /* moving it in Decorate calls a climb off: it is where it was put */
+  js_trip(&J, 0, 2);
+  js_step(&J);
+  js_move_to(&J, 0, 120, 0);
+  CHECK_EQ(J.placed[0].climb, 0);
+  CHECK_EQ(J.placed[0].level, 0);
 }

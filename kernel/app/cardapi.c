@@ -350,11 +350,22 @@ static int api_sig_verify(const uint8_t pub[65], const void *msg, size_t n, cons
   psa_set_key_bits(&at, 256);
   psa_set_key_usage_flags(&at, PSA_KEY_USAGE_VERIFY_MESSAGE);
   psa_set_key_algorithm(&at, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
-  if (psa_import_key(&at, pub, 65, &key) != PSA_SUCCESS) { psa_reset_key_attributes(&at); return -1; }
+  psa_crypto_init();                                /* idempotent; boot did it */
+  st = psa_import_key(&at, pub, 65, &key);
+  if (st != PSA_SUCCESS) {
+    applogf("sig", "import refused: %d", (int)st);
+    psa_reset_key_attributes(&at);
+    return -1;
+  }
   st = psa_verify_message(key, PSA_ALG_ECDSA(PSA_ALG_SHA_256), (const uint8_t *)msg, n, sig, 64);
   psa_destroy_key(key);
   psa_reset_key_attributes(&at);
   if (st == PSA_SUCCESS) return 1;
+  /* A good signature was once refused on a device that had been up for
+   * hours, while a fresh boot of the same image accepted it (2026-10-10):
+   * say what the library said, and that the message was hashed here. */
+  applogf("sig", "verify %d (%u bytes, heap %u)", (int)st, (unsigned)n,
+          (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
   return st == PSA_ERROR_INVALID_SIGNATURE ? 0 : -1;
 }
 

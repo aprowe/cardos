@@ -37,8 +37,9 @@ static Msg Q[4];
 static int NQ, OFFLINE, GIFT_OK;
 static char ME[512];
 
+static char SAID[128];
+static int TALK_POLLS;
 static int post_server(const char *m, const char *path, const char *body, char *out, int cap) {
-  (void)m; (void)body;
   if (OFFLINE) return -1;
   if (!strcmp(path, "/jar/pubkey")) return snprintf(out, (size_t)cap, "%s\n", JF_PUBHEX);
   if (!strcmp(path, "/jar/me")) return snprintf(out, (size_t)cap, "%s", ME);
@@ -52,6 +53,16 @@ static int post_server(const char *m, const char *path, const char *body, char *
   if (!strcmp(path, "/q/peek?q=jar.gifts&max=1")) {
     if (!NQ) return 0;
     return snprintf(out, (size_t)cap, "%u\t-\t%u\t%d\n%s\n", Q[0].id, T0, (int)strlen(Q[0].body), Q[0].body);
+  }
+  if (!strcmp(path, "/jar/talk") && !strcmp(m, "POST")) {
+    snprintf(SAID, sizeof SAID, "%s", body ? body : "");
+    TALK_POLLS = 0;
+    return snprintf(out, (size_t)cap, "pending\n");
+  }
+  if (!strcmp(path, "/jar/talk")) {
+    if (SAID[0] && TALK_POLLS++ < 1) return snprintf(out, (size_t)cap, "pending\nday\tA crate came in.\nme\t%s\n", SAID);
+    if (!SAID[0]) return snprintf(out, (size_t)cap, "ok\nday\tA crate came in.\n");
+    return snprintf(out, (size_t)cap, "ok\nday\tA crate came in.\nme\t%s\nhim\tHm, I know a fellow down at the rail yard who might.\n", SAID);
   }
   if (!strncmp(path, "/q/ack?q=jar.gifts&upto=", 24)) {
     uint32_t upto = (uint32_t)atoi(path + 24);
@@ -90,6 +101,7 @@ static void card(uint32_t coins) {
   NQ = 0;
   OFFLINE = 0;
   GIFT_OK = 1;
+  SAID[0] = 0;
   snprintf(ME, sizeof ME, "code K7Q2XP\nname Alex\nfriend maya\tMaya\t%u\tmutual\nfriend bo\tBo\t0\twaiting\n",
            T0 - 3 * 3600);
   fakeapi_epoch = T0;
@@ -307,4 +319,61 @@ void test_jarpost_offline_the_post_says_so(void) {
   CHECK(U.msg[0] != 0);
   CHECK_EQ(G.mail_n, 0);
   shot("p08_mail_empty");
+}
+
+/* ---- sending from the friends list, and talking to Tibbs ------------------------------ */
+
+void test_jarpost_a_gift_starts_from_a_friend(void) {
+  const JfReq *r;
+  card(100);
+  launch("friends");
+  tick(20);
+  CHECK_EQ(G.nfr, 2);
+  key(CAPP_KEY_DOWN);                         /* Bo has not added us back */
+  key(CAPP_KEY_ENTER);
+  CHECK_EQ(G.view, V_FRIENDS);
+  CHECK(strstr(U.msg, "not added you back") != 0);
+  key(CAPP_KEY_UP);
+  shot("p20_friends_pick");
+  key(CAPP_KEY_ENTER);                        /* Maya: which of your things? */
+  CHECK_EQ(G.view, V_PICK);
+  CHECK_EQ(G.npk, 1);                         /* the signed one; hand-made ones stay home */
+  CHECK(strcmp(G.pkname[0], "Moth Lamp") == 0);
+  shot("p21_pick");
+  key(CAPP_KEY_ENTER);                        /* straight to the note: the friend is chosen */
+  CHECK_EQ(G.view, V_GIFT);
+  CHECK_EQ(G.gift_step, 1);
+  type("hi");
+  key(CAPP_KEY_ENTER);
+  key('y');
+  tick(20);
+  r = jf_last("/jar/gift?to=");
+  CHECK(r && strcmp(r->path, "/jar/gift?to=maya") == 0);
+  CHECK(!js_owns(&J, 7001));
+  CHECK_EQ(G.view, V_FRIENDS);
+}
+
+void test_jarpost_talking_to_tibbs(void) {
+  const JfReq *r;
+  card(0);
+  launch("talk");
+  CHECK_EQ(G.view, V_TALK);
+  tick(20);
+  CHECK(TK_N >= 1);                           /* his line of the day */
+  CHECK(strcmp(TK[0], "A crate came in.") == 0);
+  type("got any gears?");
+  key(CAPP_KEY_ENTER);
+  tick(20);
+  r = jf_last("/jar/talk");
+  CHECK(r && strcmp(r->method, "POST") == 0 && strcmp(r->body, "got any gears?") == 0);
+  CHECK(TK_PENDING);
+  shot("p22_talk_waiting");
+  tick(3100);                                 /* still thinking */
+  CHECK(TK_PENDING);
+  tick(3100);
+  CHECK(!TK_PENDING);
+  CHECK(strcmp(TK[TK_N - 1], "the rail yard who might.") == 0 || strstr(TK[TK_N - 2], "fellow") != 0);
+  shot("p23_talk");
+  key(CAPP_KEY_ESC);
+  CHECK(strcmp(RAN, "Jar Factory") == 0);
 }

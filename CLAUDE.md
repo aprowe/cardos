@@ -1001,6 +1001,53 @@ simulated day); test fixtures pin that both machines agree. The signature
 covers the record minus its signature and its 8 memory slots (scripts write
 those).
 
+**A shop's stock is 4 items, from a shared pool** (2026-10-10). Every item
+ever made goes into one pool (`server/jar.py`, "the pool"), and `own/ID` is
+where an item is: absent means the pool; a name means that person's shop or
+things. That keeps every item unique. A stock is:
+- what the person holds (Space in the shop, 4 at most);
+- then pool items, a random mix;
+- then new ones, made one Claude call each and shown as each lands
+  (`/jar/day` says `more` until the stock is whole, and `batch N` says
+  which stock it is).
+
+The device buys offline and reports `bought` and `held` ids with its next
+request; the rest goes back to the pool then. The shop checks `/jar/day`
+quietly on every open, so it picks up a stock it missed. `python -m
+server.jar seed N` adds N items to the pool, counted against nobody.
+
+**The shop is a person: Tibbs** (2026-10-10, `server/shopkeep.py`). There
+are no tags any more. The shelf, the garden and the season used to steer
+the stock, and a request for industrial scrap on an autumn day came out a
+jack-o'-lantern with a gear in it. Now each new stock begins with Tibbs's
+beat: his line of the day (shown in the shop) and a one-line brief per new
+find, each item then made from its brief. He keeps a journal per player:
+- his last few beats;
+- the recent talk;
+- purchases, as history only;
+- what is in their jar.
+
+**Variety is the code's job, not the model's** -- the owner's rule. Models
+latch on: sell one cute thing and every find is cute. So:
+- the server rolls the dice: an event in his day, and two sparks per find
+  from wide word lists;
+- a coin (ANSWER_CHANCE) decides whether a find answers what the player
+  said;
+- recent briefs are passed as themes not to repeat;
+- purchases are framed as history with a rule against catering to them.
+
+Change the prompts with care: they were tuned against real output.
+
+The rest:
+- Talk replaces the old hint: Jar Post's Talk screen (`t` in the shop),
+  `POST`/`GET /jar/talk`.
+- Prices are chosen before an item is made (`TIERS`: common to treasure,
+  30-900), kept in record byte 207 (in fives, signed), and a dear item gets
+  more care and more effort.
+- Plants steer nothing: the shop sells seed packets now and then, and the
+  Garden plants from seeds (`/var/jar/seeds.txt`).
+- The shelf is gone.
+
 ## Hardware facts — measured on the actual device, not from a datasheet
 
 M5Stack Cardputer v1.1, ESP32-S3FN8 (Xtensa LX7 dual-core, 240 MHz).

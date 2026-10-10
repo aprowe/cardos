@@ -75,8 +75,8 @@ From the jar: S shop, D decorate, P plant (garden), H shelf, F friends, M mail.
   bars.
 - State is saved on every purchase, placement and gift, and at least every 5
   minutes.
-- The device needs the real date and time for plant growth, daily stock and away
-  earnings. With no time available, those three features pause and everything
+- The device needs the real date and time for plant growth and daily
+  stock. With no time available, those two features pause and everything
   else works.
 
 ## The space: a factory in a jar
@@ -120,7 +120,7 @@ income.
 | Starting output | 3 jars per minute |
 | Shop item price range | 45 to 200 coins |
 | Postage per gift | 10 coins |
-| Away earnings cap | 8 hours of output |
+| Away earnings | none: only on screen (2026-10-10) |
 
 ### Idle life
 
@@ -135,9 +135,26 @@ each occasional and self-resolving:
 
 ### Away time
 
-On start, compute earnings for the time the device was off from the current
-output rate, capped as above, and show them as a pile of jars on the dock that
-ships out quickly. Plants advance by the real time elapsed.
+Changed 2026-10-10, the owner's rule: jam and coins are made only while the
+jar is on screen. Time away earns nothing -- no pile on the dock, no banner,
+no berries ripened -- and the companion apps do not run the factory either.
+Plants still come of age by the real time elapsed (three days to grow).
+
+### Ledges: using the height of the jar (2026-10-10)
+
+The owner: "the ground will become quite crowded, need a way to use the
+vertical space". Two ledges stand at the back of the jar, junk like the
+factory: a wooden ruler on a stack of bottle caps and three cotton reels over
+the garden (34 px up), and a lolly stick on a tower of matchboxes behind the
+pond, its far end hung from the lid on a thread (51 px up). In Decorate,
+moving floor decor or a critter that stands, Up and Down change its level
+(soil, ruler shelf, matchbox ledge); the top line says which, and each level
+is dotted along its top, the chosen one gold. Critters that walk or hop climb
+by themselves at the caps or the matchboxes: those whose favourite zone is
+"high" spend most of their time up there, the others go up now and then;
+up top they potter along the ledge and sit, then climb down. `walk high` in
+a recipe is a climb. A save's place line carries the level as a fourth
+number when it is not the soil; a save without one is all on the soil.
 
 ## Items
 

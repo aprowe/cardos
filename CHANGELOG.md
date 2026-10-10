@@ -11,6 +11,108 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.13.0 -- 2026-10-10
+
+- **Tibbs, the shopkeeper.** The shop is a person with an ongoing story.
+  - **How stocks are made:** each new stock starts with his line of the day
+    (shown in the shop) and a brief for each new find, and every item is
+    made from its brief.
+  - **No more tags:** the shelf, the garden and the season no longer steer
+    anything.
+  - **What he knows:** your recent talk, your purchases (as history only)
+    and what is in your jar.
+  - **Variety comes from the code:**
+    - random events in his day;
+    - random sparks for each find;
+    - a coin toss deciding whether a find answers what you asked;
+    - recent themes are not repeated.
+
+    This keeps the AI from latching onto what you bought.
+  - **Talking:** talk to him from the shop (`t`), the jar menu (Tibbs) or
+    Jar Post (`t`).
+- **Prices are chosen first**, from common (30–80) up to a rare treasure
+  (450–900). Dearer items get more care and more AI effort. The price is
+  part of the signed item.
+- **Seed packets:** about 30% of stocks include one, and the Garden plants
+  from seeds (everyone starts with one of each).
+- **Gifts from the friends list:** in Jar Post, press Enter on a friend,
+  choose one of your things, add a note and send.
+- **Ledges:** a ruler shelf on bottle caps and a matchbox tower at the back
+  of the jar.
+  - In Decorate, Up/Down puts floor decor and critters on a ledge.
+  - Critters climb up, potter about and come down; "high" critters like it
+    up there.
+  - Saves keep each item's level; old saves load with everything on the
+    soil.
+- **Nothing is made off screen:** coins and jam come only while the jar is
+  open, and the "while you were away" banner is gone. Plants still grow by
+  the real clock.
+- The shelf is gone.
+
+## v0.12.1 -- 2026-10-10
+
+- **Fix: Jar Shop said "0 here" while every item was being refused.** A
+  device that had been up about 2 hours refused every signed item as
+  "signature bad". The same records verify on the server. The device's own
+  decode built the exact message the server signed (checked byte for byte
+  by running the app's C code on a real record), and a fresh boot of the
+  same source accepted all four. The cause is still unknown. If it comes
+  back:
+  - `api->sig_verify` now logs the crypto library's status, the size and
+    the free heap to `log`;
+  - the shop says "N failed the check (log)" rather than looking empty;
+  - a refused item is no longer fetched again every 5 s while the rest of
+    the stock is made.
+- The firmware's version banner is stamped when the build is configured, so
+  an incremental build can show an old tag (the device said v0.10.0 while
+  running v0.11.0's API 44).
+
+## v0.12.0 -- 2026-10-10
+
+- **The item pool.** Every item made goes into one pool shared by everyone.
+  A shop's stock is 4 items:
+  - first, what you hold;
+  - then items from the pool;
+  - then new ones.
+
+  With nothing held that is 2 from the pool and 2 new; there are always at
+  least 2 besides what is held.
+  - **Unique:** an item is in one place at a time (the pool, one person's
+    shop, or someone's things), so items stay unique.
+  - **Turnover:** when you next ask for a stock (a new day, or `r`),
+    whatever you neither bought nor held goes back to the pool. It never
+    comes straight back to you.
+  - **Picking:** pool items are chosen to fit your garden, shelf and hint.
+  - **Speed:** they show up at once, so only the new ones wait for Claude,
+    and a stock costs 2 calls instead of 8.
+  - **Seeding:** `python -m server.jar seed 20` fills the pool;
+    `python -m server.jar pool` lists it.
+- **Hold:** Space in the shop holds an item, up to 4. It stays in your
+  shop through new stocks until you buy it or press Space again. The shop
+  tells the server what you bought and what you hold with each request.
+- **Fix: a stock that was still being made never reached the shop.** The
+  shop gave up after 3 minutes, and on reopening it saw a stock dated
+  today and never asked again. Now:
+  - each stock carries a batch number;
+  - every time the shop opens it checks quietly and picks up the rest of an
+    unfinished stock, or a new one;
+  - it keeps trying for 15 minutes.
+- **Fix: a server restart mid-stock left it pending for good.** A poll now
+  notices and starts it again, keeping what was on show.
+
+## v0.11.5 -- 2026-10-10
+
+- **The shop's stock arrives one item at a time.** The server asks Claude
+  for one item per call and stores each as soon as it passes the checks.
+  `/jar/day` answers with the items made so far plus a `more` line until
+  the stock is whole, and Jar Shop shows each item as it lands. Anything
+  bought meanwhile stays bought. On the laptop the first item took 38 s,
+  where all eight used to take 105 s together. Each call is told its kind
+  (3 critters, 3 floor decor, 2 hanging) and the names already made, so
+  the mix and the variety hold. A hint goes to items 2, 5 and 7. A call
+  that comes to nothing is tried again, up to 4 times. If the day's asks
+  run out partway, the stock keeps what was made.
+
 ## v0.11.4 -- 2026-10-10
 
 - **Fix: the shop's stock could vanish.** Once the day's stock was already
