@@ -350,3 +350,155 @@ How it fits CardOS:
 - The OS dims the screen after its own timeout; the app does not fight it.
 - Items made by hand for steps 2 and 3 are built in and trusted; the signature
   check applies to items that arrive from the server (steps 5 and 6).
+
+## Server (steps 5 and 6), 2026-10-09
+
+`server/jar.py`, on the general store (`docs/superpowers/specs/
+2026-10-09-server-store-design.md`): its data is in `srv/jar`, which a
+device may read and never write; Claude is asked through `ask.ask_shape`,
+records are signed with `sign.sign`, names and last seen come from
+`/people`, and the inbox is the store's own queues. Tests:
+`server/tests/test_jar.py`.
+
+### The routes
+
+All `device_or_dash`. A refusal is one line, `error WHY\n`, with the
+store's statuses: 400 a bad argument or item, 403 not allowed, 404 no such
+person, code or item, 503 a server without Claude, 507 full.
+
+    GET  /jar/me               code CODE\n  name DISPLAY\n
+                               friend NAME\tDISPLAY\tLAST_SEEN\tSTATE\n ...
+    POST /jar/friend?code=C    ok NAME mutual|waiting\n   (404 unknown, 400 yourself)
+    POST /jar/unfriend?name=N  ok\n
+    POST /jar/day              body lines: garden mushroom=4,flower=2 / shelf TAG,TAG /
+                               owned NAME,NAME / tz POSIX_TZ  ->  pending\n | ok DATE\n
+    GET  /jar/day              pending\n | ok DATE\ntags A, B, C\nitems N\n | error WHY\n
+    GET  /jar/item?i=N         base64 of item N's signed record, \n
+    GET  /jar/pubkey           130 hex digits, \n  (the same as /sign/pubkey)
+    POST /jar/gift?to=NAME     body NOTE\nBASE64\n  ->  ok\n
+    POST /jar/thanks?to=NAME&id=ID                  ->  ok\n
+
+Details the contract leaves open, as built:
+
+- **Friend codes** are 6 characters from `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (no
+  I, L, O, 0, 1), made at the first `/jar/me` and kept. `/jar/friend`
+  upper-cases the code and ignores spaces and dashes. `/jar/me` lists only
+  the people you added: `waiting` until they add you back, then `mutual`.
+  DISPLAY is the `/people` display name (16 characters; the device cuts to
+  8); LAST_SEEN unix seconds, 0 never. At most 64 friends.
+- **The day** is the UTC date. `POST /jar/day` starts today's stock if it
+  is not made or making (a background thread; the request never waits) and
+  answers `pending`; once made it answers `ok DATE` and makes nothing more
+  until tomorrow. A failed day is reported by `GET /jar/day` as `error WHY`
+  with status 200 (it is the state of the stock, not a refusal), and the
+  next POST tries again. `GET /jar/day` before any POST is 404. `i` in
+  `/jar/item` counts from 0 to N-1; while a new day is pending, the last
+  finished stock is still served. Stock is kept three days.
+- **Base64** is the standard alphabet with padding, everywhere.
+- **A gift** checks, in order: the recipient exists (404) and is not you
+  (400); the note passes the filter (400; it is made one line, ASCII, and
+  cut to 24); the body is a record that decodes and whose total length is
+  its size (400 "that is not an item"); it is signed and not built in (400
+  "only shop items can be sent"); the signature checks (400 "the item's
+  signature does not check"); the ledger says it is yours (403 "that item
+  is not yours"); you are mutual friends (403). Then the server sets the
+  gift flag and gifted-by -- the sender's display name, cut to 12, as the
+  item card shows it -- re-signs, pushes `FROM\tNOTE\tBASE64` (FROM the
+  sender's account name) onto the recipient's `jar.gifts` as the server
+  (the queue shows `-` as its pusher), and only then moves the ledger.
+- **Thanks** need mutual friends too (403 otherwise); the message is
+  `FROM\tID` on the recipient's `jar.thanks`.
+- **Ids** are `100 + srv/jar next_id`, so they never meet the built-ins
+  (1..12); the ledger is `srv/jar own/ID`.
+
+### The signature, exactly
+
+ECDSA P-256 over SHA-256, the signature raw r || s (64 bytes). The signed
+message is the record **without** its signature: bytes [0, 208) with byte
+204 (signature length) set to 0 and the total length (offset 2) counting no
+signature, followed by everything that came after the signature -- the
+script, then the frames. Put the other way, the server encodes the record
+with no signature, signs those bytes, and inserts the 64 bytes at offset
+208, adding 64 to the total and writing 64 at 204. So a device extracts the
+message by: copy bytes 0..207, set [204] = 0, set [2..3] = total - sig_len,
+append bytes from 208 + sig_len to the end. The signature covers every byte
+of the record, memory included: a device must hand back the record exactly
+as it was signed (keep an item's moving memory beside it, not in it), or
+the next gift will not verify.
+
+`test/fixtures/` holds, for the device's host test, a record signed with a
+fixed test key (the private scalar is SHA-256 of "jar factory test key"
+mod n; it is not the server's key):
+
+| File | What |
+|---|---|
+| `jar_item_signed.bin` | a complete signed record, 464 bytes: "Fixture", id 4242, 2 frames, no script |
+| `jar_item_message.bin` | exactly the bytes that were signed, 400 |
+| `jar_pubkey.bin` | the test key's 65-byte uncompressed point, 04 X Y |
+
+`python -m server.tests.test_jar --fixtures` writes them again (ECDSA is
+randomised here, so only the 64 signature bytes change);
+`server/tests/test_jar.py` checks them on every run.
+
+### Generation
+
+Per person per UTC day, in a thread:
+
+1. **Tags.** Mature beds weight their flavours (mushroom odd/glowing/spooky,
+   berry sweet/round/food, fern -- and moss, the same -- soft/sleepy/cosy,
+   flower fancy/dressed-up, cactus spiky/deserty/tough) by count; each
+   shelf tag adds one. The top three (ties shuffled by person and date; two
+   at random when nothing is grown or shown), then the season, the weather
+   word and `full-moon`/`new-moon`: at most six. The record's 24-byte tags
+   field holds as many whole tags as fit.
+2. **The day.** Season by month (December to February winter; turned round
+   south of the equator); the first of March, June, September or December is
+   a season's first day. The moon is computed (synodic month from the new
+   moon of 2000-01-06 18:14 UTC); a full-moon day is within 0.75 days of
+   full. Weather: the POSIX TZ string is mapped to a representative city by
+   its abbreviation and offset (`PST8PDT` San Francisco, `CET-1CEST` Berlin,
+   `AEST-10AEDT` Sydney, ...; then by offset alone), and open-meteo (no key)
+   is asked for the current weather code and temperature, cached per city
+   per day. `UTC0` -- a device with no TZ -- is nowhere: no weather.
+   Anything unreachable is skipped quietly.
+3. **Asking.** One `ask_shape` call for all 8 (9 on a full-moon day or a
+   season's first day: the last is the special one), against a strict schema
+   built from `apps/jaritem.h`'s enums (parsed from the header, not
+   retyped): name <= 12, line <= 32, kind, movement, speed, zone, up to 3
+   habits `{when, when_arg, do, do_arg}`, up to 4 bubbles <= 12, 8 `#rrggbb`
+   colours (slot 0 transparent), 1-4 frames of 16 strings of 16 digits 0-7.
+   The call counts against the person's day of asks (`ask.DAILY`) and may
+   take 420 s.
+4. **Checks**, per item, beyond the schema: every frame 16x16 of slots 0-7,
+   at least 24 solid pixels, no colour over 85% of the solid ones; the text
+   filter on name, line and bubbles; recipe arguments the game can do
+   (near 0-4, jam 0-2, time 0-4, tick every 4 or more, say and frame within
+   the item's bubbles and frames, particle and walk within their enums,
+   glow 0-2, hop <= 24, hanging decor neither hops nor walks); a name not
+   already owned or used today.
+5. **Again**, only for what failed: at most 3 calls in all, the retries 4
+   items at most each. Fewer than 8 is a smaller stock and `items N` says
+   so; none at all is `error WHY`.
+6. **Packing**: palette to RGB565 as `tools/make_jar_art.py` does it, frames
+   at 3 bits a pixel exactly as `ji_px` reads them, id from the counter,
+   maker "Jar Works", made = now, tags; signed; kept in `srv/jar
+   stock/NAME/I`; the ledger written.
+
+The text filter is minimal on purpose: about forty words, whole words only
+(plus plain -s/-es/-ing/-er/-ed/-y forms) after undoing common digit-for-
+letter swaps. It keeps the obvious out of a shop; it is not moderation, and
+a "Scunthorpe" passes.
+
+One limit to watch: `ask_shape` refuses an answer over 16 KB. Eight items of
+four frames each come to about 13 KB of compact JSON, so the prompt asks for
+compact JSON and at most two items with more than two frames; an answer that
+is still too long costs a round, and the retries ask for four at a time.
+
+### What the droplet needs
+
+Nothing new to install: `cryptography` (already needed by `/sign/pubkey`)
+and outbound HTTPS to `api.open-meteo.com` (weather is skipped without it).
+The repository must be there (it is: Build runs in it), because the enums
+are read from `apps/jaritem.h` at run time. `CARDOS_STATE/sign_key.pem` is
+the key every item is signed with: back it up, and never let it be
+regenerated, or every item already given out stops verifying.

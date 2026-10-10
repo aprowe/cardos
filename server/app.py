@@ -28,7 +28,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 
-from . import accounts, agent, ask, chat, m5hub, daily, dash, dashapi, files, google, kv, midi, msg, music, notes, people, photos, shots, sign, talk, toggl, tz, updates, voice
+from . import accounts, agent, ask, chat, m5hub, daily, dash, dashapi, files, google, jar, kv, midi, msg, music, notes, people, photos, shots, sign, talk, toggl, tz, updates, voice
 from .chat import ROOT as ROOT_DIR
 
 
@@ -140,7 +140,7 @@ def _normalise(routes):
 ALL_ROUTES = _normalise(SERVER_ROUTES + chat.ROUTES + agent.ROUTES + m5hub.ROUTES + updates.ROUTES +
                         voice.ROUTES + shots.ROUTES + tz.ROUTES + dash.ROUTES + dashapi.ROUTES +
                         google.ROUTES + files.ROUTES + toggl.ROUTES + notes.ROUTES + daily.ROUTES + photos.ROUTES + music.ROUTES + midi.ROUTES + talk.ROUTES + msg.ROUTES +
-                        kv.ROUTES + people.ROUTES + ask.ROUTES + sign.ROUTES +
+                        kv.ROUTES + people.ROUTES + ask.ROUTES + sign.ROUTES + jar.ROUTES +
                         _render_routes() +
                         _screen_routes())
 
