@@ -1,6 +1,6 @@
 /* Jar Shop -- Jar Factory's shop, My Stuff, upgrades and garden.
  *
- * Opened from the jar (apps/jar.c) with api->run("Jar Shop", SCREEN): shop,
+ * A screen of Jar Factory (apps/jar.c), opened with shop_open(SCREEN): shop,
  * stuff, decor (My Stuff, picking something to put in the jar), up, garden.
  * Esc at a top screen, or fn-`, goes back to the jar. What it shares
  * with Jar Post (apps/jarpost.c) is apps/jarui.h; the files are
@@ -32,6 +32,9 @@
  * Host tests: test/test_jarshop.c (JAR_DUMP=dir writes its screens).
  */
 
+#ifndef CARDOS_JARSHOP_H
+#define CARDOS_JARSHOP_H
+
 #include "apps/jarui.h"
 
 #define C_SOIL CAPP_RGB(0x4a, 0x34, 0x24)
@@ -40,14 +43,14 @@ enum { V_STOCK = 0, V_STUFF, V_CARD, V_UP, V_GARDEN, V_PLANT };
 enum { P_BROWSE = 0, P_DECOR };                          /* what My Stuff is picking for */
 enum { N_DAY_POST = N_APP, N_DAY_POLL, N_ITEM };
 
-static JStock S;                                          /* the stock on show */
-/* Tibbs's line of the day (server/shopkeep.py), and seeds in hand. Talking to
- * him is Jar Post's ("talk"); t opens it. */
-static char SAY[144];
-static int SEEDS[JPL_KINDS];
-static JStock NS;                                         /* the day's batch, arriving */
-
-static struct {
+typedef struct {
+  JStock s;                                               /* the stock on show */
+  JStock ns;                                              /* the day's batch, arriving */
+  /* Tibbs's line of the day (server/shopkeep.py), and seeds in hand. Talking
+   * to him is Jar Post's ("talk"); t opens it. */
+  char say[144];
+  int seeds[JPL_KINDS];
+  struct {
   int view, back, pick, slot, sel, top, ntile;
   int up_sel, bed, plant, asking;
   Tile tile[8];
@@ -56,7 +59,21 @@ static struct {
    * done: `more` is that, `live` that this batch is already on show. */
   int more, live, got, quiet, dropped;
   uint32_t wait_until;
-} G;
+  } g;
+} ShopMem;
+
+/* In Jar Factory, in the scene's item memory while the shop is up (jarui.h). */
+#ifdef JAR_ONE_APP
+static ShopMem *SHOP_P;
+#define SHOP_MEM (*SHOP_P)
+#else
+static ShopMem SHOP_MEM;
+#endif
+#define S     SHOP_MEM.s
+#define NS    SHOP_MEM.ns
+#define SAY   SHOP_MEM.say
+#define SEEDS SHOP_MEM.seeds
+#define G     SHOP_MEM.g
 
 static const char *const UP_NAME[JU_KINDS] = { "Another mossling", "Another machine", "Faster belt", "Another bed" };
 static const int PLANT_SPR[JPL_KINDS] = { SPR_BUSH, SPR_FERN, SPR_SHROOM, SPR_FLOWER, SPR_CACTUS };
@@ -579,7 +596,7 @@ static void paint_plant(void) {
   }
 }
 
-static void app_paint(void *st, CRect c) {
+static void shop_paint(void *st, CRect c) {
   static const char *const H_STOCK[] = { "Ent", "buy", "Spc", "hold", "T", "Tibbs", "Tab", "stuff", 0 };
   static const char *const H_STUFF[] = { "Ent", "open", "G", "gift", "Tab", "shop", "Esc", "jar", 0 };
   static const char *const H_PICK[] = { "Ent", "choose", "Esc", "back", 0 };
@@ -660,7 +677,7 @@ static void gift(uint32_t id) {
   char a[24];
   save();
   api->fmt(a, sizeof a, "gift %u", (unsigned)id);
-  if (api->run("Jar Post", a) != 0) say("No Jar Post app");
+  if (ui_run("Jar Post", a) != 0) say("No Jar Post app");
 }
 
 static int key_grid(int k) {
@@ -772,13 +789,13 @@ static int key_garden(int k) {
   return 1;
 }
 
-static int app_key(void *st, uint8_t k) {
+static int shop_key(void *st, uint8_t k) {
   (void)st;
   U.dirty = 1;
   if (U.msg[0]) U.msg[0] = 0;
   if ((k == 't' || k == 'T') && (G.view == V_STOCK || G.view == V_STUFF)) {
     save();                                       /* Tibbs is Jar Post's */
-    if (api->run("Jar Post", "talk") != 0) say("No Jar Post app");
+    if (ui_run("Jar Post", "talk") != 0) say("No Jar Post app");
     return 1;
   }
   /* For trying things out: r asks the server for a new stock now (it makes
@@ -806,7 +823,7 @@ static int app_key(void *st, uint8_t k) {
   return 0;
 }
 
-static int app_tick(void *st, uint32_t now) {
+static int shop_tick(void *st, uint32_t now) {
   (void)st;
   net_tick(now);
   if (ui_clock() && (G.view == V_STOCK || G.view == V_GARDEN)) U.dirty = 1;
@@ -816,36 +833,16 @@ static int app_tick(void *st, uint32_t now) {
   return 1;
 }
 
-/* ---- starting ------------------------------------------------------------------------------ */
+/* ---- opening ------------------------------------------------------------------------------ */
 
-const CappInfo capp_info = {
-  CAPP_API_VERSION,
-  CAPP_FULLSCREEN,
-  "Jar Shop",
-  /* 16x16: a market stall, a striped awning over a counter of jars. */
-  { 0x7F, 0xFE, 0x99, 0x99, 0x99, 0x99, 0xFF, 0xFF,
-    0x55, 0x55, 0x40, 0x02, 0x40, 0x02, 0x4C, 0xCA,
-    0x5E, 0xDE, 0x52, 0x92, 0x5E, 0xDE, 0x7F, 0xFE,
-    0x40, 0x02, 0x40, 0x02, 0x40, 0x02, 0x7F, 0xFE },
-  "Jar Factory's shop and garden\n"
-  "Tab\tStock and My Stuff\n"
-  "Enter\tbuy; on an item, put it in the jar\n"
-  "G\tsend as a gift (Jar Post), in the shop, My Stuff or a card\n"
-  "Space\thold: it stays in the shop until you buy it or let go (4 at most)\n"
-  "T\ttalk to Tibbs, the shopkeeper\n"
-  "r\ta new stock from the server now (testing)\n"
-  "$\t1000 coins (testing)\n"
-  "Esc\tback to the jar\n",
-};
-
-static CappUi UI;
-
-int capp_main(const CardApi *a, int argc, char **argv) {
-  const char *s = argc > 1 ? argv[1] : "";
-  api = a;
+/* The shop on SCREEN: shop (the default), stuff, decor, up, garden ("shelf",
+ * which is gone, is My Stuff). A screen of Jar Factory (apps/jar.c), which
+ * routes its paint, keys and ticks here while it is on. */
+static void shop_open(const char *s) {
+  if (!s) s = "";
   api->mem_set(&G, 0, sizeof G);
   api->mem_set(&U, 0, sizeof U);
-  if (ui_load()) return 0;
+  if (ui_load()) return;
   if (jst_get(api, JST_SAY, SAY, sizeof SAY) < 0) SAY[0] = 0;
   jst_clean(SAY);
   jst_seeds_load(api, SEEDS, TEXT, sizeof TEXT);
@@ -855,11 +852,6 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   else if (str_same(s, "garden")) G.view = V_GARDEN;
   else if (str_same(s, "shelf")) go_stuff(P_BROWSE);   /* the shelf is gone */
   else go_stock();
-  UI.paint = app_paint;
-  UI.key = app_key;
-  UI.tick = app_tick;
-  UI.pref_w = SW;
-  UI.pref_h = SHT;
-  api->ui(&UI);
-  return 0;
 }
+
+#endif /* CARDOS_JARSHOP_H */

@@ -13,11 +13,7 @@
 #include "fakeapi.h"
 #include "jarfake.h"
 
-#define capp_info jarshop_capp_info
-#define capp_main jarshop_capp_main
-#include "apps/jarshop.c"
-#undef capp_info
-#undef capp_main
+#include "apps/jarshop.h"           /* the shop screen, standing alone */
 
 #define T0 1800000000u                 /* 2027-01-15 08:00 UTC */
 
@@ -72,19 +68,21 @@ static void launch(const char *screen) {
   argv[0] = "jarshop";
   argv[1] = (char *)screen;
   JF_PENDING = 0;                    /* the OS drops a closed app's request */
-  jarshop_capp_main(&A, screen ? 2 : 1, argv);
+  (void)argv;
+  api = &A;
+  shop_open(screen);
 }
 
-static void key(int k) { app_key(0, (uint8_t)k); }
+static void key(int k) { shop_key(0, (uint8_t)k); }
 
 static void tick(int ms) {
   int t;
-  for (t = 0; t < ms; t += 5) { fakeapi_ticks += 5; app_tick(0, fakeapi_ticks); }
+  for (t = 0; t < ms; t += 5) { fakeapi_ticks += 5; shop_tick(0, fakeapi_ticks); }
 }
 
 static void shot(const char *name) {
   CRect all = { 0, 0, SW, SHT };
-  app_paint(0, all);
+  shop_paint(0, all);
   jf_dump(name);
 }
 

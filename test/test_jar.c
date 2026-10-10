@@ -14,6 +14,10 @@
 #include "fakeapi.h"
 #include "jarfake.h"
 
+/* The scene's own tests ask for the shop or the post and check what was
+ * asked (RAN); they stay on the scene. The screens' tests switch for real. */
+static int jar_test_open(const char *app, const char *args);
+#define JAR_TEST_OPEN(a, b) do { if (jar_test_open((a), (b))) return 0; } while (0)
 #define capp_info jar_capp_info
 #define capp_main jar_capp_main
 #include "apps/jar.c"
@@ -39,6 +43,14 @@ static int f_run(const char *name, const char *args) {
   snprintf(RAN, sizeof RAN, "%s", name);
   snprintf(RAN_ARGS, sizeof RAN_ARGS, "%s", args ? args : "");
   return 0;
+}
+
+static int STAY = 1;                 /* a screen asked for is recorded, not opened */
+static int jar_test_open(const char *app, const char *args) {
+  if (strcmp(app, "Jar Shop") && strcmp(app, "Jar Post")) return 0;
+  f_run(app, args);
+  if (STAY) save();                  /* as jar_open does, before a screen */
+  return STAY;
 }
 
 static int NET_UP;
@@ -154,6 +166,45 @@ void test_jar_first_run_writes_and_places_the_starters(void) {
   CHECK_EQ(J.coins, 0);
   CHECK_EQ(G.view, V_JAR);
   dump("01_first");
+}
+
+/* One app: the shop and the post are screens of the jar now. Opening one
+ * saves the scene, hands its item memory to the screen and lets the OS
+ * compose the screen's paint; Esc comes back to the scene, loaded afresh
+ * with what the screen changed. */
+void test_jar_the_shop_and_the_post_are_screens_of_one_app(void) {
+  uint32_t before;
+  int placed;
+  start(T0);
+  J.coins = 500;
+  placed = J.nplaced;
+  CHECK(placed >= 3);
+  STAY = 0;
+  key('s');
+  CHECK_EQ(SCREEN, SC_SHOP);
+  CHECK_EQ(fakeapi_paint_direct, 0);                 /* the OS composes the shop */
+  CHECK_EQ(J.nplaced, 0);                            /* its memory is the shop's now */
+  CHECK_EQ(J.nwant, placed);                         /* what is in the jar, as a save says it */
+  CHECK((void *)SHOP_P >= (void *)J.pool && (void *)POST_P == (void *)J.placed);
+  CHECK_EQ(SHOP_P->s.n, 8);                          /* the hand-made stock, offline */
+  CHECK(UI_P->card.ok);
+  before = J.coins;
+  key(CAPP_KEY_ENTER);                               /* bought */
+  CHECK(J.coins < before);
+  key(CAPP_KEY_ESC);                                 /* the card */
+  key(CAPP_KEY_ESC);                                 /* the jar */
+  CHECK_EQ(SCREEN, SC_JAR);
+  CHECK_EQ(fakeapi_paint_direct, 1);                 /* the scene paints its own strips */
+  CHECK_EQ(J.nplaced, placed);                       /* everything back where it was */
+  CHECK(J.coins < before);                           /* and the purchase kept */
+  ticks(200);
+  key('t');                                          /* Tibbs */
+  CHECK_EQ(SCREEN, SC_POST);
+  CHECK_EQ(POST_P->g.view, V_TALK);
+  key(CAPP_KEY_ESC);
+  CHECK_EQ(SCREEN, SC_JAR);
+  CHECK_EQ(J.nplaced, placed);
+  STAY = 1;
 }
 
 void test_jar_keys_open_the_companions_after_saving(void) {

@@ -76,11 +76,13 @@ static const CardApi *api;
 static Jar J;
 
 /* The strip, and the same memory for the card and the network, which never
- * happen while a strip is being drawn. */
+ * happen while a strip is being drawn -- and for the shop and post screens'
+ * buffers (apps/jarui.h), which are only in use while the scene is not. */
 static union {
   uint16_t strip[SW * SH];
   JIo io;
   char text[2048];
+  struct { JIo io; char txt[2048]; char net[2048]; } ui;
 } SCR;
 
 static struct {
@@ -831,7 +833,7 @@ static void zoom_clamp(void) {
   if (G.zy > SHT - (SHT + 1) / 2) G.zy = SHT - (SHT + 1) / 2;
 }
 
-static void app_paint(void *st, CRect c) {
+static void scene_paint(void *st, CRect c) {
   int k, full = !G.asked || (G.frames % 30) == 0;
   (void)st;
   G.asked = 0;
@@ -882,12 +884,13 @@ static void save(void) {
 
 /* Save, and open a companion at one of its screens. Quitting it comes back
  * to a fresh jar, loaded from this save. */
+static int jar_open(const char *app, const char *args);
+
+/* The shop or the post: screens of this app now (they were apps of their
+ * own while the code had to fit in RAM; with app code run from flash, one
+ * app again -- the XIP spec's "merging Jar back into one app"). */
 static void open_app(const char *app, const char *screen) {
-  save();
-  if (api->run(app, screen) != 0) {
-    api->fmt(G.msg, sizeof G.msg, "%s is not on the card", app);
-    G.msg_until = api->ticks_ms() + 4000;
-  }
+  jar_open(app, screen);                           /* it saves the scene first */
 }
 
 /* ---- decorate ------------------------------------------------------------- */
@@ -970,7 +973,7 @@ static int key_decor(int k) {
 
 /* ---- keys ------------------------------------------------------------------- */
 
-static int app_key(void *st, unsigned char k) {
+static int scene_key(void *st, unsigned char k) {
   uint32_t now = api->ticks_ms();
   (void)st;
   G.menu_dirty = 1;
@@ -1161,7 +1164,7 @@ static void clock_minute(void) {
   set_sky(J.minute);
 }
 
-static int app_tick(void *st, uint32_t now) {
+static int scene_tick(void *st, uint32_t now) {
   uint32_t dt;
   int steps = 0, want;
   (void)st;
@@ -1241,24 +1244,16 @@ const CappInfo capp_info = {
     0x20, 0x04, 0x40, 0x02, 0x40, 0x02, 0x44, 0x02,
     0x4E, 0x02, 0x44, 0x22, 0x44, 0x72, 0x44, 0x22,
     0x7F, 0xFE, 0x40, 0x02, 0x40, 0x02, 0x3F, 0xFC },
-  "S\tthe shop (Tab: My Stuff)\n"
-  "I\tMy Stuff: what you own; G there gifts it\n"
-  "Z\tzoom to 2x; Tab follows the next critter\n"
-  "D\tdecorate: move, add, take out\n"
-  "^v\tmoving: up onto a shelf, or down\n"
-  "P\tthe garden: plant the beds\n"
-  "T\ttalk to Tibbs, the shopkeeper\n"
-  "F\tfriends\n"
-  "M\tmail; Enter opens a parcel on the dock\n"
-  "U\tupgrades\n"
-  "any key\tbrings the bars back\n",
+  "Enter\tthe menu; S shop, I My Stuff, P garden\n"
+  "T\tTibbs; F friends; M mail; U upgrades\n"
+  "D\tdecorate; ^v moves onto a ledge\n"
+  "Z\tzoom 2x; Tab follows a critter\n"
+  "Shop\tEnter buys, Space holds, G gifts\n"
+  "Esc\tback to the jar\n",
 };
 
-static CappUi UI;
-
-int capp_main(const CardApi *a, int argc, char **argv) {
-  (void)argc; (void)argv;
-  api = a;
+/* The scene from the save: at start, and back from a screen. */
+static void scene_start(void) {
   api->mem_set(&J, 0, sizeof J);
   api->mem_set(&G, 0, sizeof G);
   js_init(&J, api->ticks_ms() ^ api->epoch());
@@ -1266,9 +1261,165 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   G.next_q = api->ticks_ms() + NET_FIRST_MS;
   load();
   clock_minute();
+}
+
+/* ---- the shop and the post, screens of this app ----------------------------- */
+
+#define JAR_ONE_APP
+#define IO   SCR.ui.io
+#define TEXT SCR.ui.txt
+#define NET  SCR.ui.net
+/* The scene keeps its helpers' names; the screens' are ui_, and each screen's
+ * own state is renamed where the two would meet. */
+#define text(...) ui_text(__VA_ARGS__)
+#define textn(...) ui_textn(__VA_ARGS__)
+#define pic(...) ui_pic(__VA_ARGS__)
+#define spr(...) ui_spr(__VA_ARGS__)
+#define hints(...) ui_hints(__VA_ARGS__)
+#define rc(...) ui_rc(__VA_ARGS__)
+#define slen(...) ui_slen(__VA_ARGS__)
+#define swap16(...) ui_swap16(__VA_ARGS__)
+#define say(...) ui_say(__VA_ARGS__)
+#define save(...) ui_save(__VA_ARGS__)
+#define net_reply shop_net_reply
+#define key_card  shop_key_card
+#define V_CARD    SHOP_V_CARD
+#include "apps/jarshop.h"
+#undef G
+#undef S
+#undef NS
+#undef SAY
+#undef SEEDS
+#undef net_reply
+#undef key_card
+#undef V_CARD
+#define net_reply post_net_reply
+#define key_card  post_key_card
+#define V_CARD    POST_V_CARD
+#define post_tick post_screen_tick      /* the scene has a post_tick of its own */
+#include "apps/jarpost.h"
+#undef post_tick
+#undef G
+#undef M
+#undef TK
+#undef TK_WHO
+#undef net_reply
+#undef key_card
+#undef V_CARD
+#undef text
+#undef textn
+#undef pic
+#undef spr
+#undef hints
+#undef rc
+#undef slen
+#undef swap16
+#undef say
+#undef save
+
+enum { SC_JAR = 0, SC_SHOP, SC_POST };
+static int SCREEN;
+
+/* Leaving the scene for a screen: it is saved, its placed items become
+ * "want" lines (what a save writes, and what the screens read as in the
+ * jar), and its item memory -- the placed items and the frame pool, 7 KB --
+ * holds the screens' state until the scene comes back and loads afresh. The
+ * post's 3.9 KB goes where the placed items were; the shop's state, the
+ * screens' shared U and the picture buffer go in the frame pool. */
+static void screen_bind(void) {
+  int i;
+  uintptr_t a;
+  if (SCREEN == SC_JAR) {
+    save();
+    J.nwant = 0;
+    for (i = 0; i < J.nplaced && J.nwant < JS_MAX_PLACED; i++) {
+      JWant *w = &J.want[J.nwant++];
+      w->id = J.placed[i].id;
+      w->x = J.placed[i].home_x;
+      w->y = (int8_t)J.placed[i].home_y;
+      w->lv = J.placed[i].level;
+    }
+    J.nplaced = 0;
+  }
+  POST_P = (PostMem *)(void *)J.placed;
+  a = ((uintptr_t)J.pool + 3u) & ~(uintptr_t)3u;
+  SHOP_P = (ShopMem *)a;
+  a = (a + sizeof(ShopMem) + 3u) & ~(uintptr_t)3u;
+  UI_P = (UiState *)a;
+  a = (a + sizeof(UiState) + 3u) & ~(uintptr_t)3u;
+  PB_P = (uint16_t *)a;
+}
+
+/* What screen_bind relies on, checked when it is built. */
+typedef char jar_post_fits[sizeof(PostMem) <= sizeof J.placed ? 1 : -1];
+typedef char jar_shop_fits[sizeof(ShopMem) + sizeof(UiState) + PB_N * 2 + 12 <=
+                           sizeof J.pool + sizeof J.pool_used ? 1 : -1];
+
+/* Another screen of the jar by its old app name; anything else is an app.
+ * The scene paints its own strips; the screens are composed by the OS. */
+static int jar_open(const char *app, const char *args) {
+#ifdef JAR_TEST_OPEN
+  JAR_TEST_OPEN(app, args);
+#endif
+  if (str_same(app, "Jar Shop")) {
+    screen_bind();
+    SCREEN = SC_SHOP;
+    if (api->paint_direct) api->paint_direct(0);
+    shop_open(args);
+  } else if (str_same(app, "Jar Post")) {
+    screen_bind();
+    SCREEN = SC_POST;
+    if (api->paint_direct) api->paint_direct(0);
+    post_open(args);
+  } else if (str_same(app, "Jar Factory")) {
+    SCREEN = SC_JAR;
+    if (api->paint_direct) api->paint_direct(1);
+    scene_start();
+  } else return api->run(app, args);
+  return 0;
+}
+
+static void app_paint(void *st, CRect c) {
+  if (SCREEN == SC_SHOP) shop_paint(st, c);
+  else if (SCREEN == SC_POST) post_paint(st, c);
+  else scene_paint(st, c);
+}
+
+static int app_key(void *st, uint8_t k) {
+  if (SCREEN == SC_SHOP) return shop_key(st, k);
+  if (SCREEN == SC_POST) return post_key(st, k);
+  return scene_key(st, k);
+}
+
+static int app_tick(void *st, uint32_t now) {
+  if (SCREEN == SC_SHOP) return shop_tick(st, now);
+  if (SCREEN == SC_POST) return post_screen_tick(st, now);
+  return scene_tick(st, now);
+}
+
+static int app_wants_text(void *st) { return SCREEN == SC_POST && post_wants_text(st); }
+
+static CappUi UI;
+
+/* Started with a screen's name -- shop, stuff, garden, up, mail, talk,
+ * friends -- it opens there; otherwise on the scene. */
+int capp_main(const CardApi *a, int argc, char **argv) {
+  const char *s = argc > 1 && argv[1] ? argv[1] : "";
+  api = a;
+  /* Jar Shop and Jar Post were apps until they became screens here: the
+   * card's old copies would only be refused (an older API), so they go. */
+  api->remove("/apps/Games/jarshop.capp");
+  api->remove("/apps/Games/jarpost.capp");
+  SCREEN = SC_JAR;
+  scene_start();
+  if (str_same(s, "shop") || str_same(s, "stuff") || str_same(s, "garden") || str_same(s, "up"))
+    jar_open("Jar Shop", s);
+  else if (str_same(s, "mail") || str_same(s, "talk") || str_same(s, "friends"))
+    jar_open("Jar Post", s);
   UI.paint = app_paint;
   UI.key = app_key;
   UI.tick = app_tick;
+  UI.wants_text = app_wants_text;
   UI.pref_w = SW;
   UI.pref_h = SHT;
   api->ui(&UI);

@@ -13,11 +13,7 @@
 #include "fakeapi.h"
 #include "jarfake.h"
 
-#define capp_info jarpost_capp_info
-#define capp_main jarpost_capp_main
-#include "apps/jarpost.c"
-#undef capp_info
-#undef capp_main
+#include "apps/jarpost.h"           /* the post screen, standing alone */
 
 #define T0 1800000000u
 
@@ -123,20 +119,22 @@ static void launch(const char *screen) {
   argv[0] = "jarpost";
   argv[1] = (char *)screen;
   JF_PENDING = 0;                    /* the OS drops a closed app's request */
-  jarpost_capp_main(&A, screen ? 2 : 1, argv);
+  (void)argv;
+  api = &A;
+  post_open(screen);
 }
 
-static void key(int k) { app_key(0, (uint8_t)k); }
+static void key(int k) { post_key(0, (uint8_t)k); }
 static void type(const char *s) { while (*s) key((uint8_t)*s++); }
 
 static void tick(int ms) {
   int t;
-  for (t = 0; t < ms; t += 5) { fakeapi_ticks += 5; app_tick(0, fakeapi_ticks); }
+  for (t = 0; t < ms; t += 5) { fakeapi_ticks += 5; post_tick(0, fakeapi_ticks); }
 }
 
 static void shot(const char *name) {
   CRect all = { 0, 0, SW, SHT };
-  app_paint(0, all);
+  post_paint(0, all);
   jf_dump(name);
 }
 
@@ -157,11 +155,11 @@ void test_jarpost_friends_list_add_and_name(void) {
   shot("p01_friends");
   /* add by code */
   key('a');
-  CHECK(app_wants_text(0));                 /* ; , . / are letters while typing */
+  CHECK(post_wants_text(0));                 /* ; , . / are letters while typing */
   type("zz9;");
   shot("p02_add");
   key(CAPP_KEY_ENTER);
-  CHECK(!app_wants_text(0));
+  CHECK(!post_wants_text(0));
   CHECK_EQ(jf_count("/jar/friend?code=zz9%3B"), 1);
   tick(20);
   CHECK(strstr(U.msg, "sam") != 0);

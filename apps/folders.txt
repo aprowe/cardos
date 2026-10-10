@@ -33,8 +33,6 @@ music     Make
 mines     Games
 noodle    Games
 jar       Games
-jarpost   Games
-jarshop   Games
 notes     Plan
 photo     Make
 pet       Games

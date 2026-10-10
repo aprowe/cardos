@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 44
+#define CAPP_API_VERSION 45
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -944,6 +944,15 @@ typedef struct {
    * only what the server signed (server/sign.py; its public key is
    * GET /sign/pubkey). An app has no crypto of its own. */
   int (*sig_verify)(const uint8_t pub[65], const void *msg, size_t n, const uint8_t sig[64]);
+
+  /* ---- painting direct, or not, from now on (API 45) ----
+   *
+   * CAPP_PAINT_DIRECT in capp_info, for the screen the app is showing now:
+   * 1, its paints reach the panel as they are drawn (it composes its own
+   * strips); 0, the OS composes a full repaint off the panel first. For an
+   * app with screens of both kinds -- Jar Factory's scene and its shop. The
+   * flag in capp_info is where it starts. */
+  void (*paint_direct)(int on);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

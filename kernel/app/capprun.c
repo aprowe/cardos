@@ -1284,4 +1284,12 @@ int capprun_paint_direct(const AppDef *a) {
   return s && (s->flags & CAPP_PAINT_DIRECT) != 0;
 }
 
+/* api->paint_direct: the calling app's flag, from now on. */
+void capprun_set_paint_direct(int on) {
+  Run *s = s_running ? s_running : s_active;
+  if (!s) return;
+  if (on) s->flags |= CAPP_PAINT_DIRECT;
+  else s->flags = (uint16_t)(s->flags & ~CAPP_PAINT_DIRECT);
+}
+
 uint32_t capprun_exec_free(void) { return capp_exec_free(); }

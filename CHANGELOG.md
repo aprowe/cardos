@@ -11,6 +11,26 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.15.0 -- 2026-10-10
+
+- **App code runs from flash (XIP).** This was the other session's work,
+  merged here: the `appcode` partition, a 28 KB data arena for the app on
+  screen, and no code cap for apps.
+  - Jar now costs 0.36 KB of heap instead of 45 KB.
+  - A device needs one full USB flash to get the new partition table.
+    Without it, app code loads into RAM as before, and Jar (50 KB of code)
+    will not fit.
+- **Jar Factory is one app again.**
+  - The shop and the post are screens of it, not separate apps, so there is
+    no reload when you switch between them.
+  - When it starts, the old Jar Shop and Jar Post apps are removed from the
+    card.
+  - Its data fits the 28 KB arena because the screens borrow the scene's
+    item memory while they are up.
+- **API 45:** `paint_direct(on)`, for an app with screens that compose
+  their own strips and screens the OS composes. Every app is rebuilt;
+  devices need `update all`.
+
 ## v0.14.0 -- 2026-10-10
 
 - **Tibbs is one person for everyone.** He is a single Claude Code session

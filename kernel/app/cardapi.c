@@ -613,6 +613,7 @@ static const CardApi API = {
   api_firmware_boot,
   api_link,
   api_sig_verify,
+  capprun_set_paint_direct,
 };
 
 const CardApi *cardos_api(void) { return &API; }
