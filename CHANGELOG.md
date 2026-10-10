@@ -11,6 +11,23 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.14.0 -- 2026-10-10
+
+- **Tibbs is one person for everyone.** He is a single Claude Code session
+  on Opus 5.5, resumed for every turn and shared by every player, so his
+  memory is the conversation itself.
+  - He knows every customer: what they bought, what they said, who sent
+    what to whom. Ask him about a friend.
+  - Purchases, gifts, new finds and new friends reach him as news on his
+    next turn.
+  - He runs in his own directory, not the repository.
+- **Stocks are 8 again:** what you hold, 3 random items from the shared
+  pool, 3 Tibbs picks for you, and 2 new finds from his briefs. New items
+  are made on Opus, with more effort for dearer ones.
+- Measured on the laptop with real Opus: a stock turn takes 14 s and a
+  reply 7–8 s. Asked "what has britney been up to?", he knew her purchase
+  and the gift she sent, with its note.
+
 ## v0.13.0 -- 2026-10-10
 
 - **Tibbs, the shopkeeper.** The shop is a person with an ongoing story.

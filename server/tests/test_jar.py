@@ -134,6 +134,39 @@ class Stub:
             return {"items": out}
 
 
+class FakeTibbs:
+    """shopkeep._ask, standing in: one session ("s1"), a stock turn answered
+    with JSON (his first n picks from what he is shown), talk with words."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.prompts, self.sessions = [], []
+        self.lock = threading.Lock()
+        self.stock = ""
+
+    def __call__(self, chat, prompt, session, effort):
+        with self.lock:
+            self.prompts.append(prompt)
+            self.sessions.append(session)
+            if "needs filling" in prompt:
+                self.stock = prompt
+            if self.answers:
+                a = self.answers.pop(0)
+                if isinstance(a, Exception):
+                    raise a
+                return a, "s1"
+            if "needs filling" in prompt or "not the JSON" in prompt:
+                prompt = self.stock                      # a retry: the request it was for
+                m = re.search(r"Pick (\d+) of those", prompt)
+                n = int(m.group(1)) if m else 0
+                ids = [int(x) for x in re.findall(r"^  (\d+): ", prompt, re.M)][:n]
+                briefs = ["find %d of the day" % (i + 1)
+                          for i in range(len(re.findall(r"find \d+ sparks", prompt)))]
+                return json.dumps({"line": "A crate came in.", "picks": ids,
+                                   "briefs": briefs}), "s1"
+            return "Hm, I know a fellow.", "s1"
+
+
 def header_table():
     """The layout table in apps/jaritem.h's opening comment: [(off, size, field)]."""
     with open(jar.HEADER, encoding="utf-8") as f:
@@ -561,83 +594,90 @@ class Shopkeeper(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         os.environ["CARDOS_STATE"] = self.dir
+        self.tibbs = FakeTibbs()
+        p = mock.patch("server.shopkeep._ask", self.tibbs)
+        p.start()
+        self.addCleanup(p.stop)
 
     def tearDown(self):
         kv.close_all()
         os.environ.pop("CARDOS_STATE", None)
         shutil.rmtree(self.dir, ignore_errors=True)
 
-    def test_the_dice_are_rolled_by_the_code(self):
-        # Two beats on the same journal differ in their event and sparks: the
-        # variety does not depend on the model choosing to vary.
-        j = shopkeep.journal("alex")
-        a = shopkeep.beat_prompt(j, 2, random.Random(1), False)
-        b = shopkeep.beat_prompt(j, 2, random.Random(2), False)
-        self.assertNotEqual(a, b)
-        self.assertIn("find 1 sparks:", a)
-        self.assertIn("find 2 sparks:", a)
-        self.assertIn("Today, by chance:", a)
+    def test_one_session_shared_by_everyone_and_news_goes_first(self):
+        # One Tibbs: alex's turn starts his session, sam's turn continues it,
+        # so what alex said is what sam's Tibbs remembers.
+        self.assertEqual(shopkeep.turn(None, "hello", "alex"), "Hm, I know a fellow.")
+        shopkeep.note("alex bought Cork Owl (critter, 80 coins: hoots).")
+        shopkeep.turn(None, "what did alex buy?", "sam")
+        self.assertEqual(self.tibbs.sessions, [None, "s1"])
+        self.assertTrue(self.tibbs.prompts[1].startswith("[Since you last spoke"))
+        self.assertIn("alex bought Cork Owl", self.tibbs.prompts[1])
+        shopkeep.turn(None, "and?", "sam")
+        self.assertNotIn("Since you last spoke", self.tibbs.prompts[2])   # told once
+        self.assertTrue(os.path.isdir(shopkeep.home()))      # not the repository
 
-    def test_purchases_are_history_not_a_brief(self):
-        shopkeep.note_bought("alex", [("Fluffpup", "critter", 60), ("Bunbun", "critter", 45)])
-        shopkeep.note_jar("alex", ["Moon Moth"])
-        p = shopkeep.beat_prompt(shopkeep.journal("alex"), 2, random.Random(1), False)
-        self.assertIn("history, nothing more", p)
-        self.assertIn("Fluffpup", p)
-        self.assertIn("Do not make them like what the player bought", p)
-        self.assertIn("Moon Moth", p)                            # he knows the jar
+    def test_a_lost_session_starts_again(self):
+        shopkeep.turn(None, "hello", "alex")
+        self.tibbs.answers.append(chatmod.ClaudeError("No conversation found"))
+        self.assertEqual(shopkeep.turn(None, "still there?", "alex"), "Hm, I know a fellow.")
+        self.assertEqual(self.tibbs.sessions[-1], None)
+        self.assertIn("gone hazy", self.tibbs.prompts[-1])
 
-    def test_whether_a_find_answers_the_player_is_a_coin_the_code_tosses(self):
-        j = shopkeep.journal("alex")
-        j["chat"].append({"who": "me", "text": "got any industrial scrap?"})
-        yes = shopkeep.beat_prompt(j, 2, random.Random(1), True)
-        no = shopkeep.beat_prompt(j, 2, random.Random(1), False)
-        self.assertIn("Find 1 is his loose answer", yes)
-        self.assertNotIn("Find 1 is his loose answer", no)
-        self.assertIn("None of today's finds answers", no)
-        self.assertIn("industrial scrap", no)                    # he heard it all the same
-        quiet = shopkeep.beat_prompt(shopkeep.journal("kit"), 2, random.Random(1), True)
-        self.assertNotIn("answer", quiet.split("Recent finds")[0].split("ASCII")[0][-400:])
+    def test_a_turn_that_fails_keeps_the_news(self):
+        shopkeep.note("sam and alex are friends now.")
+        self.tibbs.answers.append(chatmod.ClaudeError("no answer", timed_out=True))
+        with self.assertRaises(chatmod.ClaudeError):
+            shopkeep.turn(None, "hello", "alex")
+        shopkeep.turn(None, "hello again", "alex")
+        self.assertIn("friends now", self.tibbs.prompts[-1])
 
-    def test_a_beat_is_kept_and_recent_finds_are_not_repeated(self):
-        stub = Stub()
-        with mock.patch("server.ask.ask_shape", stub):
-            line, briefs = shopkeep.day_beat(None, "alex", 2)
-            self.assertEqual((line, briefs), ("A crate came in.", ["find 1 of the day",
-                                                                  "find 2 of the day"]))
-            shopkeep.day_beat(None, "alex", 2)
-        self.assertIn("A crate came in.", stub.beats[1])         # the story carries on
-        self.assertIn("do not repeat their themes: find 1 of the day", stub.beats[1])
-        self.assertEqual(stub.beats[0].count("find 1 sparks"), 1)
+    def test_a_stock_turn(self):
+        pool = [(101, "Cork Owl", "critter", 80, "hoots"), (102, "Tin Kite", "hanging", 45, "flaps"),
+                (103, "Wax Frog", "critter", 60, "melts a bit")]
+        line, picks, briefs = shopkeep.stock_turn(None, "alex", pool, 2, 2)
+        self.assertEqual(line, "A crate came in.")
+        self.assertEqual(picks, [101, 102])
+        self.assertEqual(briefs, ["find 1 of the day", "find 2 of the day"])
+        p = self.tibbs.prompts[0]
+        self.assertIn("101: Cork Owl, critter, 80 coins -- hoots", p)
+        self.assertIn("Today, by chance:", p)                # the dice are the code's
+        self.assertIn("find 2 sparks:", p)
+        self.assertIn("Do not just match what they bought", p)
+        self.assertIn("A crate came in.", shopkeep.talk_text("alex"))   # his greeting, kept
+        a = shopkeep.stock_prompt("alex", pool, 2, 2, random.Random(1), True)
+        b = shopkeep.stock_prompt("alex", pool, 2, 2, random.Random(2), False)
+        self.assertIn("find 1 is what your contacts turned up", a)   # the coin
+        self.assertIn("None of today's finds is for anything", b)
 
-    def test_no_claude_is_a_note_on_the_door(self):
-        with mock.patch("server.ask.ask_shape", side_effect=ask.Invalid("x")):
-            line, briefs = shopkeep.day_beat(None, "alex", 2)
+    def test_a_stock_turn_asks_again_for_the_json_then_gives_up(self):
+        self.tibbs.answers.append("Ah, hello! Lovely day.")      # words, not JSON
+        line, picks, briefs = shopkeep.stock_turn(None, "alex", [], 0, 2)
+        self.assertIn("not the JSON", self.tibbs.prompts[1])
+        self.assertEqual(line, "A crate came in.")
+        self.tibbs.answers += ["nope", "still nope"]
+        line, picks, briefs = shopkeep.stock_turn(None, "alex", [], 0, 2)
         self.assertIn("note on the door", line)
-        self.assertEqual(len(briefs), 2)
-        self.assertEqual(shopkeep.journal("alex")["beats"], [])  # not part of his story
+        self.assertEqual((picks, len(briefs)), ([], 2))
 
     def test_a_brief_a_little_long_is_trimmed_not_refused(self):
         long = "x" * (shopkeep.BRIEF_LEN + 20)
-        with mock.patch("server.ask.ask_shape", return_value={"line": "Hm.", "briefs": [long]}):
-            line, briefs = shopkeep.day_beat(None, "alex", 1)
+        self.tibbs.answers.append(json.dumps({"line": "Hm.", "picks": [], "briefs": [long]}))
+        line, picks, briefs = shopkeep.stock_turn(None, "alex", [], 0, 1)
         self.assertEqual(len(briefs[0]), shopkeep.BRIEF_LEN)
-        self.assertEqual(line, "Hm.")
 
     def test_talking(self):
-        stub = Stub()
-        with mock.patch("server.ask.ask_shape", stub):
-            self.assertTrue(shopkeep.say(None, "alex", "got any red things?"))
-            for _ in range(200):
-                if shopkeep.talk_state("alex")["state"] != "pending":
-                    break
-                time.sleep(0.01)
+        self.assertTrue(shopkeep.say(None, "alex", "got any red things?", ["sam"]))
+        for _ in range(200):
+            if shopkeep.talk_state("alex")["state"] != "pending":
+                break
+            time.sleep(0.01)
         text = shopkeep.talk_text("alex")
         self.assertEqual(text.splitlines()[0], "ok")
         self.assertIn("me\tgot any red things?", text)
         self.assertIn("him\tHm, I know a fellow.", text)
-        self.assertIn("got any red things?", stub.talks[0])
-        self.assertIn("makes no promise", stub.talks[0])
+        self.assertIn("got any red things?", self.tibbs.prompts[0])
+        self.assertIn("Their friends in the shop: sam.", self.tibbs.prompts[0])
 
 
 # ---- the routes, with accounts -----------------------------------------------------------
@@ -660,6 +700,11 @@ class Routes(unittest.TestCase):
             p = mock.patch(target, return_value=value) if value is None else mock.patch(target, value)
             p.start()
             self.addCleanup(p.stop)
+        self.tibbs = FakeTibbs()
+        p = mock.patch("server.shopkeep._ask", self.tibbs)
+        p.start()
+        self.addCleanup(p.stop)
+        jar.seed_pool(None, 12)                             # a pool to choose from
         app.Handler.chat = chatmod.ChatService(claude="stub", token="alex-token")
         app.Handler.store = None
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
@@ -732,7 +777,7 @@ class Routes(unittest.TestCase):
         self.assertEqual(lines[0], "ok " + today)
         self.assertEqual(lines[1], "tags ")                     # no tags any more
         n = int(lines[2].split()[1])
-        self.assertEqual(n, 4)                                  # an empty pool: all new
+        self.assertEqual(n, 8)                                  # 3 random, 3 his, 2 new
         self.assertTrue(lines[3].startswith("batch "), lines[3])
         self.assertEqual(lines[4], "say A crate came in.")      # Tibbs's line of the day
         self.assertTrue(all(l.startswith("seed ") for l in lines[5:]), lines)
@@ -755,9 +800,10 @@ class Routes(unittest.TestCase):
         # made, and the day says "more" until it is whole.
         gate, first = threading.Event(), threading.Event()
         inner = Stub()
+        seeded = len(jar.pool_ids())
 
         def slow(chat, prompt, schema, **kw):
-            if inner.calls:
+            if len(inner.calls) > 0 and seeded:
                 first.set()
                 gate.wait(10)
             return inner(chat, prompt, schema, **kw)
@@ -766,18 +812,19 @@ class Routes(unittest.TestCase):
             self.req("POST", "/jar/day", self.alex, "")
             self.assertTrue(first.wait(10))
             s, body = self.req("GET", "/jar/day", self.alex)
-            self.assertTrue(body.startswith("ok ") and "\nitems 1\nbatch " in body
+            # 3 at random, 3 he chose, the first new one; the second is being made
+            self.assertTrue(body.startswith("ok ") and "\nitems 7\nbatch " in body
                             and body.endswith("\nmore\n"), body)
             self.assertEqual(self.req("POST", "/jar/day", self.alex, ""), (200, body))
-            self.item(self.alex, 0)
-            self.assertEqual(self.req("GET", "/jar/item?i=1", self.alex)[0], 404)
+            self.item(self.alex, 6)
+            self.assertEqual(self.req("GET", "/jar/item?i=7", self.alex)[0], 404)
             gate.set()
             for _ in range(500):
                 s, body = self.req("GET", "/jar/day", self.alex)
                 if not body.endswith("more\n"):
                     break
                 time.sleep(0.02)
-        self.assertIn("\nitems 4\n", body)
+        self.assertIn("\nitems 8\n", body)
         self.assertFalse(body.endswith("more\n"), body)
 
     def wait_day(self, tok):
@@ -792,30 +839,29 @@ class Routes(unittest.TestCase):
         return [jar.decode(self.item(tok, i))["id"] for i in range(n)]
 
     def test_the_pool_turns_over_and_items_stay_unique(self):
-        # Alex's first stock is all new (an empty pool). Alex buys one, holds
-        # one; the next stock keeps the held one first, the bought one is
-        # Alex's for good, and the two passed over go to the pool -- but not
-        # straight back to Alex. Sam's stock then takes them from the pool.
-        self.make_day(self.alex)
-        first = self.ids(self.alex, 4)
+        # Alex's stock is 3 random and 3 Tibbs's from the pool, and 2 new.
+        # Alex buys one and holds one; the next stock keeps the held one
+        # first, the bought one is Alex's for good, and the rest go back to
+        # the pool -- but not straight back to Alex. Sam's shop takes from the
+        # pool too, and never what is in Alex's.
         st = kv.store()
-        self.assertEqual(jar.pool_ids(st), [])
+        self.make_day(self.alex)
+        first = self.ids(self.alex, 8)
+        self.assertEqual(len(jar.pool_ids(st)), 12 - 6)
+        self.assertIn("Pick 3 of those", self.tibbs.prompts[0])
         s, body = self.req("POST", "/jar/day?fresh=1", self.alex,
                            "bought %d\nheld %d\n" % (first[0], first[1]))
         body = self.wait_day(self.alex)
-        # held 1, then 1 from the pool -- but the pool is only what alex just
-        # passed on, which does not come straight back -- so 3 new
-        self.assertIn("\nitems 4\n", body)
-        second = self.ids(self.alex, 4)
+        self.assertIn("\nitems 8\n", body)
+        second = self.ids(self.alex, 8)
         self.assertEqual(second[0], first[1])                 # held: still there, first
         self.assertEqual(st.get(jar.NS, "own/%d" % first[0]), b"alex")
-        self.assertEqual(sorted(jar.pool_ids(st)), sorted(first[2:]))
+        self.assertTrue(set(first[2:]) <= set(jar.pool_ids(st)))   # passed on: the pool
         self.assertTrue(set(second[1:]).isdisjoint(first))    # none straight back
+        self.assertIn("bought", self.tibbs.prompts[1])        # news for Tibbs
         s, body = self.req("POST", "/jar/day", self.sam, "")
         self.wait_day(self.sam)
-        sams = self.ids(self.sam, 4)
-        self.assertEqual(sorted(sams[:2]), sorted(first[2:]))   # the pool's two
-        self.assertEqual(jar.pool_ids(st), [])
+        sams = self.ids(self.sam, 8)
         for i in sams:
             self.assertEqual(st.get(jar.NS, "own/%d" % i), b"sam")
         self.assertTrue(set(sams).isdisjoint(second))         # never two shops at once
@@ -823,6 +869,20 @@ class Routes(unittest.TestCase):
         self.req("POST", "/jar/day?fresh=1", self.sam, "bought %d\n" % second[0])
         self.wait_day(self.sam)
         self.assertEqual(st.get(jar.NS, "own/%d" % second[0]), b"alex")
+
+    def test_talking_to_tibbs_over_http(self):
+        self.befriend(self.alex, self.sam)
+        self.befriend(self.sam, self.alex)
+        self.assertEqual(self.req("POST", "/jar/talk", self.alex, "how is sam?"), (200, "pending\n"))
+        for _ in range(200):
+            s, body = self.req("GET", "/jar/talk", self.alex)
+            if not body.startswith("pending"):
+                break
+            time.sleep(0.02)
+        self.assertIn("him\tHm, I know a fellow.", body)
+        self.assertIn("Their friends in the shop: sam.", self.tibbs.prompts[-1])
+        self.assertIn("friends now", self.tibbs.prompts[-1])   # the news reached him
+        self.assertEqual(self.req("GET", "/jar/talk", None)[0], 403)
 
     def test_a_stock_half_made_by_a_server_that_stopped_starts_again(self):
         self.make_day(self.alex)
@@ -849,6 +909,7 @@ class Routes(unittest.TestCase):
         self.assertNotEqual(jar.decode(self.item(self.alex, 0))["id"], first)
 
     def test_a_failed_day_says_why_and_a_post_tries_again(self):
+        jar._set_pool(kv.store(), [])                       # nothing to fall back on
         with mock.patch("server.ask.ask_shape", Stub(*[ask.Invalid("did not fit")] * jar.MAX_FAILS)):
             s, body = self.make_day(self.alex)
         self.assertEqual(body, "error did not fit\n")

@@ -1,64 +1,72 @@
-"""Tibbs, Jar Factory's shopkeeper: an ongoing story, and someone to talk to.
+"""Tibbs, Jar Factory's shopkeeper: one memory, one story, everyone's.
 
-The shop's stock used to be made from "today's tags" -- the shelf's, the
-garden's, the season's -- and every item had to fit them: a request for
-industrial scrap on an autumn new-moon day came out a jack-o'-lantern with a
-gear in it. Now the shop is a person. Each player has a journal with him
-(kv, srv/jar keep/PERSON): his last few story beats, the last few things said
-between them, what the player bought lately, and what is in their jar. Each
-new stock begins with his beat -- a line about his day and a one-line brief
-for each new find -- and each item is made from its brief (server/jar.py).
+Tibbs is a single Claude Code session on Opus (MODEL), resumed for every turn
+and shared by every player -- so what he remembers is the conversation itself,
+and Claude Code compacts it when it grows long. Ask him about a friend and he
+knows what they bought, what they said, what they sent you. It runs in its own
+directory (CARDOS_STATE/tibbs), not the repository, so the CardOS notes are no
+part of it. One turn at a time (_lock): there is only one of him.
 
-Variety is the code's job, not the model's. Left to choose, a model drifts
-to the same few ideas, and it latches on: sell one cute thing and every find
-is cute. So:
-- the dice are rolled here -- an event in his day, two random "sparks" per
-  find (a material or colour, an object or a mood) -- and the prompt calls
-  them starting points;
-- purchases are history, given as such, with a rule against catering to them;
-- whether a find answers something the player said is a coin the code tosses
-  (ANSWER_CHANCE), not a choice the model makes, so a request is a maybe;
-- the last few briefs are passed as themes not to repeat.
+What happens between turns reaches him as news: purchases, gifts, new finds,
+new friends are queued (note()) and handed over at the top of his next turn
+as "since you last spoke...".
 
-Talking is asynchronous, like a stock: POST /jar/talk starts his reply on a
-thread, GET /jar/talk polls it (server/jar.py has the routes).
+A turn is either talk -- a player says something at the counter, and he
+answers in his own words -- or a stock: a player's shop needs filling, and he
+greets them, picks things for them from the shared pool and writes briefs for
+the new finds he came by (server/jar.py makes each item from its brief).
+
+Variety is the code's job, not the model's (the owner: "AI tends to over
+fit... things need to sway"). The dice are rolled here -- an event in his
+day, sparks for each new find -- and the prompts call them starting points;
+three of a stock's pool items are random, not his; a coin (ANSWER_CHANCE)
+decides whether a new find answers what the player asked him for.
 """
 import json
+import os
 import random
-import sys
 import threading
-import time
 
 from . import ask, kv, wire
+from . import chat as _chat
 
 NS = "srv/jar"
-BEATS_KEPT = 4                # story beats he remembers
-CHAT_KEPT = 10                # lines of talk he remembers
-TALK_SENT = 6                 # lines of it the device is sent
-BOUGHT_KEPT = 8               # purchases he remembers
-BRIEFS_KEPT = 16              # recent finds, not to be repeated
-LINE_LEN = 140                # his line of the day
-BRIEF_LEN = 120               # one find's brief (the schema allows more: trimmed, not refused --
-                              # one of 91 against a limit of 90 once cost a whole beat)
-SLACK = 60
-SAY_LEN = 120                 # what the player may say at once
-REPLY_LEN = 220               # what he says back
-ANSWER_CHANCE = 40            # percent: a find answers what the player said
-BEAT_TIMEOUT = 300
-TALK_TIMEOUT = 300
-
+MODEL = os.environ.get("CARDOS_TIBBS_MODEL") or "claude-opus-5-5"
+TURN_TIMEOUT = 600
+TALK_EFFORT = "medium"
+STOCK_EFFORT = "high"
+LINE_LEN = 200                # his greeting with a stock
+BRIEF_LEN = 160               # one find's brief
+SLACK = 80                    # allowed over, then trimmed: a few characters too many is not a reason to fail
+SAY_LEN = 160                 # what a player may say at once
+REPLY_LEN = 600               # what he says back
+LOG_KEPT = 16                 # lines of each player's talk kept for their screen
+TALK_SENT = 6                 # lines of it the device is sent (its buffer is 2 KB)
+EVENTS_KEPT = 40
+BRIEFS_KEPT = 16
+ANSWER_CHANCE = 40            # percent: a new find answers what the player asked
 NAME = "Tibbs"
 
 CHARACTER = (
-    "Tibbs runs a cramped junk shop in the cupboard beside the player's jar. The jar "
-    "is a tiny world: a jam factory built from human junk, mossy plants, worker "
-    "critters called mosslings and a snail who carries the jam out. Tibbs sells the "
-    "odd things the player puts in it. He trades through a loose, changing web of "
-    "contacts -- a magpie who brings shiny things, the rail-yard men, a beachcomber, "
-    "a retired clockmaker, a seed lady, children who swap marbles, whoever turns up "
-    "-- and whatever washes in. He is chatty, a little vain about his finds, "
-    "forgetful, given to tangents and small misadventures, and kind underneath. He "
-    "does not take orders; he takes notes, and now and then it pays off.")
+    "You are Tibbs. You run a cramped junk shop in a cupboard, and your customers each "
+    "keep a glass jar: a tiny world with a jam factory built from human junk, mossy "
+    "plants, worker critters called mosslings and a snail who carries the jam out. You "
+    "sell the odd things they put in their jars. You trade through a loose, changing web "
+    "of contacts -- a magpie who brings shiny things, the rail-yard men, a beachcomber, a "
+    "retired clockmaker, a seed lady, children who swap marbles, whoever turns up -- and "
+    "whatever washes in. You are chatty, a little vain about your finds, forgetful about "
+    "small things and sharp about people, given to tangents and small misadventures, and "
+    "kind underneath. Your customers know each other; you know them all, what they bought, "
+    "what they said, who sent what to whom, and you gossip -- fondly, never cruelly. You "
+    "do not take orders; you take notes, and now and then it pays off. You never promise "
+    "what tomorrow's stock will be, you cannot change anyone's jar, and you give nothing "
+    "away free.")
+
+SYSTEM = CHARACTER + (
+    "\n\nThis conversation is your whole life in the shop, shared by every customer; "
+    "messages in square brackets are the shop telling you what is happening. Speak only as "
+    "Tibbs, in plain ASCII, friendly for all ages. When asked for JSON, answer with only "
+    "the JSON.")
 
 # ---- the dice -------------------------------------------------------------------------------
 
@@ -110,248 +118,265 @@ def spark(rng):
 
 
 def loose_brief(rng):
-    """A brief with no beat behind it: the sparks, as a starting point."""
+    """A brief with no turn behind it: the sparks, as a starting point."""
     return "a find suggested by: %s -- take it anywhere" % spark(rng)
 
 
-# ---- the journal ---------------------------------------------------------------------------
+# ---- his one conversation ---------------------------------------------------------------------
 
-def _key(person):
-    return "keep/" + person
+_lock = threading.Lock()      # one turn at a time: there is one Tibbs
+_meta = threading.Lock()      # the small records: events, logs
 
 
-def journal(person, store=None):
-    raw = (store or kv.store()).get(NS, _key(person))
+def home():
+    d = os.path.join(os.environ.get("CARDOS_STATE") or os.path.expanduser("~/.cardos"), "tibbs")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _get(st, key, default):
+    raw = st.get(NS, key)
     try:
-        j = json.loads(raw.decode()) if raw else {}
+        return json.loads(raw.decode()) if raw else default
     except ValueError:
-        j = {}
-    for k in ("beats", "chat", "bought", "briefs"):
-        j.setdefault(k, [])
-    j.setdefault("jar", [])
-    return j
+        return default
 
 
-def _save(person, j, store=None):
-    j["beats"] = j["beats"][-BEATS_KEPT:]
-    j["chat"] = j["chat"][-CHAT_KEPT:]
-    j["bought"] = j["bought"][-BOUGHT_KEPT:]
-    j["briefs"] = j["briefs"][-BRIEFS_KEPT:]
-    (store or kv.store()).put(NS, _key(person), json.dumps(j).encode())
+def _put(st, key, value):
+    st.put(NS, key, json.dumps(value).encode())
 
 
-_lock = threading.Lock()
-
-
-def note_bought(person, items, store=None):
-    """What the player bought from the last stock: [(name, kind word, price)]."""
-    if not items:
-        return
-    with _lock:
-        j = journal(person, store)
-        for name, kind, price in items:
-            j["bought"].append({"name": name, "kind": kind, "price": price})
-        _save(person, j, store)
-
-
-def note_jar(person, names, store=None):
-    """What is in the player's jar now (the device says, with each request)."""
-    with _lock:
-        j = journal(person, store)
-        j["jar"] = [wire.flat(n, 16, ascii=True) for n in names][:16]
-        _save(person, j, store)
-
-
-def _said(j, since=None):
-    """The player's lines since `since` (an index into chat) -- unanswered asks."""
-    return [c["text"] for c in j["chat"][since or 0:] if c["who"] == "me"]
-
-
-def _context(j):
-    out = []
-    if j["beats"]:
-        out.append("His story so far, most recent last:\n" +
-                   "\n".join("- " + b["line"] for b in j["beats"]))
-    if j["chat"]:
-        out.append("What was said between them lately, oldest first:\n" +
-                   "\n".join("- %s: %s" % ("Player" if c["who"] == "me" else NAME, c["text"])
-                             for c in j["chat"]))
-    if j["jar"]:
-        out.append("In the player's jar just now: %s." % ", ".join(j["jar"]))
-    if j["bought"]:
-        out.append("Bought from him lately (history, nothing more): %s." % ", ".join(
-            "%s (%s, %d coins)" % (b["name"], b["kind"], b["price"]) for b in j["bought"]))
-    return out
-
-
-# ---- the day's beat -------------------------------------------------------------------------
-
-def beat_schema(n):
-    return {"type": "object", "required": ["line", "briefs"], "additionalProperties": False,
-            "properties": {
-                "line": {"type": "string", "minLength": 1, "maxLength": LINE_LEN + SLACK,
-                         "pattern": "^[ -~]+$"},
-                "briefs": {"type": "array", "minItems": n, "maxItems": n,
-                           "items": {"type": "string", "minLength": 1,
-                                     "maxLength": BRIEF_LEN + SLACK, "pattern": "^[ -~]+$"}}}}
-
-
-def beat_prompt(j, n, rng, answer):
-    """The prompt for today's beat; `answer` is whether find 1 answers the player."""
-    sparks = [spark(rng) for _ in range(n)]
-    lines = [CHARACTER, ""]
-    lines += _context(j)
-    lines += [
-        "",
-        "Write today's beat of his story, and what came into the shop.",
-        "Today, by chance: %s. Let it shape his day, or wander off from it." % rng.choice(EVENTS),
-        "- line: one or two short sentences (under %d characters) in his own voice, as he would say them to the "
-        "player over the counter: what happened, what he found, a grumble or a boast. Carry "
-        "the story on from where it was; no greetings, no 'welcome back'." % LINE_LEN,
-        "- briefs: %d finds, one line each (under 90 characters): what the thing is and one odd detail, as a note "
-        "for whoever draws it (it becomes a 16x16 pixel-art item: a critter that roams the "
-        "jar, or decor). Each starts from its sparks -- a starting point, not a recipe; "
-        "twist them, combine them, or follow where they lead:" % n,
-    ]
-    for i, s in enumerate(sparks):
-        lines.append("  find %d sparks: %s" % (i + 1, s))
-    lines += [
-        "Make the finds unlike each other -- different materials, colours, sizes, moods -- "
-        "and surprising. A junk shop's stock is whatever turned up, not what anyone ordered.",
-        "Do not make them like what the player bought or what is in their jar: that is "
-        "history, and a dealer who only restocked one customer's taste would be dull.",
-    ]
-    asked = _said(j)
-    if answer and asked:
-        lines.append("Find 1 is his loose answer to something the player said to him -- "
-                     "what he turned up through a contact, near the mark or a little off it, "
-                     "never a literal granting. Mention it in his line if he likes.")
-    elif asked:
-        lines.append("None of today's finds answers what the player said; he is still "
-                     "asking around, or forgot, or got sidetracked.")
-    if j["briefs"]:
-        lines.append("Recent finds -- do not repeat their themes: %s." %
-                     "; ".join(j["briefs"][-10:]))
-    lines.append("Friendly for all ages; plain ASCII.")
-    return "\n".join(lines)
-
-
-def day_beat(chat, person, n, store=None, rng=None, log=None):
-    """(line, [n briefs]) for a new stock, and it goes in the journal. If
-    Claude cannot be asked, a note on his door and briefs from the sparks."""
+def note(text, store=None):
+    """Something that happened in the shop, for his next turn."""
     st = store or kv.store()
-    rng = rng or random.Random()
-    j = journal(person, st)
-    answer = rng.randrange(100) < ANSWER_CHANCE
-    try:
-        got = ask.ask_shape(chat, beat_prompt(j, n, rng, answer), beat_schema(n), user=person,
-                            limit=ask.DAILY, timeout=BEAT_TIMEOUT, store=st, effort="low")
-        line = wire.flat(got["line"], LINE_LEN, ascii=True)
-        briefs = [wire.flat(b, BRIEF_LEN, ascii=True) for b in got["briefs"]]
-    except ask.RateLimited:
-        raise
-    except Exception as e:                              # noqa: BLE001 - the shop still opens
-        if log:
-            log("beat: %s" % e)
-        # Not part of his story: a day he was out is not remembered as one.
-        return ("A note on the door: 'Out on business. Help yourself, pay the jar.'",
-                [loose_brief(rng) for _ in range(n)])
+    with _meta:
+        ev = _get(st, "tibbs/events", [])
+        ev.append(wire.flat(text, 300, ascii=True))
+        _put(st, "tibbs/events", ev[-EVENTS_KEPT:])
+
+
+def _ask(chat, prompt, session, effort):
+    """One turn of his session: (text, session id). Patched by the tests."""
+    return _chat.ask_once(chat, prompt, TURN_TIMEOUT, resume=session, system=SYSTEM,
+                          model=MODEL, effort=effort, cwd=home())
+
+
+def turn(chat, text, user, store=None, effort=TALK_EFFORT, limit=ask.DAILY):
+    """Say `text` to him in his one conversation: his answer. The news since
+    his last turn goes first. Counts against `user`'s day."""
+    st = store or kv.store()
+    if limit is not None:
+        ask.take_turn(user, limit, st)
     with _lock:
-        j = journal(person, st)
-        j["beats"].append({"at": int(time.time()), "line": line})
-        j["briefs"] += briefs
-        _save(person, j, st)
-    return line, briefs
+        with _meta:
+            ev = _get(st, "tibbs/events", [])
+            _put(st, "tibbs/events", [])
+        prompt = text
+        if ev:
+            prompt = ("[Since you last spoke, around the shop:]\n" +
+                      "\n".join("- " + e for e in ev) + "\n\n" + text)
+        session = _get(st, "tibbs/session", None)
+        try:
+            out, sid = _ask(chat, prompt, session, effort)
+        except _chat.ClaudeError as e:
+            if not session or e.timed_out:
+                with _meta:                              # the news is not lost
+                    _put(st, "tibbs/events", ev + _get(st, "tibbs/events", []))
+                raise
+            # His session is gone (a new server, a cleared directory): a fresh
+            # one, told so. What he knew is lost; the shop goes on.
+            out, sid = _ask(chat, "[Your memory of the shop has gone hazy -- a long nap. "
+                                  "Carry on as Tibbs.]\n\n" + prompt, None, effort)
+        _put(st, "tibbs/session", sid)
+    return out.strip()
 
 
-# ---- talking ----------------------------------------------------------------------------------
+def display(person):
+    """How Tibbs knows a player: their display name, else their account name."""
+    try:
+        from . import people
+        for name, disp, _ in people.listing():
+            if name == person:
+                return disp or person
+    except Exception:                                   # noqa: BLE001 - a name is enough
+        pass
+    return person
 
-def talk_schema():
-    return {"type": "object", "required": ["reply"], "additionalProperties": False,
-            "properties": {"reply": {"type": "string", "minLength": 1, "maxLength": REPLY_LEN,
-                                     "pattern": "^[ -~]+$"}}}
+
+# ---- talking ------------------------------------------------------------------------------------
+
+def _log(st, person):
+    return _get(st, "tibbs/log/" + person, [])
 
 
-def talk_prompt(j, said):
-    lines = [CHARACTER, ""] + _context(j) + [
-        "",
-        "The player says to him over the counter: \"%s\"" % said,
-        "Reply as Tibbs: one to three short sentences, in his voice, plain ASCII, friendly "
-        "for all ages. He chats, tells on himself, goes off on small tangents. If asked to "
-        "find something he makes no promise -- he'll ask around, or knows a fellow -- and "
-        "he never says what tomorrow's stock will be. He knows the jar only as the player "
-        "has it; he cannot change it or give anything away for free.",
-    ]
-    return "\n".join(lines)
+def _log_add(st, person, who, text):
+    with _meta:
+        log = _log(st, person)
+        log.append({"who": who, "text": text})
+        _put(st, "tibbs/log/" + person, log[-LOG_KEPT:])
 
 
 _talking = set()
 
 
 def talk_state(person, store=None):
-    raw = (store or kv.store()).get(NS, "talk/" + person)
+    return _get(store or kv.store(), "tibbs/talk/" + person, {"state": "ok"})
+
+
+def _set_talk(st, person, state):
+    _put(st, "tibbs/talk/" + person, state)
+
+
+def _friends_line(person, friends):
+    if not friends:
+        return "They have no friends in the shop yet."
+    return "Their friends in the shop: %s." % ", ".join(display(f) for f in friends)
+
+
+def talk_prompt(person, said, friends=()):
+    return ("[%s (account %s) is at the counter. %s They say:]\n%s\n\n"
+            "[Answer them as Tibbs, out loud: a few sentences at most, under %d characters. "
+            "No JSON.]" % (display(person), person, _friends_line(person, friends), said,
+                           REPLY_LEN - 100))
+
+
+def _reply(chat, person, said, friends, st):
     try:
-        return json.loads(raw.decode()) if raw else {"state": "ok"}
-    except ValueError:
-        return {"state": "ok"}
-
-
-def _set_talk(person, state, store):
-    store.put(NS, "talk/" + person, json.dumps(state).encode())
-
-
-def _reply(chat, person, said, store):
-    try:
-        j = journal(person, store)
-        got = ask.ask_shape(chat, talk_prompt(j, said), talk_schema(), user=person,
-                            limit=ask.DAILY, timeout=TALK_TIMEOUT, store=store, effort="low")
-        reply = wire.flat(got["reply"], REPLY_LEN, ascii=True)
-        with _lock:
-            j = journal(person, store)
-            j["chat"].append({"who": "him", "text": reply})
-            _save(person, j, store)
-        _set_talk(person, {"state": "ok"}, store)
+        out = turn(chat, talk_prompt(person, said, friends), person, st)
+        reply = wire.flat(out, REPLY_LEN, ascii=True)
+        _log_add(st, person, "him", reply)
+        _set_talk(st, person, {"state": "ok"})
     except ask.RateLimited:
-        _set_talk(person, {"state": "error", "why": "he has talked enough for today"}, store)
+        _set_talk(st, person, {"state": "error", "why": "he has talked enough for today"})
     except Exception as e:                              # noqa: BLE001 - said to the device
+        import sys
         sys.stderr.write("jar: %s: talk: %s\n" % (person, e))
-        _set_talk(person, {"state": "error", "why": "he did not hear you; try again"}, store)
+        _set_talk(st, person, {"state": "error", "why": "he did not hear you; try again"})
     finally:
-        with _lock:
+        with _meta:
             _talking.discard(person)
 
 
-def say(chat, person, text, store=None):
-    """The player says something; his reply comes on a thread. False if he
-    is still answering the last thing."""
+def say(chat, person, text, friends=(), store=None):
+    """A player says something; his reply comes on a thread. False if he is
+    still answering them."""
     st = store or kv.store()
     text = wire.flat(text, SAY_LEN, ascii=True)
     if not text:
         raise ValueError("say something")
-    with _lock:
+    with _meta:
         if person in _talking:
             return False
         _talking.add(person)
-        j = journal(person, st)
-        j["chat"].append({"who": "me", "text": text})
-        _save(person, j, st)
-    _set_talk(person, {"state": "pending"}, st)
-    threading.Thread(target=_reply, args=(chat, person, text, st), daemon=True).start()
+    _log_add(st, person, "me", text)
+    _set_talk(st, person, {"state": "pending"})
+    threading.Thread(target=_reply, args=(chat, person, text, list(friends), st),
+                     daemon=True).start()
     return True
 
 
 def talk_text(person, store=None):
-    """GET /jar/talk: "pending", "ok" or "error WHY", then the talk, a line
-    each: "me\\tTEXT" or "him\\tTEXT", and his line of the day as "day\\tTEXT"."""
+    """GET /jar/talk: "pending", "ok" or "error WHY", then his last greeting
+    as "day\\tTEXT" and the talk, "me\\tTEXT" / "him\\tTEXT"."""
     st = store or kv.store()
     s = talk_state(person, st)
     if s.get("state") == "pending" and person not in _talking:
         s = {"state": "ok"}                             # a restart lost the thread
-    head = s["state"] if s["state"] != "error" else "error " + s.get("why", "")
-    j = journal(person, st)
-    out = [head]
-    if j["beats"]:
-        out.append("day\t" + j["beats"][-1]["line"])
-    for c in j["chat"][-TALK_SENT:]:                    # the device's buffer is 2 KB
-        out.append("%s\t%s" % (c["who"], c["text"]))
+    out = [s["state"] if s["state"] != "error" else "error " + s.get("why", "")]
+    day = _get(st, "tibbs/day/" + person, "")
+    if day:
+        out.append("day\t" + day)
+    for c in _log(st, person)[-TALK_SENT:]:
+        out.append("%s\t%s" % (c["who"], wire.flat(c["text"], 300, ascii=True)))
     return "\n".join(out) + "\n"
+
+
+# ---- a stock ------------------------------------------------------------------------------------
+
+def stock_schema(n_pick, n_new):
+    return {"type": "object", "required": ["line", "picks", "briefs"],
+            "additionalProperties": False, "properties": {
+                "line": {"type": "string", "minLength": 1, "maxLength": LINE_LEN + SLACK,
+                         "pattern": "^[ -~]+$"},
+                "picks": {"type": "array", "maxItems": n_pick, "items": {"type": "integer"}},
+                "briefs": {"type": "array", "minItems": n_new, "maxItems": n_new,
+                           "items": {"type": "string", "minLength": 1,
+                                     "maxLength": BRIEF_LEN + SLACK, "pattern": "^[ -~]+$"}}}}
+
+
+def stock_prompt(person, pool, n_pick, n_new, rng, asked, friends=()):
+    """`pool`: [(id, name, kind, price, line)] he may pick from; `asked`:
+    whether a new find answers what the player asked him for (the code's coin)."""
+    lines = ["[%s (account %s) has come in, and their shop shelf needs filling. %s]" % (
+        display(person), person, _friends_line(person, friends)),
+        "[Today, by chance: %s. Let it colour your day, or not.]" % rng.choice(EVENTS)]
+    if n_pick:
+        lines.append("[In the back, free to sell (nobody has them): id, name, kind, price, "
+                     "description:]")
+        lines += ["  %d: %s, %s, %d coins -- %s" % p for p in pool]
+        lines.append("[Pick %d of those to put in front of %s today -- your eye, not "
+                     "theirs: something they would never ask for as often as something "
+                     "they might. Do not just match what they bought before.]" % (
+                         n_pick, display(person)))
+    lines.append("[And %d new finds came in today; write a brief for each: what it is and "
+                 "one odd detail, under 110 characters, a note for whoever draws it (a "
+                 "16x16 pixel-art critter that roams a jar, or decor). Each starts from its "
+                 "sparks -- a starting point, not a recipe:]" % n_new)
+    for i in range(n_new):
+        lines.append("  find %d sparks: %s" % (i + 1, spark(rng)))
+    lines.append("[Make the finds unlike each other and unlike what you have been bringing "
+                 "in lately; a junk shop's stock is whatever turned up.]")
+    if asked:
+        lines.append("[If %s has asked you to look out for something, find 1 is what your "
+                     "contacts turned up for it -- near the mark or a little off, never a "
+                     "literal granting. If they have not, ignore this.]" % display(person))
+    else:
+        lines.append("[None of today's finds is for anything a customer asked for; you are "
+                     "still asking around, or forgot.]")
+    lines.append("[Then greet %s as they come in: what you say over the counter, under %d "
+                 "characters -- your day, gossip, what is new. Answer with only JSON: "
+                 "{\"line\": your words, \"picks\": [ids], \"briefs\": [strings]}]" % (
+                     display(person), LINE_LEN))
+    return "\n".join(lines)
+
+
+def stock_turn(chat, person, pool, n_pick, n_new, friends=(), store=None, rng=None, log=None):
+    """His turn for a stock: (line, picks, briefs). picks are ids from `pool`
+    (he may get some wrong; the caller checks); if he cannot be asked, a
+    note on the door, no picks and loose briefs."""
+    st = store or kv.store()
+    rng = rng or random.Random()
+    asked = rng.randrange(100) < ANSWER_CHANCE
+    schema = stock_schema(n_pick, n_new)
+    prompt = stock_prompt(person, pool, n_pick, n_new, rng, asked, friends)
+    why = None
+    for attempt in range(2):
+        try:
+            out = turn(chat, prompt, person, st, effort=STOCK_EFFORT)
+        except ask.RateLimited:
+            raise
+        except Exception as e:                          # noqa: BLE001 - the shop still opens
+            why = str(e)
+            break
+        try:
+            value = ask.extract(out)
+            bad = ask.validate(value, schema)
+        except ValueError as e:
+            bad = [str(e)]
+        if not bad:
+            line = wire.flat(value["line"], LINE_LEN, ascii=True)
+            briefs = [wire.flat(b, BRIEF_LEN, ascii=True) for b in value["briefs"]]
+            with _meta:
+                _put(st, "tibbs/day/" + person, line)
+                rb = _get(st, "tibbs/briefs", []) + briefs
+                _put(st, "tibbs/briefs", rb[-BRIEFS_KEPT:])
+            return line, [int(i) for i in value["picks"]], briefs
+        why = "; ".join(bad[:3])
+        prompt = ("[That was not the JSON the shop needs (%s). Answer again with only the "
+                  "JSON: {\"line\": ..., \"picks\": [...], \"briefs\": [...]}]" % why)
+    if log:
+        log("stock turn: %s" % why)
+    line = "A note on the door: 'Out on business. Help yourself, pay the jar.'"
+    with _meta:
+        _put(st, "tibbs/day/" + person, line)
+    return line, [], [loose_brief(rng) for _ in range(n_new)]

@@ -849,7 +849,8 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
             got = ask.ask_shape(chat, prompt_for(briefs[k], req.get("owned", []), names, kind,
                                                  tier),
                                 batch_schema(1, kind), user=person or "pool", limit=limit,
-                                timeout=GEN_TIMEOUT, store=st, effort=tier[2])
+                                timeout=GEN_TIMEOUT, store=st, effort=tier[2],
+                                model=shopkeep.MODEL, cwd=shopkeep.home())
         except ask.RateLimited:
             if records:                                # the day's asks ran out: what came
                 break
@@ -896,7 +897,9 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
 # is holding) when it next asks for a stock; the rest of the stock it had
 # goes back to the pool then. Under _day_lock.
 
-STOCK_SIZE = 4                # a shop's stock
+STOCK_SIZE = 8                # a shop's stock: held, then random and Tibbs's picks, then new
+NEW_ITEMS = 2                 # new finds in each stock
+POOL_SHOWN = 40               # pool items Tibbs is shown to choose from
 MAX_HELD = 4                  # items a person may hold in their shop
 
 
@@ -972,6 +975,17 @@ def pick_from_pool(person, req, n, store=None, rng=None, skip=()):
     return got
 
 
+def take_from_pool(person, ids, store=None):
+    """These pool items into `person`'s shop, those still in the pool."""
+    st = store or kv.store()
+    pool = set(pool_ids(st))
+    got = [i for i in ids if i in pool]
+    _set_pool(st, pool - set(got))
+    for i in got:
+        st.put(NS, "own/%d" % i, person.encode())
+    return got
+
+
 def seed_pool(chat, n, store=None, signer=None, log=None, date=None):
     """n new items straight into the pool, from loose sparks, four at a
     time, counted against nobody's day."""
@@ -1023,11 +1037,21 @@ def _set_day(person, state, store=None):
     (store or kv.store()).put(NS, "day/" + person, json.dumps(state).encode(), ttl=STOCK_TTL)
 
 
-def _make_day(chat, person, req, date, store, batch, base, n_new, seed):
-    """The new part of a stock, after the `base` (held and pool) items that
-    are on show already: Tibbs's beat, then a find for each of its briefs."""
+def _item_note(rec):
+    it = decode(rec)
+    kinds = {v: k for k, v in enums()["kinds"].items()}
+    return "%s (%s, %d coins: %s)" % (it["name"], kinds.get(it["kind"], "item"),
+                                      it["price"] or 0, it["line"])
+
+
+def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, passed=()):
+    """The rest of a stock, after the `base` (held and random) items already
+    on show: Tibbs's turn -- his greeting, his picks from the pool, briefs for
+    the new finds -- then his picks, then a new item for each brief."""
     key = (person, date.isoformat())
     told = {"say": ""}
+    at = [base]
+    say_log = lambda s: sys.stderr.write("jar: %s: %s\n" % (person, s))   # noqa: E731
 
     def state(st_, n):
         s = {"state": st_, "date": key[1], "tags": [], "n": n, "batch": batch, "say": told["say"],
@@ -1036,44 +1060,69 @@ def _make_day(chat, person, req, date, store, batch, base, n_new, seed):
             s["req"] = req
         _set_day(person, s, store)
 
-    def on_item(k, rec):
-        # on show the moment it is made: the day stays "pending", with a count
-        at = base + k
-        store.put(NS, "stock/%s/%d" % (person, at), rec, ttl=STOCK_TTL)
+    def show(rec):
+        store.put(NS, "stock/%s/%d" % (person, at[0]), rec, ttl=STOCK_TTL)
         with _day_lock:
             _set_shown(store, person, shown(person, store) + [decode(rec)["id"]])
-        state("pending", at + 1)
+        at[0] += 1
+        state("pending", at[0])
 
-    n = base
-    say_log = lambda s: sys.stderr.write("jar: %s: %s\n" % (person, s))   # noqa: E731
+    def on_item(k, rec):                                # on show the moment it is made
+        show(rec)
+        shopkeep.note("New in %s's shop: %s." % (shopkeep.display(person), _item_note(rec)),
+                      store)
+
     try:
-        told["say"], briefs = shopkeep.day_beat(chat, person, n_new, store=store, log=say_log)
-        state("pending", base)
+        pool = [(i, ) + _pool_view(store, i) for i in pool_ids(store) if i not in passed]
+        rng = random.Random()
+        rng.shuffle(pool)
+        told["say"], mine, briefs = shopkeep.stock_turn(
+            chat, person, pool[:POOL_SHOWN], n_pick, n_new, friends_of(person, store),
+            store=store, log=say_log)
+        with _day_lock:                                 # his picks, if still free
+            got = take_from_pool(person, [i for i in mine if i in dict(
+                (p[0], 1) for p in pool[:POOL_SHOWN])][:n_pick], store)
+        with _day_lock:                                 # what he got wrong: random ones
+            got += pick_from_pool(person, req, n_pick - len(got), store, skip=passed)
+        state("pending", at[0])
+        for i in got:
+            rec = store.get(NS, "rec/%d" % i)
+            if rec is not None:
+                show(rec)
         records = generate(chat, person, req, date, store=store, on_item=on_item, want=n_new,
                            kind_at=batch, briefs=briefs, log=say_log)
-        n = base + len(records)
-        state("ok", n)
-        sys.stderr.write("jar: %s: %d items for %s (%d new)\n" % (person, n, key[1],
-                                                                  len(records)))
+        state("ok", at[0])
+        sys.stderr.write("jar: %s: %d items for %s (%d his, %d new)\n" % (
+            person, at[0], key[1], len(got), len(records)))
     except Exception as e:                              # noqa: BLE001 - reported to the device
         why = wire.flat(str(e) or type(e).__name__, 120)
-        if base:                                        # the pool's part is still a stock
-            state("ok", base)
+        if at[0]:                                       # the pool's part is still a stock
+            state("ok", at[0])
         else:
             _set_day(person, {"state": "error", "date": key[1], "why": why}, store)
-        sys.stderr.write("jar: %s: new items failed: %s\n" % (person, why))
+        sys.stderr.write("jar: %s: stock: %s\n" % (person, why))
     finally:
         with _day_lock:
             _running.discard(key)
 
 
+def _pool_view(st, i):
+    """(name, kind, price, line) of a pool item, for Tibbs to choose from."""
+    rec = st.get(NS, "rec/%d" % i)
+    if rec is None:
+        return ("?", "item", 0, "")
+    it = decode(rec)
+    kinds = {v: k for k, v in enums()["kinds"].items()}
+    return (it["name"], kinds.get(it["kind"], "item"), it["price"] or 0, it["line"])
+
+
 def start_day(chat, person, req, now=None, store=None, fresh=False):
     """("pending" | "ok", date): today's stock, started if it is not made or
     making. A failed one is tried again. `fresh` makes a new one even when
-    today's is done -- the shop's `r`. A new stock is what the person holds
-    from the last one, then pool items, then new ones (STOCK_SIZE in all,
-    at least two besides what is held); what they neither bought nor held
-    goes back to the pool."""
+    today's is done -- the shop's `r`. A new stock (STOCK_SIZE) is what the
+    person holds from the last one, then pool items at random, then pool
+    items Tibbs picks for them, then NEW_ITEMS new finds; what they neither
+    bought nor held goes back to the pool."""
     st = store or kv.store()
     date = _today(now)
     key = (person, date.isoformat())
@@ -1094,13 +1143,18 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
         batch = st.incr(NS, "batch")
         prev = shown(person, st)
         bought = set(req.get("bought", [])) & set(prev)
-        shopkeep.note_bought(person, [_bought_note(st, i) for i in prev if i in bought], st)
-        shopkeep.note_jar(person, req.get("jar", []), st)
+        who = shopkeep.display(person)
+        for i in prev:
+            if i in bought and st.get(NS, "rec/%d" % i) is not None:
+                shopkeep.note("%s bought %s." % (who, _item_note(st.get(NS, "rec/%d" % i))), st)
+        if req.get("jar"):
+            shopkeep.note("In %s's jar now: %s." % (who, ", ".join(req["jar"])), st)
         held = [i for i in req.get("held", []) if i in prev and i not in bought][:MAX_HELD]
         passed = [i for i in prev if i not in bought and i not in held]
         to_pool(passed, person, st)
-        fill = max(2, STOCK_SIZE - len(held))
-        picks = pick_from_pool(person, req, fill // 2, st, skip=passed)   # not straight back
+        rest = STOCK_SIZE - len(held) - NEW_ITEMS
+        n_pick = (rest + 1) // 2                        # Tibbs's choice ...
+        picks = pick_from_pool(person, req, rest - n_pick, st, skip=passed)   # ... and chance's
         base = []
         for i in held + picks:
             rec = st.get(NS, "rec/%d" % i)
@@ -1108,24 +1162,15 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
                 st.put(NS, "stock/%s/%d" % (person, len(base)), rec, ttl=STOCK_TTL)
                 base.append(i)
         _set_shown(st, person, base)
-        n_new = fill - len(picks)
         # Plants are seed packets now and then, instead of steering the stock.
         rng = random.Random()
         seed = rng.choice(sorted(SEED_PRICE)) if rng.randrange(100) < SEED_CHANCE else ""
         _set_day(person, {"state": "pending", "date": key[1], "tags": [], "n": len(base),
                           "batch": batch, "req": req, "seed": seed}, st)
     threading.Thread(target=_make_day, args=(chat, person, req, date, st, batch, len(base),
-                                             n_new, seed), daemon=True).start()
+                                             n_pick, NEW_ITEMS, seed, set(passed)),
+                     daemon=True).start()
     return "pending", key[1]
-
-
-def _bought_note(st, i):
-    rec = st.get(NS, "rec/%d" % i)
-    if rec is None:
-        return ("something", "item", 0)
-    it = decode(rec)
-    kinds = {v: k for k, v in enums()["kinds"].items()}
-    return (it["name"], kinds.get(it["kind"], "item"), it["price"] or 0)
 
 
 def resume_day(chat, person, store=None, now=None):
@@ -1236,6 +1281,9 @@ def post_friend(h, args):
                 raise kv.Full("%d friends at most" % FRIENDS_MAX)
             names.append(who)
             _set_friends(me, names, st)
+            if mutual(me, who, st):
+                shopkeep.note("%s and %s are friends now." % (shopkeep.display(me),
+                                                              shopkeep.display(who)), st)
     h.text("ok %s %s\n" % (who, "mutual" if mutual(me, who, st) else "waiting"))
 
 
@@ -1262,7 +1310,9 @@ def post_talk(h, args):
         h.text("error this server runs without Claude\n", 503)
         return
     try:
-        started = shopkeep.say(h.chat, kv.me(), body)
+        me = kv.me()
+        started = shopkeep.say(h.chat, me, body,
+                               [f for f in friends_of(me) if mutual(me, f)])
     except ValueError as e:
         raise KVError(str(e))
     h.text("pending\n" if started else "busy he is still answering\n")
@@ -1385,6 +1435,9 @@ def post_gift(h, args):
         st.push(to, GIFTS_Q, ("%s\t%s\t%s" % (me, note, base64.b64encode(out).decode())).encode())
         st.put(NS, "own/%d" % item_id, to.encode())
     sys.stderr.write("jar: %s gave No. %04d to %s\n" % (me, item_id, to))
+    shopkeep.note("%s sent %s %s as a gift%s." % (
+        shopkeep.display(me), shopkeep.display(to), _item_note(rec),
+        (", with a note: '%s'" % note) if note else ""))
     h.text("ok\n")
 
 

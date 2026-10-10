@@ -272,7 +272,8 @@ class ClaudeError(RuntimeError):
         self.timed_out = timed_out
 
 
-def ask_once(chat, prompt, timeout, resume=None, system=None, model=False, effort=None):
+def ask_once(chat, prompt, timeout, resume=None, system=None, model=False, effort=None,
+             cwd=None):
     """One question to the CLI with no tools, outside Build's conversation:
     (answer, session id). The daily lines, a MIDI song, a talk about a
     document, a voice command, the dashboard's "does Claude answer" check.
@@ -280,7 +281,10 @@ def ask_once(chat, prompt, timeout, resume=None, system=None, model=False, effor
     `system` is appended to the system prompt; `resume` continues a session
     of these (talk's); `model` passes the server's --model, which only the
     voice translator has ever done -- the rest use the CLI's default, and
-    which model a call uses is not changed here. `effort` is `claude --effort`
+    which model a call uses is not changed here; a string names one (Tibbs
+    talks on Opus). `cwd` runs it somewhere else than the repository, so
+    the repository's CLAUDE.md is not part of the conversation (a session
+    is kept per directory, so a resumed one must use the same). `effort` is `claude --effort`
     for this call: without it the CLI's default applies, and that is whatever
     the account running the server has set -- medium on the laptop, the CLI's
     own (much longer thinking) on the droplet, where Jar Factory's daily
@@ -293,14 +297,16 @@ def ask_once(chat, prompt, timeout, resume=None, system=None, model=False, effor
     if system:
         cmd += ["--append-system-prompt", system]
     cmd += ["--output-format", "json", "--allowed-tools", "", "--permission-mode", "dontAsk"]
-    if model and chat.model:
+    if isinstance(model, str) and model:
+        cmd += ["--model", model]
+    elif model and chat.model:
         cmd += ["--model", chat.model]
     if effort:
         cmd += ["--effort", effort]
     if resume:
         cmd += ["--resume", resume]
     try:
-        r = subprocess.run(cmd, cwd=chat.cwd, capture_output=True, text=True,
+        r = subprocess.run(cmd, cwd=cwd or chat.cwd, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=timeout,
                            env=chat._child_env())
     except subprocess.TimeoutExpired:
