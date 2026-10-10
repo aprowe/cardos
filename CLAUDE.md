@@ -952,6 +952,33 @@ Chat's wrapping), `apps/datetime.h`. App tests start from `test/fakeapi.h`, a
 whole default CardApi with in-memory and host-file cards. `test/test_main.c`
 is generated: `python tools/gen_test_main.py`.
 
+**The server has a general-purpose store; use it before writing a new
+module** (2026-10-09, the owner's direction). `server/kv.py` is SQLite in
+CARDOS_STATE/kv.sqlite3: values and counters with TTLs in namespaces `me`,
+`me/APP`, `app/APP` (anyone signed in writes) and `srv/APP` (only server code
+writes), and queues owned by a person with an allow-list (the gift relay).
+`/people` lists accounts with display names and last seen; `ask.ask_shape`
+asks Claude for JSON of a given schema with retries and a daily cap;
+`server/sign.py` signs with the server's ECDSA P-256 key (`/sign/pubkey`;
+CARDOS_STATE/sign_key.pem must never be regenerated). The wire format is in
+`docs/superpowers/specs/2026-10-09-server-store-design.md`. Devices verify
+signatures with `api->sig_verify` (API 44).
+
+**Jar Factory** (2026-10-09, `apps/jar.c` and its companion, Games): an idle
+terrarium jam factory with AI-made collectible items, the owner's spec in
+`docs/superpowers/specs/2026-10-09-jar-factory-design.md` (all seven build
+steps). The world and items are portable headers (`apps/jarsim.h`,
+`apps/jaritem.h` -- the item record, under 1 KB, the server's packer mirrors
+it byte for byte), host-tested. `server/jar.py` makes each person's daily
+stock with Claude from their garden, shelf and the day (8 items, sprites
+included, checked, signed), keeps the ownership ledger, friends and gifts on
+the store. Items run recipes (habits) or, in phase 2, bytecode scripts:
+`apps/jarvm.def` is the one instruction table, read by the device machine
+(`apps/jarvm.h`) and by `server/jarvm.py` (compiler, the same machine, a
+simulated day); test fixtures pin that both machines agree. The signature
+covers the record minus its signature and its 8 memory slots (scripts write
+those).
+
 ## Hardware facts — measured on the actual device, not from a datasheet
 
 M5Stack Cardputer v1.1, ESP32-S3FN8 (Xtensa LX7 dual-core, 240 MHz).
