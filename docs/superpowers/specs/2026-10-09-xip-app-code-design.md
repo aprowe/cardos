@@ -361,6 +361,8 @@ commit:
 
 To be filled from the device. Both radios up, a print or sync running.
 
+Master rows NOT yet measured (2026-10-09): COM3 absent (no USB serial device enumerated; only Bluetooth COM5-8), so `cardctl` could not reach the device. Re-run Task 1 when it is plugged in.
+
 | State | Build | Free heap | Low water | Largest 8-bit | Largest exec | Exec free |
 |---|---|---|---|---|---|---|
 | launcher idle | master | | | | | |
