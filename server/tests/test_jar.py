@@ -869,6 +869,14 @@ class Routes(unittest.TestCase):
         self.wait_day(self.sam)
         self.assertEqual(st.get(jar.NS, "own/%d" % second[0]), b"alex")
 
+    def test_an_admin_is_not_held_to_the_days_limit(self):
+        st = kv.store()
+        for _ in range(3):
+            ask.take_turn("alex", 2, st)                      # alex is the admin here
+        with self.assertRaises(ask.RateLimited):
+            for _ in range(3):
+                ask.take_turn("sam", 2, st)
+
     def test_a_new_stock_every_four_hours(self):
         t0 = datetime.datetime(2026, 10, 10, 3, 59, tzinfo=datetime.timezone.utc).timestamp()
         self.assertEqual(jar._stock_key(t0), "20261010-0")

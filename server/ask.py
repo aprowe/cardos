@@ -53,7 +53,7 @@ from . import chat as _chat
 from . import jobs, kv
 from .jobs import MINE
 
-DAILY = int(os.environ.get("CARDOS_ASK_DAILY") or 50)
+DAILY = int(os.environ.get("CARDOS_ASK_DAILY") or 150)
 ROUTE_DAILY = int(os.environ.get("CARDOS_ASK_ROUTE_DAILY") or 20)
 PROMPT_MAX = 4000
 SCHEMA_MAX = 2000
@@ -195,12 +195,22 @@ def extract(text):
 
 # ---- the day's count ---------------------------------------------------------------------
 
+def _unlimited(user):
+    """An admin is not held to the day's limit (the owner, testing). Only
+    with accounts: without them everyone is the one person."""
+    try:
+        from . import accounts
+        return bool(user) and accounts.enabled() and accounts.is_admin(user)
+    except Exception:                                   # noqa: BLE001 - counted, then
+        return False
+
+
 def take_turn(user, limit, store=None):
     """Count one ask for `user` today; RateLimited past `limit`."""
     st = store or kv.store()
     day = time.strftime("%Y-%m-%d", time.gmtime(st.clock()))
     n = st.incr(NS, "%s/%s" % (user or kv.NOBODY, day), ttl=2 * 86400)
-    if n > limit:
+    if n > limit and not _unlimited(user):
         raise RateLimited("%d asks a day; try tomorrow" % limit)
     return n
 
