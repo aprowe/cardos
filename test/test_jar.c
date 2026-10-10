@@ -158,7 +158,7 @@ void test_jar_first_run_writes_and_places_the_starters(void) {
 
 void test_jar_keys_open_the_companions_after_saving(void) {
   static const struct { int k; const char *app, *screen; } K[] = {
-    { 's', "Jar Shop", "shop" }, { 'p', "Jar Shop", "garden" }, { 'h', "Jar Shop", "shelf" },
+    { 's', "Jar Shop", "shop" }, { 'p', "Jar Shop", "garden" }, { 't', "Jar Post", "talk" },
     { 'u', "Jar Shop", "up" }, { 'f', "Jar Post", "friends" }, { 'm', "Jar Post", "mail" },
   };
   int i;

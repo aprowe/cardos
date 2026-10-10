@@ -10,7 +10,7 @@
  * The design is docs/superpowers/specs/2026-10-09-jar-factory-design.md.
  * This app is the scene and Decorate; everything with a menu is in two
  * companion apps it opens after saving -- Jar Shop (apps/jarshop.c: the
- * shop, My Stuff, upgrades, garden, shelf) and Jar Post (apps/jarpost.c:
+ * shop, My Stuff, upgrades, garden) and Jar Post (apps/jarpost.c:
  * friends, gifts, mail) -- because the three together were 44.5 KB to load
  * against a heap whose biggest piece is often 27 KB. Quitting either comes
  * back here, and the jar starts again from its save. Nothing is made while
@@ -638,10 +638,10 @@ static void text2(int x, int y, const char *s, uint16_t c) {
 
 /* The jar's menu: Enter opens it, every command a big tile with its key in
  * the corner (the letters still work from the jar without it). */
-enum { M_SHOP, M_STUFF, M_DECOR, M_GARDEN, M_SHELF, M_UP, M_FRIENDS, M_MAIL, M_N };
+enum { M_SHOP, M_STUFF, M_DECOR, M_GARDEN, M_TIBBS, M_UP, M_FRIENDS, M_MAIL, M_N };
 static const char *const MENU_NAME[M_N] = {
-  "Shop", "My Stuff", "Decorate", "Garden", "Shelf", "Upgrades", "Friends", "Mail" };
-static const char MENU_KEY[M_N] = { 'S', 'I', 'D', 'P', 'H', 'U', 'F', 'M' };
+  "Shop", "My Stuff", "Decorate", "Garden", "Tibbs", "Upgrades", "Friends", "Mail" };
+static const char MENU_KEY[M_N] = { 'S', 'I', 'D', 'P', 'T', 'U', 'F', 'M' };
 #define MENU_TOP   (BAR + 2)
 #define MENU_ROW   26
 #define MENU_W     116
@@ -1010,7 +1010,7 @@ static int app_key(void *st, unsigned char k) {
   case 'i': case 'I': open_app("Jar Shop", "stuff"); return 1;
   case 'd': case 'D': G.view = V_DECOR; G.dmove = 0; decor_select(G.dsel); return 1;
   case 'p': case 'P': open_app("Jar Shop", "garden"); return 1;
-  case 'h': case 'H': open_app("Jar Shop", "shelf"); return 1;
+  case 't': case 'T': open_app("Jar Post", "talk"); return 1;     /* Tibbs, the shopkeeper */
   case 'u': case 'U': open_app("Jar Shop", "up"); return 1;
   case 'z': case 'Z':
     G.zoom = 1;
@@ -1247,7 +1247,7 @@ const CappInfo capp_info = {
   "D\tdecorate: move, add, take out\n"
   "^v\tmoving: up onto a shelf, or down\n"
   "P\tthe garden: plant the beds\n"
-  "H\tthe shelf: what steers the shop\n"
+  "T\ttalk to Tibbs, the shopkeeper\n"
   "F\tfriends\n"
   "M\tmail; Enter opens a parcel on the dock\n"
   "U\tupgrades\n"

@@ -11,6 +11,44 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.13.0 -- 2026-10-10
+
+- **Tibbs, the shopkeeper.** The shop is a person with an ongoing story.
+  - **How stocks are made:** each new stock starts with his line of the day
+    (shown in the shop) and a brief for each new find, and every item is
+    made from its brief.
+  - **No more tags:** the shelf, the garden and the season no longer steer
+    anything.
+  - **What he knows:** your recent talk, your purchases (as history only)
+    and what is in your jar.
+  - **Variety comes from the code:**
+    - random events in his day;
+    - random sparks for each find;
+    - a coin toss deciding whether a find answers what you asked;
+    - recent themes are not repeated.
+
+    This keeps the AI from latching onto what you bought.
+  - **Talking:** talk to him from the shop (`t`), the jar menu (Tibbs) or
+    Jar Post (`t`).
+- **Prices are chosen first**, from common (30–80) up to a rare treasure
+  (450–900). Dearer items get more care and more AI effort. The price is
+  part of the signed item.
+- **Seed packets:** about 30% of stocks include one, and the Garden plants
+  from seeds (everyone starts with one of each).
+- **Gifts from the friends list:** in Jar Post, press Enter on a friend,
+  choose one of your things, add a note and send.
+- **Ledges:** a ruler shelf on bottle caps and a matchbox tower at the back
+  of the jar.
+  - In Decorate, Up/Down puts floor decor and critters on a ledge.
+  - Critters climb up, potter about and come down; "high" critters like it
+    up there.
+  - Saves keep each item's level; old saves load with everything on the
+    soil.
+- **Nothing is made off screen:** coins and jam come only while the jar is
+  open, and the "while you were away" banner is gone. Plants still grow by
+  the real clock.
+- The shelf is gone.
+
 ## v0.12.1 -- 2026-10-10
 
 - **Fix: Jar Shop said "0 here" while every item was being refused.** A
