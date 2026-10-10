@@ -1037,7 +1037,10 @@ int launchui_run_path(const char *path, const char *args) {
 
   for (i = 0; i < icons_total(); i++) {
     const Icon *ic = icon_at(i);
-    if (ic && ic->kind == ICON_CAPP && strcmp(ic->path, path) == 0) {
+    /* Without case, as FAT does: a hotkey's "Clock" is found on PATH as
+     * /apps/Plan/Clock.capp, and missing the icon for clock.capp ran it as
+     * a stranger -- loaded for one run, without the arena or the cache. */
+    if (ic && ic->kind == ICON_CAPP && same_name(ic->path, path)) {
       int left = leave_for(capprun_def(ic->slot), ic->cli);
       start_app(ic->slot, ic->name, args);
       if (!capprun_is_app(ic->slot)) {            /* a command, already done */
