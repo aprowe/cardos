@@ -20,6 +20,7 @@ exist.
 
 import os
 import re
+import struct
 import subprocess
 import sys
 
@@ -170,33 +171,73 @@ def loaded_bytes(path):
     return out
 
 
-def code_data(path):
-    """(.code, .data) as the loader allocates them: .code is linked at 0 and
-    goes to executable RAM, .data (with .bss) at 0x10000000 to the heap --
-    each one block, which is what has to be found free."""
-    import struct
-    data = open(path, "rb").read()
-    e_shoff, = struct.unpack_from("<I", data, 0x20)
-    e_shentsize, e_shnum = struct.unpack_from("<HH", data, 0x2E)
-    code = dat = 0
-    for i in range(e_shnum):
-        s = struct.unpack_from("<10I", data, e_shoff + i * e_shentsize)
-        if not s[2] & 2:                                  # SHF_ALLOC
+# Where apps/capp.ld links each part, and what the loader makes of it
+# (kernel/app/elfload.c): code at 0; the data block at DATA_BASE -- .data,
+# then the overlay region all of an app's overlays share; the constants at
+# RODATA_BASE, in flash beside the code when the app runs from the flash
+# cache and in RAM after the data block otherwise. See
+# docs/superpowers/specs/2026-10-10-app-constants-in-flash-design.md.
+SHT_PROGBITS, SHT_NOBITS = 1, 8
+SHF_WRITE, SHF_ALLOC = 1, 2
+DATA_BASE = 0x10000000            # CAPP_DATA_ORIGIN in kernel/app/capprel.h
+RODATA_BASE = 0x20000000          # CAPP_RODATA_ORIGIN
+OVL_MAX = 4                       # CAPP_OVL_MAX in kernel/app/capp.h
+KNOWN_SECTIONS = {".code", ".data", ".rodata"} | {".ovl%d" % n for n in range(OVL_MAX)}
+
+
+def align16(n):
+    return (n + 15) & ~15
+
+
+def sections(elf):
+    """Every section header of a built .capp, named, and the file's bytes."""
+    with open(elf, "rb") as f:
+        data = f.read()
+    shoff, = struct.unpack_from("<I", data, 0x20)
+    shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 0x2E)
+    raw = [struct.unpack_from("<10I", data, shoff + i * shentsize) for i in range(shnum)]
+    names = raw[shstrndx][4]
+    out = []
+    for s in raw:
+        end = data.index(bytes([0]), names + s[0])
+        out.append({"name": data[names + s[0]:end].decode("ascii", "replace"),
+                    "type": s[1], "flags": s[2], "addr": s[3], "offset": s[4],
+                    "size": s[5], "align": s[8]})
+    return out, data
+
+
+def layout(elf):
+    """What the loader allocates. block is the data block: .data and then
+    the largest overlay, alignment included -- the arena's share when the
+    app runs from the flash cache, since its constants are in flash."""
+    secs, _ = sections(elf)
+    lay = {"code": 0, "data": 0, "rodata": 0, "block": 0, "ovl": {}, "ovl_addr": set()}
+    for s in secs:
+        if not s["flags"] & SHF_ALLOC or s["size"] == 0:
             continue
-        if s[3] >= 0x10000000:
-            dat += s[5]
+        if s["addr"] >= RODATA_BASE:
+            lay["rodata"] += s["size"]
+        elif s["addr"] >= DATA_BASE:
+            lay["block"] = max(lay["block"], s["addr"] - DATA_BASE + s["size"])
+            m = re.match(r"\.ovl([0-9])$", s["name"])
+            if m:
+                lay["ovl"][int(m.group(1))] = s["size"]
+                lay["ovl_addr"].add(s["addr"])
+            elif s["name"] == ".data":
+                lay["data"] = s["size"]
         else:
-            code += s[5]
-    return code, dat
+            lay["code"] += s["size"]
+    return lay
 
 
 # The size budget, since app code runs from flash
-# (docs/superpowers/specs/2026-10-09-xip-app-code-design.md). An app's data
-# goes in the 28 KB arena when it is the one on screen -- ARENA_SIZE in
-# kernel/app/arena.h -- and its code into the flash cache, so neither needs
-# a piece of a heap that breaks up over hours. An app that keeps its code in
-# RAM (CAPP_CODE_IN_RAM, for an inner loop) still needs one block of
-# executable RAM, and after a day the largest was 24 KB.
+# (docs/superpowers/specs/2026-10-09-xip-app-code-design.md) and its
+# constants with it (docs/superpowers/specs/2026-10-10-app-constants-in-flash-design.md).
+# What has to fit the 28 KB arena -- ARENA_SIZE in kernel/app/arena.h -- is
+# the data block: .data and the largest overlay. An app that keeps its code
+# in RAM (CAPP_CODE_IN_RAM, for an inner loop) keeps its constants in RAM
+# too, after the block, and still needs one block of executable RAM; after a
+# day the largest was 24 KB.
 DATA_BUDGET = 28 * 1024          # ARENA_SIZE
 RAM_CODE_BUDGET = 16 * 1024      # CAPP_CODE_IN_RAM apps
 MAX_CODE = 96 * 1024             # CAPP_MAX_CODE in kernel/app/elfload.c
@@ -209,29 +250,33 @@ OVER_BUDGET = {
 
 
 def check_budget(built):
-    """Print code and data per app, write build/apps/sizes.txt, and refuse an
+    """Print the layout per app, write build/apps/sizes.txt, and refuse an
     app over budget that is not in OVER_BUDGET."""
     rows, bad = [], []
     for name, elf in built:
-        code, dat = code_data(elf)
+        lay = layout(elf)
         flags = read_info(elf)[0]
         in_ram = bool(flags & CAPP_CODE_IN_RAM)
+        need = align16(lay["block"]) + lay["rodata"] if in_ram else lay["block"]
         over = []
-        if dat > DATA_BUDGET:
-            over.append("data %d > %d (the arena)" % (dat, DATA_BUDGET))
-        if in_ram and code > RAM_CODE_BUDGET:
-            over.append("code %d > %d for CAPP_CODE_IN_RAM" % (code, RAM_CODE_BUDGET))
-        if code > MAX_CODE:
-            over.append("code %d > %d" % (code, MAX_CODE))
-        rows.append((name, code, dat, in_ram, over))
+        if need > DATA_BUDGET:
+            over.append("data block %d > %d (the arena)" % (need, DATA_BUDGET))
+        if in_ram and lay["code"] > RAM_CODE_BUDGET:
+            over.append("code %d > %d for CAPP_CODE_IN_RAM" % (lay["code"], RAM_CODE_BUDGET))
+        if lay["code"] > MAX_CODE:
+            over.append("code %d > %d" % (lay["code"], MAX_CODE))
+        rows.append((name, lay, in_ram, over))
     with open(os.path.join(OUT, "sizes.txt"), "w", encoding="utf-8", newline="\n") as f:
-        f.write("# app        code    data  where  (bytes; data <= %d, RAM code <= %d)\n"
+        f.write("# app        code    data   ovl0   ovl1   ovl2   ovl3  rodata   block  where"
+                "  (bytes; block = data + largest overlay <= %d; RAM code <= %d)\n"
                 % (DATA_BUDGET, RAM_CODE_BUDGET))
-        for name, code, dat, in_ram, over in rows:
-            f.write("%-10s %7d %7d  %s%s\n" % (name, code, dat, "ram  " if in_ram else "flash",
-                                              "  OVER" if over else ""))
+        for name, lay, in_ram, over in rows:
+            ovl = ["%6d" % lay["ovl"][n] if n in lay["ovl"] else "     -" for n in range(OVL_MAX)]
+            f.write("%-10s %7d %7d %s %7d %7d  %s%s\n"
+                    % (name, lay["code"], lay["data"], " ".join(ovl), lay["rodata"],
+                       lay["block"], "ram  " if in_ram else "flash", "  OVER" if over else ""))
     print("  %s" % os.path.relpath(os.path.join(OUT, "sizes.txt"), ROOT))
-    for name, code, dat, in_ram, over in rows:
+    for name, lay, in_ram, over in rows:
         if over and name in OVER_BUDGET:
             print("  warning: %s is over budget (%s), allowed: %s"
                   % (name, "; ".join(over), OVER_BUDGET[name]))
@@ -241,7 +286,7 @@ def check_budget(built):
             print("  note: %s is under budget now -- take it out of OVER_BUDGET" % name)
     if bad:
         raise SystemExit(
-            "over the app size budget (data must fit the 28 KB arena; "
+            "over the app size budget (the data block must fit the 28 KB arena; "
             "see OVER_BUDGET in tools/build_apps.py):\n  " + "\n  ".join(bad))
 
 
@@ -328,64 +373,140 @@ def read_info(elf):
 
 # The commands, followed out of capp_info the same way (CappInfo.commands and
 # CappAction/CappParam in kernel/app/capp.h, 32-bit Xtensa layout). Pointers
-# are link-time addresses: apps/capp.ld links .data at DATA_BASE, so an
-# address minus DATA_BASE is an offset into the .data section's bytes.
-DATA_BASE = 0x10000000
-INFO_COMMANDS, INFO_NCOMMANDS = 56, 60
+# are link-time addresses, into .data or -- for anything const, which is
+# nearly everything capp_info points to -- into .rodata.
+INFO_HELP, INFO_COMMANDS, INFO_NCOMMANDS = 52, 56, 60
 ACTION_SIZE, PARAM_SIZE = 28, 12
 ARG_TYPES = {1: "text", 2: "int", 3: "bool", 4: "choice"}
 CMD_YES, CMD_NET = 0x01, 0x02
 
 
-def _data_section(elf):
-    import struct
-    with open(elf, "rb") as f:
-        data = f.read()
-    shoff, = struct.unpack_from("<I", data, 0x20)
-    shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 0x2E)
-    sec = lambda i: struct.unpack_from("<IIIIIIIIII", data, shoff + i * shentsize)
-    names = sec(shstrndx)[4]
-    for i in range(shnum):
-        sh = sec(i)
-        end = data.index(bytes([0]), names + sh[0])
-        if data[names + sh[0]:end] == b".data":
-            return data[sh[4]:sh[4] + sh[5]]
-    raise SystemExit("%s: no .data section" % elf)
+class Image:
+    """A built .capp's .data and .rodata bytes, read by link address -- as the
+    kernel reads capp_info and its tables in the icon scan, with the
+    constants in RAM beside the data."""
+
+    def __init__(self, elf):
+        secs, data = sections(elf)
+        self.elf = elf
+        self.parts = [(s["addr"], data[s["offset"]:s["offset"] + s["size"]])
+                      for s in secs
+                      if s["name"] in (".data", ".rodata") and s["type"] == SHT_PROGBITS]
+        if not any(a == DATA_BASE for a, _ in self.parts):
+            raise SystemExit("%s: no .data section, so no capp_info" % elf)
+
+    def where(self, addr):
+        """(bytes, offset) holding addr, or None outside .data and .rodata."""
+        for base, b in self.parts:
+            if base <= addr < base + len(b):
+                return b, addr - base
+        return None
+
+    def _at(self, addr, n):
+        w = self.where(addr)
+        if w is None or w[1] + n > len(w[0]):
+            raise SystemExit("%s: 0x%08x is not in .data or .rodata" % (self.elf, addr))
+        return w
+
+    def u8(self, addr):
+        b, o = self._at(addr, 1)
+        return b[o]
+
+    def u32(self, addr):
+        b, o = self._at(addr, 4)
+        return struct.unpack_from("<I", b, o)[0]
+
+    def cstr(self, addr):
+        if not addr:
+            return None
+        b, o = self._at(addr, 1)
+        return b[o:b.index(bytes([0]), o)].decode("utf-8", "replace")
 
 
 def read_commands(elf):
     """The app's commands: [{"id", "about", "net", "params": [{"name",
     "type", "about"}]}], only entries marked CAPP_CMD_YES."""
-    import struct
-    d = _data_section(elf)
-
-    def ptr(off):
-        v, = struct.unpack_from("<I", d, off)
-        return None if v == 0 else v - DATA_BASE
-
-    def cstr(off):
-        if off is None:
-            return None
-        return d[off:d.index(bytes([0]), off)].decode("utf-8", "replace")
-
-    table = ptr(INFO_COMMANDS)
-    n = d[INFO_NCOMMANDS]
+    img = Image(elf)
+    table = img.u32(DATA_BASE + INFO_COMMANDS)
+    n = img.u8(DATA_BASE + INFO_NCOMMANDS)
     out = []
-    for i in range(n if table is not None else 0):
+    for i in range(n if table else 0):
         a = table + i * ACTION_SIZE
-        cmd = d[a + 25]
+        cmd = img.u8(a + 25)
         if not cmd & CMD_YES:
             continue
-        params, np = ptr(a + 20), d[a + 24]
+        params, np = img.u32(a + 20), img.u8(a + 24)
         plist = []
-        for j in range(np if params is not None else 0):
+        for j in range(np if params else 0):
             p = params + j * PARAM_SIZE
-            plist.append({"name": cstr(ptr(p)),
-                          "type": ARG_TYPES.get(d[p + 4], "?"),
-                          "about": cstr(ptr(p + 8))})
-        out.append({"id": cstr(ptr(a)), "about": cstr(ptr(a + 16)),
+            plist.append({"name": img.cstr(img.u32(p)),
+                          "type": ARG_TYPES.get(img.u8(p + 4), "?"),
+                          "about": img.cstr(img.u32(p + 8))})
+        out.append({"id": img.cstr(img.u32(a)), "about": img.cstr(img.u32(a + 16)),
                     "net": bool(cmd & CMD_NET), "params": plist})
     return out
+
+
+def check_info(elf, name):
+    """Everything capp_info points to is in .data's bytes or in .rodata: the
+    icon scan reads it without running the app, with the constants loaded
+    into RAM and nothing else -- not the code, not an overlay."""
+    img = Image(elf)
+
+    def ok(what, v):
+        if v and img.where(v) is None:
+            raise SystemExit(
+                "%s: capp_info's %s points at 0x%08x, outside .data and .rodata (in an "
+                "overlay, or the code). The icon scan reads capp_info and what it points "
+                "to without running the app, so all of it must be data or constants."
+                % (name, what, v))
+        return v
+
+    ok("help", img.u32(DATA_BASE + INFO_HELP))
+    table = ok("commands", img.u32(DATA_BASE + INFO_COMMANDS))
+    for i in range(img.u8(DATA_BASE + INFO_NCOMMANDS) if table else 0):
+        a = ok("command %d" % i, table + i * ACTION_SIZE)
+        for what, off in (("id", 0), ("label", 4), ("menu", 8), ("about", 16)):
+            ok("command %d %s" % (i, what), img.u32(a + off))
+        params = ok("command %d params" % i, img.u32(a + 20))
+        for j in range(img.u8(a + 24) if params else 0):
+            p = ok("command %d param %d" % (i, j), params + j * PARAM_SIZE)
+            ok("command %d param %d name" % (i, j), img.u32(p))
+            ok("command %d param %d about" % (i, j), img.u32(p + 8))
+
+
+def check_layout(elf, name):
+    """Refuse a layout the loader does not expect: a section it would not
+    place, constants that are writable, misplaced or over-aligned, capp_info
+    anywhere but the start of .data, or capp_info reaching outside .data and
+    .rodata."""
+    secs, _ = sections(elf)
+    alloc = [s for s in secs if s["flags"] & SHF_ALLOC and s["size"]]
+    for s in alloc:
+        if s["name"] not in KNOWN_SECTIONS:
+            raise SystemExit(
+                "%s: section %s is not one the loader places (.code, .data, .rodata, "
+                ".ovl0-.ovl%d); overlays are numbered 0-%d"
+                % (name, s["name"], OVL_MAX - 1, OVL_MAX - 1))
+        if s["name"] == ".rodata":
+            if s["addr"] != RODATA_BASE:
+                raise SystemExit("%s: .rodata at 0x%08x, not 0x%08x" % (name, s["addr"], RODATA_BASE))
+            if s["flags"] & SHF_WRITE:
+                raise SystemExit(
+                    "%s: .rodata is writable -- something not const was put in a .rodata "
+                    "section. Constants run from flash, which an app cannot write." % name)
+            if s["align"] > 16:
+                raise SystemExit(
+                    "%s: .rodata wants %d-byte alignment; the flash cache places constants "
+                    "on a 16-byte boundary" % (name, s["align"]))
+    syms = run([READELF, "-s", "--wide", elf])
+    m = re.search(r"^\s*\d+:\s+([0-9a-f]{8})\s+\d+\s+OBJECT\s+GLOBAL\s+\S+\s+\S+\s+capp_info\s*$",
+                  syms, re.M)
+    if not m or int(m.group(1), 16) != DATA_BASE:
+        raise SystemExit(
+            "%s: capp_info is not the first thing in .data; apps/capp.ld KEEPs it there, "
+            "and the loader and read_info read it from there" % name)
+    check_info(elf, name)
 
 
 def catalog_line(app, c):
@@ -449,14 +570,23 @@ def seed_name(stem):
     return "%s/%s.capp" % (folder, stem) if folder else "%s.capp" % stem
 
 
+def compile_link(src, out_dir=OUT):
+    """Compile and link one app; the .capp's path. Linked -n (no page
+    alignment): the constants are a third segment, and page-aligned
+    segments added up to 4 KB of padding to every file and every download,
+    which the loader -- reading by section offset -- never needed."""
+    name = os.path.splitext(os.path.basename(src))[0]
+    obj = os.path.join(out_dir, name + ".o")
+    elf = os.path.join(out_dir, name + ".capp")
+    run([GCC] + CFLAGS + ["-isystem", gcc_include_dir(), "-c", src, "-o", obj])
+    run([LD, "-q", "-n", "-T", os.path.join(APPS, "capp.ld"),
+         "--gc-sections", "-o", elf, obj])
+    return elf
+
+
 def build(src):
     name = os.path.splitext(os.path.basename(src))[0]
-    obj = os.path.join(OUT, name + ".o")
-    elf = os.path.join(OUT, name + ".capp")
-
-    run([GCC] + CFLAGS + ["-isystem", gcc_include_dir(), "-c", src, "-o", obj])
-    run([LD, "-q", "-T", os.path.join(APPS, "capp.ld"),
-         "--gc-sections", "-o", elf, obj])
+    elf = compile_link(src)
     check_image(elf, name)
     check_placement(name, elf)
     before = loaded_bytes(elf)
@@ -464,10 +594,12 @@ def build(src):
     check_image(elf, name)
     if loaded_bytes(elf) != before:
         raise SystemExit("%s: stripping relocations changed the loaded image" % name)
+    check_layout(elf, name)
 
     size = os.path.getsize(elf)
-    code, dat = code_data(elf)
-    print("  %-14s %6d bytes  code %6d  data %6d" % (name + ".capp", size, code, dat))
+    lay = layout(elf)
+    print("  %-14s %6d bytes  code %6d  data %6d  rodata %6d"
+          % (name + ".capp", size, lay["code"], lay["block"], lay["rodata"]))
     return name, elf
 
 

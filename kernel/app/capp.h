@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 45
+#define CAPP_API_VERSION 46
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
