@@ -30,14 +30,23 @@ uint32_t xip_path_hash(const char *path) {
   return h;
 }
 
+uint32_t xip_ro_at(uint32_t code_size) { return (code_size + 15u) & ~15u; }
+
+uint32_t xip_body(uint32_t code_size, uint32_t rodata_size) {
+  return rodata_size ? xip_ro_at(code_size) + rodata_size : code_size;
+}
+
 static int overlap(uint32_t a, uint32_t alen, uint32_t b, uint32_t blen) {
   return a < b + blen && b < a + alen;
 }
 
+/* The sizes are bounded before they are added: a header read from flash
+ * that was never ours can say anything. */
 static int committed(const XipCache *c, const XipHdr *h, uint32_t off) {
   return h->magic == XIP_MAGIC && h->commit == XIP_MAGIC && h->sectors > 0 &&
          h->sectors <= (c->f.size - off) / XIP_SECTOR &&
-         XIP_HDR + h->key.code_size <= h->sectors * XIP_SECTOR;
+         h->key.code_size <= c->f.size && h->key.rodata_size <= c->f.size &&
+         XIP_HDR + xip_body(h->key.code_size, h->key.rodata_size) <= h->sectors * XIP_SECTOR;
 }
 
 /* Every committed entry in flash order; fn returns nonzero to stop, and
@@ -98,16 +107,26 @@ int xip_open(XipCache *c, const XipFlash *f) {
   return XIP_OK;
 }
 
-static int code_crc(XipCache *c, uint32_t off, uint32_t n, uint32_t *crc) {
+static int crc_range(XipCache *c, uint32_t at, uint32_t n, uint32_t *crc) {
   uint8_t buf[256];
-  uint32_t at = 0, k, x = 0;
-  while (at < n) {
-    k = n - at < sizeof buf ? n - at : (uint32_t)sizeof buf;
-    if (c->f.read(c->f.ctx, off + XIP_HDR + at, buf, k) != 0) return -1;
-    x = xip_crc32(x, buf, k);
+  uint32_t k;
+  while (n) {
+    k = n < sizeof buf ? n : (uint32_t)sizeof buf;
+    if (c->f.read(c->f.ctx, at, buf, k) != 0) return -1;
+    *crc = xip_crc32(*crc, buf, k);
     at += k;
+    n -= k;
   }
-  *crc = x;
+  return 0;
+}
+
+/* What an entry's crc covers: its code, then its constants, chained. */
+static int body_crc(XipCache *c, uint32_t off, const XipKey *k, uint32_t *crc) {
+  *crc = 0;
+  if (crc_range(c, off + XIP_HDR, k->code_size, crc) != 0) return -1;
+  if (k->rodata_size &&
+      crc_range(c, off + XIP_HDR + xip_ro_at(k->code_size), k->rodata_size, crc) != 0)
+    return -1;
   return 0;
 }
 
@@ -116,7 +135,7 @@ int xip_verify(XipCache *c, uint32_t off) {
   uint32_t crc;
   if (off > c->f.size || c->f.read(c->f.ctx, off, &h, sizeof h) != 0) return XIP_ERR_IO;
   if (!committed(c, &h, off)) return XIP_ERR_STATE;
-  if (code_crc(c, off, h.key.code_size, &crc) != 0) return XIP_ERR_IO;
+  if (body_crc(c, off, &h.key, &crc) != 0) return XIP_ERR_IO;
   return crc == h.crc ? XIP_OK : XIP_ERR_IO;
 }
 
@@ -125,7 +144,7 @@ static int match(XipCache *c, const XipHdr *h, uint32_t off, void *ctx) {
   struct lookup *l = (struct lookup *)ctx;
   uint32_t crc;
   if (h->live != LIVE || memcmp(&h->key, l->k, sizeof *l->k) != 0) return 0;
-  if (code_crc(c, off, h->key.code_size, &crc) != 0 || crc != h->crc) return 0;
+  if (body_crc(c, off, &h->key, &crc) != 0 || crc != h->crc) return 0;
   l->off = off;
   return 1;
 }
@@ -139,12 +158,12 @@ int xip_find(XipCache *c, const XipKey *k, uint32_t *off) {
   return XIP_OK;
 }
 
-int xip_begin(XipCache *c, uint32_t code_size, uint32_t *off) {
+int xip_begin(XipCache *c, uint32_t size, uint32_t *off) {
   uint32_t len, start;
   int i;
   if (c->pend_len) return XIP_ERR_STATE;
-  if (code_size == 0 || code_size > c->f.size) return XIP_ERR_FULL;
-  len = (XIP_HDR + code_size + XIP_SECTOR - 1) / XIP_SECTOR * XIP_SECTOR;
+  if (size == 0 || size > c->f.size) return XIP_ERR_FULL;
+  len = (XIP_HDR + size + XIP_SECTOR - 1) / XIP_SECTOR * XIP_SECTOR;
   if (len > c->f.size) return XIP_ERR_FULL;
   /* The head is the end of the newest entry, or 0: every entry with a
    * header before it ends at or before it, so an erase from here never
@@ -180,7 +199,8 @@ int xip_commit(XipCache *c, const XipKey *k, uint32_t crc, const char *path) {
   uint32_t magic = XIP_MAGIC;
   struct same s;
   size_t n;
-  if (!c->pend_len || XIP_HDR + k->code_size > c->pend_len) return XIP_ERR_STATE;
+  if (!c->pend_len || XIP_HDR + xip_body(k->code_size, k->rodata_size) > c->pend_len)
+    return XIP_ERR_STATE;
   memset(&h, 0xFF, sizeof h);              /* what is not written stays erased */
   h.magic = XIP_MAGIC;
   h.seq = c->next_seq;

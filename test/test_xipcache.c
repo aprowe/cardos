@@ -354,3 +354,104 @@ void test_xip_commit_stands_when_the_kill_walk_fails(void) {
   reboot(&c);
   CHECK(found(&c, "/apps/jar.capp", JAR, 2, NULL));
 }
+
+/* ---- constants beside the code (2026-10-10) ---- */
+
+#define DROM 0x3C1B0000u
+#define RO   12864u                  /* Jar's, linked 2026-10-10 */
+#define CODE 24484u                  /* not 16-aligned: the constants start at 24496 */
+
+static long install_ro(XipCache *c, const char *path, uint32_t code, uint32_t ro,
+                       uint32_t mtime, uint8_t fill) {
+  static uint8_t cb[96 * 1024], rb[32 * 1024];
+  XipKey k = key(path, code, mtime);
+  uint32_t off, crc;
+  int r;
+  k.rodata_size = ro;
+  k.drom_base = DROM;
+  memset(cb, fill, code);
+  memset(rb, (uint8_t)(fill ^ 0xFF), ro);
+  if ((r = xip_begin(c, xip_body(code, ro), &off)) != XIP_OK) return r;
+  if ((r = xip_write(c, 0, cb, code)) != XIP_OK) { xip_abandon(c); return r; }
+  if ((r = xip_write(c, xip_ro_at(code), rb, ro)) != XIP_OK) { xip_abandon(c); return r; }
+  crc = xip_crc32(xip_crc32(0, cb, code), rb, ro);
+  if ((r = xip_commit(c, &k, crc, path)) != XIP_OK) return r;
+  return (long)off;
+}
+static int found_ro(XipCache *c, const char *path, uint32_t code, uint32_t ro,
+                    uint32_t mtime, uint32_t drom) {
+  XipKey k = key(path, code, mtime);
+  uint32_t off;
+  k.rodata_size = ro;
+  k.drom_base = drom;
+  return xip_find(c, &k, &off) == XIP_OK;
+}
+
+void test_xip_body_layout(void) {
+  CHECK_EQ(xip_ro_at(CODE), 24496u);
+  CHECK_EQ(xip_ro_at(24480), 24480u);
+  CHECK_EQ(xip_body(CODE, 0), CODE);                 /* no constants: as before */
+  CHECK_EQ(xip_body(CODE, RO), 24496u + RO);
+}
+
+void test_xip_entry_holds_code_and_constants(void) {
+  XipCache c;
+  uint32_t i;
+  int pad_erased = 1;
+  reset(&c);
+  CHECK_EQ(install_ro(&c, "/apps/Games/jar.capp", CODE, RO, 1, 0x5A), 0);
+  CHECK(found_ro(&c, "/apps/Games/jar.capp", CODE, RO, 1, DROM));
+  CHECK_EQ(s_flash[XIP_HDR + CODE - 1], 0x5A);
+  CHECK_EQ(s_flash[XIP_HDR + 24496], 0xA5);
+  for (i = XIP_HDR + CODE; i < XIP_HDR + 24496; i++) if (s_flash[i] != 0xFF) pad_erased = 0;
+  CHECK(pad_erased);
+  /* 128 + 24496 + 12864 = 37488 bytes: ten sectors, so the next entry is at 10. */
+  CHECK_EQ(install(&c, "/apps/todo.capp", 15044, 1, 0x11), 10 * (long)XIP_SECTOR);
+  reboot(&c);
+  CHECK(found_ro(&c, "/apps/Games/jar.capp", CODE, RO, 1, DROM));
+  CHECK_EQ(s_bad_writes, 0);
+}
+
+void test_xip_constants_are_in_the_crc(void) {
+  XipCache c;
+  reset(&c);
+  CHECK_EQ(install_ro(&c, "/apps/Games/jar.capp", CODE, RO, 1, 0x5A), 0);
+  CHECK_EQ(xip_verify(&c, 0), XIP_OK);
+  s_flash[XIP_HDR + 24496 + 1000] ^= 0x01;
+  CHECK(!found_ro(&c, "/apps/Games/jar.capp", CODE, RO, 1, DROM));
+  CHECK(xip_verify(&c, 0) != XIP_OK);
+}
+
+/* Relocated for one data view and one size of constants: anything else misses. */
+void test_xip_key_names_the_data_view(void) {
+  XipCache c;
+  reset(&c);
+  CHECK_EQ(install_ro(&c, "/apps/Games/jar.capp", CODE, RO, 1, 0x5A), 0);
+  CHECK(!found_ro(&c, "/apps/Games/jar.capp", CODE, RO, 1, DROM + 0x10000u));
+  CHECK(!found_ro(&c, "/apps/Games/jar.capp", CODE, RO - 4, 1, DROM));
+  CHECK(!found_ro(&c, "/apps/Games/jar.capp", CODE, 0, 1, 0));
+}
+
+/* What the firmware before this left: "XIPC" entries, committed. They read
+ * as free space -- the head starts at 0 and nothing matches -- and the next
+ * write erases over them cleanly. No wipe needed. */
+void test_xip_old_magic_reads_as_free(void) {
+  XipCache c;
+  XipHdr h;
+  reset(&c);
+  memset(&h, 0xFF, sizeof h);
+  h.magic = 0x43504958u;
+  h.commit = 0x43504958u;
+  h.seq = 7;
+  h.sectors = 7;
+  h.key = key("/apps/Games/jar.capp", JAR, 1);
+  memcpy(s_flash, &h, sizeof h);
+  memcpy(s_flash + 7 * XIP_SECTOR, &h, sizeof h);
+  reboot(&c);
+  CHECK_EQ(c.head, 0);
+  CHECK_EQ(c.next_seq, 1);
+  CHECK(!found(&c, "/apps/Games/jar.capp", JAR, 1, NULL));
+  CHECK_EQ(install_ro(&c, "/apps/Games/jar.capp", CODE, RO, 1, 0x5A), 0);
+  CHECK(found_ro(&c, "/apps/Games/jar.capp", CODE, RO, 1, DROM));
+  CHECK_EQ(s_bad_writes, 0);
+}

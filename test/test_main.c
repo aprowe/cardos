@@ -974,6 +974,11 @@ void test_xip_soak_every_live_entry_checks(void);
 void test_xip_verify_reads_the_code_back(void);
 void test_xip_kill_makes_find_miss(void);
 void test_xip_commit_stands_when_the_kill_walk_fails(void);
+void test_xip_body_layout(void);
+void test_xip_entry_holds_code_and_constants(void);
+void test_xip_constants_are_in_the_crc(void);
+void test_xip_key_names_the_data_view(void);
+void test_xip_old_magic_reads_as_free(void);
 
 int main(void) {
   /* Unbuffered, so a crash is reported next to the test that caused it
@@ -2032,5 +2037,10 @@ int main(void) {
   RUN(test_xip_verify_reads_the_code_back);
   RUN(test_xip_kill_makes_find_miss);
   RUN(test_xip_commit_stands_when_the_kill_walk_fails);
+  RUN(test_xip_body_layout);
+  RUN(test_xip_entry_holds_code_and_constants);
+  RUN(test_xip_constants_are_in_the_crc);
+  RUN(test_xip_key_names_the_data_view);
+  RUN(test_xip_old_magic_reads_as_free);
   return tt_report();
 }

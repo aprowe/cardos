@@ -1,9 +1,9 @@
 /* The flash cache of relocated app code.
  *
  * A ring of 4 KB sectors over an abstract flash (device: the appcode
- * partition, xipflash.c; host: an array). An entry is a 128-byte header and
- * an app's code, relocated for one (map base, arena address) pair, in whole
- * sectors. New entries go at the head; the erase evicts whatever was there,
+ * partition, xipflash.c; host: an array). An entry is a 128-byte header, an
+ * app's code and then its constants (16-aligned after the code), relocated
+ * for one (code map, data map, arena) triple, in whole sectors. New entries go at the head; the erase evicts whatever was there,
  * oldest-written first, so every sector is erased once a lap and nothing
  * needs an allocator. See
  * docs/superpowers/specs/2026-10-09-xip-app-code-design.md.
@@ -18,7 +18,9 @@
 
 #define XIP_SECTOR    4096u
 #define XIP_HDR       128u          /* code starts here in an entry */
-#define XIP_MAGIC     0x43504958u   /* "XIPC" */
+#define XIP_MAGIC     0x32504958u   /* "XIP2": code and constants. Entries the
+                                     * firmware before wrote ("XIPC", code
+                                     * only) read as free space. */
 #define XIP_PATH_MAX  24
 #define XIP_INUSE_MAX 4             /* entries mapped by loaded apps at once */
 
@@ -38,14 +40,15 @@ typedef struct {
   uint32_t path_hash, file_size, file_mtime;   /* the .capp, as appidx keys it */
   uint32_t api, code_size;
   uint32_t map_base, arena;                    /* what it was relocated against */
+  uint32_t rodata_size, drom_base;             /* its constants, and the data view they are read through */
 } XipKey;
 
 typedef struct {                    /* on flash, XIP_HDR bytes */
   uint32_t magic, seq, sectors;
   XipKey   key;
-  uint32_t crc;                     /* of the code as written */
+  uint32_t crc;                     /* of the code, then the constants, as written */
   char     path[XIP_PATH_MAX];      /* the tail of the path, for listings */
-  uint32_t reserved[13];            /* left erased */
+  uint32_t reserved[11];            /* left erased */
   uint32_t live;                    /* 0xFFFFFFFF; 0 kills it, no erase needed */
   uint32_t commit;                  /* XIP_MAGIC, written last */
 } XipHdr;
@@ -64,11 +67,12 @@ int  xip_open(XipCache *c, const XipFlash *f);
 /* A live, committed entry matching k whose code still checks: XIP_OK and
  * its offset, else XIP_MISS. */
 int  xip_find(XipCache *c, const XipKey *k, uint32_t *off);
-/* Room for code_size bytes at the head (or at 0, if the head is too near
+/* Room for a body of `size` bytes (xip_body) at the head (or at 0, if the head is too near
  * the end), erased. XIP_ERR_FULL if it could never fit, XIP_ERR_BUSY if it
  * would erase an entry in use. One at a time. */
-int  xip_begin(XipCache *c, uint32_t code_size, uint32_t *off);
-/* Code bytes at `at` into the begun entry. */
+int  xip_begin(XipCache *c, uint32_t size, uint32_t *off);
+/* Body bytes at `at` (from the end of the header) into the begun entry. The
+ * constants go at xip_ro_at(code_size). */
 int  xip_write(XipCache *c, uint32_t at, const void *buf, uint32_t n);
 /* Header, then the commit word; then every other live entry for the same
  * path is killed. XIP_OK once the commit word is written, even if a kill
@@ -97,5 +101,12 @@ int  xip_each(XipCache *c, void (*fn)(const XipHdr *h, uint32_t off, int in_use,
 uint32_t xip_crc32(uint32_t crc, const void *p, uint32_t n);   /* crc32(0, ...) to start */
 /* FNV-1a of the path, letters folded: FAT does not care about case. */
 uint32_t xip_path_hash(const char *path);
+
+/* Where an entry's constants start, counted from its code: the next
+ * 16-byte boundary. The padding is never written, so it stays erased. */
+uint32_t xip_ro_at(uint32_t code_size);
+/* An entry's body after the header: code, padding, constants -- or just
+ * the code when there are none, which is exactly the old entry. */
+uint32_t xip_body(uint32_t code_size, uint32_t rodata_size);
 
 #endif /* CARDOS_XIPCACHE_H */
