@@ -32,6 +32,51 @@ functions phase 2's scripts will call (`apps/jarsim.h`). Art is text in
 `test_jarsim.c`, `test_jaritem.c`, `test_jar.c` (`JAR_DUMP=dir` writes
 frames). Code 23.0 KB + data 21.5 KB, of 44 KB.
 
+**Jar Factory, steps 4 to 6 on the device: one game in three apps.** The
+jar was 44.5 KB of a 45 KB budget, against a heap whose largest piece is
+often 27 KB, so its menus moved out: **Jar Shop** (`apps/jarshop.c`: the
+shop, My Stuff, the item card, upgrades, the garden, the shelf, the daily
+stock) and **Jar Post** (`apps/jarpost.c`: friends, gifts, mail), both
+Games. The jar keeps the scene and Decorate, saves, and opens them with
+`api->run` at a screen -- S shop, P garden, H shelf, U upgrades, F friends,
+M mail, and Decorate's N -- and quitting either (Esc at its top, or fn-`)
+comes back to a jar that starts afresh from its save, paid for the time
+away. They share `apps/jarstore.h` (the files under /var/jar) and
+`apps/jarui.h` (the look, the card, the server); they keep the jar without
+running it (`JS_KEEP_ONLY`, 6.6 KB less data). The launcher now treats an
+app opening one already on its back stack as going back to it, so the shop
+and the jar do not stack up. Sizes, code + data: jar 20.8 + 17.2 KB, Jar
+Shop 17.3 + 18.4 KB, Jar Post 14.0 + 14.7 KB.
+- **Garden** (step 4): six beds of berry, fern, mushroom, flower or cactus,
+  bought with coins, three real days to grow (by `api->epoch`; waiting with
+  no clock); only grown beds make jam, and their mix -- a bar on the garden
+  screen -- steers the daily stock. Pulling up a grown plant asks first.
+  **Shelf**: four items whose tags steer it too.
+- **The daily stock** (step 5): `POST /jar/day` with the garden, the shelf's
+  tags, owned names and the TZ setting; `GET /jar/day` until it is made;
+  `GET /jar/item?i=K`, one signed record each, checked with
+  `api->sig_verify` against the key pinned from `GET /jar/pubkey` (a forged
+  one is dropped and logged). The batch replaces the old one only whole;
+  offline, yesterday's stays. The Today card shows the tags; "new stock in"
+  counts to UTC midnight. A record carries no price, so `jst_price` works
+  one out (45 to 200). `ji_signed_message` (`apps/jaritem.h`) is the rule
+  agreed with the server: no signature, its length byte and the memory
+  slots zeroed, the total length less the signature.
+- **Friends and gifts** (step 6): your code and name, add by code, the list
+  with mutual/waiting and last seen; Send a Gift picks a mutual friend and
+  a note of up to 24, takes 10 coins postage, and the item leaves only on
+  the server's "ok" (postage back otherwise). Parcels are collected from
+  `jar.gifts`, checked, kept and only then acknowledged; opened, they become
+  owned items, the card shows the sender and note, and T sends a heart.
+  The jar asks how many wait (on open, then every three minutes while the
+  network is up): a new one floats down on a parachute, the critters look
+  up, a banner names the sender, and it waits on the crates; Enter opens the
+  post. Thank-yous arrive as hearts over the dock.
+- Records from the server are kept byte for byte, so a gift still verifies.
+  Base64 is `apps/b64.h`. Host tests: `test_b64.c`, `test_jarstore.c`,
+  `test_jarshop.c`, `test_jarpost.c` and the reworked `test_jar.c`, against
+  a stand-in server (`test/jarfake.h`).
+
 ## v0.10.0 -- 2026-10-09
 
 The cleanup: a multi-agent audit (seven reviewers, 78 findings, the eight
