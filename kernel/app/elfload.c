@@ -310,6 +310,36 @@ static void xip_release(uint32_t off) {
   xipflash_unlock();
 }
 
+/* The overlay sections -- .ovl0 to .ovl3, NOBITS, all at one address after
+ * .data (apps/capp.ld's OVERLAY) -- found by name, because the linker drops
+ * an empty one and the section index says nothing about which overlay it
+ * is. A layout the build would have refused is not loaded either. */
+static CappResult find_overlays(int fd, const Elf32_Ehdr *eh, const Elf32_Shdr *sh,
+                                uint32_t prog_size, LoadedApp *out) {
+  uint32_t names, region = 0;
+  char name[8];
+  int i, k;
+  if (eh->e_shstrndx >= eh->e_shnum) return CAPP_OK;      /* no names, no overlays */
+  names = sh[eh->e_shstrndx].sh_offset;
+  for (i = 0; i < eh->e_shnum; i++) {
+    if (sh[i].sh_type != SHT_NOBITS || !(sh[i].sh_flags & SHF_ALLOC) || sh[i].sh_size == 0) continue;
+    if (sh[i].sh_addr < CAPP_DATA_ORIGIN || sh[i].sh_addr >= CAPP_RODATA_ORIGIN) continue;
+    memset(name, 0, sizeof name);
+    if (read_at(fd, names + sh[i].sh_name, name, 6) != 0) return CAPP_ERR_NOT_ELF;
+    if (memcmp(name, ".ovl", 4) != 0 || name[4] < '0' || name[4] >= '0' + CAPP_OVL_MAX ||
+        name[5] != 0)
+      continue;
+    if (region && sh[i].sh_addr != region) return CAPP_ERR_NOT_ELF;   /* one region */
+    region = sh[i].sh_addr;
+    k = name[4] - '0';
+    out->ovl_size[k] = sh[i].sh_size;
+    if (k + 1 > out->ovl_n) out->ovl_n = (uint8_t)(k + 1);
+  }
+  if (region && region - CAPP_DATA_ORIGIN < prog_size) return CAPP_ERR_NOT_ELF;   /* over .data */
+  out->ovl_off = region ? region - CAPP_DATA_ORIGIN : 0;
+  return CAPP_OK;
+}
+
 /* capp_load_ex's `foreground` for capp_load_info. */
 #define LOAD_INFO 2
 
@@ -415,6 +445,10 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
     goto done;
   }
   if (head[0] != CAPP_API_VERSION) { rc = CAPP_ERR_API; goto done; }
+  /* The overlay region, for capprun to switch in; the icon scan never runs
+   * the app, so it has no use for it. */
+  if (foreground != LOAD_INFO && (rc = find_overlays(fd, &eh, sh, prog_size, out)) != CAPP_OK)
+    goto done;
 
   /* Where the constants go when they are not in flash: after the data
    * block, 16-aligned, in the same allocation. */

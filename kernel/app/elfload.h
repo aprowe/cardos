@@ -48,6 +48,14 @@ typedef struct {
   uint32_t        rodata_size;
   void           *rodata_heap;     /* freed by capp_unload; NULL when none */
 
+  /* The overlay region (docs/superpowers/specs/2026-10-10-app-data-overlays-design.md):
+   * at data + ovl_off, inside the block and zeroed by the load; overlay n is
+   * its first ovl_size[n] bytes while live. ovl_n is the highest overlay + 1,
+   * 0 for none. Not filled by capp_load_info, which never runs the app. */
+  uint32_t        ovl_off;
+  uint32_t        ovl_size[CAPP_OVL_MAX];
+  uint8_t         ovl_n;
+
   /* Read from the image without running it -- name, icon and flags are needed
    * to draw an icon, and executing a program to find out what it is called is
    * the wrong way round. */
