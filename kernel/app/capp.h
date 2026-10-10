@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 43
+#define CAPP_API_VERSION 44
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -928,6 +928,16 @@ typedef struct {
   /* ---- two devices, one game: ESP-NOW (API 43) ----
    * See CappLink above. NULL on firmware without it. */
   const CappLink *(*link)(void);
+
+  /* ---- a signature from the server (API 44) ----
+   *
+   * Is `sig` (64 bytes, r then s) a valid ECDSA P-256 signature over the
+   * SHA-256 of `msg`, by the key `pub` (65 bytes, uncompressed: 0x04, X, Y)?
+   * 1 yes, 0 no, -1 could not check. For data that came from somewhere else
+   * and will be run or shown -- Jar Factory's items -- so a device accepts
+   * only what the server signed (server/sign.py; its public key is
+   * GET /sign/pubkey). An app has no crypto of its own. */
+  int (*sig_verify)(const uint8_t pub[65], const void *msg, size_t n, const uint8_t sig[64]);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

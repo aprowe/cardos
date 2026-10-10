@@ -9,6 +9,7 @@
 #include "kernel/app/capp.h"
 #include "kernel/app/launcher.h"
 #include "kernel/net/link.h"
+#include "psa/crypto.h"
 #include "kernel/ui/draw.h"
 #include "kernel/fs/fs.h"
 #include "kernel/net/http.h"
@@ -337,6 +338,26 @@ static void upd_say_progress(void *ctx, const char *line) {
   if (u->on_line) u->on_line(u->ctx, line);
 }
 
+/* ECDSA P-256 over SHA-256 through PSA, which the firmware carries for TLS
+ * anyway. The key is imported for this one check and destroyed. */
+static int api_sig_verify(const uint8_t pub[65], const void *msg, size_t n, const uint8_t sig[64]) {
+  psa_key_attributes_t at = PSA_KEY_ATTRIBUTES_INIT;
+  psa_key_id_t key = 0;
+  psa_status_t st;
+  if (!pub || !sig || (!msg && n)) return -1;
+  if (pub[0] != 0x04) return 0;
+  psa_set_key_type(&at, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+  psa_set_key_bits(&at, 256);
+  psa_set_key_usage_flags(&at, PSA_KEY_USAGE_VERIFY_MESSAGE);
+  psa_set_key_algorithm(&at, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
+  if (psa_import_key(&at, pub, 65, &key) != PSA_SUCCESS) { psa_reset_key_attributes(&at); return -1; }
+  st = psa_verify_message(key, PSA_ALG_ECDSA(PSA_ALG_SHA_256), (const uint8_t *)msg, n, sig, 64);
+  psa_destroy_key(key);
+  psa_reset_key_attributes(&at);
+  if (st == PSA_SUCCESS) return 1;
+  return st == PSA_ERROR_INVALID_SIGNATURE ? 0 : -1;
+}
+
 static const CappLink LINK = {
   link_open, link_close, link_state, link_peer_count, link_peer_name, link_invite,
   link_answer, link_role, link_send, link_recv, link_look, link_why,
@@ -580,6 +601,7 @@ static const CardApi API = {
   api_update_apply_progress,
   api_firmware_boot,
   api_link,
+  api_sig_verify,
 };
 
 const CardApi *cardos_api(void) { return &API; }
