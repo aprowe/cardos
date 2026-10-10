@@ -1,0 +1,375 @@
+/* Jar Factory's world on the host: apps/jarsim.h. Where coins come from,
+ * away time and its cap, upgrades, items and their habits, the save. */
+#include <stdio.h>
+#include <string.h>
+
+#include "tinytest.h"
+#include "apps/jarsim.h"
+
+#define T0 1800000000u
+
+static Jar J;
+
+static void fresh(uint32_t seed) {
+  memset(&J, 0, sizeof J);
+  js_init(&J, seed);
+}
+
+static void run_s(int secs) {
+  int i;
+  for (i = 0; i < secs * JS_HZ; i++) js_step(&J);
+}
+
+static void mk_item(JItem *it, uint32_t id, int kind, int move) {
+  int i;
+  memset(it, 0, sizeof *it);
+  it->id = id;
+  it->kind = (uint8_t)kind;
+  it->move = (uint8_t)move;
+  it->speed = JSP_MEDIUM;
+  it->zone = JZ_ANYWHERE;
+  it->nframes = 2;
+  strcpy(it->name, "Thing");
+  for (i = 1; i < 8; i++) it->pal[i] = (uint16_t)(i * 0x0841);
+  for (i = 0; i < 256; i++) { ji_set_px(it->frames[0], i, i & 7); ji_set_px(it->frames[1], i, 1); }
+}
+
+void test_jarsim_every_coin_is_a_jar_that_left(void) {
+  uint32_t seed;
+  for (seed = 7; seed < 10; seed++) {
+    int i, bad = 0, ships = 0;
+    int32_t want;
+    fresh(seed);
+    for (i = 0; i < 30 * 60 * JS_HZ; i++) {
+      uint32_t before = J.coins;
+      uint8_t st = J.snail.st;
+      js_step(&J);
+      if (J.coins != J.shipped * JS_JAR_VALUE) bad++;
+      if (J.coins != before) {
+        /* coins move only when the snail has just gone off the screen */
+        if (!(st == S_OUT && J.snail.st == S_AWAY && J.snail.x >= JS_EXIT_X * JS_FX)) bad++;
+        ships++;
+      }
+    }
+    CHECK_EQ(bad, 0);
+    CHECK(ships > 10);
+    /* and the factory makes about what it says it can: 30 minutes at the rate */
+    want = js_rate_ph(&J) / 2;
+    printf("    30 min: %u jars shipped, rate %d/h -> %d expected\n", (unsigned)J.coins,
+           (int)js_rate_ph(&J), (int)want);
+    CHECK((int32_t)J.coins > want * 7 / 10);
+    CHECK((int32_t)J.coins < want * 13 / 10);
+  }
+}
+
+void test_jarsim_starts_at_about_three_a_minute(void) {
+  fresh(1);
+  CHECK(js_rate_ph(&J) >= 150);
+  CHECK(js_rate_ph(&J) <= 220);
+}
+
+void test_jarsim_away_earnings_are_a_pile_the_snail_ships(void) {
+  uint32_t jars;
+  int32_t rate;
+  fresh(3);
+  rate = js_rate_ph(&J);
+  J.seen = T0;
+  jars = js_away(&J, T0 + 1800);
+  CHECK_EQ(jars, (uint32_t)rate / 2);
+  CHECK_EQ(J.dock, jars);
+  CHECK_EQ(J.coins, 0);                   /* nothing until it has left */
+  CHECK_EQ(J.seen, T0 + 1800);
+  /* shipped out quickly: well inside two minutes */
+  run_s(120);
+  CHECK(J.coins >= jars);
+  CHECK_EQ(J.coins, J.shipped * JS_JAR_VALUE);
+  CHECK(J.dock < 4);
+}
+
+void test_jarsim_away_is_capped_at_eight_hours(void) {
+  fresh(3);
+  J.seen = T0;
+  CHECK_EQ(js_away(&J, T0 + 2 * 86400), (uint32_t)js_rate_ph(&J) * 8);
+  /* the plants grew while away */
+  CHECK(J.bed[0].ready);
+  CHECK(J.bed[1].ready);
+}
+
+void test_jarsim_no_clock_no_away(void) {
+  fresh(3);
+  CHECK_EQ(js_away(&J, 0), 0);            /* no clock now */
+  CHECK_EQ(J.dock, 0);
+  CHECK_EQ(js_away(&J, T0), 0);           /* never saved with a clock: start counting */
+  CHECK_EQ(J.seen, T0);
+  CHECK_EQ(js_away(&J, T0 - 50), 0);      /* a clock that went back */
+  CHECK_EQ(J.dock, 0);
+  /* and no day or night */
+  js_set_minute(&J, -1);
+  CHECK_EQ(J.phase, PH_NONE);
+}
+
+void test_jarsim_upgrades(void) {
+  int32_t r0;
+  fresh(5);
+  r0 = js_rate_ph(&J);
+  CHECK_EQ(js_buy(&J, JU_BED), -2);       /* no coins */
+  J.coins = 10000;
+  CHECK_EQ(js_up_cost(&J, JU_BED), 25);
+  CHECK_EQ(js_buy(&J, JU_BED), 0);
+  CHECK_EQ(J.coins, 10000 - 25);
+  CHECK_EQ(J.nbeds, 3);
+  CHECK(js_rate_ph(&J) > r0);
+  CHECK_EQ(js_rate_after(&J, JU_MACH), js_rate_for(3, 1, 3, 0));
+  while (js_buy(&J, JU_MACH) == 0) {}
+  CHECK_EQ(J.nmach, JS_MAX_MACH);
+  CHECK_EQ(js_up_cost(&J, JU_MACH), -1);
+  CHECK_EQ(js_buy(&J, JU_MACH), -1);
+  CHECK(js_mach_active(&J, 1) && js_mach_active(&J, 2));
+  while (js_buy(&J, JU_MOSS) == 0) {}
+  while (js_buy(&J, JU_BELT) == 0) {}
+  while (js_buy(&J, JU_BED) == 0) {}
+  CHECK_EQ(J.nmoss, JS_MAX_MOSS);
+  CHECK_EQ(J.belt, JS_MAX_BELT);
+  CHECK_EQ(J.nbeds, JS_MAX_BEDS);
+  /* everything bought makes a busier jar, and the loop still balances */
+  CHECK(js_rate_ph(&J) > 2 * r0);
+  {
+    uint32_t c = J.coins;
+    run_s(600);
+    CHECK_EQ(J.coins - c, J.shipped * JS_JAR_VALUE);
+    CHECK((int32_t)J.shipped > js_rate_ph(&J) / 6 * 7 / 10);
+  }
+}
+
+void test_jarsim_a_jam_is_fixed_even_with_one_mossling(void) {
+  static JItem it;
+  int i;
+  fresh(9);
+  mk_item(&it, 1, JK_FLOOR, JM_SITS);
+  it.nhab = 2;
+  it.hab[0].event = JE_JAM; it.hab[0].earg = 1; it.hab[0].action = JA_GLOW; it.hab[0].aarg = 1;
+  it.hab[1].event = JE_JAM; it.hab[1].earg = 2; it.hab[1].action = JA_GLOW; it.hab[1].aarg = 0;
+  CHECK_EQ(js_place(&J, &it, 30, 0), 0);
+  run_s(20);
+  J.jam_clock = 1;
+  js_step(&J);
+  CHECK(J.jammed);
+  CHECK_EQ(J.placed[0].glow, 1);          /* jam:jammed fired */
+  for (i = 0; i < 90 * JS_HZ && J.jammed; i++) js_step(&J);
+  CHECK(!J.jammed);
+  CHECK_EQ(J.placed[0].glow, 0);          /* jam:fixed fired */
+  /* and the factory goes on afterwards */
+  {
+    uint32_t s = J.shipped;
+    run_s(180);
+    CHECK(J.shipped > s);
+  }
+}
+
+void test_jarsim_two_mosslings_fix_a_jam(void) {
+  int i;
+  fresh(11);
+  J.nmoss = 3;
+  run_s(10);
+  J.jam_clock = 1;
+  js_step(&J);
+  for (i = 0; i < 90 * JS_HZ && J.jammed; i++) {
+    js_step(&J);
+    CHECK(J.fixer[0] != JW_SNAIL && J.fixer[1] != JW_SNAIL);
+  }
+  CHECK(!J.jammed);
+}
+
+void test_jarsim_a_mossling_naps_and_wakes(void) {
+  int i, napped = 0, woke = 0;
+  fresh(13);
+  J.nap_clock = 1;
+  for (i = 0; i < 60 * JS_HZ; i++) {
+    js_step(&J);
+    if (J.moss[0].st == M_NAP) napped = 1;
+    else if (napped) woke = 1;
+  }
+  CHECK(napped);
+  CHECK(woke);
+}
+
+void test_jarsim_habits_go_through_events_and_actions(void) {
+  static JItem it;
+  JPlaced *p;
+  fresh(15);
+  mk_item(&it, 2, JK_HANGING, JM_SWAYS);
+  it.nbub = 2;
+  strcpy(it.bub[0], "hello");
+  strcpy(it.bub[1], "night!");
+  it.nhab = 3;
+  it.hab[0].event = JE_TIME; it.hab[0].earg = PH_NIGHT; it.hab[0].action = JA_GLOW; it.hab[0].aarg = 1;
+  it.hab[1].event = JE_TIME; it.hab[1].earg = PH_DAY;   it.hab[1].action = JA_GLOW; it.hab[1].aarg = 0;
+  it.hab[2].event = JE_POKE; it.hab[2].earg = 0;        it.hab[2].action = JA_SAY;  it.hab[2].aarg = 1;
+  CHECK_EQ(js_place(&J, &it, 100, 20), 0);
+  p = &J.placed[0];
+  js_set_minute(&J, 22 * 60);              /* night begins */
+  CHECK_EQ(p->glow, 1);
+  js_set_minute(&J, 22 * 60 + 5);          /* still night: no new event */
+  CHECK_EQ(js_event(&J, JE_TIME, PH_DAWN), 0);   /* nothing listens for dawn */
+  js_set_minute(&J, 12 * 60);              /* day */
+  CHECK_EQ(p->glow, 0);
+  CHECK_EQ(js_item_event(&J, 0, JE_POKE, 0), 1);
+  CHECK_EQ(p->say, 1);
+  CHECK(p->say_t > 0);
+  /* the same actions, called directly, as a script will */
+  CHECK_EQ(js_act(&J, 0, JA_GLOW, 2), 0);
+  CHECK_EQ(p->glow, 1);
+  CHECK_EQ(js_act(&J, 0, JA_SAY, 3), -1);  /* it has no fourth bubble */
+  CHECK_EQ(js_act(&J, 0, JA_HOP, 4), -1);  /* hanging things do not hop */
+  CHECK_EQ(js_act(&J, 0, JA_FRAME, 1), 0);
+  CHECK_EQ(p->cur, 1);
+  CHECK_EQ(js_sense(&J, 0, JSN_TIME), PH_DAY);
+  CHECK_EQ(js_sense(&J, 0, JSN_X), 100);
+  CHECK_EQ(js_sense(&J, 0, JSN_ZONE), JZ_WORKS);
+}
+
+void test_jarsim_near_and_tick_habits(void) {
+  static JItem it;
+  int i, said = 0, frames = 0;
+  fresh(17);
+  mk_item(&it, 3, JK_FLOOR, JM_SITS);
+  it.nbub = 1;
+  strcpy(it.bub[0], "ribbit");
+  it.nhab = 2;
+  it.hab[0].event = JE_NEAR; it.hab[0].earg = JN_MOSS; it.hab[0].action = JA_SAY; it.hab[0].aarg = 0;
+  it.hab[1].event = JE_TICK; it.hab[1].earg = 8;       it.hab[1].action = JA_FLIP; it.hab[1].aarg = 0;
+  CHECK_EQ(js_place(&J, &it, JS_BED_X(0) + 4, 0), 0);
+  for (i = 0; i < 40 * JS_HZ; i++) {
+    uint8_t f = J.placed[0].flip;
+    js_step(&J);
+    if (J.placed[0].say_t == JS_SAY_STEPS) said++;
+    if (J.placed[0].flip != f) frames++;
+  }
+  CHECK(said >= 1);                        /* a mossling came by for a berry */
+  CHECK(frames >= 19 && frames <= 21);     /* every 2 s, for 40 s */
+}
+
+void test_jarsim_a_liked_item_speeds_a_mossling(void) {
+  static JItem it;
+  fresh(19);
+  mk_item(&it, 4, JK_FLOOR, JM_SITS);
+  strcpy(it.tags, "cosy,soft");
+  CHECK_EQ(js_place(&J, &it, J.moss[0].x / JS_FX, 0), 0);
+  CHECK_EQ(J.placed[0].tags, JT_COSY | JT_SOFT);
+  J.steps = JS_ITEM_TICK - 1;
+  js_step(&J);
+  CHECK(J.moss[0].boost > 0);
+  CHECK(J.moss[0].boost <= JS_BOOST_STEPS);
+  /* spooky things do nothing for a mossling */
+  fresh(19);
+  strcpy(it.tags, "spooky");
+  js_place(&J, &it, J.moss[0].x / JS_FX, 0);
+  J.steps = JS_ITEM_TICK - 1;
+  js_step(&J);
+  CHECK_EQ(J.moss[0].boost, 0);
+}
+
+void test_jarsim_placement_limits(void) {
+  static JItem it;
+  int i, used = 0;
+  fresh(21);
+  for (i = 0; i < JS_MAX_PLACED; i++) {
+    mk_item(&it, 100 + (uint32_t)i, i % 3, JM_SITS);
+    it.nframes = 1;
+    CHECK_EQ(js_place(&J, &it, 20 + i * 8, 0), i);
+  }
+  mk_item(&it, 999, JK_FLOOR, JM_SITS);
+  CHECK_EQ(js_place(&J, &it, 50, 0), -1);   /* the 25th */
+  js_unplace(&J, 3);
+  CHECK_EQ(J.nplaced, JS_MAX_PLACED - 1);
+  CHECK_EQ(js_find(&J, 103), -1);
+  CHECK_EQ(js_find(&J, 104), 3);            /* the rest moved up */
+  CHECK(js_place(&J, &it, 50, 0) >= 0);
+  CHECK_EQ(js_place(&J, &it, 60, 0), -1);   /* the same item twice */
+  for (i = 0; i < JS_POOL; i++) used += J.pool_used[i];
+  CHECK_EQ(used, JS_MAX_PLACED - 1 + 2);
+  /* x is kept inside the glass; a hanging string has a length */
+  fresh(21);
+  mk_item(&it, 7, JK_HANGING, JM_SWAYS);
+  js_place(&J, &it, 400, 300);
+  CHECK_EQ(J.placed[0].home_x, JS_HANG_HI);   /* under the lid, not the shoulder */
+  CHECK_EQ(J.placed[0].home_y, 60);
+  js_move_to(&J, 0, 2, 10);
+  CHECK_EQ(J.placed[0].home_x, JS_HANG_LO);
+  CHECK_EQ(J.placed[0].home_y, 10);
+}
+
+void test_jarsim_pool_runs_out_gracefully(void) {
+  static JItem it;
+  int i;
+  fresh(23);
+  for (i = 0; i < 8; i++) {
+    mk_item(&it, 200 + (uint32_t)i, JK_FLOOR, JM_SITS);
+    it.nframes = 4;
+    CHECK_EQ(js_place(&J, &it, 30 + i * 10, 0), i);
+  }
+  mk_item(&it, 300, JK_FLOOR, JM_SITS);
+  it.nframes = 4;
+  CHECK_EQ(js_place(&J, &it, 150, 0), -1);  /* 32 frames, all taken */
+  js_unplace(&J, 0);                        /* four come back */
+  mk_item(&it, 301, JK_FLOOR, JM_SITS);
+  it.nframes = 2;
+  CHECK(js_place(&J, &it, 150, 0) >= 0);
+  mk_item(&it, 302, JK_FLOOR, JM_SITS);
+  it.nframes = 4;
+  i = js_place(&J, &it, 160, 0);
+  CHECK(i >= 0);
+  CHECK_EQ(J.placed[i].nframes, 2);         /* what was left: it shows those */
+}
+
+void test_jarsim_save_and_load(void) {
+  static JItem it;
+  static char buf[2048];
+  static Jar k;
+  int n;
+  fresh(25);
+  J.coins = 1234;
+  J.shipped = 5678;
+  J.seen = T0;
+  J.dock = 4;
+  J.sold = 0x5A;
+  J.coins += 0;
+  J.nbeds = 4; J.nmoss = 3; J.nmach = 3; J.belt = 2;
+  J.bed[2].grow = 12000;
+  js_own(&J, 1); js_own(&J, 2); js_own(&J, 77);
+  mk_item(&it, 77, JK_HANGING, JM_SWAYS);
+  js_place(&J, &it, 120, 33);
+  n = js_save(&J, buf, sizeof buf);
+  CHECK(n > 40 && n < (int)sizeof buf - 1);
+  memset(&k, 0, sizeof k);
+  js_init(&k, 1);
+  CHECK_EQ(js_load(&k, buf), 0);
+  CHECK_EQ(k.coins, 1234);
+  CHECK_EQ(k.shipped, 5678);
+  CHECK_EQ(k.seen, T0);
+  CHECK_EQ(k.dock, 4);
+  CHECK_EQ(k.sold, 0x5A);
+  CHECK_EQ(k.nbeds, 4); CHECK_EQ(k.nmoss, 3); CHECK_EQ(k.nmach, 3); CHECK_EQ(k.belt, 2);
+  CHECK_EQ(k.bed[2].grow, 12000);
+  CHECK_EQ(k.nowned, 3);
+  CHECK(js_owns(&k, 77));
+  CHECK_EQ(k.nwant, 1);
+  CHECK_EQ(k.want[0].id, 77);
+  CHECK_EQ(k.want[0].x, 120);
+  CHECK_EQ(k.want[0].y, 33);
+  CHECK_EQ(js_load(&k, "not a jar"), -1);
+}
+
+void test_jarsim_a_snail_load_in_flight_is_saved_as_on_the_dock(void) {
+  static char buf[2048];
+  static Jar k;
+  fresh(27);
+  J.dock = 1;
+  J.snail.load = 2;
+  J.snail.st = S_OUT;
+  js_save(&J, buf, sizeof buf);
+  memset(&k, 0, sizeof k);
+  js_init(&k, 1);
+  js_load(&k, buf);
+  CHECK_EQ(k.dock, 3);
+}
