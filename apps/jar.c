@@ -100,6 +100,10 @@ static struct {
   int32_t para_y;                       /* a parcel on its way down, 1/16 px; 0 none */
   int16_t para_x;
   int hearts;                           /* hearts still to rise from the dock */
+  /* zoom: 2x, every scene pixel drawn as 2x2 -- the art is pixel art */
+  int zoom;
+  int zx, zy;                           /* the view's top left, in scene pixels */
+  int follow;                           /* 0..moss-1 a mossling, JS_MAX_MOSS the snail, -1 free */
 } G;
 
 /* ---- small helpers ------------------------------------------------------- */
@@ -129,9 +133,10 @@ static int slen(const char *s) { return (int)api->str_len(s); }
 /* ---- drawing into the strip ---------------------------------------------- */
 
 static int SY0, SY1;                    /* the rows the strip holds */
+static uint16_t *SB = SCR.strip;        /* where row SY0 starts (zoom: the buffer's second half) */
 
 static void px(int x, int y, uint16_t c) {
-  if ((unsigned)x < SW && y >= SY0 && y < SY1) SCR.strip[(y - SY0) * SW + x] = c;
+  if ((unsigned)x < SW && y >= SY0 && y < SY1) SB[(y - SY0) * SW + x] = c;
 }
 
 static void fill(int x, int y, int w, int h, uint16_t c) {
@@ -141,7 +146,7 @@ static void fill(int x, int y, int w, int h, uint16_t c) {
   if (y < SY0) y = SY0;
   if (y1 > SY1) y1 = SY1;
   for (yy = y; yy < y1; yy++) {
-    uint16_t *r = SCR.strip + (yy - SY0) * SW;
+    uint16_t *r = SB + (yy - SY0) * SW;
     for (xx = x; xx < x1; xx++) r[xx] = c;
   }
 }
@@ -159,7 +164,7 @@ static void glow(int cx, int cy, int rr, int r, int g, int b, int a) {
   for (y = cy - rr; y <= cy + rr; y++) {
     uint16_t *row;
     if (y < SY0 || y >= SY1) continue;
-    row = SCR.strip + (y - SY0) * SW;
+    row = SB + (y - SY0) * SW;
     for (x = cx - rr; x <= cx + rr; x++) {
       int d = (x - cx) * (x - cx) + (y - cy) * (y - cy);
       if ((unsigned)x >= SW || d > rr * rr) continue;
@@ -272,7 +277,7 @@ static uint32_t hash2(int x, int y) {
 static void background(void) {
   int y, x;
   for (y = SY0; y < SY1; y++) {
-    uint16_t *row = SCR.strip + (y - SY0) * SW, c;
+    uint16_t *row = SB + (y - SY0) * SW, c;
     if (y < 9) {                                       /* the lid */
       c = y == 8 ? rgb(0x4a, 0x40, 0x30) : (y % 3 == 1) ? rgb(0xd8, 0xc0, 0x80) : rgb(0xa8, 0x90, 0x60);
       for (x = 0; x < SW; x++) row[x] = c;
@@ -545,7 +550,7 @@ static void hints(int y, const char *const *h) {
 /* The jar's seven keys, each a word with its key as a light cap inside it:
  * seven caps and seven words side by side do not fit in 240 pixels. */
 static void jar_keys(int y) {
-  static const char *const W[] = { "Shop", "Deco", "Plant", "sHelf", "Friends", "Mail", "Upgrade", 0 };
+  static const char *const W[] = { "Shop", "Deco", "Plant", "sHelf", "Friends", "Mail", "Up", "Zoom", 0 };
   int x = 3, i, k;
   char c[2];
   c[1] = 0;
@@ -645,6 +650,58 @@ static uint32_t strip_hash(int n) {
   return h;
 }
 
+/* Zoomed: the output strip's 8 rows are 4 scene rows, each drawn twice and
+ * each pixel twice across. The scene draws those 4 rows into the second half
+ * of the strip buffer, and they are spread over the whole of it from the top:
+ * output rows 2k and 2k+1 come from scene row k, so a scene row is always
+ * read before an output row lands on it -- except the last, which is why a
+ * row is copied out first. No second buffer: memory is the budget here. */
+static void render_zoomed(int k) {
+  uint16_t row[SW / 2];
+  int half = SH / 2, r, x, o0 = k * SH;
+  SY0 = G.zy + o0 / 2;
+  SY1 = SY0 + half;
+  SB = SCR.strip + half * SW;
+  scene();
+  SB = SCR.strip;
+  for (r = 0; r < half; r++) {
+    const uint16_t *src = SCR.strip + (half + r) * SW + G.zx;
+    uint16_t *a = SCR.strip + (2 * r) * SW, *b = a + SW;
+    for (x = 0; x < SW / 2; x++) row[x] = src[x];
+    for (x = 0; x < SW / 2; x++) { a[2 * x] = a[2 * x + 1] = row[x]; }
+    for (x = 0; x < SW; x++) b[x] = a[x];
+  }
+  SY0 = o0;
+  SY1 = o0 + SH > SHT ? SHT : o0 + SH;
+  /* on top, at full size: a banner (a parcel, a heart, away earnings) and
+   * the mark that this is the zoomed view */
+  note();
+  if (SY0 < 12) {
+    fill(SW - 19, 2, 17, 9, C_BG);
+    text(SW - 17, 3, "2x", C_GOLD);
+  }
+}
+
+/* Where the view wants to be: on whoever it follows, kept inside the jar. */
+static void zoom_aim(void) {
+  int tx, ty;
+  if (G.follow < 0) return;
+  if (G.follow < J.nmoss) { tx = (int)(J.moss[G.follow].x / JS_FX); ty = JS_SOIL - 20; }
+  else { tx = (int)(J.snail.x / JS_FX); ty = JS_SOIL - 20; }
+  tx -= SW / 4;
+  ty -= SHT / 4;
+  /* glide, two pixels a frame, rather than jump */
+  G.zx += tx > G.zx + 1 ? 2 : tx < G.zx - 1 ? -2 : 0;
+  G.zy += ty > G.zy + 1 ? 1 : ty < G.zy - 1 ? -1 : 0;
+}
+
+static void zoom_clamp(void) {
+  if (G.zx < 0) G.zx = 0;
+  if (G.zx > SW / 2) G.zx = SW / 2;
+  if (G.zy < 0) G.zy = 0;
+  if (G.zy > SHT - (SHT + 1) / 2) G.zy = SHT - (SHT + 1) / 2;
+}
+
 static void app_paint(void *st, CRect c) {
   int k, full = !G.asked || (G.frames % 30) == 0;
   (void)st;
@@ -654,7 +711,8 @@ static void app_paint(void *st, CRect c) {
     uint32_t h;
     SY0 = k * SH;
     SY1 = SY0 + SH > SHT ? SHT : SY0 + SH;
-    render();
+    if (G.zoom) render_zoomed(k);
+    else render();
     h = strip_hash((SY1 - SY0) * SW);
     if (!full && h == G.hash[k]) continue;
     G.hash[k] = h;
@@ -781,6 +839,22 @@ static int app_key(void *st, unsigned char k) {
   uint32_t now = api->ticks_ms();
   (void)st;
   G.menu_dirty = 1;
+  /* Zoomed: the view's keys. Z or Esc goes back; arrows pan (and stop
+   * following); Tab follows the next critter. */
+  if (G.zoom) {
+    G.last_key = now;
+    switch (k) {
+    case 'z': case 'Z': case CAPP_KEY_ESC: G.zoom = 0; return 1;
+    case CAPP_KEY_LEFT:  G.follow = -1; G.zx -= 12; zoom_clamp(); return 1;
+    case CAPP_KEY_RIGHT: G.follow = -1; G.zx += 12; zoom_clamp(); return 1;
+    case CAPP_KEY_UP:    G.follow = -1; G.zy -= 8; zoom_clamp(); return 1;
+    case CAPP_KEY_DOWN:  G.follow = -1; G.zy += 8; zoom_clamp(); return 1;
+    case '\t': G.follow = G.follow < 0 ? 0 : G.follow >= J.nmoss ? 0 : G.follow + 1;
+      if (G.follow == J.nmoss) G.follow = JS_MAX_MOSS;   /* after the mosslings, the snail */
+      return 1;
+    default: return 1;
+    }
+  }
   /* Bars hidden: a key brings them back and does nothing else. */
   if (G.view == V_JAR && G.bars > 0) { G.last_key = now; return 1; }
   G.last_key = now;
@@ -791,6 +865,11 @@ static int app_key(void *st, unsigned char k) {
   case 'p': case 'P': open_app("Jar Shop", "garden"); return 1;
   case 'h': case 'H': open_app("Jar Shop", "shelf"); return 1;
   case 'u': case 'U': open_app("Jar Shop", "up"); return 1;
+  case 'z': case 'Z':
+    G.zoom = 1;
+    zoom_aim();
+    zoom_clamp();
+    return 1;
   case 'f': case 'F': open_app("Jar Post", "friends"); return 1;
   case 'm': case 'M': open_app("Jar Post", "mail"); return 1;
   case CAPP_KEY_ENTER:
@@ -949,6 +1028,7 @@ static int app_tick(void *st, uint32_t now) {
     if (!J.seen && J.epoch) J.seen = J.epoch;     /* the clock arrived: count from now */
   }
   post_tick(now);
+  if (G.zoom) { zoom_aim(); zoom_clamp(); }
   /* The bars slide away on the jar after a while without a key. */
   want = G.view == V_JAR && now - G.last_key > BARS_IDLE_MS ? BAR : 0;
   if (G.bars != want && now - G.bar_ms >= 20) { G.bar_ms = now; G.bars += G.bars < want ? 1 : -1; }

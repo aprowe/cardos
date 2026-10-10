@@ -11,6 +11,19 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.11.2 -- 2026-10-10
+
+- **Jar Factory zoom:** Z shows the jar at exactly 2x -- every scene pixel
+  as 2x2, so the pixel art stays crisp. The view follows the first mossling
+  and glides with it; Tab follows the next critter (then the snail), arrows
+  pan freely, Z or Esc goes back. Banners still show; a "2x" mark sits in the
+  corner. No extra memory: the scene draws 4 rows into the second half of
+  the strip and they are doubled into the whole of it. A host test checks
+  the zoomed frame against the scene pixel for pixel. The hint bar's
+  "Upgrade" is "Up" now, to fit "Zoom".
+- The daily stock allows 900 s a round: on the droplet, at effort medium, 8
+  items took 391 s (all verified against /sign/pubkey, 4 with scripts).
+
 ## v0.11.1 -- 2026-10-09
 
 - The daily stock asks Claude at effort medium (`ask_shape`'s new default;

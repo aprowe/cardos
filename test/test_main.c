@@ -397,6 +397,8 @@ void test_jar_places_what_a_companion_asked_for(void);
 void test_jar_restart_brings_back_the_jar_and_pays_for_time_away(void);
 void test_jar_no_clock_still_runs(void);
 void test_jar_bars_slide_away_and_a_key_only_wakes_them(void);
+void test_jar_zoom_is_the_scene_at_exactly_2x(void);
+void test_jar_zoom_keys(void);
 void test_jar_a_gift_floats_down_and_a_thank_you_is_hearts(void);
 void test_jar_a_young_bed_in_the_scene(void);
 void test_jar_frames(void);
@@ -1348,6 +1350,8 @@ int main(void) {
   RUN(test_jar_restart_brings_back_the_jar_and_pays_for_time_away);
   RUN(test_jar_no_clock_still_runs);
   RUN(test_jar_bars_slide_away_and_a_key_only_wakes_them);
+  RUN(test_jar_zoom_is_the_scene_at_exactly_2x);
+  RUN(test_jar_zoom_keys);
   RUN(test_jar_a_gift_floats_down_and_a_thank_you_is_hearts);
   RUN(test_jar_a_young_bed_in_the_scene);
   RUN(test_jar_frames);

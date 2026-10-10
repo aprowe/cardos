@@ -281,6 +281,61 @@ void test_jar_bars_slide_away_and_a_key_only_wakes_them(void) {
   CHECK(strcmp(RAN, "Jar Shop") == 0);
 }
 
+/* 2x zoom: every scene pixel drawn as exactly 2x2 -- pixel for pixel the
+ * same picture, only bigger -- with the "2x" mark in the corner. */
+static uint16_t FB1[SHT][SW];
+void test_jar_zoom_is_the_scene_at_exactly_2x(void) {
+  int x, y, bad = 0;
+  start(T0);
+  ticks(11000);                           /* bars away: the frame is all scene */
+  CHECK_EQ(G.bars, BAR);
+  G.msg[0] = 0;
+  paint();
+  memcpy(FB1, FB, sizeof FB1);
+  G.zoom = 1;
+  G.follow = -1;
+  G.zx = 40;
+  G.zy = 30;
+  paint();                                /* the same moment, zoomed */
+  for (y = 12; y < SHT; y++)
+    for (x = 0; x < SW; x++)
+      if (FB[y][x] != FB1[30 + y / 2][40 + x / 2]) bad++;
+  CHECK_EQ(bad, 0);
+  for (y = 0; y < 12; y++)                /* and outside the mark, the top rows too */
+    for (x = 0; x < SW - 20; x++)
+      if (FB[y][x] != FB1[30 + y / 2][40 + x / 2]) bad++;
+  CHECK_EQ(bad, 0);
+  dump("20_zoom");
+}
+
+void test_jar_zoom_keys(void) {
+  start(T0);
+  ticks(100);
+  key('z');
+  CHECK_EQ(G.zoom, 1);
+  CHECK_EQ(G.follow, 0);                  /* on the first mossling */
+  ticks(3000);                            /* the view glides onto it */
+  dump("21_zoom_follow");
+  key('s');                               /* zoomed: not the shop */
+  CHECK_EQ(RAN[0], 0);
+  key(CAPP_KEY_LEFT);
+  CHECK_EQ(G.follow, -1);                 /* panning lets go of the critter */
+  {
+    int i;
+    for (i = 0; i < 40; i++) key(CAPP_KEY_RIGHT);
+    CHECK_EQ(G.zx, SW / 2);               /* and stays inside the jar */
+    for (i = 0; i < 40; i++) key(CAPP_KEY_DOWN);
+    CHECK_EQ(G.zy, SHT - (SHT + 1) / 2);
+  }
+  key('\t');
+  CHECK_EQ(G.follow, 0);
+  key(CAPP_KEY_ESC);
+  CHECK_EQ(G.zoom, 0);
+  ticks(400);
+  key('s');
+  CHECK(strcmp(RAN, "Jar Shop") == 0);
+}
+
 /* The server for the jar: two parcels waiting, the newest from Maya, and a
  * thank-you from Sam. */
 static int GIFTS = 2, THANKS = 1;
