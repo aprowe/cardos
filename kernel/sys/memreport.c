@@ -27,10 +27,11 @@ void mem_report(void (*out)(const char *line, void *ctx), void *ctx) {
   snprintf(b, sizeof b, "low water %6u",
            (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
   out(b, ctx);
-  /* The arena is always 28 KB out of the heap; say who has it, because
-   * "heap free" alone no longer says what an open app costs. */
-  snprintf(b, sizeof b, "arena     %6u  %s", (unsigned)ARENA_SIZE,
-           arena_held() ? arena_holder() : "free");
+  /* The arena is always 28 KB out of the heap; say who has it and how much
+   * of it they use, because "heap free" alone no longer says what an open
+   * app costs, and the use is what constants in flash and overlays shrink. */
+  snprintf(b, sizeof b, "arena %5u/%5u %.13s", (unsigned)arena_used(),
+           (unsigned)ARENA_SIZE, arena_held() ? arena_holder() : "free");
   out(b, ctx);
   if (xipflash_ready()) {
     uint32_t live, total;

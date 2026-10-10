@@ -52,6 +52,7 @@ void test_arena_refuses_too_big_or_overaligned(void);
 void test_arena_release_by_a_stranger_is_ignored(void);
 void test_arena_claim_is_zeroed(void);
 void test_arena_code_goes_to_flash_only_when_allowed(void);
+void test_arena_used_is_what_the_holder_claimed(void);
 void test_the_three_operand_templates_match_the_assembler(void);
 void test_the_immediate_templates_match_the_assembler(void);
 void test_the_memory_templates_match_the_assembler(void);
@@ -1031,6 +1032,7 @@ int main(void) {
   RUN(test_arena_release_by_a_stranger_is_ignored);
   RUN(test_arena_claim_is_zeroed);
   RUN(test_arena_code_goes_to_flash_only_when_allowed);
+  RUN(test_arena_used_is_what_the_holder_claimed);
   printf("-- asm --\n");
   RUN(test_the_three_operand_templates_match_the_assembler);
   RUN(test_the_immediate_templates_match_the_assembler);

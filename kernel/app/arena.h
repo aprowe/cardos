@@ -23,6 +23,7 @@ void       *arena_claim(uint32_t size, uint32_t align, const char *who);
 void        arena_release(const void *p);
 int         arena_held(void);
 const char *arena_holder(void);     /* "" when free */
+uint32_t    arena_used(void);       /* what the holder claimed; 0 when free */
 uintptr_t   arena_addr(void);
 int         arena_owns(const void *p);
 

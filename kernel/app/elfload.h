@@ -28,7 +28,7 @@
 
 typedef struct {
   void           *code;      /* instruction address: executable RAM or the flash cache */
-  void           *data;      /* the arena or the heap: rodata, data and bss */
+  void           *data;      /* the arena or the heap: .data, then the overlay region; constants too when they are in RAM */
   uint32_t        code_size;
   uint32_t        data_size;
   uint32_t        code_cap;  /* the block's size, which a spare may exceed */
@@ -38,6 +38,15 @@ typedef struct {
    * or on the heap. See docs/superpowers/specs/2026-10-09-xip-app-code-design.md. */
   int32_t         xip_off;
   uint8_t         data_in_arena;
+
+  /* The constants (.rodata, linked at CAPP_RODATA_ORIGIN): in the flash
+   * cache's data view beside the code when the code is there; otherwise in
+   * RAM, after the data block, or in a block of their own (rodata_heap)
+   * when the cache failed after the arena was claimed for the flash path.
+   * See docs/superpowers/specs/2026-10-10-app-constants-in-flash-design.md. */
+  void           *rodata;
+  uint32_t        rodata_size;
+  void           *rodata_heap;     /* freed by capp_unload; NULL when none */
 
   /* Read from the image without running it -- name, icon and flags are needed
    * to draw an icon, and executing a program to find out what it is called is
@@ -71,7 +80,9 @@ CappResult capp_load(const char *path, LoadedApp *out);
 CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground);
 
 /* Only what capp_info says -- name, icon, flags, commands -- for the icon
- * scan: the data, relocated, and no code at all. out->main is not valid and
+ * scan: the data and the constants, relocated, and no code at all. The
+ * constants come too because capp_info's help and command tables are
+ * constants. out->main is not valid and
  * nothing in the image may be called; capp_unload gives it back. The data
  * borrows the arena when it is free, the heap otherwise. Loading the code
  * as well put every app's code in executable RAM once per scan, which the

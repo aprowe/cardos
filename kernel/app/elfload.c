@@ -198,24 +198,52 @@ static CappResult find_symbols(int fd, const Elf32_Ehdr *eh, const Elf32_Shdr *s
 static void (*s_on_prepare)(const char *path);
 void capp_on_prepare(void (*fn)(const char *path)) { s_on_prepare = fn; }
 
-/* The code into the flash cache: this file's entry if there is one, else
- * relocated a window at a time through `scratch` -- the arena, which holds
- * nothing yet; this is a launch that is only now claiming it -- and written
- * as a new entry. The whole point is that the code may not fit in one piece
- * of RAM, so it is never asked to. On success the entry is referenced, and
- * capp_unload (or the load's own failure path) lets it go.
+/* One section into the begun entry at body offset `at`, a window of the
+ * arena at a time: read, relocate the window, fold it into the CRC, write.
+ * The code and the constants are written the same way, which is the point
+ * of capprel being windowed. */
+static CappResult write_part(int fd, const Elf32_Shdr *sh, int shnum, int sec, uint32_t origin,
+                             uint32_t size, uint32_t at, uint8_t *scratch,
+                             const CappBases *b, uint32_t *crc) {
+  XipCache *c = xipflash_cache();
+  uint32_t done, n;
+  CappResult rc;
+  for (done = 0; done < size; done += n) {
+    n = size - done < ARENA_SIZE ? size - done : ARENA_SIZE;
+    if (read_at(fd, sh[sec].sh_offset + done, scratch, n) != 0) return CAPP_ERR_NOT_ELF;
+    rc = relocate(fd, sh, shnum, sec, origin, scratch, done, n, size, b);
+    if (rc != CAPP_OK) return rc;
+    *crc = xip_crc32(*crc, scratch, n);
+    if (xip_write(c, at + done, scratch, n) != XIP_OK) return CAPP_ERR_NO_MEMORY;
+  }
+  return CAPP_OK;
+}
+
+/* Where an entry's code and constants are, through the two views. */
+static void xip_bases(uint32_t off, uint32_t code_size, uint32_t ro_size, CappBases *b) {
+  b->code = xipflash_base() + off + XIP_HDR;
+  b->rodata = ro_size ? xipflash_drom_base() + off + XIP_HDR + xip_ro_at(code_size) : 0;
+}
+
+/* The code and the constants into the flash cache: this file's entry if
+ * there is one, else relocated a window at a time through `scratch` -- the
+ * arena, which holds nothing yet; this is a launch that is only now
+ * claiming it -- and written as a new entry, the constants 16-aligned after
+ * the code. The whole point is that neither may fit in one piece of RAM, so
+ * neither is asked to. On success the entry is referenced, and capp_unload
+ * (or the load's own failure path) lets it go; b->code and b->rodata say
+ * where they are.
  *
  * One lock span from the lookup to the reference: a forget from another
  * task must not program a word into the sectors this is writing, nor kill
  * or let the ring erase the entry between finding it and holding it. */
 static CappResult xip_place(int fd, const char *path, const Elf32_Shdr *sh, int shnum,
-                            int code_sec, uint32_t code_size, uint8_t *scratch,
-                            uint32_t data_base, uint32_t *off_out) {
+                            int code_sec, uint32_t code_size, int ro_sec, uint32_t ro_size,
+                            uint8_t *scratch, CappBases *b, uint32_t *off_out) {
   XipCache *c = xipflash_cache();
   FsStat st;
   XipKey k;
-  uint32_t off, at, n, crc = 0, code_base;
-  CappBases b;
+  uint32_t off, crc = 0;
   CappResult rc;
 
   if (!c || fs_stat(path, &st) != 0) return CAPP_ERR_OPEN;
@@ -226,26 +254,24 @@ static CappResult xip_place(int fd, const char *path, const Elf32_Shdr *sh, int 
   k.api = CAPP_API_VERSION;
   k.code_size = code_size;
   k.map_base = xipflash_base();
-  k.arena = data_base;
+  k.arena = b->data;
+  k.rodata_size = ro_size;
+  k.drom_base = ro_size ? xipflash_drom_base() : 0;
   xipflash_lock();
   if (xip_find(c, &k, &off) == XIP_OK) goto found;
 
   if (s_on_prepare) s_on_prepare(path);
-  if (xip_begin(c, code_size, &off) != XIP_OK) {
+  if (xip_begin(c, xip_body(code_size, ro_size), &off) != XIP_OK) {
     xipflash_unlock();
     applogf("xip", "%s: no room in appcode, code to RAM", path);
     return CAPP_ERR_NO_MEMORY;
   }
-  code_base = xipflash_base() + off + XIP_HDR;
-  b.code = code_base; b.data = data_base; b.rodata = 0;
-  for (at = 0; at < code_size; at += n) {
-    n = code_size - at < ARENA_SIZE ? code_size - at : ARENA_SIZE;
-    if (read_at(fd, sh[code_sec].sh_offset + at, scratch, n) != 0) { rc = CAPP_ERR_NOT_ELF; goto fail; }
-    rc = relocate(fd, sh, shnum, code_sec, 0, scratch, at, n, code_size, &b);
-    if (rc != CAPP_OK) goto fail;
-    crc = xip_crc32(crc, scratch, n);
-    if (xip_write(c, at, scratch, n) != XIP_OK) { rc = CAPP_ERR_NO_MEMORY; goto fail; }
-  }
+  xip_bases(off, code_size, ro_size, b);
+  rc = write_part(fd, sh, shnum, code_sec, 0, code_size, 0, scratch, b, &crc);
+  if (rc == CAPP_OK && ro_size)
+    rc = write_part(fd, sh, shnum, ro_sec, CAPP_RODATA_ORIGIN, ro_size, xip_ro_at(code_size),
+                    scratch, b, &crc);
+  if (rc != CAPP_OK) goto fail;
   /* Abandoned on failure too: a commit that fails leaves the write pending,
    * and the ring refuses every later begin until it is let go. */
   if (xip_commit(c, &k, crc, path) != XIP_OK) { rc = CAPP_ERR_NO_MEMORY; goto fail; }
@@ -255,10 +281,11 @@ static CappResult xip_place(int fd, const char *path, const Elf32_Shdr *sh, int 
   if (xip_verify(c, off) != XIP_OK) {
     xip_kill(c, off);
     xipflash_unlock();
-    applogf("xip", "%s: code at %u did not read back, code to RAM", path, (unsigned)off);
+    applogf("xip", "%s: entry at %u did not read back, code to RAM", path, (unsigned)off);
     return CAPP_ERR_NO_MEMORY;
   }
-  applogf("xip", "%s: %u bytes of code to flash at %u", path, (unsigned)code_size, (unsigned)off);
+  applogf("xip", "%s: %u code + %u constants to flash at %u", path, (unsigned)code_size,
+          (unsigned)ro_size, (unsigned)off);
 found:
   if (xip_ref(c, off) != XIP_OK) {
     xipflash_unlock();
@@ -266,6 +293,7 @@ found:
     return CAPP_ERR_NO_MEMORY;
   }
   xipflash_unlock();
+  xip_bases(off, code_size, ro_size, b);
   *off_out = off;
   return CAPP_OK;
 fail:
@@ -288,16 +316,19 @@ static void xip_release(uint32_t off) {
 CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
   Elf32_Ehdr eh;
   Elf32_Shdr *sh = NULL;
-  uint8_t *code = NULL, *code_w = NULL, *data = NULL;
-  uint32_t code_size = 0, data_size = 0, code_cap = 0;
-  uint32_t main_off = 0, info_off = 0, xip_off = 0, code_base, data_base;
+  uint8_t *code = NULL, *code_w = NULL, *data = NULL, *ro = NULL, *ro_heap = NULL;
+  uint32_t code_size = 0, data_size = 0, prog_size = 0, ro_size = 0, code_cap = 0;
+  uint32_t ro_at, ram_size, claim;
+  uint32_t main_off = 0, info_off = 0, xip_off = 0;
+  CappBases b;
   uint16_t head[2];
-  int code_sec = -1, data_sec = -1;
-  int in_arena = 0, in_flash = 0;
+  int code_sec = -1, data_sec = -1, ro_sec = -1;
+  int in_arena = 0, in_flash = 0, try_flash;
   int fd, i, fsize;
   CappResult rc = CAPP_ERR_OPEN;
 
   memset(out, 0, sizeof *out);
+  memset(&b, 0, sizeof b);
   out->xip_off = -1;
 
   fd = fs_open(path, FS_O_READ);
@@ -325,27 +356,44 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
     goto done;
   }
 
-  /* Classify the allocatable sections by where they were linked rather than by
-   * name: the link address is what the relocations are expressed in. */
+  /* Classify the allocatable sections by where they were linked rather than
+   * by name: the link address is what the relocations are expressed in.
+   * Code below CAPP_DATA_ORIGIN. The data block from CAPP_DATA_ORIGIN to the
+   * end of the last section below CAPP_RODATA_ORIGIN: .data first, read from
+   * the file, and anything after it -- the overlay region -- zeroed. The
+   * constants from CAPP_RODATA_ORIGIN. Sizes are bounded before they are
+   * added, since a header can say anything. */
   for (i = 0; i < eh.e_shnum; i++) {
+    uint32_t a = sh[i].sh_addr;
     if (!(sh[i].sh_flags & SHF_ALLOC)) continue;
     if (sh[i].sh_type != SHT_PROGBITS && sh[i].sh_type != SHT_NOBITS) continue;
     if (sh[i].sh_size == 0) continue;
-    if (sh[i].sh_addr >= CAPP_DATA_ORIGIN) {
-      if (data_sec < 0) { data_sec = i; data_size = sh[i].sh_size; }
-    } else {
-      if (code_sec < 0) { code_sec = i; code_size = sh[i].sh_size; }
+    if (sh[i].sh_size > CAPP_MAX_CODE) { rc = CAPP_ERR_TOO_BIG; goto done; }
+    if (a >= CAPP_RODATA_ORIGIN) {
+      if (ro_sec < 0 && a == CAPP_RODATA_ORIGIN && sh[i].sh_type == SHT_PROGBITS) {
+        ro_sec = i;
+        ro_size = sh[i].sh_size;
+      }
+    } else if (a >= CAPP_DATA_ORIGIN) {
+      if (a - CAPP_DATA_ORIGIN > CAPP_MAX_DATA) { rc = CAPP_ERR_TOO_BIG; goto done; }
+      if (a - CAPP_DATA_ORIGIN + sh[i].sh_size > data_size)
+        data_size = a - CAPP_DATA_ORIGIN + sh[i].sh_size;
+      if (data_sec < 0 && a == CAPP_DATA_ORIGIN) { data_sec = i; prog_size = sh[i].sh_size; }
+    } else if (code_sec < 0) {
+      code_sec = i;
+      code_size = sh[i].sh_size;
     }
   }
   if (code_sec < 0) { rc = CAPP_ERR_NO_IMAGE; goto done; }
   if (fsize > 0 &&
       ((uint32_t)fsize < sh[code_sec].sh_offset + code_size ||
        (data_sec >= 0 && sh[data_sec].sh_type == SHT_PROGBITS &&
-        (uint32_t)fsize < sh[data_sec].sh_offset + data_size))) {
+        (uint32_t)fsize < sh[data_sec].sh_offset + prog_size) ||
+       (ro_sec >= 0 && (uint32_t)fsize < sh[ro_sec].sh_offset + ro_size))) {
     rc = CAPP_ERR_TRUNCATED;
     goto done;
   }
-  if (code_size > CAPP_MAX_CODE || data_size > CAPP_MAX_DATA) {
+  if (code_size > CAPP_MAX_CODE || data_size > CAPP_MAX_DATA || ro_size > CAPP_MAX_DATA) {
     rc = CAPP_ERR_TOO_BIG;
     goto done;
   }
@@ -355,7 +403,7 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
   if (rc != CAPP_OK) goto done;
   if (main_off >= code_size || data_sec < 0 || sh[data_sec].sh_type != SHT_PROGBITS ||
       info_off < CAPP_DATA_ORIGIN ||
-      info_off - CAPP_DATA_ORIGIN + sizeof(CappInfo) > data_size) {
+      info_off - CAPP_DATA_ORIGIN + sizeof(CappInfo) > prog_size) {
     rc = CAPP_ERR_NO_ENTRY;
     goto done;
   }
@@ -368,55 +416,85 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
   }
   if (head[0] != CAPP_API_VERSION) { rc = CAPP_ERR_API; goto done; }
 
-  /* Data: the arena for the app being started on screen, when it is free
-   * and the data fits; the heap otherwise, as before. */
+  /* Where the constants go when they are not in flash: after the data
+   * block, 16-aligned, in the same allocation. */
+  ro_at = (data_size + 15u) & ~15u;
+  ram_size = ro_sec >= 0 ? ro_at + ro_size : data_size;
+
+  /* The flash path, if it can be had: the app being started on screen, the
+   * cache there, the app not asking for RAM code, alignments an entry can
+   * keep. Then the constants go to flash with the code, and the arena holds
+   * only the data block -- which is what this is all for. */
+  try_flash = foreground == 1 && arena_code_in_flash(1, xipflash_ready(), head[1]) &&
+              sh[code_sec].sh_addralign <= XIP_HDR &&
+              (ro_sec < 0 || sh[ro_sec].sh_addralign <= 16);
+  claim = try_flash ? data_size : ram_size;
+
+  /* Data: the arena for the app being started on screen (and, inside this
+   * call only, the icon scan), when it is free and the claim fits; the heap
+   * otherwise, as before. */
   s_short_want = s_short_largest = 0;
   {
     const char *base = strrchr(path, '/');
-    /* The scan (LOAD_INFO) holds the arena only inside this call, so it
-     * never keeps it from an app; if one has it, the data goes on the heap. */
     if (foreground &&
-        (data = arena_claim(data_size, sh[data_sec].sh_addralign, base ? base + 1 : path)) != NULL)
+        (data = arena_claim(claim, sh[data_sec].sh_addralign, base ? base + 1 : path)) != NULL)
       in_arena = 1;
   }
   if (!in_arena) {
-    data = heap_caps_malloc(data_size, MALLOC_CAP_8BIT);
+    /* Cached code is relocated for one data address, and only the arena
+     * keeps one: off the arena there is no flash path. */
+    try_flash = 0;
+    claim = ram_size;
+    data = heap_caps_malloc(claim, MALLOC_CAP_8BIT);
     if (!data) {
       /* The block that fails after hours of use: one piece of the 8-bit
        * heap, while the total says there is plenty. Said where it can be
        * read later, because nothing else records it. */
-      s_short_want = data_size;
+      s_short_want = claim;
       s_short_largest = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
       ESP_LOGE(TAG, "want %u bytes of data, largest block %u",
-               (unsigned)data_size, (unsigned)s_short_largest);
-      applogf("load", "%s: data wants %u, free %u, largest %u", path,
-              (unsigned)data_size,
-              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-              (unsigned)s_short_largest);
+               (unsigned)claim, (unsigned)s_short_largest);
+      applogf("load", "%s: data wants %u, free %u, largest %u", path, (unsigned)claim,
+              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)s_short_largest);
       rc = CAPP_ERR_NO_MEMORY;
       goto done;
     }
   }
-  data_base = (uint32_t)(uintptr_t)data;
+  b.data = (uint32_t)(uintptr_t)data;
 
   /* The descriptor only: no code, and the data's pointers into it aimed at
-   * nowhere in particular, since none of them is followed. */
+   * nowhere in particular, since none of them is followed. The constants
+   * do come, after the block: capp_info's help and commands are constants. */
   if (foreground == LOAD_INFO) {
-    code_base = 0;
+    if (ro_sec >= 0) ro = data + ro_at;
+    b.rodata = (uint32_t)(uintptr_t)ro;
     goto data;
   }
 
-  /* Code: from the flash cache when the data is in the arena -- cached code
-   * is relocated for one data address, and only the arena keeps one -- and
-   * otherwise, or when the cache cannot, in executable RAM as before. RAM
-   * code relocated against the arena is as good as any, so a cache failure
-   * leaves the data where it is. */
-  if (arena_code_in_flash(in_arena, xipflash_ready(), head[1]) &&
-      sh[code_sec].sh_addralign <= XIP_HDR &&
-      xip_place(fd, path, sh, eh.e_shnum, code_sec, code_size, data, data_base, &xip_off) == CAPP_OK) {
+  if (try_flash &&
+      xip_place(fd, path, sh, eh.e_shnum, code_sec, code_size, ro_sec, ro_size, data, &b,
+                &xip_off) == CAPP_OK) {
     in_flash = 1;
-    code = (uint8_t *)(uintptr_t)(xipflash_base() + xip_off + XIP_HDR);
+    code = (uint8_t *)(uintptr_t)b.code;
+    ro = ro_sec >= 0 ? (uint8_t *)(uintptr_t)b.rodata : NULL;
   } else {
+    /* The constants in RAM: after the block when it was allocated with room
+     * for them, or a block of their own when the arena was claimed at the
+     * block's size for a flash path that then failed. RAM code relocated
+     * against the arena is as good as any, so the data stays put. */
+    if (ro_sec >= 0) {
+      if (claim >= ram_size) {
+        ro = data + ro_at;
+      } else if ((ro = ro_heap = heap_caps_malloc(ro_size, MALLOC_CAP_8BIT)) == NULL) {
+        s_short_want = ro_size;
+        s_short_largest = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        applogf("load", "%s: constants want %u, largest %u", path, (unsigned)ro_size,
+                (unsigned)s_short_largest);
+        rc = CAPP_ERR_NO_MEMORY;
+        goto done;
+      }
+    }
+    b.rodata = (uint32_t)(uintptr_t)ro;
     code = code_alloc(code_size, &code_cap);
     if (!code) {
       s_short_want = code_size;
@@ -433,26 +511,26 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
      * instruction window permits. */
     code_w = writable(code);
     if (read_at(fd, sh[code_sec].sh_offset, code_w, code_size) != 0) { rc = CAPP_ERR_NOT_ELF; goto done; }
-    {
-      CappBases b;
-      b.code = (uint32_t)(uintptr_t)code; b.data = data_base; b.rodata = 0;
-      rc = relocate(fd, sh, eh.e_shnum, code_sec, 0, code_w, 0, code_size, code_size, &b);
-    }
+    b.code = (uint32_t)(uintptr_t)code;
+    rc = relocate(fd, sh, eh.e_shnum, code_sec, 0, code_w, 0, code_size, code_size, &b);
     if (rc != CAPP_OK) goto done;
   }
-  code_base = (uint32_t)(uintptr_t)code;
 
 data:
-  /* Data last. The arena may hold scratch code from a first launch, so it
-   * is cleared first. */
+  /* Data last. The arena may hold scratch from a first launch, so the block
+   * is cleared first; what is past .data -- the overlay region -- stays
+   * zeros. */
   memset(data, 0, data_size);
-  if (read_at(fd, sh[data_sec].sh_offset, data, data_size) != 0) { rc = CAPP_ERR_NOT_ELF; goto done; }
-  {
-    CappBases b;
-    b.code = code_base; b.data = data_base; b.rodata = 0;
-    rc = relocate(fd, sh, eh.e_shnum, data_sec, CAPP_DATA_ORIGIN, data, 0, data_size, data_size, &b);
-  }
+  if (read_at(fd, sh[data_sec].sh_offset, data, prog_size) != 0) { rc = CAPP_ERR_NOT_ELF; goto done; }
+  rc = relocate(fd, sh, eh.e_shnum, data_sec, CAPP_DATA_ORIGIN, data, 0, prog_size, prog_size, &b);
   if (rc != CAPP_OK) goto done;
+  /* The constants, when they are in RAM, read and relocated like the data.
+   * In flash they were written relocated. */
+  if (ro_sec >= 0 && !in_flash) {
+    if (read_at(fd, sh[ro_sec].sh_offset, ro, ro_size) != 0) { rc = CAPP_ERR_NOT_ELF; goto done; }
+    rc = relocate(fd, sh, eh.e_shnum, ro_sec, CAPP_RODATA_ORIGIN, ro, 0, ro_size, ro_size, &b);
+    if (rc != CAPP_OK) goto done;
+  }
 
   out->info = (const CappInfo *)(data + (info_off - CAPP_DATA_ORIGIN));
   out->main = code ? (int (*)(const CardApi *, int, char **))(code + main_off) : NULL;
@@ -461,6 +539,9 @@ data:
   out->code_size = code_size;
   out->code_cap = code_cap;
   out->data_size = data_size;
+  out->rodata = ro;
+  out->rodata_size = ro_size;
+  out->rodata_heap = ro_heap;
   out->xip_off = in_flash ? (int32_t)xip_off : -1;
   out->data_in_arena = (uint8_t)in_arena;
   rc = CAPP_OK;
@@ -469,18 +550,21 @@ done:
   fs_close(fd);
   free(sh);
   /* A failure gives back exactly what it took: the cache entry's reference
-   * or the code block, the arena or the heap block. */
+   * or the code block, the constants' own block, the arena or the heap
+   * block. */
   if (rc != CAPP_OK) {
     if (in_flash) xip_release(xip_off);
     else code_free(code, code_cap);
+    if (ro_heap) heap_caps_free(ro_heap);
     if (in_arena) arena_release(data);
     else if (data) heap_caps_free(data);
   }
   if (rc == CAPP_OK)
-    ESP_LOGI(TAG, "loaded %s (%s): %u code (%s), %u data (%s), exec free %u",
+    ESP_LOGI(TAG, "loaded %s (%s): %u code (%s), %u data (%s), %u constants (%s), exec free %u",
              path, out->info->name, (unsigned)out->code_size,
              in_flash ? "flash" : code ? "RAM" : "not loaded",
              (unsigned)out->data_size, in_arena ? "arena" : "heap",
+             (unsigned)ro_size, !ro_size ? "none" : in_flash ? "flash" : ro_heap ? "own block" : "RAM",
              (unsigned)capp_exec_free());
   else
     ESP_LOGW(TAG, "load %s failed: %s", path, capp_strerror(rc));
@@ -494,12 +578,15 @@ CappResult capp_load_info(const char *path, LoadedApp *out) {
 }
 
 /* What capp_load_ex took, given back: a reference on the cache entry (the
- * entry itself stays, for the next launch) or the code block, and the arena
- * or the heap block. */
+ * entry itself stays, for the next launch) or the code block, the
+ * constants' own block if they have one, and the arena or the heap block.
+ * Constants after the block go with the block; constants in flash go with
+ * the entry's reference. */
 void capp_unload(LoadedApp *la) {
   if (!la) return;
   if (la->xip_off >= 0) xip_release((uint32_t)la->xip_off);
   else code_free(la->code, la->code_cap);
+  if (la->rodata_heap) heap_caps_free(la->rodata_heap);
   if (la->data_in_arena) arena_release(la->data);
   else if (la->data) heap_caps_free(la->data);
   memset(la, 0, sizeof *la);

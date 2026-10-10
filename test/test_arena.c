@@ -70,3 +70,18 @@ void test_arena_code_goes_to_flash_only_when_allowed(void) {
   CHECK_EQ(arena_code_in_flash(1, 0, 0), 0);   /* an OTA'd device: old table */
   CHECK_EQ(arena_code_in_flash(0, 1, 0), 0);   /* data on the heap */
 }
+
+/* `mem` says how much of the arena the app on screen uses: the arena is
+ * always 28 KB out of the heap, so the use is the only number that moves
+ * when constants go to flash. */
+void test_arena_used_is_what_the_holder_claimed(void) {
+  void *a;
+  CHECK_EQ(arena_used(), 0);
+  a = arena_claim(15668, 4, "jar.capp");
+  CHECK(a != NULL);
+  CHECK_EQ(arena_used(), 15668);
+  CHECK(arena_claim(100, 4, "todo.capp") == NULL);
+  CHECK_EQ(arena_used(), 15668);
+  arena_release(a);
+  CHECK_EQ(arena_used(), 0);
+}

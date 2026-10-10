@@ -67,8 +67,15 @@ static void api_text(int16_t x, int16_t y, const char *s, uint16_t fg, uint16_t 
 }
 
 /* Raw blit, clipped like everything else -- a program must not be able to draw
- * over another window's chrome. */
+ * over another window's chrome.
+ *
+ * A row from the app's constants is in flash now (an icon or sprite table in
+ * .rodata), and the panel's SPI DMA cannot read flash: left to the driver,
+ * every row would allocate a bounce buffer of its own. So such a row is
+ * copied into one RAM row first. display_blit is synchronous and apps run on
+ * the shell's task only, so one static row is enough. */
 static void api_pixels(CRect r, const uint16_t *px) {
+  static uint16_t bounce[DISPLAY_W];
   Rect want = to_rect(r);
   Rect vis = rect_intersect(want, draw_clip());
   int16_t y;
@@ -76,6 +83,10 @@ static void api_pixels(CRect r, const uint16_t *px) {
   for (y = vis.y; y < vis.y + vis.h; y++) {
     const uint16_t *row = px + (size_t)(y - want.y) * (size_t)want.w
                              + (size_t)(vis.x - want.x);
+    if (!esp_ptr_internal(row) && vis.w <= DISPLAY_W) {
+      memcpy(bounce, row, (size_t)vis.w * sizeof *row);
+      row = bounce;
+    }
     display_blit(vis.x, y, vis.w, 1, row);
   }
 }
