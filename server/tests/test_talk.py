@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 from http.server import ThreadingHTTPServer
-from server import app, dash, talk
+from server import app, dash, msg, talk
 from server import chat as chatmod
 
 TOKEN = "tok"
@@ -94,6 +94,38 @@ class Talk(unittest.TestCase):
         self.assertEqual(self.say(sid.strip(), "a bad song please"), "reply rev\nChanged.\n")
         self.assertIn("line 2", self.calls[1][0])
         self.assertEqual(self.req("GET", "/talk/doc?s=" + sid.strip())[1], "tempo 90\nn 0 C4 1\n")
+
+    def notes(self):
+        return msg.notes_since(None, 0)[0]
+
+    def test_a_reply_notifies_the_claude_app(self):
+        before = len(self.notes())
+        s, sid = self.req("POST", "/talk/start?name=cats.md", b"Cats.\n")
+        self.say(sid.strip(), "what is this about?")
+        n = self.notes()[before:]
+        self.assertEqual([(x["app"], x["title"], x["text"]) for x in n],
+                         [("Claude", "replied", "It is about cats.")])
+        self.say(sid.strip(), "make it shorter")
+        n = self.notes()[before + 1:]
+        self.assertEqual([(x["app"], x["title"]) for x in n], [("Claude", "revised cats.md")])
+
+    def test_an_error_notifies(self):
+        def boom(chat, prompt, sid):
+            raise RuntimeError("claude is away")
+        talk._claude = boom
+        before = len(self.notes())
+        s, sid = self.req("POST", "/talk/start?name=a.md", b"x\n")
+        self.say(sid.strip(), "hello")
+        n = self.notes()[before:]
+        self.assertEqual([(x["app"], x["title"], x["text"]) for x in n],
+                         [("Claude", "error", "claude is away")])
+
+    def test_it_goes_to_the_user_who_started_it(self):
+        s = talk.Session("a.md", "text", "x", user="ann")
+        s.answer = "Done."
+        talk._notify(s, "reply")
+        self.assertEqual([x["text"] for x in msg.notes_since("ann", 0)[0]], ["Done."])
+        self.assertEqual(msg.notes_since("bob", 0)[0], [])
 
     def test_an_unknown_conversation_is_over(self):
         self.assertEqual(self.req("GET", "/talk/poll?s=nope")[0], 404)

@@ -116,7 +116,8 @@ def get_notify_poll(h, path, args):
     """what a device should tell its owner about, while Chat is closed:
     ?chat=ID&me=NAME -> "ok LAST" and up to three newer messages from others
     &note=ID         -> "ok LAST NOTELAST", and the server's own news after
-                        ID: "note <tab> app <tab> title <tab> text" (a Build done)
+                        ID: "note <tab> app <tab> title <tab> text"
+                        (a Build done, a Claude reply, an update to install)
 
     The device (kernel/sys/notify.c) asks every half minute. With no chat id
     -- a device that has never asked -- it is only told where the room is,
