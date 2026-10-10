@@ -421,4 +421,20 @@ static const JBuiltin BUILTINS[JB_COUNT] = {
     "Glow Jelly\0Drifts near the lid at night.\0glowing,spooky\0Alex\0blub", JIF_12 },
 };
 
+#define JB_NSTART 4
+static const JBuiltin JB_STARTERS[JB_NSTART] = {
+  { 1, 0, 0, 1, 0, 0, 0, 2, 0, { { 2, 1, 9, 1 }, { 1, 0, 9, 0 }, { 0, 0, 0, 0 } },
+    { 0x0000, 0x2902, 0x8AC6, 0xB3E9, 0x6D69, 0xAECE, 0x3BC5, 0x0000 },
+    "Moss Bench\0A twig bench with a moss seat.\0cosy,soft\0Alex", JIF_1 },
+  { 2, 0, 1, 2, 3, 0, 4, 3, 0, { { 6, 4, 8, 1 }, { 6, 1, 8, 0 }, { 1, 0, 8, 2 } },
+    { 0x0000, 0x2906, 0x5ACD, 0x9D16, 0xFE8C, 0xFFB8, 0xECC7, 0x0000 },
+    "Tiny Lantern\0Hangs from the lid. Lit at dark.\0glowing,cosy\0Alex", JIF_2 },
+  { 3, 0, 2, 2, 2, 1, 0, 2, 2, { { 2, 1, 10, 0 }, { 1, 0, 9, 1 }, { 0, 0, 0, 0 } },
+    { 0x0000, 0x18A3, 0xD1C7, 0xFB4B, 0xF77B, 0x1085, 0x0000, 0x0000 },
+    "Ladybug\0Seven spots, one opinion.\0round,sweet\0Alex\0hello!\0dots!", JIF_3 },
+  { 4, 0, 0, 2, 3, 0, 0, 2, 0, { { 1, 0, 9, 0 }, { 2, 3, 9, 0 }, { 0, 0, 0, 0 } },
+    { 0x0000, 0x4CC7, 0x2B45, 0xF77B, 0xCE3B, 0xFE8C, 0x0000, 0x0000 },
+    "Dandelion\0Make a wish. Not too hard.\0soft,sleepy\0Alex", JIF_4 },
+};
+
 #endif /* CARDOS_JAR_ART_H */
