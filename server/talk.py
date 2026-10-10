@@ -25,7 +25,7 @@ import secrets
 import sys
 import threading
 
-from . import jobs, midi
+from . import accounts, jobs, midi
 
 DOC_MAX = 24000
 SAY_MAX = 2000
@@ -55,7 +55,8 @@ _FENCE = re.compile(r"```doc[^\n]*\n(.*?)```", re.S)
 
 
 class Session:
-    def __init__(self, name, kind, doc):
+    def __init__(self, name, kind, doc, user=None):
+        self.user = user              # whose devices hear the reply (the starter)
         self.name = name
         self.kind = kind
         self.doc = doc
@@ -111,11 +112,32 @@ def _run(chat, s, said):
             s.rev_new = rev is not None
             s.answer = words or ("(revised)" if rev else "(no answer)")
             s.state = "reply"
+            state = "reply"
     except Exception as e:                         # Claude (ClaudeError), mostly
         with _lock:
             s.answer = str(e)
             s.state = "error"
+            state = "error"
     sys.stderr.write("talk: %s %s\n" % (s.name, s.state))
+    _notify(s, state)
+
+
+def _notify(s, state):
+    """Tell the starter's devices, so a reply that lands while the Claude app
+    is shut is not found by luck. The app is named so a banner is skipped
+    when that app is on screen. Never the turn's problem."""
+    try:
+        from . import msg
+        with _lock:
+            answer, rev = s.answer, s.rev_new
+        if state == "error":
+            title = "error"
+        else:
+            title = "revised " + s.name if rev else "replied"
+        first = next((l.strip() for l in answer.splitlines() if l.strip()), "")
+        msg.notify_push(s.user, "Claude", title, first or title)
+    except Exception as e:
+        sys.stderr.write("talk: notify: %s\n" % e)
 
 
 def _session(args):
@@ -128,7 +150,7 @@ def post_start(h, path, args):
     name = ((args.get("name") or ["document"])[0] or "document")[:80]
     kind = (args.get("kind") or ["text"])[0]
     sid = secrets.token_hex(5)
-    _sessions.put(sid, Session(name, kind, doc))
+    _sessions.put(sid, Session(name, kind, doc, accounts.current()))
     h.text(sid + "\n")
 
 

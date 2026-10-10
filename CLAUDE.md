@@ -404,7 +404,7 @@ has a dot while any are unread; opening an app reads its own. While a
 banner is up, `draw_reserve_top(24)` narrows every clip below it, so apps
 (api->pixels included) and shells draw around it; the launcher's own direct
 blits start below `notify_covers()`.
-Two kinds of source. **Polled**: Chat -- `GET /notify/poll?chat=ID&me=NAME`
+Two kinds of source. **Polled**: Chat, and the server's own notes (a finished Build, a Claude reply from /talk, new artifacts published to the store: apps "Build", "Claude", "Update") -- `GET /notify/poll?chat=ID&me=NAME`
 (server/msg.py) every 30 s while WiFi is already up, through
 `httpq_poll_as`, which only hands a reply to the request's owner (apps use
 it too: the first to poll used to take any reply). **Scheduled**:

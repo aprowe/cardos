@@ -27,7 +27,7 @@ import subprocess
 import sys
 import threading
 
-from . import updates
+from . import accounts, updates
 from .chat import ChatService, ROOT
 
 BUILD_TIMEOUT = 1800          # a first firmware build on one core is slow
@@ -143,7 +143,28 @@ def publish(store, firmwares, apps_dir, firmware):
     for name, dst, data in blobs:
         updates.put_artifact(dst, data)
         sent.append(name)
+    if sent:
+        _notify_update(sent)
     return sent
+
+
+def _notify_update(sent):
+    """One note to every device the store serves: it is shared, so with
+    accounts that is each account. Never the publish's problem."""
+    try:
+        from . import msg
+        fws = [n for n in sent if n.startswith("firmware")]
+        apps = [n for n in sent if not n.startswith("firmware")]
+        if fws and len(apps) > 2:
+            what = "firmware + %d apps" % len(apps)
+        elif fws:
+            what = " + ".join(["firmware"] + apps)
+        else:
+            what = ", ".join(apps)
+        for user in (list(accounts.users()) if accounts.enabled() else [None]):
+            msg.notify_push(user, "Update", "available", what + ": run update")
+    except Exception as e:
+        sys.stderr.write("build: notify: %s\n" % e)
 
 
 class BuildingChat(ChatService):
