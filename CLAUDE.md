@@ -205,13 +205,38 @@ shows both. Headless commands and a second desktop window load as before
 2026-10-10), because with the arena held its RAM-code loads failed at boot
 and the big apps vanished from the launcher. `CAPP_CODE_IN_RAM` keeps an
 inner loop in RAM; no app needs it (Kart, Calc, Pinball and Noodle measured
-no slower from flash). The budget is now data <= 28 KB, and code <= 16 KB
+no slower from flash). The budget is now the data block (`.data` and the largest overlay) <= 28 KB, and code <= 16 KB
 only for those. A device updated over the air from the old table has no
 `appcode` and runs code from RAM (data still in the arena); it takes one
 full USB flash. Measured: idle heap 28.6 KB lower, opening Jar costs 0.4 KB
 instead of 45, and a print now lets WiFi go (the arena leaves too little
 for both radios). Design and numbers:
 `docs/superpowers/specs/2026-10-09-xip-app-code-design.md`.
+
+**Constants run from flash too, and modes can share their state**
+(2026-10-10). An app's `.rodata` is linked at `0x20000000` and written
+into its flash cache entry after the code, read through a second mapping
+of `appcode` on the data bus; on every other path (headless commands, RAM
+code, the icon scan) it goes in RAM after the data. Only `capp_info`
+itself stays in `.data`; what it points to is constants, which the icon
+scan loads too. Jar's arena use went from 28532 to 15672 bytes.
+On the S3 that second mapping is an alias: IDF hands back the
+instruction-bus address for pages already mapped, where a byte load is a
+LoadStoreError, so `xipflash.c` takes the same linear address at the
+data-bus base and invalidates the D-cache over its own writes (IDF only
+invalidates the instruction-bus view).
+**Overlays:** `CAPP_OVERLAY(n) static T x;` puts zeroed state in overlay
+0-3; all of an app's overlays share one region, so the arena holds `.data`
+plus the largest. `api->overlay(n, CAPP_OVL_KEEP | CAPP_OVL_DISCARD)`
+switches, keeping the outgoing one in `/cache/ovl/<load>-<n>.bin` (gone
+when the app closes, and at boot); overlay 0 is live at start. A pointer
+into an overlay is good only while it is live -- nothing traps a stray
+one. `ovltest` (a CLI app) checks it on a device. The build refuses an
+initialised overlay variable (the compiler does), `capp_info` reaching an
+overlay or the code, and a writable `.rodata`; the budget is `.data` +
+largest overlay <= 28 KB. Apps are linked `ld -n`. Design:
+`docs/superpowers/specs/2026-10-10-app-constants-in-flash-design.md`,
+`docs/superpowers/specs/2026-10-10-app-data-overlays-design.md`.
 
 **Redundant redrawing is an OS problem, not an app problem.** The shell used
 to hand every app its whole rectangle as the clip on every event, so a
@@ -717,7 +742,7 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36), `motion` (37), `midi` (38), `notify` (39), `notify_at`/`notify_cancel` (40), `update_apply_progress` (41), `firmware_boot` (42), `link` (43), `sig_verify` (44) and `paint_direct` (45). A new capp_info flag bit (`CAPP_PAINT_DIRECT`) is not an API change; neither is clamping what `http_poll` returns.
+`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36), `motion` (37), `midi` (38), `notify` (39), `notify_at`/`notify_cancel` (40), `update_apply_progress` (41), `firmware_boot` (42), `link` (43), `sig_verify` (44), `paint_direct` (45), and `overlay`/`overlay_live` (46), which came with constants moving to their own link origin. A new capp_info flag bit (`CAPP_PAINT_DIRECT`) is not an API change; neither is clamping what `http_poll` returns.
 
 **Fonts are files an app asks for** (2026-09-23). The 6x8 console font is
 still compiled in and still the default; anything nicer is a `.cfnt` in

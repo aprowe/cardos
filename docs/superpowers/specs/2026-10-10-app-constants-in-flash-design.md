@@ -5,6 +5,8 @@ flash constants"); this spec records the details. Builds on
 `2026-10-09-xip-app-code-design.md`, and is planned together with
 `2026-10-10-app-data-overlays-design.md`.
 
+Planned with corrections: docs/superpowers/plans/2026-10-10-overlays-and-constants.md, Spec corrections.
+
 ## Why
 
 An app's constants (strings, tables, help, menus, icons) are 84 KB across
@@ -113,3 +115,41 @@ Device:
 ## Out of scope
 
 Overlays (their own spec, same plan), and constants for the kernel itself.
+
+## Measurements
+
+On both devices (Cardputer, COM3; Cardputer ADV, COM4), 2026-10-10, debug
+build of worktree-xip-app-code after the origin/main 8ca9da7 merge.
+
+- **Jar's arena use: 28532 -> 15672 bytes** (`mem` with Jar open says
+  `arena 15672/28672 jar.capp` on both). Its constants are 12864 bytes, in
+  its cache entry after the 50940 bytes of code (one 64 KB entry, 16
+  sectors).
+- **jar.capp: 103164 -> 97016 bytes** (the old file on the card against
+  this build, linked `ld -n`).
+- **Heap with Jar open**, master (f45c57e + 8ca9da7) against this build:
+
+  | | heap free | largest | exec free | low water |
+  |---|---|---|---|---|
+  | COM3 master | 71848 | 31744 | 39816 | 42172 |
+  | COM3 this | 69212 | 31744 | 37180 | 21392* |
+  | COM4 master | 62836 | 31744 | 30804 | 43004 |
+  | COM4 this | 65988 | 31744 | 33956 | 24420* |
+
+  *The low water is after opening all 39 apps one after another (Today's
+  headless commands and Toggl set it), not comparable with master's, which
+  was taken after a short session. The arena is a fixed 28 KB either way,
+  so Jar's 12.9 KB saving is room inside the arena, not heap.
+- **Launch times** (write against hit) were not measured: both devices
+  dropped off USB before that step (see the Task 10 report). A hit shows
+  no `xip` line, and opening Jar a second time printed none.
+- **The data view on the S3 is an alias, not a second mapping.** The
+  second `esp_partition_mmap(..., DATA)` hands back the instruction-bus
+  address (IDF finds the pages mapped and returns the existing block), and
+  the first byte load of a constant through it was a LoadStoreError at
+  every app start. `xipflash.c` now takes the same linear address at the
+  data-bus base (`0x3C000000 | (ibus & 0x1FFFFFF)`), and invalidates the
+  D-cache over every write and erase itself, because IDF invalidates only
+  the address the pages were mapped at.
+- **Stale constants:** Jar's first help line changed, the entry rewritten
+  at offset 0 after `xip wipe`, and fn-h showed the new line on both.

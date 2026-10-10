@@ -1,6 +1,9 @@
 # App data overlays — design
 
 Status: **approved by alex 2026-10-10** ("cool do the overlay and the flash constants"), with the defaults in "For alex to decide": card-backed saves, four overlays, 0 live at start, first real user chosen later.
+
+Planned with corrections: docs/superpowers/plans/2026-10-10-overlays-and-constants.md, Spec corrections.
+
 Date: 2026-10-10. Builds on `2026-10-09-xip-app-code-design.md` (branch
 `worktree-xip-app-code`).
 
@@ -197,3 +200,25 @@ Device:
    second RAM block, which would defeat the purpose.
 2. **Four overlays** per app, numbered from 0, with 0 live at start.
 3. **The first real user:** the Jar rewrite, when you are ready for it.
+
+## Measurements
+
+On both devices, 2026-10-10, debug build. `ovltest` passed every run;
+switch times (20480-byte overlay 0 and 6000-byte overlay 1):
+
+| run | Cardputer 0->1 | 1->0 | ADV 0->1 | 1->0 |
+|---|---|---|---|---|
+| 1 | 204 ms | 59 ms | 149 ms | 103 ms |
+| 2 | 119 ms | 63 ms | 82 ms | 107 ms |
+| 3 | 46 ms | 59 ms | 82 ms | 103 ms |
+
+0->1 saves 20 KB and reads 6 KB; 1->0 saves 6 KB and reads 20 KB. The
+first run on each device was the slowest; every run but one (204 ms)
+is inside the 50-150 ms the design expected.
+
+- **ovltest's data block is 20560 bytes**: `.data` 68 rounded to 80, plus
+  20480, not plus 26480. The loader printed `loaded /apps/ovltest.capp
+  (ovltest): 616 code (flash), 20560 data (arena), 312 constants (flash)`,
+  matching the `block` column of `sizes.txt`.
+- `/cache/ovl` was empty after each run, and a stray `99-0.bin` put there
+  was gone after a reboot, on both devices.
