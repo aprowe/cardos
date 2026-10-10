@@ -54,7 +54,7 @@ import threading
 import time
 import urllib.request
 
-from . import accounts, ask, kv, people, sign, wire
+from . import accounts, ask, kv, people, sign, wire, jarvm
 from .kv import kv_route, KVError, NotAllowed, NotFound
 from .routes import arg
 
@@ -68,6 +68,7 @@ ITEMS = 8                     # a day's stock
 MAX_ROUNDS = 3                # Claude calls a day's stock may take
 RETRY_BATCH = 4               # a retry asks for at most this many
 GEN_TIMEOUT = 420             # seconds for one Claude call: 8 sprites take a while
+SCRIPT_SRC_MAX = 1200         # a script's source, as Claude writes it
 STOCK_TTL = 3 * 86400
 FRIENDS_MAX = 64
 NOTE_MAX = 24
@@ -606,6 +607,9 @@ def item_schema():
             "frames": {"type": "array", "minItems": 1, "maxItems": MAX_FRAMES, "items": {
                 "type": "array", "minItems": 16, "maxItems": 16, "items": {
                     "type": "string", "pattern": "^[0-7]{16}$"}}},
+            # Phase 2 (step 7): an optional behaviour script in server/jarvm.py's
+            # language, compiled and given a simulated day before it ships.
+            "script": {"type": "string", "maxLength": SCRIPT_SRC_MAX},
         },
     }
 
@@ -669,8 +673,16 @@ def prompt_for(n, tags, facts, owned, special=None, avoid=()):
         "three colours; no single colour should cover most of it. Most items need 1 or 2 "
         "frames; give at most two items 3 or 4, so the whole answer stays under 12000 "
         "characters.",
+        "- script (optional, give it to about half the items): a short behaviour script, "
+        "at most 12 lines, in the language below. It runs instead of the habits for the "
+        "events it handles, so it can count, remember (mem[0]..mem[7]) and choose. Make it "
+        "small and charming: react to pokes, the time of day, a jar shipping, a critter "
+        "passing. Bubble and frame numbers in scripts count from 1.",
         "Keep everything friendly for all ages. Write the JSON compactly, without "
         "indentation.",
+        "",
+        "The script language:",
+        jarvm.LANGUAGE_GUIDE,
     ]
     return "\n".join(lines)
 
@@ -729,7 +741,24 @@ def check_item(raw, nameset=()):
     return why
 
 
-def to_item(raw, item_id, made, tags):
+def compile_script(raw, log=None):
+    """An item's script source -> its bytecode, or b"" when it has none or it
+    does not compile and live through a simulated day: the item then ships
+    with its recipe alone, which always works -- a failed script is not worth
+    losing the item over."""
+    src = (raw.get("script") or "").strip()
+    if not src:
+        return b""
+    try:
+        return jarvm.prepare_script(src, nbub=len(raw.get("bubbles") or []),
+                                    nframes=len(raw.get("frames") or []))
+    except jarvm.ScriptError as e:
+        if log:
+            log("script of %r dropped: %s" % (raw.get("name"), e))
+        return b""
+
+
+def to_item(raw, item_id, made, tags, log=None):
     """A checked item (Claude's dict) -> the dict encode() takes."""
     e = enums()
     return {
@@ -743,6 +772,7 @@ def to_item(raw, item_id, made, tags):
         "bubbles": list(raw["bubbles"]), "mem": [0] * MEM,
         "maker": MAKER, "made": int(made), "tags": tags, "gifted": "",
         "frames": [pack_frame(f) for f in raw["frames"]],
+        "script": compile_script(raw, log),
     }
 
 
@@ -803,7 +833,7 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
     rtags = record_tags(tags)
     for raw in good:
         item_id = ID_BASE + st.incr(NS, "next_id")
-        rec = seal(encode(to_item(raw, item_id, now, rtags)), signer)
+        rec = seal(encode(to_item(raw, item_id, now, rtags, log)), signer)
         st.put(NS, "own/%d" % item_id, person.encode())
         records.append(rec)
     return tags, records

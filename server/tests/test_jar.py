@@ -267,6 +267,27 @@ class Signing(unittest.TestCase):
         bad[-1] ^= 1
         self.assertFalse(jar.verified(bytes(bad), test_pub()))
 
+    def test_an_item_ships_its_script_compiled_or_none(self):
+        # Step 7: a script that compiles and lives through its simulated day
+        # goes into the record; one that does not is dropped and the item
+        # ships on its recipe.
+        from server import jarvm
+        good = raw_item("Hummer", script="on poke: say 1; hop\nend\non time night: glow on\nend")
+        rec = jar.encode(jar.to_item(good, 101, 1791504000, "cosy"))
+        code = jar.decode(rec)["script"]
+        self.assertTrue(code)
+        self.assertEqual(code, jarvm.prepare_script(good["script"], nbub=2, nframes=2))
+        logged = []
+        bad = raw_item("Mumbler", script="on poke: say then then")
+        rec = jar.encode(jar.to_item(bad, 102, 1791504000, "cosy", logged.append))
+        self.assertEqual(jar.decode(rec)["script"], b"")
+        self.assertTrue(logged and "Mumbler" in logged[0])
+        self.assertEqual(jar.decode(jar.encode(jar.to_item(raw_item("Plain"), 103, 1791504000,
+                                                           "cosy")))["script"], b"")
+        self.assertIn("script", jar.item_schema()["properties"])
+        self.assertIn(jarvm.LANGUAGE_GUIDE[:40],
+                      jar.prompt_for(8, ["cosy"], {"date": "d", "season": "s", "moon": "m"}, []))
+
     def test_memory_is_not_signed_but_everything_else_is(self):
         # Scripts write the memory slots on the device; a gift must still
         # verify afterwards. Anything else changed must not.
