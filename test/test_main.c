@@ -405,6 +405,7 @@ void test_jar_builtins_are_valid_records(void);
 void test_jar_first_run_writes_and_places_the_starters(void);
 void test_jar_the_shop_and_the_post_are_screens_of_one_app(void);
 void test_jar_the_menu_opens_the_shop_screen(void);
+void test_jar_a_request_left_behind_is_drained(void);
 void test_jar_keys_open_the_companions_after_saving(void);
 void test_jar_places_what_a_companion_asked_for(void);
 void test_jar_restart_brings_back_the_jar_and_makes_nothing_away(void);
@@ -1407,6 +1408,7 @@ int main(void) {
   RUN(test_jar_first_run_writes_and_places_the_starters);
   RUN(test_jar_the_shop_and_the_post_are_screens_of_one_app);
   RUN(test_jar_the_menu_opens_the_shop_screen);
+  RUN(test_jar_a_request_left_behind_is_drained);
   RUN(test_jar_keys_open_the_companions_after_saving);
   RUN(test_jar_places_what_a_companion_asked_for);
   RUN(test_jar_restart_brings_back_the_jar_and_makes_nothing_away);

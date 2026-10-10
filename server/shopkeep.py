@@ -306,7 +306,12 @@ def stock_schema(n_pick, n_new):
                                      "maxLength": BRIEF_LEN + SLACK, "pattern": "^[ -~]+$"}}}}
 
 
-def stock_prompt(person, pool, n_pick, n_new, rng, asked, friends=(), commission=None):
+KIND_SAID = {"critter": "a critter that roams the jar", "floor": "decor that stands on the soil",
+             "hanging": "decor that hangs from the lid"}
+
+
+def stock_prompt(person, pool, n_pick, n_new, rng, asked, friends=(), commission=None,
+                 kinds=None):
     """`pool`: [(id, name, kind, price, line)] he may pick from; `asked`:
     whether a new find answers what the player asked him for (the code's coin)."""
     lines = ["[%s (account %s) has come in, and their shop shelf needs filling. %s]" % (
@@ -324,8 +329,12 @@ def stock_prompt(person, pool, n_pick, n_new, rng, asked, friends=(), commission
                  "one odd detail, under 110 characters, a note for whoever draws it (a "
                  "16x16 pixel-art critter that roams a jar, or decor). Each starts from its "
                  "sparks -- a starting point, not a recipe:]" % n_new)
+    # Each find's kind is the code's (KIND_PLAN), so the brief must be for
+    # that kind: a brief saying "decor" was drawn as a critter.
     for i in range(n_new):
-        lines.append("  find %d sparks: %s" % (i + 1, spark(rng)))
+        kind = KIND_SAID.get((kinds or [])[i] if kinds and i < len(kinds) else "", "")
+        lines.append("  find %d%s sparks: %s" % (i + 1, (", " + kind + ",") if kind else "",
+                                                spark(rng)))
     lines.append("[Make the finds unlike each other and unlike what you have been bringing "
                  "in lately; a junk shop's stock is whatever turned up.]")
     if commission is not None:
@@ -355,7 +364,7 @@ def stock_prompt(person, pool, n_pick, n_new, rng, asked, friends=(), commission
 
 
 def stock_turn(chat, person, pool, n_pick, n_new, friends=(), store=None, rng=None, log=None,
-               commission=None):
+               commission=None, kinds=None):
     """His turn for a stock: (line, picks, briefs). picks are ids from `pool`
     (he may get some wrong; the caller checks); if he cannot be asked, a
     note on the door, no picks and loose briefs."""
@@ -363,7 +372,7 @@ def stock_turn(chat, person, pool, n_pick, n_new, friends=(), store=None, rng=No
     rng = rng or random.Random()
     asked = rng.randrange(100) < ANSWER_CHANCE
     schema = stock_schema(n_pick, n_new)
-    prompt = stock_prompt(person, pool, n_pick, n_new, rng, asked, friends, commission)
+    prompt = stock_prompt(person, pool, n_pick, n_new, rng, asked, friends, commission, kinds)
     why = None
     for attempt in range(2):
         try:

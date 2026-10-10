@@ -64,6 +64,7 @@ typedef struct {
    * given back if it fails */
   int pay, paid, finds;
   uint32_t pay_until;            /* a paid ask the one HTTP slot was busy for: try till then */
+  uint32_t ask_again;            /* the stock's own ask found the slot busy: again then */
   char ask[48];
   } g;
 } ShopMem;
@@ -244,7 +245,7 @@ static void start_day(void) {
   G.quiet = 0;
   if (!s_fresh && S.date[0] && S.gen == today_gen()) {
     G.quiet = 1;
-    if (send(N_DAY_POLL, "GET", "/jar/day", 0) != 0) G.tried = 0;
+    if (send(N_DAY_POLL, "GET", "/jar/day", 0) != 0) { G.tried = 0; G.ask_again = api->ticks_ms() + 2000; }
     return;
   }
   day_body();
@@ -256,7 +257,7 @@ static void start_day(void) {
   if (send(N_DAY_POST, "POST", s_fresh ? "/jar/day?fresh=1" : "/jar/day", NET) == 0)
     net_status(G.finds ? "Tibbs goes out looking" : s_fresh ? "asking for a new stock"
                                                            : "asking for today's stock");
-  else G.tried = 0;
+  else { G.tried = 0; if (!s_fresh) G.ask_again = api->ticks_ms() + 2000; }
   s_fresh = 0;
   G.finds = 0;
 }
@@ -924,6 +925,12 @@ static int shop_tick(void *st, uint32_t now) {
   (void)st;
   net_tick(now);
   pay_retry(now);
+  /* The slot was busy (a reply being drained, the device's own poll): ask
+   * again rather than wait for the next open. */
+  if (G.ask_again && !U.net && (int32_t)(now - G.ask_again) >= 0) {
+    G.ask_again = 0;
+    start_day();
+  }
   if (ui_clock() && (G.view == V_STOCK || G.view == V_GARDEN)) U.dirty = 1;
   if (U.msg[0] && (int32_t)(now - U.msg_until) > 0) { U.msg[0] = 0; U.dirty = 1; }
   if (!U.dirty) return 0;
