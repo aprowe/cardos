@@ -27,11 +27,17 @@
 #include "kernel/app/capp.h"
 
 typedef struct {
-  void           *code;      /* executable RAM, instruction-window address */
-  void           *data;      /* ordinary heap: rodata, data and bss */
+  void           *code;      /* instruction address: executable RAM or the flash cache */
+  void           *data;      /* the arena or the heap: rodata, data and bss */
   uint32_t        code_size;
   uint32_t        data_size;
   uint32_t        code_cap;  /* the block's size, which a spare may exceed */
+
+  /* Where the halves went: code from the flash cache (xip_off is its entry,
+   * code is the mapped address) or executable RAM (-1); data in the arena
+   * or on the heap. See docs/superpowers/specs/2026-10-09-xip-app-code-design.md. */
+  int32_t         xip_off;
+  uint8_t         data_in_arena;
 
   /* Read from the image without running it -- name, icon and flags are needed
    * to draw an icon, and executing a program to find out what it is called is
@@ -57,6 +63,27 @@ typedef enum {
 } CappResult;
 
 CappResult capp_load(const char *path, LoadedApp *out);
+
+/* As capp_load, for the app being started on screen when foreground is 1:
+ * its data goes in the arena if it is free and fits, and its code then runs
+ * from the flash cache unless it says CAPP_CODE_IN_RAM. Anything that
+ * cannot be done that way is done as before. */
+CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground);
+
+/* Only what capp_info says -- name, icon, flags, commands -- for the icon
+ * scan: the data, relocated, and no code at all. out->main is not valid and
+ * nothing in the image may be called; capp_unload gives it back. The data
+ * borrows the arena when it is free, the heap otherwise. Loading the code
+ * as well put every app's code in executable RAM once per scan, which the
+ * arena left too little of: at boot, with WiFi starting, the largest piece
+ * was 7.7 KB and every app bigger than that was missing from the launcher. */
+CappResult capp_load_info(const char *path, LoadedApp *out);
+
+/* Called once before the cache writes an app's code (a few hundred
+ * milliseconds, the screen frozen during each erase), so the launcher can
+ * say "preparing". */
+void capp_on_prepare(void (*fn)(const char *path));
+
 void       capp_unload(LoadedApp *la);
 const char *capp_strerror(CappResult r);
 

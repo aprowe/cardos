@@ -52,6 +52,19 @@
 #   ota_1    2.25 MB   the other half of the A/B pair
 #   spiffs    700 KB   Arduino guests' LittleFS; it was 316 KB
 #
+# Sizes, revised 2026-10-09 for app code in flash
+# (docs/superpowers/specs/2026-10-09-xip-app-code-design.md):
+#
+#   factory  2.75 MB   the one that grows
+#   ota_0    2.25 MB   a guest, or CardOS updating itself
+#   ota_1    2.25 MB   the other half of the A/B pair
+#   spiffs    188 KB   Arduino guests' LittleFS: it must exist and mount, and
+#                      keeps its label and offset so every guest still finds it
+#   appcode   512 KB   relocated app code, mapped and run in place; a cache,
+#                      so erasing it is always safe. 64 KB-aligned, whole MMU
+#                      pages. OTA cannot add it: a device needs one full USB
+#                      flash, and until then app code loads into RAM as before.
+#
 # nvs stays at 0x9000: moving it would throw away WiFi credentials, hotkeys
 # and the Google token for no gain. The OTA slots moving does invalidate a
 # staged guest, which the next boot re-copies from the card.
@@ -63,4 +76,5 @@ factory,    app,  factory,  0x10000,  0x2C0000,
 ota_0,      app,  ota_0,    0x2D0000, 0x240000,
 ota_1,      app,  ota_1,    0x510000, 0x240000,
 phy_init,   data, phy,      0x750000, 0x1000,
-spiffs,     data, spiffs,   0x751000, 0xAF000,
+spiffs,     data, spiffs,   0x751000, 0x2F000,
+appcode,    data, 0x40,     0x780000, 0x80000,

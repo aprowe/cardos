@@ -90,6 +90,24 @@ class Publish(unittest.TestCase):
         self.put("apps/b.capp", app_image(b"B"))
         self.assertEqual(pub(True), ["b"])
 
+    def test_new_artifacts_notify_once(self):
+        from server import msg
+        notes = lambda: msg.notes_since(None, 0)[0]
+        before = len(notes())
+        self.put("fw.bin", firmware_image(b"1"))
+        for n in "abc":
+            self.put("apps/%s.capp" % n, app_image(n.encode()))
+        build.publish(self.store, self.fw, self.apps, True)
+        got = notes()[before:]
+        self.assertEqual([(x["app"], x["title"], x["text"]) for x in got],
+                         [("Update", "available", "firmware + 3 apps: run update")])
+        build.publish(self.store, self.fw, self.apps, True)     # nothing new
+        self.assertEqual(len(notes()), before + 1)
+        self.put("apps/b.capp", app_image(b"B"))
+        self.put("apps/c.capp", app_image(b"C"))
+        build.publish(self.store, self.fw, self.apps, True)
+        self.assertEqual(notes()[-1]["text"], "b, c: run update")
+
     def test_firmware_only_when_asked(self):
         self.put("fw.bin", firmware_image(b"1"))
         self.put("apps/a.capp", app_image())

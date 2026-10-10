@@ -78,6 +78,12 @@ typedef struct {
 #define CAPP_NEEDS_NET   0x0004  /* the internet, over WiFi */
 #define CAPP_NEEDS_PROXY 0x0008  /* the CardOS server (server/); implies NET */
 
+/* Keep this app's code in executable RAM rather than running it from the
+ * flash cache (docs/superpowers/specs/2026-10-09-xip-app-code-design.md).
+ * For an inner loop that the 16 KB instruction cache would slow: measured,
+ * not guessed. A flag, not a table change, so no API bump. */
+#define CAPP_CODE_IN_RAM 0x0040
+
 /* Paint straight to the panel, as every app did before the OS composed
  * repaints off it. A full repaint -- the app just opened, or whatever covered
  * it went away, or it asked without marking damage -- is otherwise drawn a

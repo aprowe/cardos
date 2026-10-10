@@ -22,6 +22,7 @@
 #include "kernel/ui/desktop.h"
 #include "kernel/ui/shell.h"
 #include "kernel/app/capprun.h"
+#include "kernel/app/elfload.h"
 #include "kernel/sys/bg.h"
 #include "kernel/net/httpq.h"
 #include "kernel/app/capp.h"
@@ -105,6 +106,9 @@ static void start_app(int slot, const char *name, const char *args) {
   snprintf(s_app_args, sizeof s_app_args, "%s", args ? args : "");
   notify_opened(name);                         /* its notifications are read */
   capprun_start(slot, name, args);
+  /* A "preparing" note (see preparing) was for the start that has now
+   * happened; a failure's reason replaces it in said_why. */
+  if (!capprun_start_error()[0] && s_note[0]) { s_note[0] = 0; s_dirty = 1; }
 }
 
 /* The search (Space): what has been typed, and the best matches for it as
@@ -566,6 +570,26 @@ static void leave_app_ex(int show) {
   if (show) flush();
 }
 
+/* An app starting while another is on screen, from outside any app's
+ * handler -- a hotkey, a spoken "open", Enter in opt-space search: the one
+ * on screen goes first, as run_next does it, so the new one is loaded into
+ * the room it leaves and gets the arena, and with it code from flash.
+ * Loaded beside it, the new one found the arena taken and quietly ran from
+ * RAM, or did not fit at all. `next` is what is about to be hosted, if it
+ * is already running: restarting the app on screen is capprun_start's to
+ * do. Only with no app code on the stack (capprun_caller() is NULL): from a
+ * handler, the app asking is queued through run_next instead, and anything
+ * else keeps the old order -- host lets the old one go after. A command
+ * (`cli`) takes no screen, so nothing is let go for one. The back stack is
+ * left as it is. Nonzero if it let one go. */
+static int leave_for(const AppDef *next, int cli) {
+  /* A captured console line (cardctl sh, Dashboard Link) never takes the
+   * screen, so it must not close the app that has it either. */
+  if (!s_app || s_app == next || cli || capprun_caller() || con_capturing()) return 0;
+  leave_app_ex(0);
+  return 1;          /* the row is due a paint if nothing takes the screen */
+}
+
 
 static int run_now(const char *name, const char *args);
 
@@ -594,6 +618,17 @@ static int said_why(const char *name) {
   s_dirty = 1;
   flush();
   return 1;
+}
+
+/* A first launch from the flash cache writes the app's code (a few hundred
+ * milliseconds, frozen during each erase): say so on the row first. Painted
+ * only in the launcher: the desktop starts apps through the same loader,
+ * and the row drawn over its windows would be worse than saying nothing. */
+static void preparing(const char *path) {
+  const char *base = strrchr(path, '/');
+  snprintf(s_note, sizeof s_note, "preparing %s...", base ? base + 1 : path);
+  s_dirty = 1;
+  if (ui_shell() == UI_LAUNCHER) flush();
 }
 
 static void open_folder(int flat) {
@@ -627,6 +662,7 @@ static void close_folder(void) {
 static void launch_with(int i, const char *args) {
   const Icon *ic = icon_at(i);
   const AppDef *a;
+  int left;
 
   if (!ic) return;
 
@@ -647,19 +683,24 @@ static void launch_with(int i, const char *args) {
     /* Running the program *is* opening it: capp_main constructs whatever state
      * it has and installs an interface if it wants one. A program that
      * installs nothing was a command, and has already finished. */
+    left = leave_for(capprun_def(ic->slot), ic->cli);
     start_app(ic->slot, ic->name, args);
-    if (!capprun_is_app(ic->slot)) { said_why(ic->name); return; }
+    if (!capprun_is_app(ic->slot)) { if (!said_why(ic->name) && left) flush(); return; }
     a = capprun_def(ic->slot);
     if (!a) { flush(); return; }
   } else {
     a = icon_app(i);
     if (!a) { flush(); return; }
+    leave_for(a, 0);
     if (a->open) a->open(a->state);
     if (args && *args && a->set_args) a->set_args(a->state, args);
   }
 
   /* Everything runs fullscreen here, whatever size it asked for: there is no
-   * desktop behind it for a window to sit on. */
+   * desktop behind it for a window to sit on. Whatever was here and is not
+   * this is let go, as host does it -- overwritten, it stayed loaded and
+   * held the arena until the next launchui_init. */
+  if (s_app && s_app != a) capprun_release(s_app);
   s_app = a;
   s_app_rect = app_rect(a);
   s_app_how = AH_FULL | AH_SURROUND | AH_OPENED;
@@ -813,6 +854,7 @@ static void need_icons(void) {
 }
 
 void launchui_init(void) {
+  capp_on_prepare(preparing);
   capprun_release(s_app);      /* from the last visit, if any */
   s_app = NULL;
   s_nback = 0;
@@ -959,11 +1001,13 @@ static int run_now(const char *name, const char *args) {
     /* A command runs and returns, and the console keeps the screen. Anything
      * else is an app, and the launcher takes over to host it. */
     if (ic->kind == ICON_CAPP) {
+      int left = leave_for(capprun_def(ic->slot), ic->cli);
       start_app(ic->slot, ic->name, args);
       if (!capprun_is_app(ic->slot)) {
         /* A command, and it is done -- or an app that would not start, and
          * the reason has been said. Either way the name was not unknown. */
-        if (said_why(ic->name) && ui_shell() == UI_LAUNCHER) select_flat(i);
+        if (said_why(ic->name)) { if (ui_shell() == UI_LAUNCHER) select_flat(i); }
+        else if (left) flush();
         return 0;
       }
       if (from_dashboard(ic->slot)) return 0;
@@ -993,9 +1037,16 @@ int launchui_run_path(const char *path, const char *args) {
 
   for (i = 0; i < icons_total(); i++) {
     const Icon *ic = icon_at(i);
-    if (ic && ic->kind == ICON_CAPP && strcmp(ic->path, path) == 0) {
+    /* Without case, as FAT does: a hotkey's "Clock" is found on PATH as
+     * /apps/Plan/Clock.capp, and missing the icon for clock.capp ran it as
+     * a stranger -- loaded for one run, without the arena or the cache. */
+    if (ic && ic->kind == ICON_CAPP && same_name(ic->path, path)) {
+      int left = leave_for(capprun_def(ic->slot), ic->cli);
       start_app(ic->slot, ic->name, args);
-      if (!capprun_is_app(ic->slot)) return 0;   /* a command, already done */
+      if (!capprun_is_app(ic->slot)) {            /* a command, already done */
+        if (left) flush();
+        return 0;
+      }
       if (from_dashboard(ic->slot)) return 0;
       select_flat(i);
       enter();
