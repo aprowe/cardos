@@ -495,13 +495,12 @@ class _Parser:
             if n[0] != "num" or not 1 <= int(n[1]) <= 255:
                 raise ScriptError(n[2], "expected a number of ticks 1..255 after 'every', found %s" % _show(n))
             return int(n[1])
-        if kind == "number":
-            self.next()
-            if tok[0] != "num" or not 1 <= int(tok[1]) <= 255:
-                raise ScriptError(tok[2], "expected a weather tag 1..255 or ':', found %s" % _show(tok))
-            return int(tok[1])
         if kind in GROUPS:
             self.next()
+            if kind == "weather" and tok[0] == "num":       # the tag itself, as before it had names
+                if not 1 <= int(tok[1]) <= 255:
+                    raise ScriptError(tok[2], "expected a weather tag 1..255 or ':', found %s" % _show(tok))
+                return int(tok[1])
             if tok[1] not in GROUPS[kind]:
                 raise ScriptError(tok[2], "after 'on %s' write ':' or one of %s, found %s"
                                   % (ev, ", ".join(GROUPS[kind]), _show(tok)))
@@ -929,8 +928,8 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
             world["time"] = phases[hour]
             fire("time", phases[hour])
         if hour == 7:
-            world["weather"] = 1
-            fire("weather", 1)
+            world["weather"] = GROUPS["weather"]["rainy"]
+            fire("weather", world["weather"])
         if hour == 12:
             fire("gift", 0)
         for t in range(ticks_per_hour):
@@ -1010,7 +1009,8 @@ def _guide():
         "below, + - * / % (whole numbers), == != < <= > >=, and or not, ( ).",
         "Names for numbers: zones " + ", ".join(GROUPS["zone"]) + "; particles " +
         ", ".join(GROUPS["particle"]) + "; kinds " + ", ".join(GROUPS["near"]) +
-        "; times " + ", ".join(GROUPS["time"]) + ".",
+        "; times " + ", ".join(GROUPS["time"]) + "; weathers " + ", ".join(GROUPS["weather"]) +
+        " (the real weather where the owner lives; 0 when not known).",
         "",
         "SENSES",
     ] + sens + [

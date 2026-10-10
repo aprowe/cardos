@@ -44,7 +44,7 @@ JV_OP(25, ACTK,   2, 0, 0, "do action K (first operand) with the second as its a
 
 /* JV_EVENT(number, word, C enum, filter, "fires when")
  *   The word is what follows `on` in a script. The filter says what may come
- *   after the word: none, every (tick: `every N`), near, time, jam, number. */
+ *   after the word: none, every (tick: `every N`), near, time, jam, weather. */
 JV_EVENT(0, tick,    JE_TICK,    every,  "4 times a second; `on tick every N:` runs every Nth tick")
 JV_EVENT(1, poke,    JE_POKE,    none,   "the player selects the item")
 JV_EVENT(2, near,    JE_NEAR,    near,   "something comes within 16 px; `on near snail:` narrows it")
@@ -52,7 +52,7 @@ JV_EVENT(3, shipped, JE_SHIPPED, none,   "a jar leaves through the cork door")
 JV_EVENT(4, jam,     JE_JAM,     jam,    "the belt jams or is fixed; `on jam fixed:` narrows it")
 JV_EVENT(5, gift,    JE_GIFT,    none,   "a parcel enters the jar")
 JV_EVENT(6, time,    JE_TIME,    time,   "dawn, day, dusk or night begins; `on time night:` narrows it")
-JV_EVENT(7, weather, JE_WEATHER, number, "the day's weather tag changes")
+JV_EVENT(7, weather, JE_WEATHER, weather, "the real weather outside changes; `on weather rainy:` narrows it")
 
 /* JV_ACTION(number, word, C enum, argument, "what it does")
  *   The word is the statement in a script. The argument is:
@@ -86,7 +86,7 @@ JV_SENSE(8, random,   JSN_RANDOM,    "a random number 0..255")
 /* JV_NAME(group, word, value, C enum)
  *   Names a script may write for a number. Every group is usable in any
  *   expression; zone, particle and glow are also what walk, emit and glow
- *   take, and near, time and jam are the event filters. */
+ *   take, and near, time, jam and weather are the event filters. */
 JV_NAME(zone,     garden,   0, JZ_GARDEN)
 JV_NAME(zone,     works,    1, JZ_WORKS)
 JV_NAME(zone,     dock,     2, JZ_DOCK)
@@ -106,6 +106,12 @@ JV_NAME(time,     dawn,     1, PH_DAWN)
 JV_NAME(time,     day,      2, PH_DAY)
 JV_NAME(time,     dusk,     3, PH_DUSK)
 JV_NAME(time,     night,    4, PH_NIGHT)
+JV_NAME(weather,  sunny,    1, JWX_SUNNY)
+JV_NAME(weather,  cloudy,   2, JWX_CLOUDY)
+JV_NAME(weather,  foggy,    3, JWX_FOGGY)
+JV_NAME(weather,  rainy,    4, JWX_RAINY)
+JV_NAME(weather,  snowy,    5, JWX_SNOWY)
+JV_NAME(weather,  stormy,   6, JWX_STORMY)
 JV_NAME(jam,      jammed,   1, 1)
 JV_NAME(jam,      fixed,    2, 2)
 JV_NAME(glow,     off,      0, 0)

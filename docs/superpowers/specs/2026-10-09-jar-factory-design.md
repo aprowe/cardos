@@ -604,7 +604,7 @@ Small and readable, so an AI writes it reliably; compiled on the server only.
 Events and their filters: `on tick:`, `on tick every N:`, `on poke:`,
 `on near:` / `on near moss|snail|critter|decor:`, `on shipped:`, `on jam:` /
 `on jam jammed|fixed:`, `on gift:`, `on time:` / `on time
-dawn|day|dusk|night:`, `on weather:` / `on weather N:`. A script may have
+dawn|day|dusk|night:`, `on weather:` / `on weather sunny|cloudy|foggy|rainy|snowy|stormy:` (a number 1..6 still works). A script may have
 one handler for each event and filter; a filtered one is found before the
 plain one, so the narrower wins.
 

@@ -70,7 +70,8 @@
 #define C_PINK   CAPP_RGB(0xff, 0x8f, 0xab)
 
 enum { V_JAR = 0, V_DECOR };
-enum { Q_IDLE = 0, Q_LEN, Q_PEEK, Q_THANKS, Q_ACK };   /* asking after the post */
+enum { Q_IDLE = 0, Q_LEN, Q_PEEK, Q_THANKS, Q_ACK, Q_SKY };   /* asking after the post, and the sky */
+#define SKY_EVERY_MS (30u * 60u * 1000u) /* how often to ask after the real sky */
 
 static const CardApi *api;
 static Jar J;
@@ -109,7 +110,12 @@ static struct {
   int follow;                           /* 0..moss-1 a mossling, JS_MAX_MOSS the snail, -1 free */
   /* the menu: big tiles in place of seven squeezed words */
   int menu, msel;
+  int lit[4];                           /* the light on everything: towards r g b, by a/256 */
 } G;
+
+/* The real sky (GET /jar/sky): kept across the shop and the post, which
+ * clear G. Sunrise and sunset in local minutes, 0 not known. */
+static struct { int16_t rise, set; uint8_t w; uint32_t next; } SKYQ;
 
 /* ---- small helpers ------------------------------------------------------- */
 
@@ -268,8 +274,31 @@ static const int16_t SKY[][7] = {
   { 1440, 0x0b, 0x10, 0x20, 0x16, 0x24, 0x36 },
 };
 
+/* What the weather does to the sky: towards r g b by a/256, by JWX_*. */
+static const uint8_t WX[7][4] = {
+  { 0, 0, 0, 0 }, { 0, 0, 0, 0 },
+  { 0x70, 0x78, 0x80, 100 },            /* cloudy */
+  { 0xb0, 0xb4, 0xb8, 160 },            /* foggy */
+  { 0x40, 0x48, 0x58, 140 },            /* rainy */
+  { 0xc8, 0xd0, 0xe0, 120 },            /* snowy */
+  { 0x28, 0x2c, 0x3c, 180 },            /* stormy */
+};
+
+static int iabs(int v) { return v < 0 ? -v : v; }
+
+/* The clock's minute, moved so the real sunrise falls at 390 and sunset at
+ * 1110 -- the middles of dawn and dusk in SKY and js_phase_of. */
+static int sun_minute(int m) {
+  int r = SKYQ.rise, s = SKYQ.set;
+  if (m < 0 || r <= 0 || s <= r || s >= 1440) return m;
+  if (m < r) return m * 390 / r;
+  if (m < s) return 390 + (m - r) * 720 / (s - r);
+  return 1110 + (m - s) * 330 / (1440 - s);
+}
+
 static void set_sky(int minute) {
-  int k = 0, i;
+  int k = 0, i, d;
+  const uint8_t *w = WX[J.weather <= JWX_STORMY ? J.weather : 0];
   if (minute < 0) minute = 700;          /* no clock: always day */
   while (k < 6 && SKY[k + 1][0] <= minute) k++;
   for (i = 0; i < 6; i++) {
@@ -277,6 +306,15 @@ static void set_sky(int minute) {
     int span = SKY[k + 1][0] - SKY[k][0];
     G.sky[i] = a + (b - a) * (minute - SKY[k][0]) / (span ? span : 1);
   }
+  /* the weather, no brighter than the hour: fog at night is dark fog */
+  k = (G.sky[3] + G.sky[4] + G.sky[5]) * 256 / 236;
+  if (k > 256) k = 256;
+  for (i = 0; i < 6; i++) G.sky[i] += (w[i % 3] * k / 256 - G.sky[i]) * w[3] / 256;
+  /* the light on everything in front: as far from a clear noon as the sky
+   * is, towards the sky's own colour, and a little more under weather */
+  d = (iabs(G.sky[3] - 0x34) + iabs(G.sky[4] - 0x58) + iabs(G.sky[5] - 0x60)) * 2 / 3 + w[3] / 3;
+  G.lit[3] = d > 150 ? 150 : d;
+  for (i = 0; i < 3; i++) G.lit[i] = G.sky[3 + i] * 3 / 5;
 }
 
 static uint32_t hash2(int x, int y) {
@@ -287,6 +325,7 @@ static uint32_t hash2(int x, int y) {
 
 static void background(void) {
   int y, x;
+  int flash = J.weather == JWX_STORMY && hash2((int)(J.steps / 6), 91) % 160 == 0;
   for (y = SY0; y < SY1; y++) {
     uint16_t *row = SB + (y - SY0) * SW, c;
     if (y < 9) {                                       /* the lid */
@@ -305,6 +344,7 @@ static void background(void) {
       int f = (y - 9) * 256 / (JS_SOIL - 9);
       c = rgb(G.sky[0] + (G.sky[3] - G.sky[0]) * f / 256, G.sky[1] + (G.sky[4] - G.sky[1]) * f / 256,
               G.sky[2] + (G.sky[5] - G.sky[2]) * f / 256);
+      if (flash) c = mix(c, 255, 255, 255, 150);
       for (x = 0; x < SW; x++) row[x] = c;
       if (y < 13) for (x = 0; x < SW; x++) row[x] = mix(row[x], 0, 0, 0, 120);   /* the neck */
       /* light on the glass: a soft streak, and the far wall's edge */
@@ -597,8 +637,53 @@ static void parachute(void) {
   spr(SPR_PARCEL, 0, x - 4, y, 0);
 }
 
+/* Rain and snow outside, behind everything in the jar. */
+static void weather_back(void) {
+  int i, n, top = 13, h = JS_SOIL - 13;
+  int rain = J.weather == JWX_RAINY || J.weather == JWX_STORMY;
+  if (!rain && J.weather != JWX_SNOWY) return;
+  n = J.weather == JWX_STORMY ? 48 : 30;
+  for (i = 0; i < n; i++) {
+    uint32_t hh = hash2(i, 41);
+    int x = 20 + (int)(hh % (SW - 40)), y;
+    if (rain) {
+      y = top + (int)((hh >> 8) + J.steps * 4) % h;
+      x -= (y - top) / 8;                         /* a slant */
+      px(x, y, rgb(0x9a, 0xb0, 0xc8));
+      px(x, y + 1, rgb(0x9a, 0xb0, 0xc8));
+      px(x - 1, y + 2, rgb(0x70, 0x88, 0xa0));
+    } else {
+      y = top + (int)((hh >> 8) + J.steps / 3) % h;
+      x += (int)((J.steps / 20 + hh) % 3) - 1;    /* a drift */
+      px(x, y, rgb(0xf0, 0xf4, 0xff));
+    }
+  }
+}
+
+/* The light: everything in the jar towards the hour's and the weather's
+ * colour. The space outside the glass stays the interface's. */
+static void light(void) {
+  int i, n = (SY1 - SY0) * SW, a = G.lit[3];
+  uint16_t *p = SB;
+  if (a <= 0) return;
+  for (i = 0; i < n; i++)
+    if (p[i] != C_BG) p[i] = mix(p[i], G.lit[0], G.lit[1], G.lit[2], a);
+}
+
+/* What glows lights its own corner again: lamps in the dark. */
+static void lamps(void) {
+  int i, x, y;
+  if (G.lit[3] < 24) return;
+  for (i = 0; i < J.nplaced; i++) {
+    if (!J.placed[i].glow) continue;
+    item_at(i, &x, &y);
+    glow(x + 8, y + 8, 18, 255, 220, 140, G.lit[3] * 3 / 4);
+  }
+}
+
 static void scene(void) {
   background();
+  weather_back();
   ledges();
   garden();
   works();
@@ -606,6 +691,8 @@ static void scene(void) {
   items();
   workers();
   parachute();
+  light();
+  lamps();
   air();
   talk();
 }
@@ -1083,14 +1170,54 @@ static uint32_t thanks(int n) {
   return last;
 }
 
+static void clock_minute(void);
+
+/* "sky WORD TAG", "rise MIN", "set MIN" (server/jar.py sky_text). */
+static void sky_reply(void) {
+  const char *p, *q;
+  int w = -1, r = 0, s = 0;
+  for (p = SCR.text; *p; p = tsv_next_line(p)) {
+    if (str_starts(p, "sky ")) {
+      for (q = p + 4; *q && *q != ' ' && *q != '\n'; q++) {}
+      if (*q == ' ') { q++; w = (int)str_uint(&q); }
+    } else if (str_starts(p, "rise ")) { q = p + 5; r = (int)str_uint(&q); }
+    else if (str_starts(p, "set ")) { q = p + 4; s = (int)str_uint(&q); }
+  }
+  if (w < 0) return;                                   /* not an answer */
+  SKYQ.rise = (int16_t)r;
+  SKYQ.set = (int16_t)s;
+  SKYQ.w = (uint8_t)(w <= JWX_STORMY ? w : 0);
+  js_set_weather(&J, SKYQ.w);
+  clock_minute();
+}
+
+static void tz_of(char *out, int n);
+
+static void sky_ask(void) {
+  char tz[48], enc[96], path[120];
+  tz_of(tz, sizeof tz);
+  url_enc(enc, sizeof enc, tz);
+  api->fmt(path, sizeof path, "/jar/sky?tz=%s", enc);
+  q_start(Q_SKY, "GET", path);
+}
+
 static void post_reply(int n) {
   int was = G.q;
   char path[64];
   G.q = Q_IDLE;
+  if (n < 0 && was == Q_SKY) {                         /* the sky is extra: the post goes on */
+    SKYQ.next = api->ticks_ms() + NET_EVERY_MS;
+    q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
+    return;
+  }
   if (n < 0) { G.failed = 1; return; }
   SCR.text[n] = 0;
   G.failed = 0;
   switch (was) {
+  case Q_SKY:
+    sky_reply();
+    q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
+    return;
   case Q_LEN: {
     const char *p = SCR.text;
     G.waiting = (int)str_uint(&p);
@@ -1138,7 +1265,10 @@ static void post_tick(uint32_t now) {
   /* The first ask may bring the network up; after that, only while it is. */
   if (G.asked_post && !api->net_ready()) return;
   G.asked_post = 1;
-  q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
+  if (!SKYQ.next || (int32_t)(now - SKYQ.next) >= 0) {
+    SKYQ.next = now + SKY_EVERY_MS;
+    sky_ask();
+  } else q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
 }
 
 /* The parcel on its parachute, and hearts rising, a jar step at a time. */
@@ -1159,7 +1289,7 @@ static void clock_minute(void) {
   CappTime t;
   api->now(&t);
   J.epoch = api->epoch();
-  js_set_minute(&J, t.synced ? t.hour * 60 + t.min : -1);
+  js_set_minute(&J, sun_minute(t.synced ? t.hour * 60 + t.min : -1));
   js_settle_beds(&J, J.epoch);              /* a plant comes of age while you watch */
   set_sky(J.minute);
 }
@@ -1261,6 +1391,7 @@ static void scene_start(void) {
   G.last_key = G.last_save = api->ticks_ms();
   G.next_q = api->ticks_ms() + NET_FIRST_MS;
   load();
+  J.weather = SKYQ.w;                       /* as last asked: no event for coming back */
   clock_minute();
 }
 

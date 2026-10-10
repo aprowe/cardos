@@ -134,6 +134,7 @@ enum { JT_COSY = 1, JT_SOFT = 2, JT_SWEET = 4, JT_GLOWING = 8, JT_SLEEPY = 16,
 
 enum { JU_MOSS = 0, JU_MACH, JU_BELT, JU_BED, JU_KINDS };
 enum { PH_NONE = 0, PH_DAWN, PH_DAY, PH_DUSK, PH_NIGHT };
+enum { JWX_NONE = 0, JWX_SUNNY, JWX_CLOUDY, JWX_FOGGY, JWX_RAINY, JWX_SNOWY, JWX_STORMY };
 enum { JSN_X = 0, JSN_ZONE, JSN_NEAR_KIND, JSN_NEAR_DIST, JSN_TIME, JSN_WEATHER,
        JSN_DAYS, JSN_GIFT, JSN_RANDOM, JSN_KINDS };
 
@@ -267,6 +268,7 @@ typedef struct {
 
   int16_t  minute;                     /* of the day, -1 unknown */
   uint8_t  phase;                      /* PH_* */
+  uint8_t  weather;                    /* JWX_* (apps/jarvm.def), 0 unknown */
   uint32_t steps, seed, epoch;         /* epoch: now, for senses; 0 unknown */
 } Jar;
 
@@ -667,7 +669,7 @@ static JS_OPT int js_sense(Jar *j, int i, int sense) {
   case JSN_NEAR_KIND: return js_nearest(j, i, 0);
   case JSN_NEAR_DIST: js_nearest(j, i, &d); return d;
   case JSN_TIME:      return j->phase;
-  case JSN_WEATHER:   return 0;                       /* not known offline */
+  case JSN_WEATHER:   return j->weather;              /* JWX_*, 0 not known */
   case JSN_DAYS:      return (j->epoch && p->made && j->epoch > p->made)
                              ? (int)((j->epoch - p->made) / 86400u) : 0;
   case JSN_GIFT:      return (p->flags & JIF_GIFT) ? 1 : 0;
@@ -803,7 +805,8 @@ static JS_OPT int js_item_event(Jar *j, int i, int ev, int arg) {
     if (ev == JE_TICK) {
       int per = hb->earg ? hb->earg : 1;
       if ((arg + p->phase) % per) continue;
-    } else if (hb->earg && hb->earg != arg && (ev == JE_NEAR || ev == JE_JAM || ev == JE_TIME)) {
+    } else if (hb->earg && hb->earg != arg && (ev == JE_NEAR || ev == JE_JAM || ev == JE_TIME ||
+                                                ev == JE_WEATHER)) {
       continue;
     }
     js_act(j, i, hb->action, hb->aarg);
@@ -1001,6 +1004,14 @@ static JS_OPT void js_set_minute(Jar *j, int minute) {
     j->phase = (uint8_t)ph;
     if (ph) js_event(j, JE_TIME, ph);
   }
+}
+
+/* The real weather outside (apps/jar.c asks the server), JWX_* or 0; a
+ * change is an event. */
+static JS_OPT void js_set_weather(Jar *j, int w) {
+  if (w == j->weather) return;
+  j->weather = (uint8_t)w;
+  if (w) js_event(j, JE_WEATHER, w);
 }
 
 /* ---- one step ------------------------------------------------------------ */
