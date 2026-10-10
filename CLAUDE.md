@@ -1019,6 +1019,11 @@ the store. Items run recipes (habits) or, in phase 2, bytecode scripts:
 simulated day); test fixtures pin that both machines agree. The signature
 covers the record minus its signature and its 8 memory slots (scripts write
 those).
+The jar's light is the real sky (2026-10-10): `GET /jar/sky?tz=` (open-meteo,
+cached per city per half hour) gives the weather and today's sunrise and
+sunset; the jar moves its clock so they fall in dawn and dusk, tints the sky,
+dims everything in front by the hour and the weather (glowing items light
+their corner), draws rain, snow and lightning, and fires `on weather rainy:`.
 
 **A shop's stock is 4 items, from a shared pool** (2026-10-10). Every item
 ever made goes into one pool (`server/jar.py`, "the pool"), and `own/ID` is

@@ -220,6 +220,18 @@ void test_jarsim_habits_go_through_events_and_actions(void) {
   CHECK_EQ(js_act(&J, 0, JA_FRAME, 1), 0);
   CHECK_EQ(p->cur, 1);
   CHECK_EQ(js_sense(&J, 0, JSN_TIME), PH_DAY);
+  /* the weather: a sense, and an event on a change only, narrowed by its tag */
+  CHECK_EQ(js_sense(&J, 0, JSN_WEATHER), 0);
+  p->hab[2].event = JE_WEATHER; p->hab[2].earg = JWX_SNOWY; p->hab[2].action = JA_GLOW; p->hab[2].aarg = 1;
+  p->glow = 0;
+  js_set_weather(&J, JWX_RAINY);
+  CHECK_EQ(p->glow, 0);                    /* rain is not snow */
+  CHECK_EQ(js_sense(&J, 0, JSN_WEATHER), JWX_RAINY);
+  js_set_weather(&J, JWX_SNOWY);
+  CHECK_EQ(p->glow, 1);
+  p->glow = 0;
+  js_set_weather(&J, JWX_SNOWY);           /* no change, no event */
+  CHECK_EQ(p->glow, 0);
   CHECK_EQ(js_sense(&J, 0, JSN_X), 100);
   CHECK_EQ(js_sense(&J, 0, JSN_ZONE), JZ_WORKS);
 }

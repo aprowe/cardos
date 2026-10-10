@@ -502,8 +502,9 @@ class Generate(unittest.TestCase):
         self.assertIn("Make it a critter", prompt)              # its kind, given
         self.assertIn("Thing 1", stub.calls[1][1])              # what is already made
         self.assertIn("Moth", prompt)                          # owned: not again
+        steer = prompt.split("The script language:")[0]    # the guide names every weather
         for word in ("tags", "autumn", "rainy", "fern", "shelf"):
-            self.assertNotIn(word, prompt)                      # nothing steers it but the brief
+            self.assertNotIn(word, steer)                       # nothing steers it but the brief
         self.assertEqual(kw["user"], "alex")
         self.assertIn("It will sell for", prompt)              # a price, chosen first
         ids = set()
@@ -738,6 +739,18 @@ class Routes(unittest.TestCase):
         except urllib.error.HTTPError as e:
             resp = e
         return (resp.status if hasattr(resp, "status") else resp.code), resp.read().decode()
+
+    def test_sky(self):
+        sky = {"word": "rainy", "temp": 11.4, "cloud": 90, "rise": 431, "set": 1105}
+        jar._sky_cache.clear()
+        with mock.patch("server.jar.fetch_sky", return_value=sky) as f:
+            s, body = self.req("GET", "/jar/sky?tz=PST8PDT,M3.2.0,M11.1.0", self.alex)
+            self.assertEqual(s, 200)
+            self.assertEqual(body, "sky rainy 4\nrise 431\nset 1105\ntemp 11\ncloud 90\n")
+            self.req("GET", "/jar/sky?tz=PST8PDT,M3.2.0,M11.1.0", self.sam)
+            self.assertEqual(f.call_count, 1)               # one city, one half hour: asked once
+            self.assertEqual(self.req("GET", "/jar/sky?tz=UTC0", self.alex)[1], "sky none 0\n")
+        self.assertEqual(self.req("GET", "/jar/sky?tz=UTC0", None)[0], 403)
 
     def me(self, tok):
         s, body = self.req("GET", "/jar/me", tok)

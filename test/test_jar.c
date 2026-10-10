@@ -58,6 +58,7 @@ static int f_net_ready(void) { return NET_UP; }
 
 /* A fresh app on the card as it is. */
 static void reopen(void) {
+  memset(&SKYQ, 0, sizeof SKYQ);                    /* statics start clear in a loaded app */
   memset(&J, 0, sizeof J);
   memset(&G, 0, sizeof G);
   jar_capp_main(&A, 0, 0);
@@ -75,6 +76,7 @@ static void start(uint32_t epoch) {
   RAN[0] = RAN_ARGS[0] = 0;
   fakeapi_epoch = epoch;
   fakeapi_ticks = 1000;
+  memset(&SKYQ, 0, sizeof SKYQ);
   jar_capp_main(&A, 0, 0);
 }
 
@@ -472,6 +474,78 @@ static int jar_server(const char *m, const char *path, const char *body, char *o
   }
   if (!strncmp(path, "/q/ack?q=jar.thanks&upto=8", 26)) { THANKS = 0; return snprintf(out, (size_t)cap, "ok 1\n"); }
   return -404;
+}
+
+/* The real sky: asked with the post, by the device's TZ. */
+static int SKY_OK = 1;
+static int sky_server(const char *m, const char *path, const char *body, char *out, int cap) {
+  if (!strncmp(path, "/jar/sky?tz=", 12)) {
+    if (!SKY_OK) return -502;
+    return snprintf(out, (size_t)cap, "sky rainy 4\nrise 480\nset 1020\ntemp 9\ncloud 90\n");
+  }
+  return jar_server(m, path, body, out, cap);
+}
+static int sky_shell(const char *line, char *out, size_t n) {
+  (void)line;
+  return snprintf(out, n, "PATH=/apps\nTZ=<+0530>-5:30\n");
+}
+
+void test_jar_the_real_sky(void) {
+  int before;
+  /* the minute moves so sunrise and sunset land in dawn and dusk */
+  memset(&SKYQ, 0, sizeof SKYQ);
+  CHECK_EQ(sun_minute(480), 480);                  /* not known: as the clock says */
+  SKYQ.rise = 480; SKYQ.set = 1020;
+  CHECK_EQ(sun_minute(480), 390);
+  CHECK_EQ(sun_minute(1020), 1110);
+  CHECK_EQ(sun_minute(0), 0);
+  CHECK_EQ(sun_minute(-1), -1);
+  CHECK(sun_minute(1439) >= 1438);
+  CHECK_EQ(js_phase_of(sun_minute(470)), PH_DAWN);  /* ten to eight, an hour of dark left */
+  CHECK_EQ(js_phase_of(sun_minute(1040)), PH_DUSK);
+
+  start(T0);
+  A.shell = sky_shell;
+  jf_handler = sky_server;
+  GIFTS = 0;
+  THANKS = 0;
+  SKY_OK = 1;
+  fakeapi_now.synced = 1;
+  fakeapi_now.hour = 12;
+  set_sky(sun_minute(720));
+  before = G.lit[3];
+  CHECK_EQ(before, 0);                               /* a clear noon: no light on it */
+  ticks(3600);
+  CHECK_EQ(jf_count("/jar/sky?tz=%3C%2B0530%3E-5%3A30"), 1);
+  CHECK_EQ(J.weather, JWX_RAINY);
+  CHECK_EQ(js_sense(&J, 0, JSN_WEATHER), JWX_RAINY);
+  CHECK_EQ(SKYQ.rise, 480);
+  CHECK_EQ(SKYQ.set, 1020);
+  CHECK(G.lit[3] > before);                          /* rain darkens noon */
+  CHECK_EQ(jf_count("/q/len"), 1);                   /* and the post was asked after it */
+  ticks(800);
+  dump("31_rain");
+  /* not again for half an hour; then again (only while the network is up) */
+  NET_UP = 1;
+  ticks(10 * 60 * 1000);
+  CHECK_EQ(jf_count("/jar/sky"), 1);
+  ticks(25 * 60 * 1000);
+  CHECK_EQ(jf_count("/jar/sky"), 2);
+  /* back from a screen: the weather is kept, without an event */
+  reopen();
+  CHECK_EQ(J.weather, 0);
+  memset(&SKYQ, 0, sizeof SKYQ);
+  /* a sky that cannot be had leaves the post asked all the same */
+  start(T0);
+  A.shell = sky_shell;
+  jf_handler = sky_server;
+  SKY_OK = 0;
+  ticks(3600);
+  CHECK_EQ(jf_count("/jar/sky"), 1);
+  CHECK_EQ(jf_count("/q/len"), 1);
+  CHECK_EQ(J.weather, 0);
+  SKY_OK = 1;
+  fakeapi_now.synced = 0;
 }
 
 void test_jar_a_gift_floats_down_and_a_thank_you_is_hearts(void) {

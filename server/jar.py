@@ -517,6 +517,76 @@ def fetch_weather(lat, lon):
         return None
 
 
+# ---- the sky over the jar: real sunrise, sunset and weather ---------------------
+
+SKY_URL = ("https://api.open-meteo.com/v1/forecast?latitude=%.2f&longitude=%.2f"
+           "&current=weather_code,temperature_2m,cloud_cover&daily=sunrise,sunset"
+           "&timezone=auto&forecast_days=1")
+SKY_S = 1800                    # asked again at most every half hour, per city
+_sky_cache = {}
+
+
+def _local_minute(stamp):
+    """"2026-10-10T07:12" -> 432, or None."""
+    m = re.search(r"T(\d{2}):(\d{2})", stamp or "")
+    return int(m.group(1)) * 60 + int(m.group(2)) if m else None
+
+
+def fetch_sky(lat, lon):
+    """{word, temp, cloud, rise, set} now at a place, sunrise and sunset in
+    its local minutes; None if open-meteo cannot be had."""
+    try:
+        req = urllib.request.Request(SKY_URL % (lat, lon), headers={"User-Agent": "cardos-server"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            got = json.loads(r.read().decode("utf-8", "replace"))
+        cur, daily = got.get("current") or {}, got.get("daily") or {}
+        temp, cloud = cur.get("temperature_2m"), cur.get("cloud_cover")
+        return {"word": weather_word(int(cur.get("weather_code"))),
+                "temp": None if temp is None else float(temp),
+                "cloud": None if cloud is None else int(cloud),
+                "rise": _local_minute((daily.get("sunrise") or [""])[0]),
+                "set": _local_minute((daily.get("sunset") or [""])[0])}
+    except Exception as e:                              # noqa: BLE001 - the jar keeps its clock sky
+        sys.stderr.write("jar: sky: %s\n" % e)
+        return None
+
+
+def sky_for(tz, now=None):
+    """The sky for a device's TZ, cached per city per half hour; None for no
+    place (UTC0) or no answer."""
+    place = city_for_tz(tz)
+    if not place:
+        return None
+    key = (place[0], int((time.time() if now is None else now) // SKY_S))
+    if key not in _sky_cache:
+        _sky_cache[key] = fetch_sky(*place[1])
+        if len(_sky_cache) > 256:
+            _sky_cache.pop(next(iter(_sky_cache)))
+    return _sky_cache[key]
+
+
+def sky_text(s):
+    """The device's lines: "sky WORD TAG" (TAG from apps/jarvm.def's weather
+    names, 0 unknown), "rise MIN", "set MIN", "temp C", "cloud PCT"."""
+    if not s:
+        return "sky none 0\n"
+    word = s.get("word") or "none"
+    out = ["sky %s %d" % (word, jarvm.GROUPS["weather"].get(word, 0))]
+    rise, sset = s.get("rise"), s.get("set")
+    if rise is not None and sset is not None and 0 < rise < sset < 1440:
+        out += ["rise %d" % rise, "set %d" % sset]
+    if s.get("temp") is not None:
+        out.append("temp %d" % round(s["temp"]))
+    if s.get("cloud") is not None:
+        out.append("cloud %d" % s["cloud"])
+    return "\n".join(out) + "\n"
+
+
+def get_sky(h, path, args):
+    """the real sky where the device is (tz=its TZ): weather, sunrise, sunset"""
+    h.text(sky_text(sky_for(arg(args, "tz")[:64])))
+
+
 def day_facts(date, tz):
     """Everything about the day that steers the stock."""
     place = city_for_tz(tz)
@@ -1498,6 +1568,7 @@ ROUTES = [
     ("GET", "/jar/day", get_day, "device_or_dash"),
     ("GET", "/jar/item", get_item, "device_or_dash"),
     ("GET", "/jar/pubkey", get_pubkey, "device_or_dash"),
+    ("GET", "/jar/sky", get_sky, "device_or_dash"),
     ("POST", "/jar/gift", post_gift, "device_or_dash"),
     ("POST", "/jar/thanks", post_thanks, "device_or_dash"),
 ]
