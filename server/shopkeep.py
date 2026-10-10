@@ -41,7 +41,9 @@ SLACK = 80                    # allowed over, then trimmed: a few characters too
 SAY_LEN = 160                 # what a player may say at once
 REPLY_LEN = 600               # what he says back
 LOG_KEPT = 16                 # lines of each player's talk kept for their screen
-TALK_SENT = 6                 # lines of it the device is sent (its buffer is 2 KB)
+TALK_SENT = 4                 # lines of it the device is sent: 4 x SENT_LEN and his greeting
+SENT_LEN = 400                # fit Jar Post's 2 KB (a reply was cut at 300 on the first try)
+ASK_LEN = 350                 # what he is asked to keep a reply under
 EVENTS_KEPT = 40
 BRIEFS_KEPT = 16
 ANSWER_CHANCE = 40            # percent: a new find answers what the player asked
@@ -237,7 +239,7 @@ def talk_prompt(person, said, friends=()):
     return ("[%s (account %s) is at the counter. %s They say:]\n%s\n\n"
             "[Answer them as Tibbs, out loud: a few sentences at most, under %d characters. "
             "No JSON.]" % (display(person), person, _friends_line(person, friends), said,
-                           REPLY_LEN - 100))
+                           ASK_LEN))
 
 
 def _reply(chat, person, said, friends, st):
@@ -287,7 +289,7 @@ def talk_text(person, store=None):
     if day:
         out.append("day\t" + day)
     for c in _log(st, person)[-TALK_SENT:]:
-        out.append("%s\t%s" % (c["who"], wire.flat(c["text"], 300, ascii=True)))
+        out.append("%s\t%s" % (c["who"], wire.flat(c["text"], SENT_LEN, ascii=True)))
     return "\n".join(out) + "\n"
 
 
