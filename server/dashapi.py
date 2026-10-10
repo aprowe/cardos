@@ -137,7 +137,9 @@ def server_state(h):
     voice = h.voice.ready() if h.voice else False
     render = any(r[1].startswith("/render") for r in app.ALL_ROUTES)
     store = getattr(c, "store", None)
+    from . import updates
     return {
+        "version": updates.server_version(),
         "claude": {"ok": bool(c and c.claude), "detail": str(c.claude) if c and c.claude
                    else "the claude command was not found"},
         "session": c.session_id if c and c.session_id else None,
@@ -154,6 +156,7 @@ def updates_state(h):
     """The /update manifest, both flavours, as data."""
     from . import updates
     fw, apps = {"debug": None, "release": None}, []
+    versions = {"debug": None, "release": None}
     for flavor in ("debug", "release"):
         try:
             firmware, apps_dir = h.update_files(flavor)
@@ -166,10 +169,13 @@ def updates_state(h):
             f = line.split()
             if len(f) >= 2 and f[0] == "firmware":
                 fw[flavor] = f[1][:12]
+            elif len(f) >= 3 and f[0] == "version" and f[1] == "firmware":
+                versions[flavor] = f[2]
             elif flavor == "release" and len(f) >= 4 and f[0] == "app":
                 apps.append({"name": f[1], "folder": f[4] if len(f) > 4 else "",
                              "size": int(f[3]) if f[3].isdigit() else 0})
-    return {"firmware": fw, "apps": apps}
+    return {"firmware": fw, "versions": versions, "apps": apps,
+            "server": updates.server_version()}
 
 
 # ---- routes ----------------------------------------------------------------------------

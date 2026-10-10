@@ -459,7 +459,19 @@ static void update_say(void *ctx, const char *line) {
   con_printf("%s\n", line);
 }
 
+/* update version -- this firmware's version, and what the server offers */
+static void update_versions(const char *flavor) {
+  const UpdateCheck *c;
+  con_printf("running   %s (%s)\n", esp_app_get_description()->version, update_flavor());
+  if (!fs_mounted()) { err("update", "no card mounted"); return; }
+  if ((c = update_check_shared(flavor)) == NULL) { err("update", update_error()); return; }
+  con_printf("offered   %s (%s)%s\n", c->m.fw_version[0] ? c->m.fw_version : "?", flavor,
+             c->firmware_stale ? "" : ", the same");
+  con_printf("server    %s\n", c->m.server_version[0] ? c->m.server_version : "?");
+}
+
 /* update        -- what the PC has that is newer than this
+ * update version -- versions: running, offered, the server's
  * update apps   -- install the apps
  * update os     -- install the firmware (restarts)
  * update all    -- both, apps first so they survive if the restart does not */
@@ -477,11 +489,12 @@ void cmd_update(const char *arg) {
   }
   if (!flavor[0]) snprintf(flavor, sizeof flavor, "%s", update_flavor());
 
+  if (!strcmp(what, "version")) { update_versions(flavor); return; }
   if (!strcmp(what, "apps")) apps = 1;
   else if (!strcmp(what, "os")) os = 1;
   else if (!strcmp(what, "all")) apps = os = 1;
   else if (what[0] || !update_flavor_valid(flavor)) {
-    con_write("usage: update [apps|os|all] [debug|release]\n");
+    con_write("usage: update [apps|os|all|version] [debug|release]\n");
     return;
   }
 

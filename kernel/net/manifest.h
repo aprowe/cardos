@@ -38,6 +38,8 @@ typedef struct {
   uint32_t firmware_size;
   int      napps;
   int      dropped;                   /* app lines past MANIFEST_MAX_APPS */
+  char     fw_version[32];            /* "version firmware v0.15.1": what is offered */
+  char     server_version[32];        /* "version server v0.15.1-2-gabc": the server */
   ManifestApp app[MANIFEST_MAX_APPS];
 } Manifest;
 

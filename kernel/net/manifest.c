@@ -2,6 +2,7 @@
 
 #include "kernel/net/manifest.h"
 
+#include <stdio.h>
 #include <string.h>
 
 uint32_t manifest_fnv1a(uint32_t h, const uint8_t *data, size_t n) {
@@ -116,6 +117,14 @@ int manifest_parse(const char *text, Manifest *out) {
         out->has_firmware = 1;
         out->firmware_size = size;
         understood++;
+      }
+    } else if (!strcmp(kind, "version")) {
+      /* "version firmware V" / "version server V": labels only, never
+       * compared -- what is stale is decided by hashes. Not counted as
+       * understood, so a page of them alone is still not a manifest. */
+      if ((q = word(q, b, sizeof b)) && (q = word(q, a, sizeof a))) {
+        if (!strcmp(b, "firmware")) snprintf(out->fw_version, sizeof out->fw_version, "%s", a);
+        else if (!strcmp(b, "server")) snprintf(out->server_version, sizeof out->server_version, "%s", a);
       }
     } else if (!strcmp(kind, "app") && out->napps >= MANIFEST_MAX_APPS) {
       out->dropped++;                 /* said, not lost: see update.c */

@@ -127,7 +127,7 @@ def publish(store, firmwares, apps_dir, firmware):
     _, store_apps = updates.store_paths(store)
     have = set(updates.manifest(firmware=os.devnull, apps_dir=store_apps).splitlines())
     for line in updates.manifest(firmware=os.devnull, apps_dir=apps_dir).splitlines():
-        if line in have:
+        if line in have or not line.startswith("app "):    # "version server ..." is a label
             continue
         name = line.split()[1]
         todo.append((name, os.path.join(apps_dir, name + ".capp"),
@@ -148,7 +148,7 @@ def publish(store, firmwares, apps_dir, firmware):
     # every `update` put them back on the card.
     built = {ln.split()[1] for ln in
              updates.manifest(firmware=os.devnull, apps_dir=apps_dir).splitlines()
-             if len(ln.split()) > 1}
+             if ln.startswith("app ")}
     if built:
         for name in updates.app_files(store_apps):
             if name[:-len(".capp")] not in built:

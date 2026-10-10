@@ -71,6 +71,9 @@ static struct {
   int   f_ui, f_uib;
   CRect c;
   char  diff[512];
+  /* versions, from the console's `update version`: this firmware's, the one
+   * the server offers, the server's own */
+  char  run_v[40], off_v[40], srv_v[40];
 } U;
 
 static void draw(int f, int x, int y, const char *s, uint16_t fg, uint16_t bg) {
@@ -158,6 +161,46 @@ static void parse_diff(void) {
   /* The firmware last: it is installed last, and restarts the device. */
 }
 
+/* "running   V (flavor)" / "offered   V (flavor)..." / "server    V":
+ * the word after the label, into out. */
+static void version_of(const char *text, const char *label, char *out, int n) {
+  const char *p = text;
+  int k = 0;
+  out[0] = 0;
+  while (*p) {
+    if (str_starts(p, label)) {
+      p += api->str_len(label);
+      while (*p == ' ') p++;
+      while (*p && *p != ' ' && *p != '\n' && k < n - 1) out[k++] = *p++;
+      out[k] = 0;
+      return;
+    }
+    while (*p && *p != '\n') p++;
+    if (*p) p++;
+  }
+}
+
+static void fetch_versions(void) {
+  static char out[256];
+  out[0] = 0;
+  if (api->shell("update version", out, sizeof out) < 0) out[0] = 0;
+  version_of(out, "running", U.run_v, sizeof U.run_v);
+  version_of(out, "offered", U.off_v, sizeof U.off_v);
+  version_of(out, "server", U.srv_v, sizeof U.srv_v);
+}
+
+/* Both versions, along the bottom of the body: what this is, and what the
+ * server has. */
+static void paint_versions(void) {
+  char b[48];
+  int y = U.c.y + U.c.h - FOOT_H - 22;
+  if (!U.run_v[0]) return;
+  api->fmt(b, sizeof b, "this device  %s", U.run_v);
+  draw(-1, U.c.x + 8, y, b, CLR_FAINT, CLR_BG);
+  api->fmt(b, sizeof b, "the server   %s", U.off_v[0] ? U.off_v : (U.srv_v[0] ? U.srv_v : "?"));
+  draw(-1, U.c.x + 8, y + 10, b, CLR_FAINT, CLR_BG);
+}
+
 static void run_check(void) {
   int n = api->update_check(U.diff, sizeof U.diff);
   U.top = 0;
@@ -167,6 +210,7 @@ static void run_check(void) {
     api->fmt(U.msg, sizeof U.msg, "%s", U.diff);
     return;
   }
+  fetch_versions();
   if (n == 0) { U.state = S_CURRENT; U.n = 0; return; }
   parse_diff();
   U.state = S_READY;
@@ -204,7 +248,8 @@ static void paint_row(int i) {
   api->fill(capp_rect(U.c.x, y, 10, ROW_H), CLR_BG);
   glyph(x, y + (ROW_H - 9) / 2, g, gc, CLR_BG);
   api->fill(capp_rect(x + 9, y, 6, ROW_H), CLR_BG);
-  if (it->firmware) api->fmt(label, sizeof label, "CardOS firmware");
+  if (it->firmware) api->fmt(label, sizeof label, U.off_v[0] ? "CardOS %s" : "CardOS firmware",
+                              U.off_v);
   else api->fmt(label, sizeof label, "%s", it->name);
   draw(U.f_ui, x + 15, ty, label, it->state == I_WAIT ? CLR_DIM : CLR_TEXT, CLR_BG);
   w = width(U.f_ui, label);
@@ -331,6 +376,7 @@ static void app_paint(void *st, CRect c) {
     return;
   case S_CURRENT:
     paint_center(0, CLR_GOOD, "Up to date", "the firmware and every app match the server");
+    paint_versions();
     footer_paint(api, c, "r check again");
     return;
   case S_READY:

@@ -248,7 +248,7 @@ class Api(Server):
         self.assertEqual(st["device"], {"connected": False, "last_seen": None})
         self.assertEqual((st["google"]["configured"], st["google"]["signed_in"]), (True, False))
         self.assertEqual(st["toggl"]["connected"], False)
-        self.assertEqual(set(st["server"]), {"claude", "session", "builds", "voice", "render"})
+        self.assertEqual(set(st["server"]), {"version", "claude", "session", "builds", "voice", "render"})
         self.assertIn("apps", st["updates"])
 
     def test_toggl_token_is_checked_then_kept_then_forgotten(self):

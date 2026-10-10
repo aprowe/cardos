@@ -41,11 +41,12 @@ def main():
     m = updates.manifest(firmware=os.path.join(tmp, "none.bin"), apps_dir=apps,
                          folders={})
     fails += not check("lists each .capp with its hash and size",
-                       m, "app pinball e40c292c 1\n")
+                       m, "app pinball e40c292c 1\nversion server %s\n" % updates.server_version())
     m = updates.manifest(firmware=os.path.join(tmp, "none.bin"), apps_dir=apps,
                          folders={"pinball": "Games"})
     fails += not check("and the folder it belongs in, last",
-                       m, "app pinball e40c292c 1 Games\n")
+                       m, "app pinball e40c292c 1 Games\nversion server %s\n"
+                       % updates.server_version())
     fails += not check("the repository's own table is apps/folders.txt",
                        updates.load_folders().get("timer"), "Plan")
     fails += not check("where '-' means the top level",
