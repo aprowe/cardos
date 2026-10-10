@@ -414,17 +414,16 @@ Details the contract leaves open, as built:
 ### The signature, exactly
 
 ECDSA P-256 over SHA-256, the signature raw r || s (64 bytes). The signed
-message is the record **without** its signature: bytes [0, 208) with byte
-204 (signature length) set to 0 and the total length (offset 2) counting no
+message is the record **without** its signature and **without its memory**:
+bytes [0, 208) with byte 204 (signature length) set to 0, bytes 136..151
+(the 8 memory slots) set to 0, and the total length (offset 2) counting no
 signature, followed by everything that came after the signature -- the
-script, then the frames. Put the other way, the server encodes the record
-with no signature, signs those bytes, and inserts the 64 bytes at offset
-208, adding 64 to the total and writing 64 at 204. So a device extracts the
-message by: copy bytes 0..207, set [204] = 0, set [2..3] = total - sig_len,
-append bytes from 208 + sig_len to the end. The signature covers every byte
-of the record, memory included: a device must hand back the record exactly
-as it was signed (keep an item's moving memory beside it, not in it), or
-the next gift will not verify.
+script, then the frames. So a device extracts the message by: copy bytes
+0..207, set [204] = 0, zero [136..151], set [2..3] = total - sig_len, append
+bytes from 208 + sig_len to the end. Memory is left out (2026-10-09, after
+the first version covered it) because scripts write it on the device and
+keep it in the record; a gift must still verify afterwards. Everything else
+must come back exactly as signed.
 
 `test/fixtures/` holds, for the device's host test, a record signed with a
 fixed test key (the private scalar is SHA-256 of "jar factory test key"

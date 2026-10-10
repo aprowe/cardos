@@ -267,6 +267,18 @@ class Signing(unittest.TestCase):
         bad[-1] ^= 1
         self.assertFalse(jar.verified(bytes(bad), test_pub()))
 
+    def test_memory_is_not_signed_but_everything_else_is(self):
+        # Scripts write the memory slots on the device; a gift must still
+        # verify afterwards. Anything else changed must not.
+        raw = raw_item("Memo", line="remembers")
+        rec = jar.seal(jar.encode(jar.to_item(raw, 77, 1791504000, "cosy")), test_signer)
+        mem = bytearray(rec)
+        mem[136:152] = bytes(range(1, 17))
+        self.assertTrue(jar.verified(bytes(mem), test_pub()))
+        renamed = bytearray(rec)
+        renamed[12] ^= 1
+        self.assertFalse(jar.verified(bytes(renamed), test_pub()))
+
     def test_fixtures(self):
         with open(os.path.join(FIXTURES, "jar_item_signed.bin"), "rb") as f:
             rec = f.read()
@@ -277,8 +289,12 @@ class Signing(unittest.TestCase):
         self.assertEqual(pub, test_pub())
         self.assertEqual(len(pub), 65)
         self.assertEqual(jar.message(rec), msg)
-        # the extraction, spelled out the way a device does it
-        self.assertEqual(msg[:204], rec[:2] + (len(rec) - 64).to_bytes(2, "little") + rec[4:204])
+        # the extraction, spelled out the way a device does it: the memory
+        # slots (136..151) zeroed, which the fixture's are not
+        self.assertNotEqual(rec[136:152], bytes(16))
+        self.assertEqual(msg[136:152], bytes(16))
+        self.assertEqual(msg[:136], rec[:2] + (len(rec) - 64).to_bytes(2, "little") + rec[4:136])
+        self.assertEqual(msg[152:204], rec[152:204])
         self.assertEqual(msg[204], 0)
         self.assertEqual(msg[205:208], rec[205:208])
         self.assertEqual(msg[208:], rec[208 + 64:])
@@ -290,10 +306,12 @@ class Signing(unittest.TestCase):
 def write_fixtures():
     raw = raw_item("Fixture", line="Made for the device's tests")
     item = jar.to_item(raw, 4242, 1791504000, "odd,glowing,autumn")
-    unsigned = jar.encode(item)
-    rec = jar.seal(unsigned, test_signer)
+    unsigned = bytearray(jar.encode(item))
+    # memory a script wrote, which the signature must not cover
+    unsigned[136:152] = (1).to_bytes(2, "little") * 3 + (0xFFFF).to_bytes(2, "little") + bytes(8)
+    rec = jar.seal(bytes(unsigned), test_signer)
     os.makedirs(FIXTURES, exist_ok=True)
-    for name, data in (("jar_item_signed.bin", rec), ("jar_item_message.bin", unsigned),
+    for name, data in (("jar_item_signed.bin", rec), ("jar_item_message.bin", jar.message(rec)),
                        ("jar_pubkey.bin", test_pub())):
         with open(os.path.join(FIXTURES, name), "wb") as f:
             f.write(data)

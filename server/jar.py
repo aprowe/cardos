@@ -22,8 +22,10 @@ below mirror jitem_encode and jitem_decode, and the enums (kinds,
 movements, events, actions, ...) are read out of that header rather than
 typed twice. A signed record is the unsigned one with the signature put in
 after the header: the signed message is the record with no signature --
-bytes [0, header) with the signature length (offset 204) 0 and the total
-length (offset 2) not counting it, then the script and frames.
+bytes [0, header) with the signature length (offset 204) 0, the 8 memory
+slots (bytes 136..151) 0, and the total length (offset 2) not counting the
+signature, then the script and frames. Memory is out of it because scripts
+write it on the device, and a gift must still verify afterwards.
 
 Routes (all "device_or_dash"; a refusal is "error WHY\\n" with its status):
 
@@ -275,14 +277,18 @@ def decode(data):
     }
 
 
+MEM_AT, MEM_LEN = 136, 16      # the 8 int16 memory slots: scripts write them
+
+
 def message(record):
     """What a record's signature covers: the record without its signature --
-    the header with signature length 0 and the total not counting it, then
-    everything after the signature (script, frames)."""
+    the header with signature length 0, the memory slots 0 and the total not
+    counting the signature, then everything after it (script, frames)."""
     record = bytes(record)
     hdr, sig_len = record[1], record[204]
     head = bytearray(record[:hdr])
     head[204] = 0
+    head[MEM_AT:MEM_AT + MEM_LEN] = bytes(MEM_LEN)
     head[2:4] = (len(record) - sig_len).to_bytes(2, "little")
     return bytes(head) + record[hdr + sig_len:]
 
@@ -293,7 +299,7 @@ def seal(unsigned, signer=None):
     unsigned = bytes(unsigned)
     if unsigned[204] != 0:
         unsigned = message(unsigned)
-    sig = (signer or sign.sign)(unsigned)
+    sig = (signer or sign.sign)(message(unsigned))
     hdr = unsigned[1]
     head = bytearray(unsigned[:hdr])
     head[204] = len(sig)
