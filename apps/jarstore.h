@@ -198,6 +198,9 @@ typedef struct {
   char     date[12];                   /* the server's day; "" the built-in batch */
   char     tags[48];                   /* the Today card */
   uint8_t  n, gen, sold;               /* sold: a bit per slot */
+  uint8_t  held;                       /* a bit per slot: kept into the next stock */
+  uint8_t  next;                       /* the server's items fetched (some may be refused) */
+  uint32_t batch;                      /* the server's number for this stock */
   uint32_t id[JST_STOCK_N];
   uint16_t price[JST_STOCK_N];
 } JStock;
@@ -241,6 +244,9 @@ static JST_OPT void jst_stock_load(const CardApi *api, JStock *s, char *text, in
     else if (js_word_is(w, "tags")) jst_word(&p, s->tags, sizeof s->tags);
     else if (js_word_is(w, "gen")) s->gen = (uint8_t)js_num(&p);
     else if (js_word_is(w, "sold")) s->sold = (uint8_t)js_num(&p);
+    else if (js_word_is(w, "held")) s->held = (uint8_t)js_num(&p);
+    else if (js_word_is(w, "next")) s->next = (uint8_t)js_num(&p);
+    else if (js_word_is(w, "batch")) s->batch = js_num(&p);
     else if (js_word_is(w, "item") && s->n < JST_STOCK_N) {
       s->id[s->n] = js_num(&p);
       s->price[s->n] = (uint16_t)js_num(&p);
@@ -254,8 +260,9 @@ static JST_OPT void jst_stock_load(const CardApi *api, JStock *s, char *text, in
 
 static JST_OPT int jst_stock_save(const CardApi *api, const JStock *s, char *text, int cap) {
   int n, i;
-  n = api->fmt(text, (size_t)cap, "date %s\ntags %s\ngen %u\nsold %u\n", s->date, s->tags,
-               (unsigned)s->gen, (unsigned)s->sold);
+  n = api->fmt(text, (size_t)cap, "date %s\ntags %s\ngen %u\nsold %u\nheld %u\nnext %u\nbatch %u\n",
+               s->date, s->tags, (unsigned)s->gen, (unsigned)s->sold, (unsigned)s->held,
+               (unsigned)s->next, (unsigned)s->batch);
   for (i = 0; i < s->n && n < cap - 32; i++)
     n += api->fmt(text + n, (size_t)(cap - n), "item %u %u\n", (unsigned)s->id[i], (unsigned)s->price[i]);
   return jst_put(api, JST_STOCK, text, n);

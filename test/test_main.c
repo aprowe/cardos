@@ -426,6 +426,8 @@ void test_jarshop_shelf(void);
 void test_jarshop_fetches_the_days_stock_and_checks_each_record(void);
 void test_jarshop_an_ok_without_a_count_does_not_empty_the_shop(void);
 void test_jarshop_items_show_as_they_are_made(void);
+void test_jarshop_opened_again_it_picks_up_the_rest_of_a_stock(void);
+void test_jarshop_held_items_stay_into_the_next_stock(void);
 void test_jarshop_a_word_to_the_shopkeeper(void);
 void test_jarshop_g_buys_and_goes_to_send_a_gift(void);
 void test_jarsim_every_coin_is_a_jar_that_left(void);
@@ -1385,6 +1387,8 @@ int main(void) {
   RUN(test_jarshop_fetches_the_days_stock_and_checks_each_record);
   RUN(test_jarshop_an_ok_without_a_count_does_not_empty_the_shop);
   RUN(test_jarshop_items_show_as_they_are_made);
+  RUN(test_jarshop_opened_again_it_picks_up_the_rest_of_a_stock);
+  RUN(test_jarshop_held_items_stay_into_the_next_stock);
   RUN(test_jarshop_a_word_to_the_shopkeeper);
   RUN(test_jarshop_g_buys_and_goes_to_send_a_gift);
   printf("-- jarsim --\n");

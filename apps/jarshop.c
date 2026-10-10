@@ -58,7 +58,7 @@ static struct {
   int k, nitems, polls, tried, again;
   /* The server makes a stock one item at a time and says "more" until it is
    * done: `more` is that, `live` that this batch is already on show. */
-  int more, live;
+  int more, live, got, quiet;
   uint32_t wait_until;
 } G;
 
@@ -90,6 +90,7 @@ static void load_page(void) {
       if (!stuff_mode()) {
         G.tile[i].price = S.price[k];
         G.tile[i].sold = (uint8_t)jst_sold(&S, &J, k);
+        G.tile[i].held = (uint8_t)(S.held >> k & 1);
         G.tile[i].ok = !G.tile[i].sold;
       }
     }
@@ -200,18 +201,41 @@ static int day_body(void) {
   k = put(NET, k, sizeof NET, "\n");
   if (tz[0]) { k = put(NET, k, sizeof NET, "tz "); k = put(NET, k, sizeof NET, tz); k = put(NET, k, sizeof NET, "\n"); }
   if (HINT[0]) { k = put(NET, k, sizeof NET, "hint "); k = put(NET, k, sizeof NET, HINT); k = put(NET, k, sizeof NET, "\n"); }
+  /* The stock on show: what was bought from it is ours now, what is held
+   * stays in the next one; the server puts the rest back in the pool. */
+  if (S.date[0]) {
+    int pass;
+    for (pass = 0; pass < 2; pass++) {
+      first = 1;
+      for (i = 0; i < S.n; i++)
+        if ((pass ? S.held : S.sold) >> i & 1) {
+          k += api->fmt(NET + k, sizeof NET - (size_t)k, "%s%u", first ? (pass ? "held " : "bought ") : ",",
+                        (unsigned)S.id[i]);
+          first = 0;
+        }
+      if (!first) k = put(NET, k, sizeof NET, "\n");
+    }
+  }
   return k;
 }
 
-/* Ask for today's stock: once a session, and only when the stock here is
- * not today's. Without a clock there is no "today", so nothing. */
+/* Ask for today's stock, once a session. When the stock here is already
+ * today's, only ask how it stands (a GET): the rest of a stock that was still
+ * being made, or a new one, is picked up then -- quietly, saying nothing if
+ * nothing changed or the server cannot be reached. Without a clock there is
+ * no "today", so nothing. */
 static int s_fresh;                               /* r: a new batch now, not tomorrow */
 
 static void start_day(void) {
   if (G.tried || U.net || !api->epoch()) return;
-  if (!s_fresh && S.date[0] && S.gen == today_gen()) return;
   if (need_pub()) return;                        /* the key first; then here again */
   G.tried = 1;
+  G.quiet = 0;
+  if (!s_fresh && S.date[0] && S.gen == today_gen()) {
+    G.quiet = 1;
+    if (send(N_DAY_POLL, "GET", "/jar/day", 0) != 0) G.tried = 0;
+    return;
+  }
   day_body();
   if (send(N_DAY_POST, "POST", s_fresh ? "/jar/day?fresh=1" : "/jar/day", NET) == 0)
     net_status(s_fresh ? "asking for a new stock" : "asking for today's stock");
@@ -223,8 +247,13 @@ static void start_day(void) {
  * go. What was bought from it stays bought (its sold bits are the shop's). */
 static void show_batch(void) {
   char p[48];
-  int i, old = S.gen;
+  int i, j, old = S.gen;
   NS.sold = G.live ? S.sold : 0;
+  if (G.live) NS.held = S.held;
+  else                                            /* a new stock: held ones, by id */
+    for (NS.held = 0, i = 0; i < NS.n; i++)
+      for (j = 0; j < S.n; j++)
+        if (S.date[0] && NS.id[i] == S.id[j] && (S.held >> j & 1)) NS.held = (uint8_t)(NS.held | 1u << i);
   ji_copy(&S, &NS, (int)sizeof S);
   jst_stock_save(api, &S, TEXT, sizeof TEXT);
   if (old != S.gen)
@@ -244,48 +273,58 @@ static void next_item(void) {
       G.again = 1;
       return;
     }
-    show_batch();
     net_status("");
+    if (!G.got && G.live) { G.quiet = 0; return; }   /* asked how it stands: as it was */
+    show_batch();
     say(S.n ? "Today's stock is in" : "No stock today");
+    G.quiet = 0;
     return;
   }
   api->fmt(p, sizeof p, "/jar/item?i=%d", G.k);
   if (send(N_ITEM, "GET", p, 0) != 0) G.wait_until = api->ticks_ms() + 500;
 }
 
-/* "ok DATE\ntags ...\nitems N[\nmore]": 1 if that is what NET holds.
- * "more" says the server is still making the rest: the N so far are
- * fetched and shown, and it is asked again. */
+/* "ok DATE\ntags ...\nitems N\nbatch B[\nmore]": 1 if that is what NET
+ * holds. "more" says the server is still making the rest: the N so far are
+ * fetched and shown, and it is asked again. The batch number says whether
+ * it is the stock on show (carry on from what is here) or a new one. */
 static int day_reply(void) {
   const char *p = NET;
-  char date[12], *c;
-  int going_on;
+  char date[12], tags[sizeof NS.tags], *c;
+  uint32_t batch = 0;
   if (!str_starts(p, "ok")) return 0;
   tsv_field(p + (p[2] ? 3 : 2), 0, date, sizeof date);
   for (c = date; *c; c++) if (*c == ' ') *c = 0;
-  /* the same batch, grown: carry on from the items already here */
-  going_on = G.more && str_same(NS.date, date);
-  if (!going_on) {
-    ji_zero(&NS, (int)sizeof NS);
-    ji_copy(NS.date, date, (int)sizeof NS.date);
-    G.live = 0;
-  }
   G.nitems = -1;
   G.more = 0;
+  tags[0] = 0;
   for (p = tsv_next_line(p); *p; p = tsv_next_line(p)) {
-    if (str_starts(p, "tags ")) tsv_field(p + 5, 0, NS.tags, sizeof NS.tags);
+    if (str_starts(p, "tags ")) tsv_field(p + 5, 0, tags, sizeof tags);
     else if (str_starts(p, "items ")) { const char *q = p + 6; G.nitems = (int)str_uint(&q); }
+    else if (str_starts(p, "batch ")) { const char *q = p + 6; batch = str_uint(&q); }
     else if (str_starts(p, "more")) G.more = 1;
   }
   /* No count is not a count of none: an older server answered a POST for a
    * stock it had already made with "ok DATE" alone, and that replaced the
    * stock with nothing. Ask for the whole answer instead. */
   if (G.nitems < 0) { G.nitems = 0; return 0; }
-  /* The batch's records are kept under a number that names the day, so a
-   * stock file only ever points at records of its own day. */
-  if (going_on) return 1;
-  NS.gen = (uint8_t)today_gen();
-  G.k = 0;
+  G.got = 0;
+  if (S.date[0] && str_same(S.date, date) && S.batch == batch) {
+    /* the stock on show: fetch only what is not here yet */
+    ji_copy(&NS, &S, (int)sizeof NS);
+    G.k = S.next > S.n ? S.next : S.n;
+    G.live = 1;
+  } else {
+    ji_zero(&NS, (int)sizeof NS);
+    ji_copy(NS.date, date, (int)sizeof NS.date);
+    NS.batch = batch;
+    /* The batch's records are kept under a number that names the day, so a
+     * stock file only ever points at records of its own day. */
+    NS.gen = (uint8_t)today_gen();
+    G.k = 0;
+    G.live = 0;
+  }
+  ji_copy(NS.tags, tags, (int)sizeof NS.tags);
   return 1;
 }
 
@@ -300,6 +339,7 @@ static void net_reply(int n) {
     return;
   case N_DAY_POST:
   case N_DAY_POLL:
+    if (G.quiet && (n < 0 || str_starts(NET, "error"))) { net_status(""); G.quiet = 0; return; }
     if (n < 0) { net_status(""); failed("Today's stock", n); return; }
     if (refused("Today's stock")) { net_status(""); return; }
     if (day_reply()) {
@@ -312,13 +352,15 @@ static void net_reply(int n) {
       G.again = 1;
       return;
     }
-    if (++G.polls > 60) { net_status(""); say("The stock is late today"); return; }
+    /* 15 minutes with nothing new: the server's turns are slow, not dead */
+    if (++G.polls > 300) { net_status(""); say("The stock is late today"); return; }
     G.wait_until = api->ticks_ms() + 3000;                /* "pending": ask again */
     G.again = 1;
     net_status("today's stock is being made");
     return;
   case N_ITEM:
     if (n < 0) { net_status(""); failed("Today's things", n); return; }
+    G.k++;
     if (take_record(NET, "stock") > 0 && NS.n < JST_STOCK_N) {
       char p[48];
       jst_stock_path(api, NS.gen, NS.n, p, sizeof p);
@@ -326,11 +368,12 @@ static void net_reply(int n) {
         NS.id[NS.n] = IO.it.id;
         NS.price[NS.n] = (uint16_t)jst_price(&IO.it);
         NS.n++;
+        NS.next = (uint8_t)G.k;
+        G.got++;
         show_batch();                                      /* on show as it comes */
         G.polls = 0;
       }
     }
-    G.k++;
     next_item();
     return;
   }
@@ -371,7 +414,10 @@ static void detail(int x) {
   if (stuff_mode())
     text(x + 2, BAR + 84, t->in_jar ? "in the jar" : t->shelved ? "on the shelf" : "in My Stuff",
          t->in_jar ? C_GOLD : t->shelved ? C_TRAIT : C_DIM, C_PANEL);
-  else price(x + 2, BAR + 84, t->price, t->price > J.coins, C_PANEL);
+  else {
+    price(x + 2, BAR + 84, t->price, t->price > J.coins, C_PANEL);
+    if (t->held) text(SW - 6 - 4 * 6, BAR + 84, "held", C_TRAIT, C_PANEL);
+  }
 }
 
 static void new_stock_in(char *b, int n) {
@@ -401,6 +447,7 @@ static void paint_grid(void) {
       } else {
         api->fmt(b, sizeof b, "%u", (unsigned)t->price);
         text(x + 14 - slen(b) * 3, y + 19, b, t->price > J.coins ? C_WARN : C_GOLD, C_PANEL);
+        if (t->held) { box(x + 22, y + 2, 4, 4, C_TRAIT); box(x + 23, y + 3, 2, 2, C_PANEL); }
       }
     }
     if (i == G.sel - G.top * 4) outline(x - 1, y - 1, 30, 30, C_GOLD);
@@ -538,7 +585,7 @@ static void paint_shelf(void) {
 }
 
 static void app_paint(void *st, CRect c) {
-  static const char *const H_STOCK[] = { "Ent", "buy", "G", "gift", "E", "hint", "Tab", "stuff", 0 };
+  static const char *const H_STOCK[] = { "Ent", "buy", "Spc", "hold", "E", "hint", "Tab", "stuff", 0 };
   static const char *const H_HINT[] = { "Ent", "tell him", "Esc", "never mind", 0 };
   static const char *const H_STUFF[] = { "Ent", "open", "G", "gift", "Tab", "shop", "Esc", "jar", 0 };
   static const char *const H_PICK[] = { "Ent", "choose", "Esc", "back", 0 };
@@ -596,7 +643,11 @@ static uint32_t buy(void) {
   if (jst_put(api, p, IO.raw, n) != 0) { J.nowned--; say("Could not write to the card"); return 0; }
   js_spend(&J, S.price[k]);
   if (!S.date[0]) J.sold |= 1u << (id & 31);
-  else { S.sold = (uint8_t)(S.sold | (1u << k)); jst_stock_save(api, &S, TEXT, sizeof TEXT); }
+  else {
+    S.sold = (uint8_t)(S.sold | (1u << k));
+    S.held = (uint8_t)(S.held & ~(1u << k));          /* bought: no longer held */
+    jst_stock_save(api, &S, TEXT, sizeof TEXT);
+  }
   save();
   load_page();
   return id;
@@ -623,6 +674,19 @@ static int key_grid(int k) {
   case CAPP_KEY_ESC:
     if (G.pick == P_SHELF) { G.pick = 0; go_shelf(); }
     else to_jar();
+    return 1;
+  case ' ':
+    /* Hold: it stays in the shop, through new stocks, until let go or bought.
+     * Only the server's stock: the hand-made one never changes anyway. */
+    if (G.view == V_STOCK && U.card.ok && S.date[0]) {
+      int k = G.sel, n = 0, i;
+      for (i = 0; i < S.n; i++) n += S.held >> i & 1;
+      if (!(S.held >> k & 1) && n >= 4) { say("You can hold 4"); return 1; }
+      S.held = (uint8_t)(S.held ^ (1u << k));
+      jst_stock_save(api, &S, TEXT, sizeof TEXT);
+      say(S.held >> k & 1 ? "Held: it stays till you let go" : "Let go: it may move on");
+      load_page();
+    }
     return 1;
   case 'g': case 'G':
     if (G.view == V_STOCK) { uint32_t id = U.card.ok ? buy() : 0; if (id) gift(id); }
@@ -808,6 +872,7 @@ const CappInfo capp_info = {
   "Enter\tbuy; on an item, put it in the jar\n"
   "G\tsend as a gift (Jar Post), in the shop, My Stuff or a card\n"
   "H\tput on the shelf\n"
+  "Space\thold: it stays in the shop until you buy it or let go (4 at most)\n"
   "E\ta word to the shopkeeper: \"could use more red\".\n"
   "\the knows people; it nudges what turns up\n"
   "r\ta new stock from the server now (testing)\n"

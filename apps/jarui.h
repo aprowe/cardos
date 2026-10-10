@@ -62,7 +62,7 @@ static uint16_t PB[32 * 8];             /* a picture, eight rows at a time */
 typedef struct {
   uint32_t id;
   uint16_t price, pal[8];
-  uint8_t kind, move, flags, in_jar, shelved, sold, ok;
+  uint8_t kind, move, flags, in_jar, shelved, sold, held, ok;
   uint8_t frame[JI_FRAME_BYTES];
 } Tile;
 

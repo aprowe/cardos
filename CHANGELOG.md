@@ -11,6 +11,39 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.12.0 -- 2026-10-10
+
+- **The item pool.** Every item made goes into one pool shared by everyone.
+  A shop's stock is 4 items:
+  - first, what you hold;
+  - then items from the pool;
+  - then new ones.
+
+  With nothing held that is 2 from the pool and 2 new; there are always at
+  least 2 besides what is held.
+  - **Unique:** an item is in one place at a time (the pool, one person's
+    shop, or someone's things), so items stay unique.
+  - **Turnover:** when you next ask for a stock (a new day, or `r`),
+    whatever you neither bought nor held goes back to the pool. It never
+    comes straight back to you.
+  - **Picking:** pool items are chosen to fit your garden, shelf and hint.
+  - **Speed:** they show up at once, so only the new ones wait for Claude,
+    and a stock costs 2 calls instead of 8.
+  - **Seeding:** `python -m server.jar seed 20` fills the pool;
+    `python -m server.jar pool` lists it.
+- **Hold:** Space in the shop holds an item, up to 4. It stays in your
+  shop through new stocks until you buy it or press Space again. The shop
+  tells the server what you bought and what you hold with each request.
+- **Fix: a stock that was still being made never reached the shop.** The
+  shop gave up after 3 minutes, and on reopening it saw a stock dated
+  today and never asked again. Now:
+  - each stock carries a batch number;
+  - every time the shop opens it checks quietly and picks up the rest of an
+    unfinished stock, or a new one;
+  - it keeps trying for 15 minutes.
+- **Fix: a server restart mid-stock left it pending for good.** A poll now
+  notices and starts it again, keeping what was on show.
+
 ## v0.11.5 -- 2026-10-10
 
 - **The shop's stock arrives one item at a time.** The server asks Claude

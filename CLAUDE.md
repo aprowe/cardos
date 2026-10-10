@@ -979,6 +979,21 @@ simulated day); test fixtures pin that both machines agree. The signature
 covers the record minus its signature and its 8 memory slots (scripts write
 those).
 
+**A shop's stock is 4 items, from a shared pool** (2026-10-10). Every item
+ever made goes into one pool (`server/jar.py`, "the pool"), and `own/ID` is
+where an item is: absent means the pool; a name means that person's shop or
+things. That keeps every item unique. A stock is:
+- what the person holds (Space in the shop, 4 at most);
+- then pool items that fit their garden, shelf and hint;
+- then new ones, made one Claude call each and shown as each lands
+  (`/jar/day` says `more` until the stock is whole, and `batch N` says
+  which stock it is).
+
+The device buys offline and reports `bought` and `held` ids with its next
+request; the rest goes back to the pool then. The shop checks `/jar/day`
+quietly on every open, so it picks up a stock it missed. `python -m
+server.jar seed N` adds N items to the pool, counted against nobody.
+
 ## Hardware facts — measured on the actual device, not from a datasheet
 
 M5Stack Cardputer v1.1, ESP32-S3FN8 (Xtensa LX7 dual-core, 240 MHz).

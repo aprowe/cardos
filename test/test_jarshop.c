@@ -315,11 +315,16 @@ void test_jarshop_fetches_the_days_stock_and_checks_each_record(void) {
     CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "sold 1") != 0);
     shot("s13_bought");
   }
-  /* opened again the same day: no new request */
+  /* opened again the same day: only asked how it stands, and as nothing
+   * changed, nothing is fetched or said */
   JF_NREQ = 0;
+  U.msg[0] = 0;
   launch("shop");
   tick(100);
-  CHECK_EQ(jf_count("/jar/day"), 0);
+  CHECK_EQ(jf_count("/jar/day"), 1);
+  CHECK(strcmp(jf_last("/jar/day")->method, "GET") == 0);
+  CHECK_EQ(jf_count("/jar/item?i="), 0);
+  CHECK_EQ(U.msg[0], 0);
   CHECK_EQ(S.n, 2);
   CHECK(jst_sold(&S, &J, 0));
   /* the next day, offline: yesterday's stays */
@@ -392,6 +397,101 @@ void test_jarshop_items_show_as_they_are_made(void) {
   CHECK_EQ(jf_count("/jar/item?i="), 3);      /* each fetched once */
   CHECK(jst_sold(&S, &J, 0));                 /* still sold */
   CHECK(!jst_sold(&S, &J, 1));
+}
+
+/* The shop closed while the server was still making the stock (or gave
+ * up on it): opened again it picks up the rest -- the bug where the new
+ * stock was made but never reached the shop. */
+static int HALF;
+static int half_server(const char *m, const char *path, const char *body, char *out, int cap) {
+  if (!strcmp(path, "/jar/day") && strcmp(m, "POST")) {
+    if (HALF) return snprintf(out, (size_t)cap, "ok 2027-01-15\ntags rainy\nitems 3\nbatch 7\n");
+    return snprintf(out, (size_t)cap, "ok 2027-01-15\ntags rainy\nitems 1\nbatch 7\nmore\n");
+  }
+  DAY_POLLS = 5;
+  return day_server(m, path, body, out, cap);
+}
+
+void test_jarshop_opened_again_it_picks_up_the_rest_of_a_stock(void) {
+  card(500);
+  jf_handler = half_server;
+  HALF = 0;
+  FORGE = 0;
+  launch("shop");
+  tick(3300);
+  CHECK_EQ(S.n, 1);
+  CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "batch 7") != 0);
+  key(CAPP_KEY_ENTER);                        /* bought */
+  CHECK(js_owns(&J, 9000));
+  /* closed; later the server has finished */
+  HALF = 1;
+  JF_NREQ = 0;
+  launch("shop");
+  tick(200);
+  CHECK_EQ(jf_count("/jar/item?i="), 2);      /* only the two not here */
+  CHECK_EQ(S.n, 3);
+  CHECK(jst_sold(&S, &J, 0));                 /* still bought */
+}
+
+/* Space holds an item: it is said with the next request, kept by id into
+ * the new stock, and let go of by Space again or by buying it. */
+static int NEXT_BATCH;
+static int hold_server(const char *m, const char *path, const char *body, char *out, int cap) {
+  if (!strncmp(path, "/jar/day", 8) && !strcmp(m, "POST")) { NEXT_BATCH++; return snprintf(out, (size_t)cap, "pending\n"); }
+  if (!strcmp(path, "/jar/day")) {
+    if (NEXT_BATCH < 2) return snprintf(out, (size_t)cap, "ok 2027-01-15\ntags rainy\nitems 3\nbatch 1\n");
+    return snprintf(out, (size_t)cap, "ok 2027-01-15\ntags rainy\nitems 2\nbatch 2\n");
+  }
+  if (NEXT_BATCH >= 2 && !strncmp(path, "/jar/item?i=", 12)) {
+    /* the new stock: the held one (9001) first, then a new one */
+    JItem it;
+    int k = atoi(path + 12), n;
+    if (k > 1) return -404;
+    jf_item(&it, k == 0 ? 9001 : 9010, k == 0 ? "Moon Moth" : "Kettle", "cosy,rainy");
+    n = jf_signed_b64(&it, out, cap - 1, 1);
+    out[n++] = '\n';
+    return n;
+  }
+  return day_server(m, path, body, out, cap);
+}
+
+void test_jarshop_held_items_stay_into_the_next_stock(void) {
+  const JfReq *r;
+  card(5000);
+  jf_handler = hold_server;
+  NEXT_BATCH = 0;
+  FORGE = 0;
+  launch("shop");
+  tick(3300);
+  CHECK_EQ(S.n, 3);
+  key(CAPP_KEY_RIGHT);
+  key(' ');                                   /* hold 9001 */
+  CHECK_EQ(S.held, 2);
+  CHECK(G.tile[1].held);
+  shot("s15_held");
+  key(CAPP_KEY_RIGHT);
+  key(' ');                                   /* and 9002, then let it go */
+  key(' ');
+  CHECK_EQ(S.held, 2);
+  key(CAPP_KEY_LEFT);
+  key(CAPP_KEY_LEFT);
+  key(CAPP_KEY_ENTER);                        /* buy 9000 */
+  CHECK(js_owns(&J, 9000));
+  key(CAPP_KEY_ESC);
+  key('r');                                   /* a new stock */
+  r = jf_last("/jar/day");
+  CHECK(r && strcmp(r->method, "POST") == 0);
+  CHECK(r && strstr(r->body, "\nbought 9000\n") != 0);
+  CHECK(r && strstr(r->body, "\nheld 9001\n") != 0);
+  tick(3300);
+  CHECK_EQ(S.n, 2);
+  CHECK_EQ(S.id[0], 9001);
+  CHECK_EQ(S.held, 1);                        /* still held, in its new place */
+  CHECK_EQ(S.sold, 0);
+  /* buying a held one lets go of it */
+  key(CAPP_KEY_ENTER);
+  CHECK(js_owns(&J, 9001));
+  CHECK_EQ(S.held, 0);
 }
 
 void test_jarshop_a_word_to_the_shopkeeper(void) {

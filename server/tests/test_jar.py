@@ -530,6 +530,24 @@ class Generate(unittest.TestCase):
         hinted = [k for k, c in enumerate(stub.calls) if "more red things" in c[1]]
         self.assertEqual(hinted, list(jar.HINTED))
 
+    def test_seed_fills_the_pool_for_nobody(self):
+        stub = Stub()
+        p = mock.patch("server.ask.ask_shape", stub)
+        p.start()
+        self.addCleanup(p.stop)
+        self.assertEqual(jar.seed_pool(None, 6, date=self.date), 6)
+        st = kv.store()
+        ids = jar.pool_ids(st)
+        self.assertEqual(len(ids), 6)
+        for i in ids:
+            self.assertIsNone(st.get(jar.NS, "own/%d" % i))
+            self.assertTrue(jar.verified(st.get(jar.NS, "rec/%d" % i)))
+        self.assertTrue(all(c[2]["limit"] is None for c in stub.calls))   # nobody's day
+        got = jar.pick_from_pool("kit", self.req, 2, st)
+        self.assertEqual(len(got), 2)
+        self.assertEqual(len(jar.pool_ids(st)), 4)
+        self.assertEqual(st.get(jar.NS, "own/%d" % got[0]), b"kit")
+
     def test_a_full_moon_adds_one(self):
         self.date = datetime.date(2026, 10, 26)
         stub = Stub()
@@ -632,7 +650,8 @@ class Routes(unittest.TestCase):
         self.assertEqual(lines[0], "ok " + today)
         self.assertTrue(lines[1].startswith("tags odd, "), lines[1])
         n = int(lines[2].split()[1])
-        self.assertIn(n, (8, 9))
+        self.assertIn(n, (4, 5))                                # an empty pool: all new
+        self.assertTrue(lines[3].startswith("batch "), lines[3])
         # once made, a POST says so, with the whole answer GET gives ("ok
         # DATE" alone emptied the shop), and makes nothing more
         self.assertEqual(self.req("POST", "/jar/day", self.alex, ""), (200, body))
@@ -663,7 +682,8 @@ class Routes(unittest.TestCase):
             self.req("POST", "/jar/day", self.alex, "")
             self.assertTrue(first.wait(10))
             s, body = self.req("GET", "/jar/day", self.alex)
-            self.assertTrue(body.startswith("ok ") and body.endswith("\nitems 1\nmore\n"), body)
+            self.assertTrue(body.startswith("ok ") and "\nitems 1\nbatch " in body
+                            and body.endswith("\nmore\n"), body)
             self.assertEqual(self.req("POST", "/jar/day", self.alex, ""), (200, body))
             self.item(self.alex, 0)
             self.assertEqual(self.req("GET", "/jar/item?i=1", self.alex)[0], 404)
@@ -673,7 +693,61 @@ class Routes(unittest.TestCase):
                 if not body.endswith("more\n"):
                     break
                 time.sleep(0.02)
-        self.assertTrue(body.endswith("\nitems 8\n"), body)
+        self.assertIn("\nitems 4\n", body)
+        self.assertFalse(body.endswith("more\n"), body)
+
+    def wait_day(self, tok):
+        for _ in range(500):
+            s, body = self.req("GET", "/jar/day", tok)
+            if body != "pending\n" and not body.endswith("more\n"):
+                return body
+            time.sleep(0.02)
+        self.fail("the stock never finished: " + body)
+
+    def ids(self, tok, n):
+        return [jar.decode(self.item(tok, i))["id"] for i in range(n)]
+
+    def test_the_pool_turns_over_and_items_stay_unique(self):
+        # Alex's first stock is all new (an empty pool). Alex buys one, holds
+        # one; the next stock keeps the held one first, the bought one is
+        # Alex's for good, and the two passed over go to the pool -- but not
+        # straight back to Alex. Sam's stock then takes them from the pool.
+        self.make_day(self.alex)
+        first = self.ids(self.alex, 4)
+        st = kv.store()
+        self.assertEqual(jar.pool_ids(st), [])
+        s, body = self.req("POST", "/jar/day?fresh=1", self.alex,
+                           "bought %d\nheld %d\n" % (first[0], first[1]))
+        body = self.wait_day(self.alex)
+        # held 1, then 1 from the pool -- but the pool is only what alex just
+        # passed on, which does not come straight back -- so 3 new
+        self.assertIn("\nitems 4\n", body)
+        second = self.ids(self.alex, 4)
+        self.assertEqual(second[0], first[1])                 # held: still there, first
+        self.assertEqual(st.get(jar.NS, "own/%d" % first[0]), b"alex")
+        self.assertEqual(sorted(jar.pool_ids(st)), sorted(first[2:]))
+        self.assertTrue(set(second[1:]).isdisjoint(first))    # none straight back
+        s, body = self.req("POST", "/jar/day", self.sam, "")
+        self.wait_day(self.sam)
+        sams = self.ids(self.sam, 4)
+        self.assertEqual(sorted(sams[:2]), sorted(first[2:]))   # the pool's two
+        self.assertEqual(jar.pool_ids(st), [])
+        for i in sams:
+            self.assertEqual(st.get(jar.NS, "own/%d" % i), b"sam")
+        self.assertTrue(set(sams).isdisjoint(second))         # never two shops at once
+        # a bought id that was never in your shop is not taken as bought
+        self.req("POST", "/jar/day?fresh=1", self.sam, "bought %d\n" % second[0])
+        self.wait_day(self.sam)
+        self.assertEqual(st.get(jar.NS, "own/%d" % second[0]), b"alex")
+
+    def test_a_stock_half_made_by_a_server_that_stopped_starts_again(self):
+        self.make_day(self.alex)
+        st = kv.store()
+        cur = jar.day_state("alex", st)
+        jar._set_day("alex", dict(cur, state="pending", req=jar.parse_request("")), st)
+        body = self.wait_day(self.alex)                      # a GET notices, and restarts
+        self.assertTrue(body.startswith("ok "), body)
+        self.assertGreater(int(re.search(r"batch (\d+)", body).group(1)), cur["batch"])
 
     def test_fresh_makes_a_new_stock_the_same_day(self):
         # The shop's r, for trying things out: a new batch even though today's

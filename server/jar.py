@@ -517,7 +517,8 @@ def parse_request(body):
     """The device's lines -> {"garden": {plant: n}, "shelf": [tags],
     "owned": [names], "tz": str, "hint": str}. Unknown lines and junk are
     dropped; so is a hint that does not pass the filter."""
-    out = {"garden": {}, "shelf": [], "owned": [], "tz": "", "hint": ""}
+    out = {"garden": {}, "shelf": [], "owned": [], "tz": "", "hint": "", "bought": [],
+           "held": []}
     for line in body.splitlines():
         head, _, rest = line.strip().partition(" ")
         rest = rest.strip()
@@ -542,6 +543,11 @@ def parse_request(body):
                     out["owned"].append(n)
         elif head == "tz":
             out["tz"] = rest[:64]
+        elif head in ("bought", "held"):
+            for part in rest.split(","):
+                part = part.strip()
+                if part.isdigit() and len(out[head]) < 16:
+                    out[head].append(int(part))
         elif head == "hint":
             h = wire.flat(rest, HINT_LEN, ascii=True).replace('"', "'")
             if clean(h):
@@ -814,24 +820,26 @@ def to_item(raw, item_id, made, tags, log=None):
 
 
 def generate(chat, person, req, date, store=None, signer=None, now=None, log=None,
-             on_tags=None, on_item=None):
-    """A day's stock for `person`: (tags, [signed records]). Asks Claude for
-    ITEMS (one more on a special day) one item a call, in KIND_PLAN's kinds,
-    sealing each as it passes and handing it to on_item(k, record); a call
-    that comes to nothing is tried again, MAX_FAILS of them in all. Fewer
-    than asked for is a smaller stock, not a failure. Raises if Claude
-    cannot be asked at all (the day's limit, no Claude, ...) and nothing
-    came of it."""
+             on_tags=None, on_item=None, want=None, kind_at=0, hinted=HINTED,
+             facts=None, tags=None, limit=ask.DAILY):
+    """New items for `person` (None: for the pool): (tags, [signed records]).
+    Asks Claude for `want` (ITEMS; one more on a special day) one item a
+    call, kinds from KIND_PLAN starting at kind_at, sealing each as it passes
+    and handing it to on_item(k, record); a call that comes to nothing is
+    tried again, MAX_FAILS of them in all. Fewer than asked for is fewer,
+    not a failure. Every record is kept (rec/ID), to go to the pool later.
+    Raises if Claude cannot be asked at all (the day's limit, no Claude, ...)
+    and nothing came of it."""
     st = store or kv.store()
     now = time.time() if now is None else now
-    facts = day_facts(date, req.get("tz"))
-    tags = day_tags(req, facts, "%s:%s" % (person, facts["date"]))
+    facts = facts or day_facts(date, req.get("tz"))
+    tags = tags or day_tags(req, facts, "%s:%s" % (person, facts["date"]))
     special = None
     if facts["full_moon"]:
         special = "a full moon"
     elif facts["first_of_season"]:
         special = "the first day of %s" % facts["season"]
-    want = ITEMS + (1 if special else 0)
+    want = (ITEMS if want is None else want) + (1 if special else 0)
     owned = [n.lower() for n in req.get("owned", [])]
     hint = req.get("hint", "")
     rtags = record_tags(tags)
@@ -841,12 +849,12 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
     while len(records) < want and fails < MAX_FAILS:
         k = len(records)
         sp = special if special and k == want - 1 else None
-        kind = None if sp else KIND_PLAN[k % len(KIND_PLAN)]
+        kind = None if sp else KIND_PLAN[(kind_at + k) % len(KIND_PLAN)]
         taken = set(owned) | {n.strip().lower() for n in names}
         try:
             got = ask.ask_shape(chat, prompt_for(1, tags, facts, req.get("owned", []), sp, names,
-                                                 hint if k in HINTED else "", kind),
-                                batch_schema(1, kind), user=person, limit=ask.DAILY,
+                                                 hint if k in hinted else "", kind),
+                                batch_schema(1, kind), user=person or "pool", limit=limit,
                                 timeout=GEN_TIMEOUT, store=st)
         except ask.RateLimited:
             if records:                                # the day's asks ran out: what came
@@ -869,13 +877,136 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
         names.append(raw["name"])
         item_id = ID_BASE + st.incr(NS, "next_id")
         rec = seal(encode(to_item(raw, item_id, now, rtags, log)), signer)
-        st.put(NS, "own/%d" % item_id, person.encode())
+        st.put(NS, "rec/%d" % item_id, rec)
+        if person:
+            st.put(NS, "own/%d" % item_id, person.encode())
         records.append(rec)
         if on_item:
             on_item(k, rec)
     if not records:
         raise last_error or ValueError("no item passed the checks")
     return tags, records
+
+
+# ---- the pool ------------------------------------------------------------------------------
+#
+# Every item made goes into one pool shared by everyone, and a shop's stock is
+# part pool, part new. An item is in one place at a time -- the pool, one
+# person's shop, or someone's things -- which own/ID says: absent, it is in
+# the pool; a person's name, it is in their shop or theirs. So every item
+# stays unique. The device buys offline and says what it bought (and what it
+# is holding) when it next asks for a stock; the rest of the stock it had
+# goes back to the pool then. Under _day_lock.
+
+STOCK_SIZE = 4                # a shop's stock
+MAX_HELD = 4                  # items a person may hold in their shop
+
+
+def _json(st, key, default):
+    raw = st.get(NS, key)
+    try:
+        return json.loads(raw.decode()) if raw else default
+    except ValueError:
+        return default
+
+
+def pool_ids(store=None):
+    return [int(i) for i in _json(store or kv.store(), "pool", [])]
+
+
+def _set_pool(st, ids):
+    st.put(NS, "pool", json.dumps(sorted(set(ids))).encode())
+
+
+def shown(person, store=None):
+    """The ids in `person`'s shop now, in order."""
+    return [int(i) for i in _json(store or kv.store(), "shown/" + person, [])]
+
+
+def _set_shown(st, person, ids):
+    st.put(NS, "shown/" + person, json.dumps(ids).encode())
+
+
+def to_pool(ids, person=None, store=None):
+    """Items back to the pool -- those `person` has in their shop, or (no
+    person) new ones for it. Not one that is someone else's."""
+    st = store or kv.store()
+    pool = set(pool_ids(st))
+    for i in ids:
+        if st.get(NS, "rec/%d" % i) is None:
+            continue
+        own = st.get(NS, "own/%d" % i)
+        if own is not None and (person is None or own.decode() != person):
+            continue
+        st.delete(NS, "own/%d" % i)
+        pool.add(i)
+    _set_pool(st, pool)
+
+
+def _words(s):
+    return set(re.findall(r"[a-z]+", (s or "").lower()))
+
+
+def pick_from_pool(person, req, n, store=None, rng=None, skip=()):
+    """Up to n pool items for `person`'s shop, taken out of the pool: the ones
+    that best fit their garden, shelf and hint, never a name they own."""
+    st = store or kv.store()
+    rng = rng or random.Random()
+    want = set(req.get("shelf", [])) | _words(req.get("hint", ""))
+    for plant, k in req.get("garden", {}).items():
+        if k:
+            want |= set(FLAVOURS.get(plant, []))
+    owned = {o.lower() for o in req.get("owned", [])}
+    scored = []
+    for i in pool_ids(st):
+        rec = st.get(NS, "rec/%d" % i)
+        if rec is None:
+            continue
+        try:
+            it = decode(rec)
+        except ValueError:
+            continue
+        if i in skip or it["name"].strip().lower() in owned:
+            continue
+        mine = set(it["tags"].split(",")) | _words(it["name"]) | _words(it["line"])
+        scored.append((len(want & mine) + rng.random(), i))
+    scored.sort(reverse=True)
+    got = [i for _, i in scored[:n]]
+    pool = set(pool_ids(st)) - set(got)
+    _set_pool(st, pool)
+    for i in got:
+        st.put(NS, "own/%d" % i, person.encode())
+    return got
+
+
+def seed_pool(chat, n, store=None, signer=None, log=None, date=None):
+    """n new items straight into the pool, four at a time from a different
+    plant's flavours, counted against nobody's day."""
+    st = store or kv.store()
+    date = date or _today()
+    rng = random.Random()
+    made = 0
+    while made < n:
+        plant = rng.choice(sorted(FLAVOURS))
+        shelf = rng.sample(sorted({w for ws in FLAVOURS.values() for w in ws}), 2)
+        req = parse_request("garden %s=3\nshelf %s\n" % (plant, ",".join(shelf)))
+        req["owned"] = [decode(st.get(NS, "rec/%d" % i))["name"] for i in pool_ids(st)
+                        if st.get(NS, "rec/%d" % i)]
+        try:
+            _, recs = generate(chat, None, req, date, store=st, signer=signer, log=log,
+                               want=min(4, n - made), kind_at=made, hinted=(), limit=None)
+        except Exception as e:                          # noqa: BLE001 - try another set
+            if log:
+                log("seed: %s" % e)
+            continue
+        ids = [decode(r)["id"] for r in recs]
+        with _day_lock:
+            to_pool(ids, store=st)
+        made += len(ids)
+        if log:
+            log("seed: %d in the pool (%s)" % (len(pool_ids(st)),
+                                                ", ".join(decode(r)["name"] for r in recs)))
+    return made
 
 
 # ---- the day's stock, kept ---------------------------------------------------------------
@@ -901,29 +1032,38 @@ def _set_day(person, state, store=None):
     (store or kv.store()).put(NS, "day/" + person, json.dumps(state).encode(), ttl=STOCK_TTL)
 
 
-def _make_day(chat, person, req, date, store):
+def _make_day(chat, person, req, date, store, batch, base, n_new, facts, tags):
+    """The new part of a stock, after the `base` (held and pool) items that
+    are on show already."""
     key = (person, date.isoformat())
-    made = {"tags": []}
-
-    def on_tags(tags):
-        made["tags"] = tags
 
     def on_item(k, rec):
         # on show the moment it is made: the day stays "pending", with a count
-        store.put(NS, "stock/%s/%d" % (person, k), rec, ttl=STOCK_TTL)
-        _set_day(person, {"state": "pending", "date": key[1], "tags": made["tags"],
-                          "n": k + 1}, store)
+        at = base + k
+        store.put(NS, "stock/%s/%d" % (person, at), rec, ttl=STOCK_TTL)
+        with _day_lock:
+            _set_shown(store, person, shown(person, store) + [decode(rec)["id"]])
+        _set_day(person, {"state": "pending", "date": key[1], "tags": tags, "n": at + 1,
+                          "batch": batch, "req": req}, store)
 
+    n = base
     try:
-        tags, records = generate(chat, person, req, date, store=store, on_tags=on_tags,
-                                 on_item=on_item,
-                                 log=lambda s: sys.stderr.write("jar: %s: %s\n" % (person, s)))
-        _set_day(person, {"state": "ok", "date": key[1], "tags": tags, "n": len(records)}, store)
-        sys.stderr.write("jar: %s: %d items for %s\n" % (person, len(records), key[1]))
+        _, records = generate(chat, person, req, date, store=store, on_item=on_item,
+                              want=n_new, kind_at=batch, hinted=(0,), facts=facts, tags=tags,
+                              log=lambda s: sys.stderr.write("jar: %s: %s\n" % (person, s)))
+        n = base + len(records)
+        _set_day(person, {"state": "ok", "date": key[1], "tags": tags, "n": n,
+                          "batch": batch}, store)
+        sys.stderr.write("jar: %s: %d items for %s (%d new)\n" % (person, n, key[1],
+                                                                  len(records)))
     except Exception as e:                              # noqa: BLE001 - reported to the device
         why = wire.flat(str(e) or type(e).__name__, 120)
-        _set_day(person, {"state": "error", "date": key[1], "why": why}, store)
-        sys.stderr.write("jar: %s: stock failed: %s\n" % (person, why))
+        if base:                                        # the pool's part is still a stock
+            _set_day(person, {"state": "ok", "date": key[1], "tags": tags, "n": base,
+                              "batch": batch}, store)
+        else:
+            _set_day(person, {"state": "error", "date": key[1], "why": why}, store)
+        sys.stderr.write("jar: %s: new items failed: %s\n" % (person, why))
     finally:
         with _day_lock:
             _running.discard(key)
@@ -932,8 +1072,10 @@ def _make_day(chat, person, req, date, store):
 def start_day(chat, person, req, now=None, store=None, fresh=False):
     """("pending" | "ok", date): today's stock, started if it is not made or
     making. A failed one is tried again. `fresh` makes a new one even when
-    today's is done -- the shop's `r`, for trying things out; it still counts
-    against the person's daily asks, so it cannot run away."""
+    today's is done -- the shop's `r`. A new stock is what the person holds
+    from the last one, then pool items, then new ones (STOCK_SIZE in all,
+    at least two besides what is held); what they neither bought nor held
+    goes back to the pool."""
     st = store or kv.store()
     date = _today(now)
     key = (person, date.isoformat())
@@ -944,10 +1086,55 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
                 return "ok", key[1]
             if cur["state"] == "pending" and key in _running:
                 return "pending", key[1]
+    facts = day_facts(date, req.get("tz"))               # may ask for the weather
+    tags = day_tags(req, facts, "%s:%s" % (person, facts["date"]))
+    with _day_lock:
+        if key in _running:
+            return "pending", key[1]
         _running.add(key)
-        _set_day(person, {"state": "pending", "date": key[1]}, st)
-    threading.Thread(target=_make_day, args=(chat, person, req, date, st), daemon=True).start()
+        # A batch number tells the shop one stock from the next on the same
+        # day (r makes another), so it can tell "the rest of this one" from
+        # "a new one" when it is opened again.
+        batch = st.incr(NS, "batch")
+        prev = shown(person, st)
+        bought = set(req.get("bought", [])) & set(prev)
+        held = [i for i in req.get("held", []) if i in prev and i not in bought][:MAX_HELD]
+        passed = [i for i in prev if i not in bought and i not in held]
+        to_pool(passed, person, st)
+        fill = max(2, STOCK_SIZE - len(held))
+        picks = pick_from_pool(person, req, fill // 2, st, skip=passed)   # not straight back
+        base = []
+        for i in held + picks:
+            rec = st.get(NS, "rec/%d" % i)
+            if rec is not None:
+                st.put(NS, "stock/%s/%d" % (person, len(base)), rec, ttl=STOCK_TTL)
+                base.append(i)
+        _set_shown(st, person, base)
+        n_new = fill - len(picks)
+        _set_day(person, {"state": "pending", "date": key[1], "tags": tags, "n": len(base),
+                          "batch": batch, "req": req}, st)
+    threading.Thread(target=_make_day, args=(chat, person, req, date, st, batch, len(base),
+                                             n_new, facts, tags), daemon=True).start()
     return "pending", key[1]
+
+
+def resume_day(chat, person, store=None, now=None):
+    """A stock left "pending" by a server that stopped mid-way (a restart, a
+    deploy) has nothing making it: start it again, from the request it was
+    made from. True if it did."""
+    st = store or kv.store()
+    cur = day_state(person, st)
+    key = (person, _today(now).isoformat())
+    if not cur or cur.get("state") != "pending" or cur.get("date") != key[1]:
+        return False
+    with _day_lock:
+        if key in _running:
+            return False
+    req = cur.get("req") or parse_request("")
+    # what it was showing is held, so the restart keeps it
+    req = dict(req, held=shown(person, st)[:MAX_HELD], bought=[])
+    start_day(chat, person, req, now=now, store=st, fresh=True)
+    return True
 
 
 # ---- friends ----------------------------------------------------------------------------
@@ -1076,8 +1263,9 @@ def _day_text(cur):
     then "more" while the rest is still being made."""
     if not cur or not cur.get("n") or cur.get("state") not in ("ok", "pending"):
         return None
-    return "ok %s\ntags %s\nitems %d\n%s" % (cur["date"], ", ".join(cur["tags"]), cur["n"],
-                                              "more\n" if cur["state"] == "pending" else "")
+    return "ok %s\ntags %s\nitems %d\nbatch %d\n%s" % (
+        cur["date"], ", ".join(cur["tags"]), cur["n"], cur.get("batch", 0),
+        "more\n" if cur["state"] == "pending" else "")
 
 
 @kv_route
@@ -1086,6 +1274,9 @@ def get_day(h, args):
     cur = day_state(kv.me())
     if not cur:
         raise NotFound("no stock yet: POST /jar/day")
+    if _chat_ok(h) and resume_day(h.chat, kv.me()):
+        sys.stderr.write("jar: %s: a stock left half-made, started again\n" % kv.me())
+        cur = day_state(kv.me())
     if cur["state"] == "ok" and not cur.get("n"):
         h.text("ok %s\ntags %s\nitems 0\n" % (cur["date"], ", ".join(cur["tags"])))
     elif cur["state"] in ("ok", "pending"):
@@ -1188,3 +1379,27 @@ ROUTES = [
     ("POST", "/jar/gift", post_gift, "device_or_dash"),
     ("POST", "/jar/thanks", post_thanks, "device_or_dash"),
 ]
+
+
+def main(argv=None):
+    """python -m server.jar seed N [--claude-cli PATH]: N new items straight
+    into the pool (CARDOS_STATE is the store, as for the server)."""
+    import argparse
+    from .chat import ChatService
+    ap = argparse.ArgumentParser(prog="python -m server.jar")
+    ap.add_argument("what", choices=["seed", "pool"])
+    ap.add_argument("n", type=int, nargs="?", default=20)
+    ap.add_argument("--claude-cli", default=None)
+    args = ap.parse_args(argv)
+    if args.what == "pool":
+        st = kv.store()
+        for i in pool_ids(st):
+            it = decode(st.get(NS, "rec/%d" % i))
+            print("No.%04d %-12s %s" % (i, it["name"], it["line"]))
+        return
+    chat = ChatService(claude=args.claude_cli) if args.claude_cli else ChatService()
+    seed_pool(chat, args.n, log=lambda s: print(s, flush=True))
+
+
+if __name__ == "__main__":
+    main()
