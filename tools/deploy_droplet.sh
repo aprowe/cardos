@@ -61,6 +61,8 @@ setup() {
 
   echo "== 4. PlatformIO in the service's venv"
   as_cardos "$VENV/bin/pip install -q --upgrade platformio && $VENV/bin/python -m platformio --version"
+  # The server signs Jar Factory items (ECDSA P-256) with it.
+  ssh "$HOST" "$VENV/bin/pip install -q cryptography"
 
   echo "== 5. first build -- the toolchain downloads now; 30-60 minutes on one core"
   as_cardos "set -e; cd $CLONE
