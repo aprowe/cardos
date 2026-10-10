@@ -152,7 +152,7 @@ static CappResult relocate(int fd, const Elf32_Shdr *sh, int shnum, int sec, int
         return CAPP_ERR_RELOC;
       if (capprel_apply(win, win_off, win_len, limit, into_code, buf, k,
                         code_base, data_base) != 0) {
-        ESP_LOGE(TAG, "a relocation in section %d cannot be applied", sec);
+        ESP_LOGE(TAG, "a relocation in section %d cannot be applied (types: only R_XTENSA_32 is applied)", sec);
         return CAPP_ERR_RELOC;
       }
     }
@@ -204,7 +204,11 @@ void capp_on_prepare(void (*fn)(const char *path)) { s_on_prepare = fn; }
  * nothing yet; this is a launch that is only now claiming it -- and written
  * as a new entry. The whole point is that the code may not fit in one piece
  * of RAM, so it is never asked to. On success the entry is referenced, and
- * capp_unload (or the load's own failure path) lets it go. */
+ * capp_unload (or the load's own failure path) lets it go.
+ *
+ * One lock span from the lookup to the reference: a forget from another
+ * task must not program a word into the sectors this is writing, nor kill
+ * or let the ring erase the entry between finding it and holding it. */
 static CappResult xip_place(int fd, const char *path, const Elf32_Shdr *sh, int shnum,
                             int code_sec, uint32_t code_size, uint8_t *scratch,
                             uint32_t data_base, uint32_t *off_out) {
@@ -216,17 +220,19 @@ static CappResult xip_place(int fd, const char *path, const Elf32_Shdr *sh, int 
 
   if (!c || fs_stat(path, &st) != 0) return CAPP_ERR_OPEN;
   memset(&k, 0, sizeof k);
-  k.path_hash = xip_path_hash(path);
+  k.path_hash = xipflash_path_hash(path);
   k.file_size = st.size;
   k.file_mtime = st.mtime;
   k.api = CAPP_API_VERSION;
   k.code_size = code_size;
   k.map_base = xipflash_base();
   k.arena = data_base;
+  xipflash_lock();
   if (xip_find(c, &k, &off) == XIP_OK) goto found;
 
   if (s_on_prepare) s_on_prepare(path);
   if (xip_begin(c, code_size, &off) != XIP_OK) {
+    xipflash_unlock();
     applogf("xip", "%s: no room in appcode, code to RAM", path);
     return CAPP_ERR_NO_MEMORY;
   }
@@ -242,15 +248,37 @@ static CappResult xip_place(int fd, const char *path, const Elf32_Shdr *sh, int 
   /* Abandoned on failure too: a commit that fails leaves the write pending,
    * and the ring refuses every later begin until it is let go. */
   if (xip_commit(c, &k, crc, path) != XIP_OK) { rc = CAPP_ERR_NO_MEMORY; goto fail; }
+  /* Read back before anything runs it. A word that did not program as
+   * written would otherwise be found by the next launch's xip_find, after
+   * this one had executed it. */
+  if (xip_verify(c, off) != XIP_OK) {
+    xip_kill(c, off);
+    xipflash_unlock();
+    applogf("xip", "%s: code at %u did not read back, code to RAM", path, (unsigned)off);
+    return CAPP_ERR_NO_MEMORY;
+  }
   applogf("xip", "%s: %u bytes of code to flash at %u", path, (unsigned)code_size, (unsigned)off);
 found:
-  if (xip_ref(c, off) != XIP_OK) return CAPP_ERR_NO_MEMORY;
+  if (xip_ref(c, off) != XIP_OK) {
+    xipflash_unlock();
+    applogf("xip", "%s: cannot hold the entry at %u, code to RAM", path, (unsigned)off);
+    return CAPP_ERR_NO_MEMORY;
+  }
+  xipflash_unlock();
   *off_out = off;
   return CAPP_OK;
 fail:
   xip_abandon(c);
+  xipflash_unlock();
   applogf("xip", "%s: cache write failed (%s), code to RAM", path, capp_strerror(rc));
   return rc;
+}
+
+/* A reference let go, under the cache's lock like everything else. */
+static void xip_release(uint32_t off) {
+  xipflash_lock();
+  xip_unref(xipflash_cache(), off);
+  xipflash_unlock();
 }
 
 CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
@@ -422,7 +450,7 @@ done:
   /* A failure gives back exactly what it took: the cache entry's reference
    * or the code block, the arena or the heap block. */
   if (rc != CAPP_OK) {
-    if (in_flash) xip_unref(xipflash_cache(), xip_off);
+    if (in_flash) xip_release(xip_off);
     else code_free(code, code_cap);
     if (in_arena) arena_release(data);
     else if (data) heap_caps_free(data);
@@ -444,7 +472,7 @@ CappResult capp_load(const char *path, LoadedApp *out) { return capp_load_ex(pat
  * or the heap block. */
 void capp_unload(LoadedApp *la) {
   if (!la) return;
-  if (la->xip_off >= 0) xip_unref(xipflash_cache(), (uint32_t)la->xip_off);
+  if (la->xip_off >= 0) xip_release((uint32_t)la->xip_off);
   else code_free(la->code, la->code_cap);
   if (la->data_in_arena) arena_release(la->data);
   else if (la->data) heap_caps_free(la->data);

@@ -194,24 +194,36 @@ static void cmd_mem(void) { mem_report(mem_line, NULL); }
 
 /* `xip`: the code cache, entry by entry. `xip wipe` empties it, which is
  * always safe -- the next launch of each app writes its entry again. */
+/* One row inside the console's 40 columns (39 at most): sector, name, size,
+ * seq, then dead or stale (dead says enough) and whether an app holds it.
+ * Stale is an entry no launch can match: relocated for another map or
+ * arena, or built for another API. */
 static void xip_row(const XipHdr *h, uint32_t off, int in_use, void *ctx) {
-  int stale = h->key.map_base != xipflash_base() || h->key.arena != (uint32_t)arena_addr();
+  int stale = h->key.map_base != xipflash_base() || h->key.arena != (uint32_t)arena_addr() ||
+              h->key.api != CAPP_API_VERSION;
   (void)ctx;
-  con_printf("  %3u %-23.23s %3u KB seq %u%s%s%s\n", (unsigned)(off / XIP_SECTOR), h->path,
+  con_printf("%3u %-14.14s %3uK %4u%s%s\n", (unsigned)(off / XIP_SECTOR), h->path,
              (unsigned)(h->sectors * XIP_SECTOR / 1024), (unsigned)h->seq,
-             h->live == 0xFFFFFFFFu ? "" : " dead", stale ? " stale" : "",
-             in_use ? " in use" : "");
+             h->live != 0xFFFFFFFFu ? " dead" : stale ? " stale" : "",
+             in_use ? " used" : "");
 }
 
+/* Under the cache's lock: a forget from the share task must not walk the
+ * ring while it is being erased or listed. */
 static void cmd_xip(const char *arg) {
   XipCache *c = xipflash_cache();
+  int r;
   if (!c) { con_write("no appcode partition: app code loads into RAM\n"); return; }
   if (arg && !strcmp(arg, "wipe")) {
-    con_write(xip_wipe(c) == XIP_OK ? "appcode wiped\n"
-                                    : "an app is running from it: close it first\n");
+    xipflash_lock();
+    r = xip_wipe(c);
+    xipflash_unlock();
+    con_write(r == XIP_OK ? "appcode wiped\n" : "an app is running from it: close it first\n");
     return;
   }
+  xipflash_lock();
   xip_each(c, xip_row, NULL);
+  xipflash_unlock();
 }
 
 /* Grouped by what you are trying to do, and kept next to the dispatcher so the
