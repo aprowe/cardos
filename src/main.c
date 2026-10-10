@@ -67,6 +67,8 @@
 #include "kernel/drv/battery.h"
 #include "kernel/sys/hotkeys.h"
 #include "kernel/sys/memreport.h"
+#include "kernel/app/arena.h"
+#include "kernel/app/xipflash.h"
 
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -190,6 +192,28 @@ static void mem_line(const char *line, void *ctx) { (void)ctx; con_printf("%s\n"
 /* The same lines the Memory app shows (kernel/sys/memreport.c). */
 static void cmd_mem(void) { mem_report(mem_line, NULL); }
 
+/* `xip`: the code cache, entry by entry. `xip wipe` empties it, which is
+ * always safe -- the next launch of each app writes its entry again. */
+static void xip_row(const XipHdr *h, uint32_t off, int in_use, void *ctx) {
+  int stale = h->key.map_base != xipflash_base() || h->key.arena != (uint32_t)arena_addr();
+  (void)ctx;
+  con_printf("  %3u %-23.23s %3u KB seq %u%s%s%s\n", (unsigned)(off / XIP_SECTOR), h->path,
+             (unsigned)(h->sectors * XIP_SECTOR / 1024), (unsigned)h->seq,
+             h->live == 0xFFFFFFFFu ? "" : " dead", stale ? " stale" : "",
+             in_use ? " in use" : "");
+}
+
+static void cmd_xip(const char *arg) {
+  XipCache *c = xipflash_cache();
+  if (!c) { con_write("no appcode partition: app code loads into RAM\n"); return; }
+  if (arg && !strcmp(arg, "wipe")) {
+    con_write(xip_wipe(c) == XIP_OK ? "appcode wiped\n"
+                                    : "an app is running from it: close it first\n");
+    return;
+  }
+  xip_each(c, xip_row, NULL);
+}
+
 /* Grouped by what you are trying to do, and kept next to the dispatcher so the
  * two are edited together -- a help text that drifts is worse than none. */
 static void cmd_help(void) {
@@ -206,6 +230,7 @@ static void cmd_help(void) {
   con_write("screens  launch (carousel), desk (windows), escape returns\n");
   con_write("boot     apps, boot NAME, boot! NAME, bootinfo\n");
   con_write("system   mem taskcost flip clear reboot echo\n");
+  con_write("         xip [wipe]  the app code cache in flash\n");
   con_write("         log [N|clear] -- what the apps wrote to the card\n");
   con_write("         time (ntp; no rtc on this board), battery\n");
   con_write("voice    hold the button on top, or type listen\n");
@@ -295,6 +320,7 @@ static int do_command(const char *rest) {
 static void run_builtin(const char *line, char *arg) {
   if (!strcmp(line, "help"))        cmd_help();
   else if (!strcmp(line, "log"))    cmd_log(arg);
+  else if (!strcmp(line, "xip"))    cmd_xip(arg);
   else if (!strcmp(line, "mem"))    { if (arg && !strcmp(arg, "map")) cmd_mem_map(); else cmd_mem(); }
   /* One reading of the ADV's motion sensor, raw axes: the way to learn which
    * way they point on a new board. */
@@ -465,7 +491,7 @@ static const char *const COMMANDS[] = {
   "battery", "defaults", "listen", "mouse", "pwd", "reboot", "rm",
   "run", "time",
   "safe",
-  "print", "share", "shot", "taskcost", "update", "usbdisk", "volume", "wifi",
+  "print", "share", "shot", "taskcost", "update", "usbdisk", "volume", "wifi", "xip",
 };
 #define NCOMMANDS ((int)(sizeof COMMANDS / sizeof COMMANDS[0]))
 
@@ -1485,6 +1511,7 @@ void app_main(void) {
   /* A missing card is a normal condition, not a boot failure: CardOS runs
    * without one, just without apps. Say which, rather than leaving
    * the user to guess why `ls` is empty. */
+  xipflash_init();               /* before any app loads: the code cache */
   if (fs_mount() == 0) {
     uint64_t total = 0, freeb = 0;
     static const HotkeyStore FILE_STORE = { hotkey_file_load, hotkey_file_save };

@@ -2,6 +2,8 @@
 #include "kernel/sys/memreport.h"
 #include "kernel/drv/bthid.h"
 #include "kernel/net/wifi.h"
+#include "kernel/app/arena.h"
+#include "kernel/app/xipflash.h"
 
 #include <stdio.h>
 
@@ -24,6 +26,19 @@ void mem_report(void (*out)(const char *line, void *ctx), void *ctx) {
   out(b, ctx);
   snprintf(b, sizeof b, "low water %6u",
            (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
+  out(b, ctx);
+  /* The arena is always 28 KB out of the heap; say who has it, because
+   * "heap free" alone no longer says what an open app costs. */
+  snprintf(b, sizeof b, "arena     %6u  %s", (unsigned)ARENA_SIZE,
+           arena_held() ? arena_holder() : "free");
+  out(b, ctx);
+  if (xipflash_ready()) {
+    uint32_t live, total;
+    xipflash_usage(&live, &total);
+    snprintf(b, sizeof b, "appcode   %u of %u sectors live", (unsigned)live, (unsigned)total);
+  } else {
+    snprintf(b, sizeof b, "appcode   none (code in RAM)");
+  }
   out(b, ctx);
   if (bthid_radio_on()) snprintf(b, sizeof b, "bluetooth %6u", (unsigned)bthid_heap_cost());
   else snprintf(b, sizeof b, "bluetooth    off");

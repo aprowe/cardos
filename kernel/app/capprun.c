@@ -19,6 +19,7 @@
 #include "kernel/sys/printq.h"
 #include "kernel/drv/bthid.h"
 #include "kernel/sys/applog.h"
+#include "kernel/app/xipflash.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -440,6 +441,7 @@ static int         s_idx_cmds_full;
 static void apps_changed(const char *path) {
   const char *a = CAPP_APPS;
   size_t i;
+  xipflash_forget(path);                  /* cached code for a changed .capp is stale */
   for (i = 0; a[i]; i++) {
     char c = path[i];
     if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');   /* FAT does not care */
