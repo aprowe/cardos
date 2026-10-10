@@ -90,6 +90,18 @@ class Publish(unittest.TestCase):
         self.put("apps/b.capp", app_image(b"B"))
         self.assertEqual(pub(True), ["b"])
 
+    def test_the_manifest_says_the_versions(self):
+        self.put("fw.bin", firmware_image(b"1"))
+        self.put("apps/a.capp", app_image(b"a"))
+        man = updates.manifest(firmware=self.fw, apps_dir=self.apps).splitlines()
+        self.assertEqual(man[-1], "version server " + updates.server_version())
+        self.assertTrue(updates.server_version())
+        img = bytearray(open(self.fw, "rb").read())
+        off = updates.APP_DESC_OFFSET + 16
+        img[off:off + 32] = b"v0.15.2-1-gabc1234".ljust(32, b"\0")
+        self.assertEqual(updates.firmware_version(bytes(img)), "v0.15.2-1-gabc1234")
+        self.assertIsNone(updates.firmware_version(b"not an image"))
+
     def test_an_app_no_longer_built_leaves_the_store(self):
         # Jar Shop and Jar Post became screens of Jar Factory, and the store
         # went on serving them: every update put them back on the card.
@@ -314,7 +326,8 @@ class StoreServed(unittest.TestCase):
     def test_manifest_and_file_from_store(self):
         data = app_image()
         self.assertEqual(self.get("/update").decode(),
-                         "app p %08x %d\n" % (updates.fnv1a32(data), len(data)))
+                         "app p %08x %d\nversion server %s\n" % (
+                             updates.fnv1a32(data), len(data), updates.server_version()))
         self.assertEqual(self.get("/update/app/p"), data)
 
 

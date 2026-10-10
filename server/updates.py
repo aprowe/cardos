@@ -84,6 +84,34 @@ def firmware_sha(data):
     return data[off:off + 32].hex()
 
 
+def firmware_version(data):
+    """The version the image carries (`git describe` when it was built:
+    "v0.15.1" or "v0.15.1-2-gabc1234"), or None."""
+    off = APP_DESC_OFFSET + 16                          # magic, secure_version, reserved
+    if len(data) < off + 32 or struct.unpack_from("<I", data, APP_DESC_OFFSET)[0] != APP_DESC_MAGIC:
+        return None
+    v = data[off:off + 32].split(b"\0", 1)[0].decode("ascii", "replace").strip()
+    return v or None
+
+
+_server_version = None
+
+
+def server_version():
+    """This server's version: `git describe` of the tree it runs from, read once."""
+    global _server_version
+    if _server_version is None:
+        import subprocess
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        try:
+            _server_version = subprocess.run(
+                ["git", "describe", "--tags", "--always", "--dirty"], cwd=root,
+                capture_output=True, text=True, timeout=10).stdout.strip() or "unknown"
+        except Exception:                               # noqa: BLE001 - only a label
+            _server_version = "unknown"
+    return _server_version
+
+
 def app_files(apps_dir=None):
     apps_dir = apps_dir or APPS_DIR
     if not os.path.isdir(apps_dir):
@@ -119,6 +147,10 @@ def manifest(firmware=None, apps_dir=None, folders=None):
         sha = firmware_sha(data)
         if sha:
             lines.append("firmware %s %d" % (sha, len(data)))
+            # Firmware that does not know these lines skips them (manifest.c).
+            v = firmware_version(data)
+            if v:
+                lines.append("version firmware %s" % v)
     for name in app_files(apps_dir):
         with open(os.path.join(apps_dir, name), "rb") as f:
             data = f.read()
@@ -128,6 +160,8 @@ def manifest(firmware=None, apps_dir=None, folders=None):
         if folders.get(stem):
             line += " " + folders[stem]
         lines.append(line)
+    if lines:
+        lines.append("version server %s" % server_version())
     return "".join(l + "\n" for l in lines)
 
 

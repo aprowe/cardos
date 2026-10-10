@@ -907,6 +907,7 @@ void test_manifest_keeps_every_app_and_counts_what_does_not_fit(void);
 void test_manifest_reads_an_apps_folder(void);
 void test_manifest_a_folder_that_is_not_a_name_is_ignored(void);
 void test_manifest_skips_what_it_does_not_understand(void);
+void test_manifest_keeps_the_versions(void);
 void test_manifest_rejects_a_page_that_is_not_one(void);
 void test_manifest_refuses_a_malformed_line_but_keeps_the_rest(void);
 void test_manifest_name_that_is_not_a_name_is_dropped(void);
@@ -1959,6 +1960,7 @@ int main(void) {
   RUN(test_manifest_reads_an_apps_folder);
   RUN(test_manifest_a_folder_that_is_not_a_name_is_ignored);
   RUN(test_manifest_skips_what_it_does_not_understand);
+  RUN(test_manifest_keeps_the_versions);
   RUN(test_manifest_rejects_a_page_that_is_not_one);
   RUN(test_manifest_refuses_a_malformed_line_but_keeps_the_rest);
   RUN(test_manifest_name_that_is_not_a_name_is_dropped);

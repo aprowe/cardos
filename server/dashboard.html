@@ -1403,7 +1403,8 @@ function renderServer(){
   if(!s){ $('#checks').innerHTML=`<li><span class="dot ${S.stErr?'bad':'off'}"></span><span class="nm">Server</span><span class="st ${S.stErr?'bad':'off'}">${S.stErr?'Unknown':'…'}</span><span class="det">${S.stErr?esc(S.stErr):'Loading…'}</span></li>`; }
   else {
     const rows=SRV.map(([k,name,yes,no])=>{ const c=s[k]||{ok:false,detail:'The server didn’t report this.'}; return {name,state:c.ok?'ok':k==='builds'?'off':'bad',st:c.ok?yes:no,det:esc(c.detail||'')}; });
-    rows.splice(1,0,{name:'Claude session',state:s.session?'ok':'off',st:s.session?'Open':'None',det:s.session?`<span class="mono">${esc(s.session)}</span>`:'The next message from the device starts a new one.'});
+    rows.unshift({name:'Version',state:'ok',st:esc(s.version||'?'),det:'This server: git describe of the tree it runs from.'});
+    rows.splice(2,0,{name:'Claude session',state:s.session?'ok':'off',st:s.session?'Open':'None',det:s.session?`<span class="mono">${esc(s.session)}</span>`:'The next message from the device starts a new one.'});
     $('#checks').innerHTML=rows.map(c=>`<li><span class="dot ${c.state}"></span><span class="nm">${c.name}</span><span class="st ${c.state}">${c.st}</span><span class="det">${c.det}</span></li>`).join('');
   }
   if(!S.stLoading) $('#srv-checked').innerHTML=S.stAt?`Checked <span class="js-stat">${fmtAgo(now()-S.stAt)}</span>`:'';
@@ -1413,7 +1414,8 @@ function renderServer(){
 /* ---------- updates ---------- */
 function renderUpdates(){
   const u=S.st&&S.st.updates, fw=(u&&u.firmware)||{}, apps=(u&&u.apps)||[];
-  const fwCard=(lab,h)=>`<div class="panel fwc"><div><div class="lab">Firmware · ${lab}</div><div class="hash">${h?`${esc(h.slice(0,8))}<span>${esc(h.slice(8))}</span>`:'<span>not published</span>'}</div></div>${h?`<button class="icon-btn" data-act="copy" data-v="${esc(h)}" title="Copy hash" aria-label="Copy ${lab} hash">${ic('copy')}</button>`:''}</div>`;
+  const fv=(u&&u.versions)||{};
+  const fwCard=(lab,h)=>`<div class="panel fwc"><div><div class="lab">Firmware · ${lab}${fv[lab]?` · <span class="mono">${esc(fv[lab])}</span>`:''}</div><div class="hash">${h?`${esc(h.slice(0,8))}<span>${esc(h.slice(8))}</span>`:'<span>not published</span>'}</div></div>${h?`<button class="icon-btn" data-act="copy" data-v="${esc(h)}" title="Copy hash" aria-label="Copy ${lab} hash">${ic('copy')}</button>`:''}</div>`;
   $('#fw').innerHTML=u?fwCard('release',fw.release)+fwCard('debug',fw.debug):'';
   const folders=[...new Set(apps.map(a=>a.folder).filter(Boolean))].sort();
   const groups=['All',...folders,...(apps.some(a=>!a.folder)?['Top level']:[])];

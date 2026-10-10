@@ -78,6 +78,27 @@ void test_manifest_skips_what_it_does_not_understand(void) {
   CHECK_EQ(m.napps, 1);
 }
 
+/* The versions are labels for people (update version, the Update app):
+ * kept, never compared, and not enough on their own to be a manifest. */
+void test_manifest_keeps_the_versions(void) {
+  Manifest m;
+  char sha[65];
+  int i;
+  for (i = 0; i < 64; i++) sha[i] = 'a';
+  sha[64] = 0;
+  {
+    char text[256];
+    snprintf(text, sizeof text, "firmware %s 100\nversion firmware v0.15.1-2-gabc1234\n"
+             "app cat 00000001 5\nversion server v0.15.2\n", sha);
+    CHECK_EQ(manifest_parse(text, &m), 2);
+  }
+  CHECK(strcmp(m.fw_version, "v0.15.1-2-gabc1234") == 0);
+  CHECK(strcmp(m.server_version, "v0.15.2") == 0);
+  CHECK_EQ(manifest_parse("version server v1\n", &m), -1);
+  CHECK_EQ(manifest_parse("app cat 00000001 5\n", &m), 1);
+  CHECK_EQ(m.fw_version[0], 0);
+}
+
 void test_manifest_rejects_a_page_that_is_not_one(void) {
   Manifest m;
   CHECK_EQ(manifest_parse("<html><body>404</body></html>", &m), -1);
