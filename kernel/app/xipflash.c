@@ -19,6 +19,8 @@ static const char *TAG = "xip";
 static const esp_partition_t       *s_part;
 static esp_partition_mmap_handle_t  s_map;
 static const void                  *s_base;
+static esp_partition_mmap_handle_t  s_dmap;
+static const void                  *s_drom;
 static XipCache                     s_cache;
 static int                          s_ready;
 static SemaphoreHandle_t            s_lock;
@@ -63,11 +65,27 @@ int xipflash_init(void) {
     ESP_LOGE(TAG, "cannot map appcode: app code loads into RAM");
     return -1;
   }
+  /* And through the data bus, for the constants beside each app's code: the
+   * instruction bus allows only aligned 32-bit loads, and a string is read
+   * a byte at a time. IDF maps one flash range twice by sharing the pages
+   * (ESP_MMU_MMAP_FLAG_PADDR_SHARED); on the S3 the two buses share one MMU
+   * table anyway. Both views or neither: code in flash with its constants
+   * in RAM would be code relocated against a heap address, which no cache
+   * entry can be valid for. */
+  if (esp_partition_mmap(s_part, 0, s_part->size, ESP_PARTITION_MMAP_DATA,
+                         &s_drom, &s_dmap) != ESP_OK) {
+    esp_partition_munmap(s_map);
+    s_base = NULL;
+    ESP_LOGE(TAG, "cannot map appcode for data: app code loads into RAM");
+    return -1;
+  }
   /* Before xip_open, so nothing can reach the cache without it; dropped
    * again below if the cache never becomes ready. */
   s_lock = xSemaphoreCreateRecursiveMutex();
   if (!s_lock) {
     esp_partition_munmap(s_map);
+    esp_partition_munmap(s_dmap);
+    s_drom = NULL;
     ESP_LOGE(TAG, "no memory for the appcode lock: app code loads into RAM");
     return -1;
   }
@@ -80,6 +98,8 @@ int xipflash_init(void) {
     /* Nothing will ever run from the mapping, so give the address space
      * back; and with no cache there is nothing to lock. */
     esp_partition_munmap(s_map);
+    esp_partition_munmap(s_dmap);
+    s_drom = NULL;
     s_base = NULL;
     vSemaphoreDelete(s_lock);
     s_lock = NULL;
@@ -87,14 +107,15 @@ int xipflash_init(void) {
     return -1;
   }
   s_ready = 1;
-  ESP_LOGI(TAG, "appcode %u KB mapped at %p, head %u", (unsigned)(f.size / 1024), s_base,
-           (unsigned)s_cache.head);
+  ESP_LOGI(TAG, "appcode %u KB mapped at %p (code) and %p (constants), head %u",
+           (unsigned)(f.size / 1024), s_base, s_drom, (unsigned)s_cache.head);
   return 0;
 }
 
 int xipflash_ready(void) { return s_ready; }
 XipCache *xipflash_cache(void) { return s_ready ? &s_cache : NULL; }
 uint32_t xipflash_base(void) { return (uint32_t)(uintptr_t)s_base; }
+uint32_t xipflash_drom_base(void) { return s_ready ? (uint32_t)(uintptr_t)s_drom : 0; }
 
 uint32_t xipflash_path_hash(const char *path) {
   char norm[FS_PATH_MAX];

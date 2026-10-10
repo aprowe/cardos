@@ -196,10 +196,11 @@ static void cmd_mem(void) { mem_report(mem_line, NULL); }
  * always safe -- the next launch of each app writes its entry again. */
 /* One row inside the console's 40 columns (39 at most): sector, name, size,
  * seq, then dead or stale (dead says enough) and whether an app holds it.
- * Stale is an entry no launch can match: relocated for another map or
+ * Stale is an entry no launch can match: relocated for another map, data view or
  * arena, or built for another API. */
 static void xip_row(const XipHdr *h, uint32_t off, int in_use, void *ctx) {
   int stale = h->key.map_base != xipflash_base() || h->key.arena != (uint32_t)arena_addr() ||
+              (h->key.rodata_size && h->key.drom_base != xipflash_drom_base()) ||
               h->key.api != CAPP_API_VERSION;
   (void)ctx;
   con_printf("%3u %-14.14s %3uK %4u%s%s\n", (unsigned)(off / XIP_SECTOR), h->path,
