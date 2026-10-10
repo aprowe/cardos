@@ -491,3 +491,119 @@ void test_jar_frames(void) {
   dump("16_decorate");
   CHECK(BLITS > 0);
 }
+
+/* Up a ledge in Decorate: Up while moving puts a standing thing on the
+ * ruler shelf, Up again on the matchbox ledge, Down back; Esc puts it back
+ * where it was; the level is saved and comes back. */
+void test_jar_decorate_puts_things_on_the_ledges(void) {
+  const char *sv;
+  int i;
+  start(T0);
+  own_stock();
+  place_new(10);                                 /* the button owl, moving */
+  CHECK_EQ(J.placed[G.dsel].level, 0);
+  key(CAPP_KEY_UP);
+  CHECK_EQ(J.placed[G.dsel].level, 1);
+  CHECK_EQ(J.placed[G.dsel].lift, JS_LEDGE_H[1]);
+  CHECK(J.placed[G.dsel].home_x >= JS_LEDGE_LO[1] && J.placed[G.dsel].home_x <= JS_LEDGE_HI[1]);
+  for (i = 0; i < 60; i++) key(CAPP_KEY_LEFT);
+  CHECK_EQ(J.placed[G.dsel].home_x, JS_LEDGE_LO[1]);   /* not off the end */
+  for (i = 0; i < 8; i++) key(CAPP_KEY_RIGHT);
+  dump("30_decorate_on_the_ruler");
+  key(CAPP_KEY_ENTER);
+  sv = fakefs_get("/var/jar/jar.txt");
+  CHECK(sv && strstr(sv, "place 10 30 0 1\n"));
+  /* the frog: up twice, onto the matchbox ledge */
+  place_new(5);
+  key(CAPP_KEY_UP);
+  key(CAPP_KEY_UP);
+  key(CAPP_KEY_UP);                              /* there is no higher */
+  CHECK_EQ(J.placed[G.dsel].level, 2);
+  dump("31_decorate_on_the_matchboxes");
+  key(CAPP_KEY_ENTER);
+  /* move the owl, change its level, think better of it */
+  decor_select(js_find(&J, 10));
+  key(CAPP_KEY_ENTER);
+  key(CAPP_KEY_DOWN);
+  CHECK_EQ(J.placed[G.dsel].level, 0);
+  CHECK_EQ(J.placed[G.dsel].lift, 0);
+  key(CAPP_KEY_RIGHT);
+  key(CAPP_KEY_ESC);
+  CHECK_EQ(J.placed[G.dsel].level, 1);
+  CHECK_EQ(J.placed[G.dsel].home_x, 30);
+  /* a hanging thing's Up is still its string; a flier has no levels */
+  decor_select(js_find(&J, 2));
+  key(CAPP_KEY_ENTER);
+  i = J.placed[G.dsel].home_y;
+  key(CAPP_KEY_UP);
+  CHECK_EQ(J.placed[G.dsel].home_y, i - 2);
+  CHECK_EQ(J.placed[G.dsel].level, 0);
+  key(CAPP_KEY_ENTER);
+  place_new(8);                                  /* the bee */
+  key(CAPP_KEY_UP);
+  CHECK_EQ(J.placed[G.dsel].level, 0);
+  key(CAPP_KEY_ENTER);
+  /* back on the card, and back up the ledges after a restart */
+  reopen();
+  CHECK_EQ(J.placed[js_find(&J, 10)].level, 1);
+  CHECK_EQ(J.placed[js_find(&J, 10)].lift, JS_LEDGE_H[1]);
+  CHECK_EQ(J.placed[js_find(&J, 5)].level, 2);
+  CHECK_EQ(J.placed[js_find(&J, 8)].level, 0);
+  CHECK_EQ(J.placed[js_find(&J, 1)].level, 0);
+}
+
+/* The jar with things up the ledges and a critter that likes it high going
+ * up and down: frames to look at, at 1x and zoomed. */
+void test_jar_ledges_in_the_scene(void) {
+  int i, k, was_up = 0, came_down = 0;
+  start(T0);
+  J.coins = 5000;
+  for (i = 0; i < 6; i++) { js_buy(&J, JU_MOSS); js_buy(&J, JU_BED); js_buy(&J, JU_MACH); js_buy(&J, JU_BELT); }
+  own_stock();
+  place_new(10); key(CAPP_KEY_UP); key(CAPP_KEY_ENTER);   /* the owl on the ruler */
+  js_move_to(&J, G.dsel, 52, 0);
+  place_new(6); key(CAPP_KEY_UP); key(CAPP_KEY_UP); key(CAPP_KEY_ENTER);  /* the lamp, up top */
+  js_move_to(&J, G.dsel, 128, 0);
+  place_new(5); key(CAPP_KEY_ENTER);                       /* the frog by the pond */
+  js_move_to(&J, G.dsel, 76, 0);
+  place_new(11); key(CAPP_KEY_ENTER);                      /* the woodlouse */
+  k = G.dsel;
+  J.placed[k].zone = JZ_HIGH;                              /* ... who likes it high */
+  key(CAPP_KEY_ESC);
+  ticks(2000);
+  dump("32_ledges");
+  for (i = 0; i < 4000 && !(J.placed[k].climb == JC_UP && J.placed[k].lift > 12); i++) ticks(25);
+  CHECK_EQ(J.placed[k].climb, JC_UP);
+  dump("33_climbing");
+  for (i = 0; i < 40000 && !came_down; i++) {
+    ticks(25);
+    if (J.placed[k].level && !J.placed[k].climb && !was_up) {
+      was_up = 1;
+      ticks(3000);
+      dump("34_up_top");
+      G.zoom = 1;
+      G.follow = -1;
+      G.zx = J.placed[k].x / JS_FX - SW / 4;
+      G.zy = JS_SOIL - J.placed[k].lift - SHT / 4;
+      zoom_clamp();
+      dump("35_up_top_zoomed");
+      G.zoom = 0;
+    }
+    if (was_up && !J.placed[k].level && !J.placed[k].climb) came_down = 1;
+  }
+  CHECK(was_up);
+  CHECK(came_down);
+  G.zoom = 1;
+  G.zx = 0;
+  G.zy = 40;
+  G.follow = -1;
+  dump("36_ruler_zoomed");
+  G.zx = 50;
+  G.zy = 20;
+  dump("37_matchboxes_zoomed");
+  G.zoom = 0;
+  fakeapi_now.hour = 22;
+  ticks(1500);
+  dump("38_ledges_night");
+  fakeapi_now.hour = 12;
+}

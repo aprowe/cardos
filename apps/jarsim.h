@@ -36,8 +36,12 @@
 
 #if defined(__GNUC__)
 #define JS_OPT __attribute__((unused))
+/* For the small things called from everywhere: -Os inlined js_rr at every
+ * one of its thirty-odd calls, and jar.capp has a size budget. */
+#define JS_SMALL __attribute__((unused, noinline))
 #else
 #define JS_OPT
+#define JS_SMALL
 #endif
 
 /* ---- the numbers (placeholders from the spec, tuned to the scene) -------- */
@@ -100,6 +104,24 @@
 #define JS_NAP_H       22
 #define JS_DOOR_X      232
 #define JS_EXIT_X      248             /* the snail's middle, once it is off the screen */
+
+/* Levels (2026-10-10: "the ground will become quite crowded"). Level 0 is
+ * the soil; the others are ledges at the back of the jar, made of junk like
+ * the factory: 1 a wooden ruler on a stack of bottle caps and three cotton
+ * reels, over the garden; 2 a lolly stick on a tower of matchboxes behind
+ * the pond, its far end hung from the lid on a thread. Floor decor can be
+ * put on a ledge, and critters that walk or hop climb up at UP (the caps,
+ * the matchboxes), potter along, sit, and climb down again. H is the top,
+ * in pixels above the soil; LO..HI is where an item's middle may be. */
+#define JS_LEVELS      3
+static JS_OPT const int16_t JS_LEDGE_H[JS_LEVELS]  = { 0, 34, 51 };
+static JS_OPT const int16_t JS_LEDGE_LO[JS_LEVELS] = { 10, 22, 90 };
+static JS_OPT const int16_t JS_LEDGE_HI[JS_LEVELS] = { 226, 66, 140 };
+static JS_OPT const int16_t JS_LEDGE_UP[JS_LEVELS] = { 0, 23, 91 };
+
+/* A climb, a step at a time: walking to the foot (or the top) of the
+ * ledge's climb, then up or down it. */
+enum { JC_NONE = 0, JC_TO_UP, JC_UP, JC_TO_DOWN, JC_DOWN };
 
 /* The machines, in order along the belt: vat, press, spool, crane. */
 static const int16_t JS_MACH_X[JS_MAX_MACH] = { 108, 132, 154, 170 };
@@ -185,15 +207,20 @@ typedef struct {
   int32_t  x, tx;                      /* sub-pixels */
   int16_t  yoff, vy;                   /* 1/16 px above its line */
   int16_t  t, wait, say_t, phase, near_cd;
-  uint8_t  cur, flip, glow, moving, dirty;
+  uint8_t  cur, flip, glow, moving;
   int8_t   say;
-  /* phase 2: its script in j->spool, 0 bytes for none; mem changed since
-   * the item's record was last written (js_mem_sync) */
-  uint16_t soff, slen;
+  /* phase 2: mem changed since the item's record was last written
+   * (js_mem_sync); its script in j->spool, 0 bytes for none */
   uint8_t  mem_dirty;
+  uint16_t soff, slen;
+  /* levels: where it stands (and is saved), a climb under way and where
+   * to; lift is how high its feet are, px above the soil. Packed into
+   * what was padding: 24 of these is a lot of an app's 28 KB. */
+  uint8_t  level, climb, goal;
+  int8_t   lift;
 } JPlaced;
 
-typedef struct { uint32_t id; int16_t x, y; } JWant;
+typedef struct { uint32_t id; int16_t x; int8_t y; uint8_t lv; } JWant;
 
 typedef struct {
   /* kept on the card */
@@ -245,7 +272,7 @@ typedef struct {
 
 /* ---- small things ------------------------------------------------------ */
 
-static JS_OPT uint32_t js_rnd(Jar *j) {
+static JS_SMALL uint32_t js_rnd(Jar *j) {
   uint32_t x = j->seed ? j->seed : 0x9E3779B9u;
   x ^= x << 13; x ^= x >> 17; x ^= x << 5;
   j->seed = x;
@@ -253,7 +280,7 @@ static JS_OPT uint32_t js_rnd(Jar *j) {
 }
 
 /* lo..hi inclusive. */
-static JS_OPT int js_rr(Jar *j, int lo, int hi) {
+static JS_SMALL int js_rr(Jar *j, int lo, int hi) {
   return lo + (int)(js_rnd(j) % (uint32_t)(hi - lo + 1));
 }
 
@@ -267,7 +294,7 @@ static JS_OPT int js_isqrt(int v) {
 }
 
 /* Walk *x towards tx at spd sub-pixels a step. 1 when there. */
-static JS_OPT int js_walk(int32_t *x, int32_t tx, int spd, uint8_t *face) {
+static JS_SMALL int js_walk(int32_t *x, int32_t tx, int spd, uint8_t *face) {
   int32_t d = tx - *x;
   if (d == 0) return 1;
   if (face) *face = d < 0;
@@ -290,7 +317,7 @@ static JS_OPT const int JS_BELT_PCT[JS_MAX_BELT + 1] = { 100, 82, 68, 56 };
 static JS_OPT const int JS_BELT_SPD[JS_MAX_BELT + 1] = { 10, 13, 16, 20 };
 
 /* One machine's share of a jar, in steps. */
-static JS_OPT int js_stage_steps(int nmach, int belt) {
+static JS_SMALL int js_stage_steps(int nmach, int belt) {
   return JS_WORK_MS / JS_STEP_MS / nmach * JS_BELT_PCT[belt] / 100;
 }
 
@@ -434,8 +461,17 @@ static JS_OPT uint16_t js_tags(const char *s) {
 }
 
 /* The x range an item keeps to: a decoration near where it was put, a
- * critter in its favourite zone. */
+ * critter in its favourite zone -- or, up on a ledge, along the ledge. */
 static JS_OPT void js_range(const JPlaced *p, int *lo, int *hi) {
+  int lv = p->level;
+  if (lv) {
+    *lo = JS_LEDGE_LO[lv]; *hi = JS_LEDGE_HI[lv];
+    if (p->kind != JK_CRITTER) {
+      if (*lo < p->home_x - 12) *lo = p->home_x - 12;
+      if (*hi > p->home_x + 12) *hi = p->home_x + 12;
+    }
+    return;
+  }
   if (p->kind != JK_CRITTER) { *lo = p->home_x - 12; *hi = p->home_x + 12; }
   else switch (p->zone) {
     case JZ_GARDEN: *lo = 8;   *hi = 80;  break;
@@ -448,7 +484,7 @@ static JS_OPT void js_range(const JPlaced *p, int *lo, int *hi) {
   if (*hi > 226) *hi = 226;
 }
 
-static JS_OPT int js_find(const Jar *j, uint32_t id) {
+static JS_SMALL int js_find(const Jar *j, uint32_t id) {
   int i;
   for (i = 0; i < j->nplaced; i++) if (j->placed[i].id == id) return i;
   return -1;
@@ -531,16 +567,58 @@ static JS_OPT void js_unplace(Jar *j, int i) {
   j->nplaced--;
 }
 
-/* Move a placed item somewhere else along its line. */
+/* Does it stand on something -- the soil or a ledge? Floor decor and the
+ * critters that walk, hop or sit; not hanging things, not fliers. */
+static JS_OPT int js_has_levels(const JPlaced *p) {
+  return p->kind == JK_FLOOR || (p->kind == JK_CRITTER && p->move != JM_FLOATS);
+}
+
+/* Move a placed item somewhere else along its line, on its level. A climb
+ * under way is called off: it is back on the level it set off from. */
 static JS_OPT void js_move_to(Jar *j, int i, int x, int y) {
   JPlaced *p = &j->placed[i];
-  x = p->kind == JK_HANGING ? js_clamp(x, JS_HANG_LO, JS_HANG_HI) : js_clamp(x, 10, 226);
+  int lv = p->level;
+  x = p->kind == JK_HANGING ? js_clamp(x, JS_HANG_LO, JS_HANG_HI) : js_clamp(x, JS_LEDGE_LO[lv], JS_LEDGE_HI[lv]);
   p->home_x = (int16_t)x;
   if (p->kind == JK_HANGING) p->home_y = (int16_t)js_clamp(y, 0, 60);
   p->x = p->tx = (int32_t)x * JS_FX;
   p->yoff = 0;
   p->vy = 0;
   p->moving = 0;
+  p->lift = (int8_t)JS_LEDGE_H[lv];
+  p->climb = p->goal = 0;
+}
+
+/* Put item i on level lv: 0 the soil, 1.. a ledge (only what stands, see
+ * js_has_levels; anything else stays at 0), keeping its x as far as the
+ * ledge allows. The level it is on. */
+static JS_OPT int js_set_level(Jar *j, int i, int lv) {
+  JPlaced *p = &j->placed[i];
+  lv = js_has_levels(p) ? js_clamp(lv, 0, JS_LEVELS - 1) : 0;
+  p->level = (uint8_t)lv;
+  js_move_to(j, i, p->home_x, p->home_y);
+  return lv;
+}
+
+/* Can it climb by itself? The critters that walk or hop. */
+static JS_OPT int js_can_climb(const JPlaced *p) {
+  return p->kind == JK_CRITTER && (p->move == JM_HOPS || p->move == JM_WANDERS);
+}
+
+/* Item i sets off for level `to`: up a ledge from the soil, or down to the
+ * soil; ledge to ledge goes down first. Nothing if it cannot climb, is
+ * already climbing, or is there. */
+static JS_OPT void js_trip(Jar *j, int i, int to) {
+  JPlaced *p = &j->placed[i];
+  if (!js_can_climb(p) || p->climb || to == p->level) return;
+  p->goal = (uint8_t)to;
+  p->climb = p->level ? JC_TO_DOWN : JC_TO_UP;
+  p->moving = 1;
+}
+
+/* The ledge whose climb is nearer x. */
+static JS_SMALL int js_near_ledge(int x) {
+  return x < (JS_LEDGE_UP[1] + JS_LEDGE_UP[2]) / 2 ? 1 : 2;
 }
 
 /* ---- items: senses, actions, events -------------------------------------- */
@@ -548,7 +626,7 @@ static JS_OPT void js_move_to(Jar *j, int i, int x, int y) {
 static JS_OPT int js_item_y(const Jar *j, int i) {     /* its middle, px */
   const JPlaced *p = &j->placed[i];
   if (p->kind == JK_HANGING) return JS_LID + p->home_y + 8;
-  return JS_SOIL - 8 - p->home_y - p->yoff / 16;
+  return JS_SOIL - 8 - p->lift - p->home_y - p->yoff / 16;
 }
 
 static JS_OPT int js_zone_of(int x) {
@@ -585,7 +663,7 @@ static JS_OPT int js_sense(Jar *j, int i, int sense) {
   int d;
   switch (sense) {
   case JSN_X:         return p->x / JS_FX;
-  case JSN_ZONE:      return js_zone_of(p->x / JS_FX);
+  case JSN_ZONE:      return p->level ? JZ_HIGH : js_zone_of(p->x / JS_FX);
   case JSN_NEAR_KIND: return js_nearest(j, i, 0);
   case JSN_NEAR_DIST: js_nearest(j, i, &d); return d;
   case JSN_TIME:      return j->phase;
@@ -622,11 +700,19 @@ static JS_OPT int js_act(Jar *j, int i, int action, int arg) {
     return 0;
   case JA_WALK:
     if (p->kind == JK_HANGING) return -1;
+    /* "Walk high" from the soil is a climb; walking to somewhere on the
+     * ground from a ledge, the climb down. */
+    if (js_can_climb(p) && (p->level ? arg < JZ_HIGH : arg == JZ_HIGH)) {
+      js_trip(j, i, p->level ? 0 : js_near_ledge(x));
+      return 0;
+    }
+    if (p->climb) return 0;
     {
       JPlaced tmp;
       tmp.kind = JK_CRITTER;
       tmp.zone = (uint8_t)(arg < JZ_KINDS ? arg : JZ_ANYWHERE);
       tmp.home_x = p->home_x;
+      tmp.level = p->level;
       js_range(&tmp, &lo, &hi);
       if (p->kind != JK_CRITTER) js_range(p, &lo, &hi);   /* decor stays put */
       p->tx = (int32_t)js_rr(j, lo, hi) * JS_FX;
@@ -1223,6 +1309,48 @@ static JS_OPT void js_step_jam(Jar *j) {
   js_event(j, JE_JAM, 2);
 }
 
+/* A climb under way, one step: along to the climb, then up it (a pixel
+ * every other step) or down it (a pixel a step). 1 while it lasts: the
+ * item does nothing else meanwhile. */
+static JS_OPT int js_step_climb(Jar *j, int i) {
+  JPlaced *p = &j->placed[i];
+  int c = p->climb;
+  if (!c) return 0;
+  if (p->nframes > 1 && (j->steps & 7) == 0) p->cur = (uint8_t)((p->cur + 1) % p->nframes);
+  if (c == JC_TO_UP || c == JC_TO_DOWN) {
+    uint8_t f = p->flip;
+    p->tx = (int32_t)JS_LEDGE_UP[c == JC_TO_UP ? p->goal : p->level] * JS_FX;
+    if (js_walk(&p->x, p->tx, js_speed(p), &f)) p->climb++;    /* there: on to the climb */
+    p->flip = f;
+    return 1;
+  }
+  if (c == JC_UP) {
+    if ((j->steps & 1) || ++p->lift < JS_LEDGE_H[p->goal]) return 1;
+    p->level = p->goal;
+    p->goal = 0;
+  } else {
+    if (--p->lift > 0) return 1;
+    p->level = 0;
+    if (p->goal) { p->climb = JC_TO_UP; p->lift = 0; return 1; }   /* ledge to ledge */
+  }
+  p->lift = (int8_t)JS_LEDGE_H[p->level];
+  p->climb = 0;
+  p->moving = 0;
+  p->t = 30;                                         /* a look round first */
+  return 1;
+}
+
+/* A critter about to pick somewhere new may go up a ledge instead, or come
+ * down from one: one that likes it high, mostly; the others now and then.
+ * 1 if it set off. */
+static JS_OPT int js_maybe_climb(Jar *j, int i) {
+  JPlaced *p = &j->placed[i];
+  int high = p->zone == JZ_HIGH;
+  if (!js_can_climb(p) || js_rr(j, 0, p->level ? (high ? 6 : 1) : (high ? 1 : 15))) return 0;
+  js_trip(j, i, p->level ? 0 : high ? js_rr(j, 1, JS_LEVELS - 1) : js_near_ledge(p->x / JS_FX));
+  return 1;
+}
+
 static JS_OPT void js_step_item(Jar *j, int i) {
   JPlaced *p = &j->placed[i];
   int lo, hi, spd = js_speed(p);
@@ -1235,6 +1363,7 @@ static JS_OPT void js_step_item(Jar *j, int i) {
   }
   p->phase = (int16_t)((p->phase + (p->speed + 1)) & 1023);
   if (p->wait > 0) { p->wait--; p->moving = 0; return; }
+  if (js_step_climb(j, i)) return;
   js_range(p, &lo, &hi);
   switch (p->move) {
   case JM_SITS:
@@ -1250,6 +1379,7 @@ static JS_OPT void js_step_item(Jar *j, int i) {
       js_walk(&p->x, p->tx, spd * 2, &f);
       p->flip = f;
     } else if (--p->t <= 0) {
+      if (js_maybe_climb(j, i)) break;
       p->tx = (int32_t)js_clamp(p->x / JS_FX + js_rr(j, -10, 10), lo, hi) * JS_FX;
       js_act(j, i, JA_HOP, 5);
       p->t = (int16_t)js_rr(j, 60, 200);
@@ -1264,6 +1394,7 @@ static JS_OPT void js_step_item(Jar *j, int i) {
       p->flip = f;
       if (p->nframes > 1 && (j->steps % 6) == 0) p->cur = (uint8_t)((p->cur + 1) % p->nframes);
     } else if (--p->t <= 0) {
+      if (js_maybe_climb(j, i)) break;
       p->tx = (int32_t)js_rr(j, lo, hi) * JS_FX;
       p->moving = 1;
     } else if (p->move == JM_FLOATS && p->nframes > 1 && (j->steps % 8) == 0) {
@@ -1310,6 +1441,13 @@ static JS_OPT int js_who_x(const Jar *j, int who) {
   return j->placed[who - JW_ITEM].x / JS_FX;
 }
 
+/* The level someone stands on: the workers the soil; an item climbing,
+ * none (99) -- it is busy holding on. */
+static JS_OPT int js_who_lv(const Jar *j, int who) {
+  if (who < JW_ITEM) return 0;
+  return j->placed[who - JW_ITEM].climb ? 99 : j->placed[who - JW_ITEM].level;
+}
+
 static JS_OPT int js_can_chat(const Jar *j, int who) {
   if (who < JS_MAX_MOSS) return who < j->nmoss && j->moss[who].st != M_NAP && j->moss[who].yoff == 0;
   if (who == JW_SNAIL) return j->snail.st != S_AWAY && j->snail.x / JS_FX < JS_DOOR_X - 8;
@@ -1334,6 +1472,7 @@ static JS_OPT void js_step_chat(Jar *j) {
     for (b = a + 1; b < n; b++) {
       if (!js_can_chat(j, b)) continue;
       if (js_abs(js_who_x(j, a) - js_who_x(j, b)) > 16) continue;
+      if (js_who_lv(j, a) != js_who_lv(j, b)) continue;    /* one up a ledge, one below */
       js_say_any(j, a);
       j->reply_who = (int8_t)b;
       j->reply_t = (int16_t)(JS_HZ * 3 / 2);
@@ -1399,11 +1538,17 @@ static JS_OPT int js_put_u(char *buf, int n, int cap, uint32_t v) {
   return n;
 }
 
+/* Text, a number, text: one call where it was three, for the size budget. */
+static JS_SMALL int js_put3(char *buf, int n, int cap, const char *pre, uint32_t v, const char *post) {
+  n = js_put(buf, n, cap, pre);
+  n = js_put_u(buf, n, cap, v);
+  return js_put(buf, n, cap, post);
+}
+
 /* The jar as text, into buf. Its length; cap should be 2 KB. */
 static JS_OPT int js_save(const Jar *j, char *buf, int cap) {
   int n = 0, i;
-#define JS_KV(key, v) do { n = js_put(buf, n, cap, key " "); n = js_put_u(buf, n, cap, (uint32_t)(v)); \
-                           n = js_put(buf, n, cap, "\n"); } while (0)
+#define JS_KV(key, v) (n = js_put3(buf, n, cap, key " ", (uint32_t)(v), "\n"))
   n = js_put(buf, n, cap, "jar 1\n");
   JS_KV("coins", j->coins);
   JS_KV("shipped", j->shipped);
@@ -1432,16 +1577,21 @@ static JS_OPT int js_save(const Jar *j, char *buf, int cap) {
   n = js_put(buf, n, cap, "\n");
   /* What is in the jar, and what a save said was in it and has not been put
    * back (the companion app, which loads the jar without placing anything,
-   * must not lose it). */
+   * must not lose it). "place ID X Y", and the level after it when it is
+   * up a ledge: a reader that does not know levels ignores the fourth
+   * number, and a line without one is on the soil. */
   for (i = 0; i < j->nplaced + j->nwant; i++) {
     uint32_t id = i < j->nplaced ? j->placed[i].id : j->want[i - j->nplaced].id;
     int x = i < j->nplaced ? j->placed[i].home_x : j->want[i - j->nplaced].x;
     int y = i < j->nplaced ? j->placed[i].home_y : j->want[i - j->nplaced].y;
+    int lv = i < j->nplaced ? j->placed[i].level : j->want[i - j->nplaced].lv;
     if (i >= j->nplaced && js_find(j, id) >= 0) continue;
     n = js_put(buf, n, cap, "place ");
     n = js_put_u(buf, n, cap, id);           n = js_put(buf, n, cap, " ");
     n = js_put_u(buf, n, cap, (uint32_t)x);  n = js_put(buf, n, cap, " ");
-    n = js_put_u(buf, n, cap, (uint32_t)y);  n = js_put(buf, n, cap, "\n");
+    n = js_put_u(buf, n, cap, (uint32_t)y);
+    if (lv) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, (uint32_t)lv); }
+    n = js_put(buf, n, cap, "\n");
   }
 #undef JS_KV
   return n;
@@ -1518,10 +1668,12 @@ static JS_OPT int js_load(Jar *j, const char *t) {
     } else if (js_word_is(w, "place")) {
       uint32_t id = js_num(&p);
       int x = (int)js_num(&p), y = (int)js_num(&p);
+      uint32_t lv = js_more(p) ? js_num(&p) : 0;   /* none: on the soil */
       if (j->nwant < JS_MAX_PLACED && id) {
         j->want[j->nwant].id = id;
         j->want[j->nwant].x = (int16_t)x;
-        j->want[j->nwant].y = (int16_t)y;
+        j->want[j->nwant].y = (int8_t)js_clamp(y, 0, 60);   /* a string's length */
+        j->want[j->nwant].lv = (uint8_t)(lv < JS_LEVELS ? lv : JS_LEVELS - 1);
         j->nwant++;
       }
     }

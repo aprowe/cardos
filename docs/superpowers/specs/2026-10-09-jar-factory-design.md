@@ -140,6 +140,22 @@ jar is on screen. Time away earns nothing -- no pile on the dock, no banner,
 no berries ripened -- and the companion apps do not run the factory either.
 Plants still come of age by the real time elapsed (three days to grow).
 
+### Ledges: using the height of the jar (2026-10-10)
+
+The owner: "the ground will become quite crowded, need a way to use the
+vertical space". Two ledges stand at the back of the jar, junk like the
+factory: a wooden ruler on a stack of bottle caps and three cotton reels over
+the garden (34 px up), and a lolly stick on a tower of matchboxes behind the
+pond, its far end hung from the lid on a thread (51 px up). In Decorate,
+moving floor decor or a critter that stands, Up and Down change its level
+(soil, ruler shelf, matchbox ledge); the top line says which, and each level
+is dotted along its top, the chosen one gold. Critters that walk or hop climb
+by themselves at the caps or the matchboxes: those whose favourite zone is
+"high" spend most of their time up there, the others go up now and then;
+up top they potter along the ledge and sit, then climb down. `walk high` in
+a recipe is a climb. A save's place line carries the level as a fourth
+number when it is not the soil; a save without one is all on the soil.
+
 ## Items
 
 A small self-contained record: a sprite, a name, a one-line description, and a
