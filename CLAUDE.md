@@ -704,7 +704,7 @@ paint used to clear the active slot for the rest of the tick — so `damage()`
 marks were dropped and the request had no owner. Apps now say "busy" when a
 start is refused instead of returning silently.
 
-**API version 44** (`CAPP_API_VERSION` in `capp.h` is the truth; this
+**API version 45** (`CAPP_API_VERSION` in `capp.h` is the truth; this
 paragraph is history). It moved six times in one day — 11 to 17 — and has
 kept moving since; each move means every `.capp` must be rebuilt, because the
 loader refuses a binary built against a different table. `python
@@ -717,7 +717,7 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36), `motion` (37), `midi` (38), `notify` (39), `notify_at`/`notify_cancel` (40), `update_apply_progress` (41), `firmware_boot` (42), `link` (43) and `sig_verify` (44). A new capp_info flag bit (`CAPP_PAINT_DIRECT`) is not an API change; neither is clamping what `http_poll` returns.
+`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36), `motion` (37), `midi` (38), `notify` (39), `notify_at`/`notify_cancel` (40), `update_apply_progress` (41), `firmware_boot` (42), `link` (43), `sig_verify` (44) and `paint_direct` (45). A new capp_info flag bit (`CAPP_PAINT_DIRECT`) is not an API change; neither is clamping what `http_poll` returns.
 
 **Fonts are files an app asks for** (2026-09-23). The 6x8 console font is
 still compiled in and still the default; anything nicer is a `.cfnt` in
@@ -986,7 +986,26 @@ CARDOS_STATE/sign_key.pem must never be regenerated). The wire format is in
 `docs/superpowers/specs/2026-10-09-server-store-design.md`. Devices verify
 signatures with `api->sig_verify` (API 44).
 
-**Jar Factory** (2026-10-09, `apps/jar.c` and its companion, Games): an idle
+**Jar Factory is one app again** (2026-10-10, API 45). The shop and the post
+are screens of `apps/jar.c`: `apps/jarshop.h` and `apps/jarpost.h` (each still
+compiles alone for its host tests) are included with their clashing names
+renamed, and `jar_open` switches screens. Two things make it fit:
+- **Code** runs from flash (XIP, the `appcode` partition), so the 50 KB of
+  code is no longer the limit.
+- **Data** has to fit the 28 KB arena. While a screen is up, the scene is
+  saved, its placed items become `want` lines, and the screens' state lives
+  in the scene's item memory (`screen_bind`): the post in `J.placed`, the
+  shop with `U` and the picture buffer in the frame pool. Their big buffers
+  share `SCR` with the scene's strip. The scene reloads from the card when
+  it comes back.
+
+Data is about 430 bytes under the budget: measure before adding.
+`api->paint_direct` lets the scene paint its own strips while the screens
+are composed by the OS. A device whose partition table predates `appcode`
+(updated only over the air) loads app code into RAM, where 50 KB will not
+fit: it needs one full USB flash.
+
+**Jar Factory** (2026-10-09, `apps/jar.c`, Games): an idle
 terrarium jam factory with AI-made collectible items, the owner's spec in
 `docs/superpowers/specs/2026-10-09-jar-factory-design.md` (all seven build
 steps). The world and items are portable headers (`apps/jarsim.h`,

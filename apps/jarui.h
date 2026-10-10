@@ -18,7 +18,9 @@
 #ifndef CARDOS_JARUI_H
 #define CARDOS_JARUI_H
 
+#ifndef JAR_ONE_APP
 #define JS_KEEP_ONLY
+#endif
 
 #include "kernel/app/capp.h"
 #include "apps/str.h"
@@ -51,12 +53,27 @@
 /* Requests both apps make; each numbers its own from N_APP. */
 enum { N_IDLE = 0, N_PUB, N_APP };
 
+/* In Jar Factory itself (JAR_ONE_APP) the world and these buffers are the
+ * jar's: apps/jar.c defines api and J and maps IO, TEXT, NET and PB into
+ * the memory its scene draws in, which is idle while a screen is up. */
+#ifndef JAR_ONE_APP
 static const CardApi *api;
 static Jar J;
 static JIo IO;
 static char TEXT[2048];                 /* the save and other files */
 static char NET[2048];                  /* a request's body, its reply, a signed message */
-static uint16_t PB[32 * 8];             /* a picture, eight rows at a time */
+#endif
+#define PB_N (32 * 8)                   /* a picture, eight rows at a time */
+
+/* Another screen or app: within Jar Factory a screen of it (jar_open in
+ * apps/jar.c), otherwise the app by name. */
+static JU_OPT int ui_run(const char *app, const char *args) {
+#ifdef JAR_ONE_APP
+  return jar_open(app, args);
+#else
+  return api->run(app, args);
+#endif
+}
 
 /* What a grid tile or the item card shows of an item. */
 typedef struct {
@@ -66,7 +83,7 @@ typedef struct {
   uint8_t frame[JI_FRAME_BYTES];
 } Tile;
 
-static struct {
+typedef struct {
   Tile card;
   char name[JI_NAME + 1], line[JI_LINE + 1], maker[JI_WHO + 1], tags[JI_TAGS + 1], gifted[JI_WHO + 1];
   uint32_t made;
@@ -77,7 +94,21 @@ static struct {
   uint8_t pub[65];
   int has_pub;
   uint32_t now;                         /* the clock as paint sees it: read in tick */
-} U;
+} UiState;
+
+/* The screens' state. In Jar Factory itself it lives in the scene's item
+ * memory, idle while a screen is up (apps/jar.c, screen_bind), because the
+ * three of them do not fit one app's 28 KB otherwise; standing alone (the
+ * host tests) it is ordinary statics. */
+#ifdef JAR_ONE_APP
+static UiState *UI_P;
+static uint16_t *PB_P;
+#define U  (*UI_P)
+#define PB PB_P
+#else
+static UiState U;
+static uint16_t PB[PB_N];
+#endif
 
 static JU_OPT const char *const KIND_NAME[JK_KINDS] = { "floor decor", "hanging decor", "critter" };
 static JU_OPT const char *const MOVE_NAME[JM_KINDS] = { "sits", "hops", "wanders", "sways", "floats" };
@@ -108,16 +139,18 @@ static JU_OPT int put(char *b, int k, int cap, const char *s) {
 /* Back to the jar, which starts again from the save. */
 static JU_OPT void to_jar(void) {
   save();
-  if (api->run("Jar Factory", 0) != 0) say("No Jar Factory app");
+  if (ui_run("Jar Factory", 0) != 0) say("No Jar Factory app");
 }
 
 /* Load the jar for an app that keeps it. 0, or -1 when there is none yet --
  * then the jar is opened instead, which makes one. */
 static JU_OPT int ui_load(void) {
+#ifndef JAR_ONE_APP                        /* in Jar Factory the world is already up */
   api->mem_set(&J, 0, sizeof J);
   js_init(&J, api->ticks_ms() | 1u);
   jst_dirs(api);
   if (jst_load(api, &J, TEXT, sizeof TEXT) != 0) { api->run("Jar Factory", 0); return -1; }
+#endif
   U.now = api->epoch();
   js_settle_beds(&J, U.now);
   {
@@ -138,7 +171,7 @@ static JU_OPT int ui_clock(void) {
 /* ---- drawing -------------------------------------------------------------------- */
 
 static JU_OPT void text(int x, int y, const char *s, uint16_t fg, uint16_t bg) {
-  api->text((int16_t)x, (int16_t)y, s, fg, bg);
+  (api->text)((int16_t)x, (int16_t)y, s, fg, bg);
 }
 
 static JU_OPT void textn(int x, int y, const char *s, int cols, uint16_t fg, uint16_t bg) {
@@ -173,7 +206,7 @@ static JU_OPT void pic(const uint8_t *data, const uint16_t *pal, int plain, int 
                        int sc, uint16_t bg) {
   int W = w * sc, H = h * sc, rows, r0, r, c;
   if (W > 32 || W <= 0) return;
-  rows = (int)(sizeof PB / sizeof PB[0]) / W;
+  rows = PB_N / W;
   for (r0 = 0; r0 < H; r0 += rows) {
     int n = H - r0 < rows ? H - r0 : rows;
     for (r = 0; r < n; r++)

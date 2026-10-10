@@ -90,6 +90,16 @@ class Publish(unittest.TestCase):
         self.put("apps/b.capp", app_image(b"B"))
         self.assertEqual(pub(True), ["b"])
 
+    def test_an_app_no_longer_built_leaves_the_store(self):
+        # Jar Shop and Jar Post became screens of Jar Factory, and the store
+        # went on serving them: every update put them back on the card.
+        self.put("apps/jar.capp", app_image(b"j"))
+        self.put("apps/jarshop.capp", app_image(b"s"))
+        build.publish(self.store, self.fw, self.apps, False)
+        os.remove(os.path.join(self.apps, "jarshop.capp"))
+        build.publish(self.store, self.fw, self.apps, False)
+        self.assertEqual(updates.app_files(os.path.join(self.store, "apps")), ["jar.capp"])
+
     def test_new_artifacts_notify_once(self):
         from server import msg
         notes = lambda: msg.notes_since(None, 0)[0]

@@ -143,6 +143,17 @@ def publish(store, firmwares, apps_dir, firmware):
     for name, dst, data in blobs:
         updates.put_artifact(dst, data)
         sent.append(name)
+    # An app the build no longer makes leaves the store too: Jar Shop and Jar
+    # Post became screens of Jar Factory, and the store kept serving them, so
+    # every `update` put them back on the card.
+    built = {ln.split()[1] for ln in
+             updates.manifest(firmware=os.devnull, apps_dir=apps_dir).splitlines()
+             if len(ln.split()) > 1}
+    if built:
+        for name in updates.app_files(store_apps):
+            if name[:-len(".capp")] not in built:
+                os.remove(os.path.join(store_apps, name))
+                sys.stderr.write("build: %s retired from the store\n" % name)
     if sent:
         _notify_update(sent)
     return sent

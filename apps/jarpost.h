@@ -1,6 +1,6 @@
 /* Jar Post -- Jar Factory's friends, gifts and mail.
  *
- * Opened from the jar (apps/jar.c) with api->run("Jar Post", SCREEN):
+ * A screen of Jar Factory (apps/jar.c), opened with post_open(SCREEN):
  * friends, mail, or "gift ID" (from Jar Shop's item card). Esc at a top
  * screen, or fn-`, goes back to the jar. What it shares with Jar Shop
  * (apps/jarshop.c) is apps/jarui.h; the files are apps/jarstore.h's.
@@ -31,23 +31,24 @@
  * Host tests: test/test_jarpost.c (JAR_DUMP=dir writes its screens).
  */
 
+#ifndef CARDOS_JARPOST_H
+#define CARDOS_JARPOST_H
+
 #include "apps/jarui.h"
 
 enum { V_FRIENDS = 0, V_GIFT, V_MAIL, V_CARD, V_PICK, V_TALK };
 #define PK_MAX 64
 enum { IN_NONE = 0, IN_CODE, IN_NAME, IN_NOTE, IN_TALK };
-enum { N_ME = N_APP, N_FRIEND, N_NAME, N_GIFT, N_PEEK, N_ACK, N_THANKS, N_SAY, N_HEAR };
+enum { N_ME = N_APP + 8, N_FRIEND, N_NAME, N_GIFT, N_PEEK, N_ACK, N_THANKS, N_SAY, N_HEAR };
 
 /* Talking to Tibbs, the shopkeeper (server/shopkeep.py): the conversation,
  * wrapped into rows when it arrives (never in paint). */
 #define TK_ROWS 28
 #define TK_COLS 38
 #define TK_SAY  120
-static char TK[TK_ROWS][TK_COLS + 1];
 static int tk_parse(void);
 static void start_input(int mode);
 static int key_input(int k, int max);
-static uint8_t TK_WHO[TK_ROWS];                           /* 0 him, 1 you, 2 his day */
 static int TK_N, TK_PENDING;
 static uint32_t TK_AGAIN;
 
@@ -55,9 +56,11 @@ static uint32_t TK_AGAIN;
 
 typedef struct { char name[JI_WHO + 1], disp[JI_WHO + 1]; uint32_t seen; uint8_t mutual; } Friend;
 
-static JMail M[JST_MAIL_MAX];
-
-static struct {
+typedef struct {
+  JMail m[JST_MAIL_MAX];
+  char tk[TK_ROWS][TK_COLS + 1];
+  uint8_t tk_who[TK_ROWS];                                /* 0 him, 1 you, 2 his day */
+  struct {
   int view, in, inlen;
   char input[TK_SAY + 1];
   char note[JST_NOTE + 1];
@@ -75,7 +78,20 @@ static struct {
   int fsel, npk, psel, ptop;
   uint32_t pk[PK_MAX];
   char pkname[PK_MAX][JI_NAME + 1];
-} G;
+  } g;
+} PostMem;
+
+/* In Jar Factory, in the scene's item memory while the post is up (jarui.h). */
+#ifdef JAR_ONE_APP
+static PostMem *POST_P;
+#define POST_MEM (*POST_P)
+#else
+static PostMem POST_MEM;
+#endif
+#define M      POST_MEM.m
+#define TK     POST_MEM.tk
+#define TK_WHO POST_MEM.tk_who
+#define G      POST_MEM.g
 
 static int unopened(void) {
   int i, n = 0;
@@ -584,7 +600,7 @@ static void paint_mail(void) {
   }
 }
 
-static void app_paint(void *st, CRect c) {
+static void post_paint(void *st, CRect c) {
   static const char *const H_FRIENDS[] = { "^v", "pick", "Ent", "send gift", "A", "add", "Esc", "jar", 0 };
   static const char *const H_PICK[] = { "^v", "pick", "Ent", "send this", "Esc", "back", 0 };
   static const char *const H_TALK[] = { "Ent", "say it", "Esc", "leave", 0 };
@@ -753,7 +769,7 @@ static int key_card(int k) {
   return 1;
 }
 
-static int app_key(void *st, uint8_t k) {
+static int post_key(void *st, uint8_t k) {
   (void)st;
   U.dirty = 1;
   if (U.msg[0]) U.msg[0] = 0;
@@ -768,12 +784,12 @@ static int app_key(void *st, uint8_t k) {
   return 0;
 }
 
-static int app_wants_text(void *st) {
+static int post_wants_text(void *st) {
   (void)st;
   return G.in != IN_NONE;
 }
 
-static int app_tick(void *st, uint32_t now) {
+static int post_tick(void *st, uint32_t now) {
   (void)st;
   if (ui_clock() && G.view == V_FRIENDS) U.dirty = 1;
   if (U.net) {
@@ -789,37 +805,16 @@ static int app_tick(void *st, uint32_t now) {
   return 1;
 }
 
-/* ---- starting ---------------------------------------------------------------------------------- */
+/* ---- opening ---------------------------------------------------------------------------------- */
 
-const CappInfo capp_info = {
-  CAPP_API_VERSION,
-  CAPP_FULLSCREEN,
-  "Jar Post",
-  /* 16x16: a parcel tied with string, a heart on its label. */
-  { 0x03, 0x60, 0x04, 0x90, 0x03, 0xE0, 0x7F, 0xFE,
-    0x40, 0x82, 0x40, 0x82, 0x7F, 0xFE, 0x40, 0x82,
-    0x5B, 0x82, 0x5F, 0x82, 0x4E, 0x82, 0x44, 0x82,
-    0x40, 0x82, 0x40, 0x82, 0x7F, 0xFE, 0x00, 0x00 },
-  "Jar Factory's friends and post\n"
-  "Enter\ton a friend: send them one of your things\n"
-  "T\ttalk to Tibbs, the shopkeeper (also from the shop)\n"
-  "A\tadd a friend by their code\n"
-  "R\task the server again\n"
-  "N\tyour name, up to 8\n"
-  "M\tmail: parcels from friends\n"
-  "T\tsay thank you for a gift\n"
-  "Esc\tback to the jar\n",
-};
-
-static CappUi UI;
-
-int capp_main(const CardApi *a, int argc, char **argv) {
-  const char *s = argc > 1 ? argv[1] : "";
-  api = a;
+/* The post on SCREEN: friends (the default), mail, talk (Tibbs), "gift ID".
+ * A screen of Jar Factory (apps/jar.c). */
+static void post_open(const char *s) {
+  if (!s) s = "";
   api->mem_set(&G, 0, sizeof G);
   api->mem_set(&U, 0, sizeof U);
   G.card_mail = -1;
-  if (ui_load()) return 0;
+  if (ui_load()) return;
   G.mail_n = jst_mail_load(api, M, TEXT, sizeof TEXT);
   J.parcels = (uint16_t)unopened();
   if (jst_get(api, JST_FRIENDS, NET, sizeof NET) > 0) parse_me(NET);
@@ -832,12 +827,6 @@ int capp_main(const CardApi *a, int argc, char **argv) {
     G.view = V_FRIENDS;
     go_gift(str_uint(&p), -1);
   } else { G.view = V_FRIENDS; fetch_me(); }
-  UI.paint = app_paint;
-  UI.key = app_key;
-  UI.tick = app_tick;
-  UI.wants_text = app_wants_text;
-  UI.pref_w = SW;
-  UI.pref_h = SHT;
-  api->ui(&UI);
-  return 0;
 }
+
+#endif /* CARDOS_JARPOST_H */

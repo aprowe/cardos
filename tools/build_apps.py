@@ -557,6 +557,13 @@ def main():
     check_slots(len(srcs))
     print("building %d app(s):" % len(srcs))
     built = [build(s) for s in srcs]
+    # A .capp whose source is gone (Jar Shop and Jar Post became screens of
+    # Jar Factory) must not stay here: the server publishes what is here.
+    names = {n for n, _ in built}
+    for f in os.listdir(OUT):
+        if f.endswith(".capp") and f[:-len(".capp")] not in names:
+            os.remove(os.path.join(OUT, f))
+            print("  removed %s: no source for it any more" % f)
     missing = [n for n in EMBED if n not in dict(built)]
     if missing:
         raise SystemExit("EMBED names apps that were not built: %s" % ", ".join(missing))

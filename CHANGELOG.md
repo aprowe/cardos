@@ -11,6 +11,58 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.15.1 -- 2026-10-10
+
+- **A new stock every 4 hours**, not once a day. Each stock is keyed by its
+  4-hour slot of the UTC day ("20261010-1"), and the shop counts down to
+  the next one.
+- **Pay Tibbs instead of waiting:**
+  - `r` (40 coins) gets a new stock now;
+  - `f` (150 coins) sends him out looking: type what for, or nothing, and
+    he comes back with 5 new finds instead of 2.
+
+  Each asks y/n first. The coins go back if the server cannot be asked.
+  His memory hears that you paid him and what you asked for. Commissioned
+  finds answer the request loosely (finds 1 and 2), and the rest are
+  whatever else he came across.
+
+## v0.15.0 -- 2026-10-10
+
+- **App code runs from flash (XIP).** This was the other session's work,
+  merged here: the `appcode` partition, a 28 KB data arena for the app on
+  screen, and no code cap for apps.
+  - Jar now costs 0.36 KB of heap instead of 45 KB.
+  - A device needs one full USB flash to get the new partition table.
+    Without it, app code loads into RAM as before, and Jar (50 KB of code)
+    will not fit.
+- **Jar Factory is one app again.**
+  - The shop and the post are screens of it, not separate apps, so there is
+    no reload when you switch between them.
+  - When it starts, the old Jar Shop and Jar Post apps are removed from the
+    card.
+  - Its data fits the 28 KB arena because the screens borrow the scene's
+    item memory while they are up.
+- **API 45:** `paint_direct(on)`, for an app with screens that compose
+  their own strips and screens the OS composes. Every app is rebuilt;
+  devices need `update all`.
+
+## v0.14.0 -- 2026-10-10
+
+- **Tibbs is one person for everyone.** He is a single Claude Code session
+  on Opus 5.5, resumed for every turn and shared by every player, so his
+  memory is the conversation itself.
+  - He knows every customer: what they bought, what they said, who sent
+    what to whom. Ask him about a friend.
+  - Purchases, gifts, new finds and new friends reach him as news on his
+    next turn.
+  - He runs in his own directory, not the repository.
+- **Stocks are 8 again:** what you hold, 3 random items from the shared
+  pool, 3 Tibbs picks for you, and 2 new finds from his briefs. New items
+  are made on Opus, with more effort for dearer ones.
+- Measured on the laptop with real Opus: a stock turn takes 14 s and a
+  reply 7–8 s. Asked "what has britney been up to?", he knew her purchase
+  and the gift she sent, with its note.
+
 ## v0.13.0 -- 2026-10-10
 
 - **Tibbs, the shopkeeper.** The shop is a person with an ongoing story.
