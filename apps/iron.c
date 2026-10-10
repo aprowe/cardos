@@ -616,6 +616,12 @@ static void pop_add(const char *text, int cr, int cg, int cb, int cx, int cy) {
   }
   p = &PO[slot];
   if (p->life) bd_add(pop_rect(p));
+  /* a word still rising from about here: this one goes above it */
+  for (i = 0; i < NPOP; i++) {
+    const Pop *o = &PO[i];
+    if (o != p && o->life && o->y > cy - 34 && o->y < cy - 8 && o->x < cx + 24 && o->x + 30 > cx - 24)
+      cy = o->y + 22 - 10;
+  }
   api->fmt(p->text, sizeof p->text, "%s", text);
   p->x = iclamp(cx - len * 3, 2, CANVAS_W - len * 6 - 2);
   p->y = iclamp(cy - 22, 2, CANVAS_H - 12);
