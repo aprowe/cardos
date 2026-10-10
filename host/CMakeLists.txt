@@ -32,6 +32,7 @@ file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
   ${ROOT}/kernel/sys/notifyq.c   # notify.c is the banner, the centre and the watching
   ${ROOT}/kernel/app/cmdline.c   # commands as words, checked against a table
   ${ROOT}/kernel/app/appidx.c    # /cache/apps.idx; capprun.c reads and writes it
+  ${ROOT}/kernel/app/arena.c     # the app data arena; elfload.c claims it
   ${ROOT}/kernel/sys/g0gesture.c # voice.c is the device glue around it
   ${ROOT}/kernel/sys/printdoc.c  # printq.c/btprint.c are the task and radio around it
   ${ROOT}/kernel/sys/serframe.c  # serlink.c is the device glue around it
