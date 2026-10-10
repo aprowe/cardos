@@ -582,10 +582,6 @@ static int api_notify(const char *title, const char *text) {
   return 0;
 }
 
-/* Overlays (API 46): wired in a later task; until then an app has none. */
-static int api_overlay(int n, int flags) { (void)n; (void)flags; return -1; }
-static int api_overlay_live(void) { return -1; }
-
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -629,8 +625,8 @@ static const CardApi API = {
   api_link,
   api_sig_verify,
   capprun_set_paint_direct,
-  api_overlay,
-  api_overlay_live,
+  capprun_overlay,
+  capprun_overlay_live,
 };
 
 const CardApi *cardos_api(void) { return &API; }

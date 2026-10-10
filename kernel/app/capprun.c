@@ -20,6 +20,7 @@
 #include "kernel/drv/bthid.h"
 #include "kernel/sys/applog.h"
 #include "kernel/app/xipflash.h"
+#include "kernel/app/ovl.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -103,6 +104,11 @@ struct Run {
   int       has_ui;
 
   AppDef    def;          /* the same thing, wearing a built-in app's clothes */
+
+  /* Its overlays: which is live, and the card files the others are kept in
+   * (kernel/app/ovl.c). A new load id on every load names those files, so an
+   * instance on screen and a headless one never share them. */
+  Ovl       ovl;
 };
 
 static const char *TAG = "capp";
@@ -127,10 +133,65 @@ static Run *s_running;
  * else has no owner and is dropped rather than credited to whoever ran last. */
 static Run *s_active;
 
+/* The id of the latest load, for overlay file names. From 1 after each
+ * boot; boot empties /cache/ovl, so an id from before cannot collide. */
+static uint32_t s_load_seq;
+
 static CRect to_crect(Rect r) {
   CRect o;
   o.x = r.x; o.y = r.y; o.w = r.w; o.h = r.h;
   return o;
+}
+
+/* The card under ovl.c. A save is the apps/safefile.h dance -- NAME.tmp,
+ * remove NAME, rename -- because the card's rename will not replace a file,
+ * and because ovl.c deletes only files it recorded as saved: a torn write
+ * straight into NAME would linger until boot, and a failed re-save would
+ * clobber the copy that was good. Any failure removes the .tmp and the save
+ * fails, which leaves the outgoing overlay live (its RAM is the truth then,
+ * so a NAME lost between the remove and the rename costs nothing). */
+static int ovl_fs_save(void *ctx, const char *path, const void *buf, uint32_t n) {
+  char tmp[OVL_PATH_MAX + 4];
+  int fd, ok;
+  (void)ctx;
+  fs_mkdir(OVL_DIR);                        /* already there is an error, and harmless */
+  snprintf(tmp, sizeof tmp, "%s.tmp", path);
+  fd = fs_open(tmp, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+  if (fd < 0) return -1;
+  ok = fs_write(fd, buf, n) == (int)n;
+  fs_close(fd);
+  if (ok) {
+    fs_remove(path);                        /* not there yet is an error, and harmless */
+    ok = fs_rename(tmp, path) == 0;
+  }
+  if (!ok) fs_remove(tmp);
+  return ok ? 0 : -1;
+}
+
+static int ovl_fs_load(void *ctx, const char *path, void *buf, uint32_t n) {
+  FsStat st;
+  int fd, ok;
+  (void)ctx;
+  if (fs_stat(path, &st) != 0 || st.is_dir || st.size != n) return -1;
+  fd = fs_open(path, FS_O_READ);
+  if (fd < 0) return -1;
+  ok = fs_read(fd, buf, n) == (int)n;
+  fs_close(fd);
+  return ok ? 0 : -1;
+}
+
+static void ovl_fs_remove(void *ctx, const char *path) {
+  (void)ctx;
+  fs_remove(path);
+}
+
+static const OvlIo OVL_FS = { ovl_fs_save, ovl_fs_load, ovl_fs_remove, NULL };
+
+/* An image just loaded into a run: a new load id, overlay 0 live. */
+static void run_loaded(Run *s) {
+  s->loaded = 1;
+  ovl_init(&s->ovl, (uint8_t *)s->la.data + s->la.ovl_off, s->la.ovl_size, s->la.ovl_n,
+           ++s_load_seq);
 }
 
 /* One set of trampolines for every run, with the run as the AppDef's state.
@@ -634,7 +695,7 @@ static int load_entry(const char *path, int transient, int keep) {
    * is copied above; the code is not needed again until someone starts it. */
   if (keep && (r = run_new(e)) != NULL) {
     r->la = la;
-    r->loaded = 1;
+    run_loaded(r);
   } else {
     capp_unload(&la);
     if (keep) return -1;                 /* no run to keep it in */
@@ -747,7 +808,7 @@ static int ensure_loaded(Run *s, int foreground) {
                r == CAPP_ERR_NO_MEMORY ? "not enough memory" : capp_strerror(r));
     return -1;
   }
-  s->loaded = 1;
+  run_loaded(s);
   return 0;
 }
 
@@ -786,7 +847,10 @@ int capprun_on_release(void (*fn)(const void *owner)) {
 static void release_image(Run *s) {
   int i;
   for (i = 0; i < s_n_on_release; i++) s_on_release[i](s);
-  if (s->loaded) capp_unload(&s->la);
+  if (s->loaded) {
+    ovl_drop(&s->ovl, &OVL_FS);      /* this load's overlay files, while we know them */
+    capp_unload(&s->la);
+  }
   s->loaded = 0;
   s->has_ui = 0;
 }
@@ -1290,6 +1354,42 @@ void capprun_set_paint_direct(int on) {
   if (!s) return;
   if (on) s->flags |= CAPP_PAINT_DIRECT;
   else s->flags = (uint16_t)(s->flags & ~CAPP_PAINT_DIRECT);
+}
+
+/* api->overlay. One log line for a switch that failed, none for one that
+ * worked: the card's log is for what went wrong, not every mode change. */
+int capprun_overlay(int n, int flags) {
+  Run *s = s_running ? s_running : s_active;
+  int r;
+  if (!s || !s->loaded) return -1;
+  r = ovl_switch(&s->ovl, &OVL_FS, n, flags);
+  if (r != 0 && n >= 0 && n < s->ovl.n)
+    applogf("ovl", "%s: overlay %d (%s) failed, %d live", s->name, n,
+            (flags & CAPP_OVL_DISCARD) ? "discard" : "keep", ovl_live(&s->ovl));
+  return r;
+}
+
+int capprun_overlay_live(void) {
+  Run *s = s_running ? s_running : s_active;
+  return s && s->loaded ? ovl_live(&s->ovl) : -1;
+}
+
+/* One file per listing: FAT is not asked to go on listing a directory it is
+ * deleting from. A file that will not go ends it, rather than looping. */
+void capprun_clear_overlays(void) {
+  FsDir d;
+  FsEntry e;
+  char path[FS_PATH_MAX];
+  int k, found;
+  for (k = 0; k < 256; k++) {
+    found = 0;
+    if (fs_opendir(OVL_DIR, &d) != 0) return;
+    while (fs_readdir(&d, &e) == 1) if (!e.is_dir) { found = 1; break; }
+    fs_closedir(&d);
+    if (!found) return;
+    snprintf(path, sizeof path, "%s/%s", OVL_DIR, e.name);
+    if (fs_remove(path) != 0) return;
+  }
 }
 
 uint32_t capprun_exec_free(void) { return capp_exec_free(); }

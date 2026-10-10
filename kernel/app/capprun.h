@@ -143,6 +143,13 @@ const AppDef *capprun_def(int slot);
  * carry CAPP_PAINT_DIRECT)? 0 for a built-in. kernel/ui/apphost.c. */
 int capprun_paint_direct(const AppDef *a);
 void capprun_set_paint_direct(int on);     /* api->paint_direct (API 45) */
+/* api->overlay and api->overlay_live (API 46), for the app executing now;
+ * kernel/app/ovl.c does the switching, this binds it to the card. */
+int  capprun_overlay(int n, int flags);
+int  capprun_overlay_live(void);
+/* Empty /cache/ovl: once at boot, after the card mounts. A power cut can
+ * strand files, and no load from before it can be running. */
+void capprun_clear_overlays(void);
 
 /* Executable RAM still free, for the Settings app to report. */
 uint32_t capprun_exec_free(void);

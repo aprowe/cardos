@@ -1530,6 +1530,7 @@ void app_main(void) {
     static const HotkeyStore FILE_STORE = { hotkey_file_load, hotkey_file_save };
     int moved;
     capprun_watch_apps();        /* before anything below can touch /apps */
+    capprun_clear_overlays();    /* a power cut can strand overlay files */
     moved = fs_migrate_layout();   /* an old card into the new folders; before ensure, so the trees can rename */
     fs_ensure_layout();
     if (moved) con_printf("card layout: moved %d into /apps /sys /config /cache /home /var\n", moved);
