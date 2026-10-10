@@ -570,6 +570,24 @@ static void leave_app_ex(int show) {
   if (show) flush();
 }
 
+/* An app starting while another is on screen, from outside any app's
+ * handler -- a hotkey, a spoken "open", Enter in opt-space search: the one
+ * on screen goes first, as run_next does it, so the new one is loaded into
+ * the room it leaves and gets the arena, and with it code from flash.
+ * Loaded beside it, the new one found the arena taken and quietly ran from
+ * RAM, or did not fit at all. `next` is what is about to be hosted, if it
+ * is already running: restarting the app on screen is capprun_start's to
+ * do. Only with no app code on the stack (capprun_caller() is NULL): from a
+ * handler, the app asking is queued through run_next instead, and anything
+ * else keeps the old order -- host lets the old one go after. A command
+ * (`cli`) takes no screen, so nothing is let go for one. The back stack is
+ * left as it is. Nonzero if it let one go. */
+static int leave_for(const AppDef *next, int cli) {
+  if (!s_app || s_app == next || cli || capprun_caller()) return 0;
+  leave_app_ex(0);
+  return 1;          /* the row is due a paint if nothing takes the screen */
+}
+
 
 static int run_now(const char *name, const char *args);
 
@@ -642,6 +660,7 @@ static void close_folder(void) {
 static void launch_with(int i, const char *args) {
   const Icon *ic = icon_at(i);
   const AppDef *a;
+  int left;
 
   if (!ic) return;
 
@@ -662,19 +681,24 @@ static void launch_with(int i, const char *args) {
     /* Running the program *is* opening it: capp_main constructs whatever state
      * it has and installs an interface if it wants one. A program that
      * installs nothing was a command, and has already finished. */
+    left = leave_for(capprun_def(ic->slot), ic->cli);
     start_app(ic->slot, ic->name, args);
-    if (!capprun_is_app(ic->slot)) { said_why(ic->name); return; }
+    if (!capprun_is_app(ic->slot)) { if (!said_why(ic->name) && left) flush(); return; }
     a = capprun_def(ic->slot);
     if (!a) { flush(); return; }
   } else {
     a = icon_app(i);
     if (!a) { flush(); return; }
+    leave_for(a, 0);
     if (a->open) a->open(a->state);
     if (args && *args && a->set_args) a->set_args(a->state, args);
   }
 
   /* Everything runs fullscreen here, whatever size it asked for: there is no
-   * desktop behind it for a window to sit on. */
+   * desktop behind it for a window to sit on. Whatever was here and is not
+   * this is let go, as host does it -- overwritten, it stayed loaded and
+   * held the arena until the next launchui_init. */
+  if (s_app && s_app != a) capprun_release(s_app);
   s_app = a;
   s_app_rect = app_rect(a);
   s_app_how = AH_FULL | AH_SURROUND | AH_OPENED;
@@ -975,11 +999,13 @@ static int run_now(const char *name, const char *args) {
     /* A command runs and returns, and the console keeps the screen. Anything
      * else is an app, and the launcher takes over to host it. */
     if (ic->kind == ICON_CAPP) {
+      int left = leave_for(capprun_def(ic->slot), ic->cli);
       start_app(ic->slot, ic->name, args);
       if (!capprun_is_app(ic->slot)) {
         /* A command, and it is done -- or an app that would not start, and
          * the reason has been said. Either way the name was not unknown. */
-        if (said_why(ic->name) && ui_shell() == UI_LAUNCHER) select_flat(i);
+        if (said_why(ic->name)) { if (ui_shell() == UI_LAUNCHER) select_flat(i); }
+        else if (left) flush();
         return 0;
       }
       if (from_dashboard(ic->slot)) return 0;
@@ -1010,8 +1036,12 @@ int launchui_run_path(const char *path, const char *args) {
   for (i = 0; i < icons_total(); i++) {
     const Icon *ic = icon_at(i);
     if (ic && ic->kind == ICON_CAPP && strcmp(ic->path, path) == 0) {
+      int left = leave_for(capprun_def(ic->slot), ic->cli);
       start_app(ic->slot, ic->name, args);
-      if (!capprun_is_app(ic->slot)) return 0;   /* a command, already done */
+      if (!capprun_is_app(ic->slot)) {            /* a command, already done */
+        if (left) flush();
+        return 0;
+      }
       if (from_dashboard(ic->slot)) return 0;
       select_flat(i);
       enter();
