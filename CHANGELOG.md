@@ -11,7 +11,32 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
-## Unreleased
+## v0.11.0 -- 2026-10-09
+
+**Jar Factory, all seven steps of the owner's spec**, and the server's
+general-purpose store under it. **API 44** (`api->sig_verify`, ECDSA P-256):
+every app is rebuilt, so a device needs `update all`, not `update apps`.
+
+- **The server store** (`server/kv.py`, `docs/superpowers/specs/2026-10-09-
+  server-store-design.md`): values, counters and queues in SQLite with
+  per-person and shared namespaces, `/people`, `ask.ask_shape` (Claude for a
+  JSON schema, with retries and a daily cap) and `server/sign.py` (the
+  server's signing key). New features build on it instead of a module each.
+- **The daily stock** (`server/jar.py`): eight items a day per person, drawn
+  and written by Claude from the garden, the shelf and the day (season,
+  moon, the time zone's weather), checked, signed; an ownership ledger,
+  friend codes, gifts re-signed and relayed through the store's queues,
+  thank-yous. Tried live: 8 items in 105 s, all verified, 5 with scripts.
+- **Scripts** (step 7): `apps/jarvm.def` is the one instruction table for the
+  device's machine (`apps/jarvm.h`) and the server's compiler and simulated
+  day (`server/jarvm.py`); fixtures pin that both machines agree. The item
+  signature leaves out the 8 memory slots scripts write.
+- Untested on hardware (no device attached): the signature check, the app
+  switching between the three Jar apps, real gifts between two devices.
+
+Tests: host 21914 checks, server 341 tests.
+
+### Jar Factory, device notes
 
 **Jar Factory** (`apps/jar.c`, Games): an idle game, steps 1 to 3 of
 `docs/superpowers/specs/2026-10-09-jar-factory-design.md`, offline. A
