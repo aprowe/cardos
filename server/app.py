@@ -28,7 +28,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 
-from . import accounts, agent, chat, m5hub, daily, dash, dashapi, files, google, midi, msg, music, notes, photos, shots, talk, toggl, tz, updates, voice
+from . import accounts, agent, ask, chat, m5hub, daily, dash, dashapi, files, google, kv, midi, msg, music, notes, people, photos, shots, sign, talk, toggl, tz, updates, voice
 from .chat import ROOT as ROOT_DIR
 
 
@@ -140,6 +140,7 @@ def _normalise(routes):
 ALL_ROUTES = _normalise(SERVER_ROUTES + chat.ROUTES + agent.ROUTES + m5hub.ROUTES + updates.ROUTES +
                         voice.ROUTES + shots.ROUTES + tz.ROUTES + dash.ROUTES + dashapi.ROUTES +
                         google.ROUTES + files.ROUTES + toggl.ROUTES + notes.ROUTES + daily.ROUTES + photos.ROUTES + music.ROUTES + midi.ROUTES + talk.ROUTES + msg.ROUTES +
+                        kv.ROUTES + people.ROUTES + ask.ROUTES + sign.ROUTES +
                         _render_routes() +
                         _screen_routes())
 
@@ -324,6 +325,8 @@ class Handler(BaseHTTPRequestHandler):
             if auth == "admin" and not accounts.is_admin():
                 self.text("error that is the server owner's\n", 403)
                 return
+            if auth != "open":
+                people.saw(accounts.current())     # last seen, for /people
             fn(self, q.path, urllib.parse.parse_qs(q.query))
         except (BrokenPipeError, ConnectionResetError):
             pass                     # the device gave up first; nothing to tell

@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 from http.server import ThreadingHTTPServer
-from server import accounts, app, dash, files
+from server import accounts, app, dash, files, kv
 from server import chat as chatmod
 
 TOKEN = "auth-test-token"
@@ -39,6 +39,10 @@ DEVICE_OR_DASH = [
     ("POST", "/midi/compose"), ("GET", "/midi/compose"),
     ("POST", "/talk/start"), ("POST", "/talk/say"), ("GET", "/talk/poll"), ("GET", "/talk/doc"),
     ("GET", "/notify/poll"), ("GET", "/msg"), ("POST", "/msg"),
+    ("GET", "/kv/get"), ("POST", "/kv/put"), ("POST", "/kv/del"), ("GET", "/kv/list"),
+    ("POST", "/kv/incr"), ("POST", "/q/push?q=t"), ("GET", "/q/peek?q=t"), ("GET", "/q/len?q=t"),
+    ("POST", "/q/ack?q=t"), ("GET", "/q/allow?q=t"), ("POST", "/q/allow?q=t"),
+    ("GET", "/people"), ("POST", "/people/name"), ("POST", "/ask"), ("GET", "/ask"),
 ]
 
 DASH = [
@@ -97,6 +101,7 @@ class Doors(unittest.TestCase):
     def tearDown(self):
         self.srv.shutdown()
         self.srv.server_close()
+        kv.close_all()
         shutil.rmtree(self.dir, ignore_errors=True)
         files.broker = files.Broker()          # /files/poll said a device was there
         files._brokers.clear()
