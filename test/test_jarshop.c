@@ -578,6 +578,41 @@ void test_jarshop_paying_tibbs(void) {
   CHECK(strstr(U.msg, "Not enough") != 0);
 }
 
+/* The device's one HTTP slot is busy now and then (its own polls): a paid
+ * ask waits for it rather than failing -- on the device it said "No server:
+ * coins back" -- and is refunded only if the slot never comes free. */
+void test_jarshop_a_paid_ask_waits_for_a_busy_slot(void) {
+  card(500);
+  jf_handler = day_server;
+  DAY_POLLS = 5;
+  FORGE = 0;
+  launch("shop");
+  tick(3500);
+  JF_NREQ = 0;
+  JF_PENDING = 1;                             /* someone else's request in flight */
+  U.net = 0;
+  key('r');
+  key('y');
+  CHECK_EQ((int)J.coins, 500 - RESTOCK_COST);  /* paid; waiting */
+  CHECK_EQ(JF_NREQ, 0);
+  tick(2000);
+  CHECK_EQ(JF_NREQ, 0);
+  JF_PENDING = 0;                             /* the slot comes free */
+  tick(20);
+  CHECK(jf_last("/jar/day?fresh=1") != 0);
+  CHECK_EQ((int)J.coins, 500 - RESTOCK_COST);
+  tick(3500);
+  /* never free: the coins come back after a while */
+  JF_PENDING = 1;
+  U.net = 0;
+  key('r');
+  key('y');
+  tick(16000);
+  CHECK_EQ((int)J.coins, 500 - RESTOCK_COST);
+  CHECK(strstr(U.msg, "coins back") != 0);
+  JF_PENDING = 0;
+}
+
 void test_jarshop_tibbs_and_his_seed_packets(void) {
   card(500);
   jf_handler = tibbs_server;

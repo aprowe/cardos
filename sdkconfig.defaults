@@ -112,3 +112,12 @@ CONFIG_TINYUSB_MSC_BUFSIZE=4096
 CONFIG_TINYUSB_DESC_MANUFACTURER_STRING="CardOS"
 CONFIG_TINYUSB_DESC_PRODUCT_STRING="CardOS SD card"
 CONFIG_TINYUSB_DESC_MSC_STRING="CardOS SD card"
+
+# SHA and AES in software (2026-10-10). On the Cardputer ADV the crypto
+# hardware's DMA mode -- what ESP-IDF uses for inputs past a few hundred
+# bytes -- gave a different, wrong SHA-256 on every call for 400+ bytes,
+# so the server's signed items were refused ("verify -149"); 300 and less,
+# and every length on the original Cardputer, were right. Software is right
+# on every board and fast enough at 240 MHz for what CardOS hashes.
+# CONFIG_MBEDTLS_HARDWARE_SHA is not set
+# CONFIG_MBEDTLS_HARDWARE_AES is not set
