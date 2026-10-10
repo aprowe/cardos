@@ -193,6 +193,26 @@ it too. Seeding lists each directory once instead of opening every file. The
 safe-mode check waits 60 ms, not 400. The CPU runs at 240 MHz rather than 160;
 power management is off, so that is also the idle clock.
 
+**App code runs from flash** (2026-10-09). The app on screen keeps its data
+in a fixed 28 KB arena (`kernel/app/arena.c`) and its code in the `appcode`
+partition (512 KB, from spiffs), relocated once on first launch and mapped
+into the instruction bus (`kernel/app/xipcache.c` is the ring, host-tested;
+`xipflash.c` the partition). The arena is fixed because an app's literals,
+inside its code, hold its data's addresses: flash code is valid for one data
+address. `xip` lists the cache, `xip wipe` empties it (always safe), `mem`
+shows both. Headless commands and a second desktop window load as before
+(heap data, RAM code); the icon scan loads only the data (`capp_load_info`,
+2026-10-10), because with the arena held its RAM-code loads failed at boot
+and the big apps vanished from the launcher. `CAPP_CODE_IN_RAM` keeps an
+inner loop in RAM; no app needs it (Kart, Calc, Pinball and Noodle measured
+no slower from flash). The budget is now data <= 28 KB, and code <= 16 KB
+only for those. A device updated over the air from the old table has no
+`appcode` and runs code from RAM (data still in the arena); it takes one
+full USB flash. Measured: idle heap 28.6 KB lower, opening Jar costs 0.4 KB
+instead of 45, and a print now lets WiFi go (the arena leaves too little
+for both radios). Design and numbers:
+`docs/superpowers/specs/2026-10-09-xip-app-code-design.md`.
+
 **Redundant redrawing is an OS problem, not an app problem.** The shell used
 to hand every app its whole rectangle as the clip on every event, so a
 keypress redrew a screen — and three apps grew their own `expect_paint`
@@ -826,14 +846,16 @@ mouse or keyboard holds it), WiFi (unless a request or the share needs
 it) -- and tries again (`make_room` in capprun.c); and no app should need
 a block near 40 KB. **`tools/build_apps.py` enforces it** (2026-10-09): it
 prints every app's `.code` and `.data` (and writes `build/apps/sizes.txt`),
-and fails an app over 28 KB of data or 44 KB of code and data unless it is
-in `OVER_BUDGET` with a reason (Forklift, for its code). A load that fails
+and fails an app over the budget in "App code runs from flash" above (28 KB
+of data for every app; 16 KB of code only for `CAPP_CODE_IN_RAM` ones). A load that fails
 now logs the block it wanted and the largest one there was, and says so on
 the row ("needs 31 KB in one piece, largest 24"); the Memory app shows what
 `mem` shows. Colour icons share 16 fixed slots instead of a malloc each.
 
 **Measured memory, with both radios up: 120 KB of heap free**, low water 95 KB
-(before 2026-10-09; re-measure). It was 79 KB until the memory manager's
+(before 2026-10-09; on 2026-10-10, with the XIP arena: 72 KB free with WiFi
+up and nothing open, 35 KB with Bluetooth up for a print -- the spec's
+Measurements table has the rest). It was 79 KB until the memory manager's
 arena came down from 48 KB to 16 -- nothing outside `kernel/mem` ever
 allocated from it -- and since 2026-10-09 the memory manager, the swapper and
 the scheduler are not in the firmware at all (their portable sources and

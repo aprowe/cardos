@@ -267,7 +267,7 @@ still are.
 
 | Situation | Result |
 |---|---|
-| No `appcode` partition (an OTA'd device, older table) | RAM path for all |
+| No `appcode` partition (an OTA'd device, older table) | Data still in the arena for the app on screen, code in exec RAM; everything else as today |
 | Arena held, or data > 28 KB | RAM path |
 | `CAPP_CODE_IN_RAM` | Code in exec RAM, data in arena |
 | Write failed, ring busy with in-use entries | Code in exec RAM, data stays in arena, line in `log` |
@@ -359,18 +359,117 @@ commit:
 
 ## Measurements
 
-To be filled from the device. Both radios up, a print or sync running.
+Measured 2026-10-10 on the device (COM4). "master" is the firmware the
+device was running before the flash: v0.10.0, debug, built Oct 9 08:46
+from the main checkout, in ota_0 -- not exactly 12201ad, but before any of
+this branch. "xip" is this branch at 8b35940 plus temporary timing logs.
+The apps on the card were the same files for both (the main checkout's
+build, API 44).
 
-Master rows NOT yet measured (2026-10-09): COM3 absent (no USB serial device enumerated; only Bluetooth COM5-8), so `cardctl` could not reach the device. Re-run Task 1 when it is plugged in.
+The printer never connected in either run (`connect failed (13)`; it was
+off), so "print" means Bluetooth up for the ~15 s connect attempt, which is
+the memory a print costs. Churn first in both: three `print test` and three
+Todo opens. Low water is the minimum since boot, so read it across a row,
+not down a column.
 
-| State | Build | Free heap | Low water | Largest 8-bit | Largest exec | Exec free |
-|---|---|---|---|---|---|---|
-| launcher idle | master | | | | | |
-| launcher idle | xip | | | | | |
-| Jar open | master | | | | | |
-| Jar open | xip | | | | | |
-| Today gathering | master | | | | | |
-| Today gathering | xip | | | | | |
+**One behaviour changes.** With the arena out of the heap, a print always
+finds less than `PRINT_ROOM` and lets WiFi go first (`printq.c`, "making
+room"); on master both radios stayed up through the print. WiFi then comes
+back only when something asks for the network after the print. So the xip
+"print" rows have Bluetooth up and WiFi down, and the master ones both up.
+
+| State | Build | Radios | Free heap | Low water | Largest 8-bit | Largest exec | Exec free |
+|---|---|---|---|---|---|---|---|
+| launcher idle | master | WiFi | 101064 | 77904 | 57344 | 57344 | 69032 |
+| launcher idle | xip | WiFi | 72420 | 62980 | 31744 | 25600 | 40388 |
+| launcher idle, print | master | WiFi + BT | 64484 | 19664 | 31744 | 16384 | 32452 |
+| launcher idle, print | xip | BT (WiFi let go) | 35648 | 25184 | 25600 | 7680 | 10020 |
+| Jar open | master | BT off, WiFi let go earlier | 95676 | 19664 | 40960 | 40960 | 63644 |
+| Jar open | xip | WiFi | 72064 | 62640 | 31744 | 25600 | 40032 |
+| Jar open, print | master | WiFi + BT | 18004 | 9208 | 8704 | 7680 | 7932 |
+| Jar open, print | xip | BT (WiFi let go) | 35044 | 19096 | 19456 | 7680 | 15504 |
+| Today gathering, print | master | WiFi + BT | 45684 | 7968 | 31744 | 7680 | 13652 |
+| Today gathering, print | xip | BT (WiFi let go) | 35248 | 18988 | 25600 | 7680 | 9620 |
+| Today gathering, no print | xip | WiFi | 95424 | 18988 | 31744 | 30720 | 63392 |
+
+What the rows say:
+
+- **Idle costs the arena**: 28.6 KB less heap with nothing open (101 -> 72
+  KB with WiFi up), as designed.
+- **Opening Jar costs nothing**: 72420 -> 72064 (0.36 KB). On master Jar
+  took about 45 KB (25.7 KB code + 19.2 KB data) and, with a print
+  running, would not open at all ("code wants 25720, largest 22528"); it
+  only ran beside a print when opened first, leaving 18 KB and a low water
+  of 9 KB.
+- **Today beside a print fails on both**: every section's RAM-code load
+  wants more than the 7.7 KB largest exec block Bluetooth leaves (Calendar
+  16.9 KB, Todo 15.0, Habits 13.3, Toggl 8.8). Not worse, not better.
+  Without a print (Step 5) every section gathers on xip; Calendar's first
+  try fails ("largest 15872"), `make_room` lets WiFi go, the retry loads.
+- With Bluetooth up on xip, WiFi cannot rebuild until it goes: `wifi`
+  needs 72 KB free (`WIFI_MIN_HEAP`) and there are 34. Todo's sync during
+  a print says "offline: only 34 KB free, needs 72"; on master it said 30.
+- TLS at the new idle heap: `get https://cardos.arowe.net/dash` (1599
+  bytes) worked with 71 KB free, WiFi up, Bluetooth off.
+
+### Launch times
+
+Device side, from temporary `esp_timer` logs around `capp_load_ex` and
+`capprun_start` (not committed). "start" includes `capp_main`.
+
+| App (code) | First launch (write): load / start | Later (hit): load / start | `find_symbols` |
+|---|---|---|---|
+| Jar (25.7 KB) | 978 / 1113 ms | 716-731 / 860-876 ms | 662 ms |
+| Calc (18.8 KB) | -- | 373 / 393 ms | -- |
+| Clock (11.1 KB) | 480 / 576 ms | -- | -- |
+| Edit (12.0 KB) | 294 / -- ms | 299 / 320-350 ms | ~260 ms |
+| Files (7.5 KB) | 365 / 394 ms | 258 / 287 ms | -- |
+| Pinball (4.8 KB) | 279 / 281 ms | 159 / 162 ms | 127 ms |
+
+The flash write is 100-270 ms of a first launch. A hit's own cost (find
+the entry, verify, reference) is about 30 ms for Jar. **Most of every
+launch is `find_symbols`**, which reads the symbol table one 16-byte entry
+and one name at a time, a seek each (pre-existing; capp_main and
+capp_info are the last two symbols). Batching it as `relocate` batches its
+reads would take about 0.6 s off every Jar launch and most of a 10 s icon
+scan. From the PC, `cardctl open jar` round trips were 1.18 s on master and
+1.19-1.29 s on xip (hit), 1.39 s on a miss; that includes Python and the
+port and cannot separate the two.
+
+### Hot loops (Step 7)
+
+Temporary counters in `tick` (not committed): loop passes and repaints per
+5 s, three windows each, 15 s per app; Calc's graph redraw timed per paint.
+Same binaries but for the flag, both from the card.
+
+| App | Code from flash | `CAPP_CODE_IN_RAM` | Difference |
+|---|---|---|---|
+| Kart (racing) | 34 / 34 / 34 frames per 5 s | 34 / 34 / 34 | none |
+| Calc graph redraw (`y=sin(x)*x`) | 168-171 ms | 169 ms | none |
+| Pinball (playing) | 717 / 588 / 790 passes (160 / 248 / 148 paints) | 746 / 585 / 820 (170 / 293 / 148) | within play-to-play variation, < 5% |
+| Noodle (mic-driven) | 79 / 41 / 87 frames | 101 / 37 / 39 | tracks the room's noise, not the code |
+
+**No app is slower from flash by more than 10%, so no app carries
+`CAPP_CODE_IN_RAM`.** Kart is CPU-bound at about 7 frames a second either
+way; its inner loop fits the instruction cache, which is the expected
+result. Calc's code is 18.8 KB, over the 16 KB RAM-code budget, so it could
+not take the flag anyway (measured with the budget raised temporarily).
+
+### Other device checks
+
+- `xip wipe` with 43 sectors live: 566 ms round trip; 250-300 ms with
+  fewer. No watchdog line in the log.
+- Map base 0x421b0000 and the arena the same across three reboots and
+  several reflashes: Jar hit every time, no `dead` or stale entries.
+- Shell stack high-water during launches: 4.0-4.6 KB free of 8 KB on a
+  miss or a hit. Edit with no file opened the picker inside `capp_main`
+  with 4.6 KB of `PmEntry` on the stack and overflowed it through
+  `cardctl open` (fixed in 40abf70; 4.5 KB free after).
+- Stale cache (§5): a `jar.capp` put with the same size and one changed
+  byte (title "Jar FactorX"), mtime different because the clock is set:
+  the put itself marked the old entry `dead` (fs hook), the next open
+  wrote a new entry and loaded "Jar FactorX". `xip wipe`, open: written
+  again, ran.
 
 ## Out of scope
 
