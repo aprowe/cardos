@@ -1,0 +1,2 @@
+jarvm_*.bin binary
+jarvm_*.txt text eol=lf

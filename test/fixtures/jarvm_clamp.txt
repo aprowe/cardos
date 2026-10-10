@@ -1,0 +1,10 @@
+# clamp: written by tools/make_jarvm_fixtures.py -- do not edit
+seed 3
+sense 0 -40000
+sense 6 40000
+mem 0 0 0 0 0 0 0 0
+ev 1 0
+--
+check 0
+ret 0 5
+mem 32767 -32768 0 0 0 0 0 0
