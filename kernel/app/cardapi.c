@@ -361,9 +361,10 @@ static int api_sig_verify(const uint8_t pub[65], const void *msg, size_t n, cons
   psa_destroy_key(key);
   psa_reset_key_attributes(&at);
   if (st == PSA_SUCCESS) return 1;
-  /* A good signature was once refused on a device that had been up for
-   * hours, while a fresh boot of the same image accepted it (2026-10-10):
-   * say what the library said, and that the message was hashed here. */
+  /* Good signatures were refused on the Cardputer ADV: its SHA hardware in
+   * DMA mode hashed 400+ bytes wrongly, differently every call (2026-10-10),
+   * so SHA and AES are software now (sdkconfig.defaults). Should a refusal
+   * come back, say what the library said. */
   applogf("sig", "verify %d (%u bytes, heap %u)", (int)st, (unsigned)n,
           (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
   return st == PSA_ERROR_INVALID_SIGNATURE ? 0 : -1;

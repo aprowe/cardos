@@ -207,6 +207,26 @@ void test_jar_the_shop_and_the_post_are_screens_of_one_app(void) {
   STAY = 1;
 }
 
+/* As on the device: idle till the bars slide away, Enter brings them back,
+ * Enter opens the menu, Enter on Shop opens the shop screen. */
+void test_jar_the_menu_opens_the_shop_screen(void) {
+  start(T0);
+  J.coins = 300;
+  STAY = 0;
+  ticks(BARS_IDLE_MS + 2000);
+  key(CAPP_KEY_ENTER);
+  ticks(400);
+  key(CAPP_KEY_ENTER);
+  CHECK_EQ(G.menu, 1);
+  key(CAPP_KEY_ENTER);
+  CHECK_EQ(SCREEN, SC_SHOP);
+  ticks(400);
+  CHECK_EQ(SCREEN, SC_SHOP);
+  key(CAPP_KEY_ESC);
+  CHECK_EQ(SCREEN, SC_JAR);
+  STAY = 1;
+}
+
 void test_jar_keys_open_the_companions_after_saving(void) {
   static const struct { int k; const char *app, *screen; } K[] = {
     { 's', "Jar Shop", "shop" }, { 'p', "Jar Shop", "garden" }, { 't', "Jar Post", "talk" },

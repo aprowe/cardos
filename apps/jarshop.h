@@ -63,6 +63,7 @@ typedef struct {
    * 3 a commission (sure?); `paid` is coins taken for a request in flight,
    * given back if it fails */
   int pay, paid, finds;
+  uint32_t pay_until;            /* a paid ask the one HTTP slot was busy for: try till then */
   char ask[48];
   } g;
 } ShopMem;
@@ -274,11 +275,34 @@ static void pay_and_ask(int cost, int finds) {
   if (js_spend(&J, (uint32_t)cost)) { say("Not enough coins"); return; }
   save();
   G.paid = cost;
+  s_fresh = 1;
+  G.tried = 0;
   G.finds = finds;
+  start_day();
+  /* The device has one HTTP slot, and its own polls take it now and then:
+   * busy is "in a moment", not "no" -- shop_tick tries again for 15 s. */
+  if (!U.net) {
+    G.finds = finds;
+    G.pay_until = api->ticks_ms() + 15000;
+  }
+}
+
+/* From tick: a paid ask still waiting for the HTTP slot. */
+static void pay_retry(uint32_t now) {
+  int finds = G.finds;
+  if (!G.pay_until || U.net) return;
   s_fresh = 1;
   G.tried = 0;
   start_day();
-  if (!U.net) { refund(); say("No server: coins back"); }
+  if (U.net) { G.pay_until = 0; return; }
+  G.finds = finds;
+  if ((int32_t)(now - G.pay_until) >= 0) {
+    G.pay_until = 0;
+    G.finds = 0;
+    s_fresh = 0;
+    refund();
+    say("No server: coins back");
+  }
 }
 
 /* The batch so far goes on show: it replaces the old stock, whose records
@@ -899,6 +923,7 @@ static int shop_wants_text(void *st) { (void)st; return G.pay == 2; }
 static int shop_tick(void *st, uint32_t now) {
   (void)st;
   net_tick(now);
+  pay_retry(now);
   if (ui_clock() && (G.view == V_STOCK || G.view == V_GARDEN)) U.dirty = 1;
   if (U.msg[0] && (int32_t)(now - U.msg_until) > 0) { U.msg[0] = 0; U.dirty = 1; }
   if (!U.dirty) return 0;
