@@ -213,7 +213,7 @@ def _prompt(prompt, schema):
 
 
 def ask_shape(chat, prompt, schema, user=MINE, limit=DAILY, timeout=TIMEOUT, system=SYSTEM,
-              store=None):
+              store=None, effort="medium"):
     """The value Claude gives for `prompt`, checked against `schema`; one
     more try if it does not fit. `user` is whose day it counts against
     (the request's by default; pass it from a thread). limit=None counts
@@ -226,7 +226,7 @@ def ask_shape(chat, prompt, schema, user=MINE, limit=DAILY, timeout=TIMEOUT, sys
     asked = _prompt(prompt, schema)
     why = None
     for attempt in range(2):
-        text, _ = _chat.ask_once(chat, asked, timeout, system=system)
+        text, _ = _chat.ask_once(chat, asked, timeout, system=system, effort=effort)
         if len(text) > ANSWER_MAX:
             why = ["the answer was %d bytes, more than %d" % (len(text), ANSWER_MAX)]
         else:

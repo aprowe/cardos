@@ -272,7 +272,7 @@ class ClaudeError(RuntimeError):
         self.timed_out = timed_out
 
 
-def ask_once(chat, prompt, timeout, resume=None, system=None, model=False):
+def ask_once(chat, prompt, timeout, resume=None, system=None, model=False, effort=None):
     """One question to the CLI with no tools, outside Build's conversation:
     (answer, session id). The daily lines, a MIDI song, a talk about a
     document, a voice command, the dashboard's "does Claude answer" check.
@@ -280,7 +280,12 @@ def ask_once(chat, prompt, timeout, resume=None, system=None, model=False):
     `system` is appended to the system prompt; `resume` continues a session
     of these (talk's); `model` passes the server's --model, which only the
     voice translator has ever done -- the rest use the CLI's default, and
-    which model a call uses is not changed here. Raises ClaudeError."""
+    which model a call uses is not changed here. `effort` is `claude --effort`
+    for this call: without it the CLI's default applies, and that is whatever
+    the account running the server has set -- medium on the laptop, the CLI's
+    own (much longer thinking) on the droplet, where Jar Factory's daily
+    stock went from 105 s to over 420 s for one round (2026-10-09).
+    Raises ClaudeError."""
     cli = chat.claude if chat else None
     if not cli:
         raise ClaudeError("this server runs without Claude")
@@ -290,6 +295,8 @@ def ask_once(chat, prompt, timeout, resume=None, system=None, model=False):
     cmd += ["--output-format", "json", "--allowed-tools", "", "--permission-mode", "dontAsk"]
     if model and chat.model:
         cmd += ["--model", chat.model]
+    if effort:
+        cmd += ["--effort", effort]
     if resume:
         cmd += ["--resume", resume]
     try:
