@@ -255,6 +255,35 @@ void test_jar_a_request_left_behind_is_drained(void) {
   STAY = 1;
 }
 
+/* Tibbs from the shop: Esc goes back to the shop, not past it to the jar,
+ * where the next word typed was keys (Friends, then its name editor). And a
+ * 't' typed into what-for of a paid find is a letter, not Tibbs. */
+void test_jar_tibbs_from_the_shop_goes_back_to_the_shop(void) {
+  start(T0);
+  STAY = 0;
+  key('s');
+  CHECK_EQ(SCREEN, SC_SHOP);
+  SHOP_P->g.pay = 2;                                 /* "what should he look for?" */
+  SHOP_P->g.ask[0] = 0;
+  key('t');
+  CHECK_EQ(SCREEN, SC_SHOP);
+  CHECK(strcmp(SHOP_P->g.ask, "t") == 0);
+  key(CAPP_KEY_ESC);
+  CHECK_EQ(SHOP_P->g.pay, 0);
+  key('t');
+  CHECK_EQ(SCREEN, SC_POST);
+  key(CAPP_KEY_ESC);
+  CHECK_EQ(SCREEN, SC_SHOP);                         /* back where he was asked from */
+  key(CAPP_KEY_ESC);
+  CHECK_EQ(SCREEN, SC_JAR);
+  key('t');                                          /* from the jar: back to the jar */
+  CHECK_EQ(SCREEN, SC_POST);
+  key(CAPP_KEY_ESC);
+  CHECK_EQ(SCREEN, SC_JAR);
+  ticks(20);
+  STAY = 1;
+}
+
 void test_jar_keys_open_the_companions_after_saving(void) {
   static const struct { int k; const char *app, *screen; } K[] = {
     { 's', "Jar Shop", "shop" }, { 'p', "Jar Shop", "garden" }, { 't', "Jar Post", "talk" },

@@ -1455,6 +1455,7 @@ static int SCREEN;
  * dropped here, or it would hold the one HTTP slot for good -- as a
  * separate app, leaving it was closing it, and the OS dropped the request. */
 static int DRAIN;
+static int POST_BACK;                   /* the post was opened from the shop */
 
 /* Leaving the scene for a screen: it is saved, its placed items become
  * "want" lines (what a save writes, and what the screens read as in the
@@ -1499,6 +1500,14 @@ static int jar_open(const char *app, const char *args) {
 #endif
   if ((SCREEN != SC_JAR && UI_P && UI_P->net) || (SCREEN == SC_JAR && G.q != Q_IDLE))
     DRAIN = 1;
+  /* Tibbs from the shop goes back to the shop, not past it to the jar: a
+   * word typed next belongs to the shop, and on the jar it was a key. */
+  if (str_same(app, "Jar Factory") && SCREEN == SC_POST && POST_BACK) {
+    POST_BACK = 0;
+    app = "Jar Shop";
+    args = "shop";
+  }
+  POST_BACK = str_same(app, "Jar Post") && SCREEN == SC_SHOP;
   if (str_same(app, "Jar Shop")) {
     screen_bind();
     SCREEN = SC_SHOP;
