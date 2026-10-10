@@ -227,6 +227,32 @@ void test_jar_the_menu_opens_the_shop_screen(void) {
   STAY = 1;
 }
 
+/* Leaving the shop with its request in flight, then coming back: the reply
+ * is drained (it held the one HTTP slot, and the shop never asked again --
+ * Britney's device stopped at 3 of 8 items), and the shop asks again. */
+void test_jar_a_request_left_behind_is_drained(void) {
+  int asked;
+  start(T0);
+  STAY = 0;
+  key('s');
+  CHECK_EQ(SCREEN, SC_SHOP);
+  CHECK(JF_PENDING);                                 /* the shop's first ask, in flight */
+  asked = JF_NREQ;
+  key(CAPP_KEY_ESC);                                 /* the stock view: back to the jar */
+  CHECK_EQ(SCREEN, SC_JAR);
+  CHECK(DRAIN);
+  ticks(20);
+  CHECK(!DRAIN);                                     /* collected, dropped */
+  CHECK(!JF_PENDING);
+  key('s');
+  CHECK_EQ(SCREEN, SC_SHOP);
+  ticks(2500);
+  CHECK(JF_NREQ > asked);                            /* it asked again */
+  key(CAPP_KEY_ESC);
+  ticks(20);
+  STAY = 1;
+}
+
 void test_jar_keys_open_the_companions_after_saving(void) {
   static const struct { int k; const char *app, *screen; } K[] = {
     { 's', "Jar Shop", "shop" }, { 'p', "Jar Shop", "garden" }, { 't', "Jar Post", "talk" },

@@ -1320,6 +1320,10 @@ static void scene_start(void) {
 
 enum { SC_JAR = 0, SC_SHOP, SC_POST };
 static int SCREEN;
+/* A request the screen being left had in flight: its reply is collected and
+ * dropped here, or it would hold the one HTTP slot for good -- as a
+ * separate app, leaving it was closing it, and the OS dropped the request. */
+static int DRAIN;
 
 /* Leaving the scene for a screen: it is saved, its placed items become
  * "want" lines (what a save writes, and what the screens read as in the
@@ -1362,6 +1366,8 @@ static int jar_open(const char *app, const char *args) {
 #ifdef JAR_TEST_OPEN
   JAR_TEST_OPEN(app, args);
 #endif
+  if ((SCREEN != SC_JAR && UI_P && UI_P->net) || (SCREEN == SC_JAR && G.q != Q_IDLE))
+    DRAIN = 1;
   if (str_same(app, "Jar Shop")) {
     screen_bind();
     SCREEN = SC_SHOP;
@@ -1393,6 +1399,10 @@ static int app_key(void *st, uint8_t k) {
 }
 
 static int app_tick(void *st, uint32_t now) {
+  if (DRAIN) {
+    char b[8];
+    if (api->http_poll(b, sizeof b) != CAPP_HTTP_PENDING) DRAIN = 0;
+  }
   if (SCREEN == SC_SHOP) return shop_tick(st, now);
   if (SCREEN == SC_POST) return post_screen_tick(st, now);
   return scene_tick(st, now);

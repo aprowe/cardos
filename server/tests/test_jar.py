@@ -161,7 +161,7 @@ class FakeTibbs:
                 n = int(m.group(1)) if m else 0
                 ids = [int(x) for x in re.findall(r"^  (\d+): ", prompt, re.M)][:n]
                 briefs = ["find %d of the day" % (i + 1)
-                          for i in range(len(re.findall(r"find \d+ sparks", prompt)))]
+                          for i in range(len(re.findall(r"find \d+[^\n]*? sparks", prompt)))]
                 return json.dumps({"line": "A crate came in.", "picks": ids,
                                    "briefs": briefs}), "s1"
             return "Hm, I know a fellow.", "s1"
@@ -643,6 +643,10 @@ class Shopkeeper(unittest.TestCase):
         self.assertIn("101: Cork Owl, critter, 80 coins -- hoots", p)
         self.assertIn("Today, by chance:", p)                # the dice are the code's
         self.assertIn("find 2 sparks:", p)
+        k = shopkeep.stock_prompt("alex", pool, 2, 2, random.Random(1), False,
+                                  kinds=["critter", "hanging"])
+        self.assertIn("find 1, a critter that roams the jar, sparks:", k)   # the kind it will be
+        self.assertIn("find 2, decor that hangs from the lid, sparks:", k)
         self.assertIn("Do not just match what they bought", p)
         self.assertIn("A crate came in.", shopkeep.talk_text("alex"))   # his greeting, kept
         a = shopkeep.stock_prompt("alex", pool, 2, 2, random.Random(1), True)
@@ -906,7 +910,7 @@ class Routes(unittest.TestCase):
         p = self.tibbs.prompts[made]
         self.assertIn("paid you to go out looking, and asked for: \"brass birds\"", p)
         self.assertIn("Pick 2 of those", p)                    # 8 - 5 new: 2 his, 1 random
-        self.assertEqual(len(re.findall(r"find \d+ sparks", p)), 5)
+        self.assertEqual(len(re.findall(r"find \d+[^\n]*? sparks", p)), 5)
         self.assertIn("paid you to go out and find new things", p)   # the news
         # too many asked for is the most allowed; a word that fails the filter is dropped
         req = jar.parse_request("finds 99\nask shit birds\n")

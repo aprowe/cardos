@@ -1101,7 +1101,8 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
         rng.shuffle(pool)
         told["say"], mine, briefs = shopkeep.stock_turn(
             chat, person, pool[:POOL_SHOWN], n_pick, n_new, friends_of(person, store),
-            store=store, log=say_log, commission=req.get("ask") if req.get("finds") else None)
+            store=store, log=say_log, commission=req.get("ask") if req.get("finds") else None,
+            kinds=[KIND_PLAN[(batch + k) % len(KIND_PLAN)] for k in range(n_new)])
         with _day_lock:                                 # his picks, if still free
             got = take_from_pool(person, [i for i in mine if i in dict(
                 (p[0], 1) for p in pool[:POOL_SHOWN])][:n_pick], store)
