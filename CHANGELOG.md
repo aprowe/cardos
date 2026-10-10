@@ -11,6 +11,27 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## Unreleased
+
+**Jar Factory** (`apps/jar.c`, Games): an idle game, steps 1 to 3 of
+`docs/superpowers/specs/2026-10-09-jar-factory-design.md`, offline. A
+terrarium with a jam factory inside built from junk -- thimble vat, matchbox
+press, cotton spool, twig crane, bottle-cap belt -- that runs by itself:
+mosslings carry berries from the beds, the snail takes the jars out through
+the cork door, and coins land only when it leaves the screen. Upgrades
+(mosslings, machines, beds, a faster belt) appear in the scene; time away is
+paid as a pile of jars on the dock (from `api->epoch()`, capped at 8 h);
+naps, steam, jams, chatter, fireflies and the background follow the real
+hour. The bars slide away after 10 s and any key only brings them back.
+Twelve hand-made items, four to start with and eight in the shop; Decorate
+places them (at most 24), My Stuff and the item card show them. The item
+record (`apps/jaritem.h`, under 1 KB, versioned) is the format the server
+will send in steps 5-6; habits run through the same event and action
+functions phase 2's scripts will call (`apps/jarsim.h`). Art is text in
+`tools/jar_art.txt` (`python tools/make_jar_art.py`). Host tests:
+`test_jarsim.c`, `test_jaritem.c`, `test_jar.c` (`JAR_DUMP=dir` writes
+frames). Code 23.0 KB + data 21.5 KB, of 44 KB.
+
 ## v0.10.0 -- 2026-10-09
 
 The cleanup: a multi-agent audit (seven reviewers, 78 findings, the eight

@@ -32,6 +32,7 @@ midi      Make
 music     Make
 mines     Games
 noodle    Games
+jar       Games
 notes     Plan
 photo     Make
 pet       Games
