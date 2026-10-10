@@ -10,18 +10,17 @@
  * the twig crane, last, lifts a finished jar onto the dock. The snail takes
  * up to three at a time out through the cork door, and the coins are added
  * at the moment it leaves the screen -- js_ship is the only place coins come
- * from, so every coin is a jar someone could have watched go (away
- * earnings too: they are a pile of jars on the dock, shipped the same way).
+ * from, so every coin is a jar someone could have watched go. Nothing is
+ * made while the app is closed: there are no away earnings (js_away).
  *
  * THE RATE. js_rate_ph is what the factory can do an hour: the least of what
  * the beds grow, the mosslings carry and the machines turn out, less a fifth
- * for naps and jams. It is the number on the top bar and what away time is
- * paid at.
+ * for naps and jams. It is the number on the top bar.
  *
  * TIME. One step is JS_STEP_MS of jar time; positions are 1/64 pixel. An
  * item's tick, the event, is every JS_ITEM_TICK steps -- four a second.
  * Nothing here reads a clock: the app hands in the minute of the day (or -1
- * when there is no clock) and the epoch for away time.
+ * when there is no clock) and the epoch, for plants and senses.
  *
  * ITEMS. A placed item keeps what it needs to draw and behave; its frames sit
  * in a shared pool, so only placed items' pictures are in memory. Every habit
@@ -83,7 +82,6 @@
 #define JS_GROW_MS     32000           /* a mature plant's berry, every so often */
 #define JS_WORK_MS     30000           /* a jar's machine time, shared out */
 #define JS_JAR_VALUE   1
-#define JS_AWAY_CAP_S  (8u * 3600u)
 
 #define JS_MOSS_SPD    18              /* sub-pixels a step: 11 px/s */
 #define JS_SNAIL_SPD   10
@@ -890,27 +888,14 @@ static JS_OPT void js_init(Jar *j, uint32_t seed) {
   }
 }
 
-/* Time away: the jars the factory would have made since the last save,
- * capped at eight hours, put on the dock as a pile for the snail; and the
- * plants grown. The number of jars. No clock (either epoch 0), or a clock
- * that went backwards: nothing. */
+/* Time away makes nothing (the owner's rule, 2026-10-10): jam and coins
+ * come only from a factory on screen, so a jar opened after a night shut is
+ * the jar it was. This only stamps `seen`. Plants still come of age by the
+ * wall clock (js_settle_beds), but no berry ripens and no jar is made while
+ * the app is closed. Returns the jars made while away: 0, always. */
 static JS_OPT uint32_t js_away(Jar *j, uint32_t now) {
-  uint32_t secs, jars;
-  int i;
-  if (!now || !j->seen || now <= j->seen) { if (now) j->seen = now; return 0; }
-  secs = now - j->seen;
-  if (secs > JS_AWAY_CAP_S) secs = JS_AWAY_CAP_S;
-  jars = (uint32_t)js_rate_ph(j) * secs / 3600u;
-  j->dock += jars;
-  if (j->dock > 6) j->pile0 = j->dock;
-  for (i = 0; i < j->nbeds; i++) {
-    int32_t g = j->bed[i].grow + (int32_t)(secs > 3600 ? 3600 : secs) * 1000;
-    if (j->bed[i].young) continue;
-    j->bed[i].grow = g > JS_GROW_MS ? JS_GROW_MS : g;
-    if (j->bed[i].grow >= JS_GROW_MS) j->bed[i].ready = 1;
-  }
-  j->seen = now;
-  return jars;
+  if (now) j->seen = now;
+  return 0;
 }
 
 static JS_OPT int js_phase_of(int minute) {

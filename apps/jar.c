@@ -13,8 +13,9 @@
  * shop, My Stuff, upgrades, garden, shelf) and Jar Post (apps/jarpost.c:
  * friends, gifts, mail) -- because the three together were 44.5 KB to load
  * against a heap whose biggest piece is often 27 KB. Quitting either comes
- * back here, and the jar starts again from its save, paid for the time it
- * was away. The world is apps/jarsim.h, the item record apps/jaritem.h, the
+ * back here, and the jar starts again from its save. Nothing is made while
+ * the jar is off screen -- not in the companions, not while shut: jam and
+ * coins come only from this scene running. The world is apps/jarsim.h, the item record apps/jaritem.h, the
  * card apps/jarstore.h, the pictures apps/jar_art.h (tools/make_jar_art.py
  * from tools/jar_art.txt). Host tests: test/test_jarsim.c,
  * test/test_jaritem.c, test/test_jarstore.c, test/test_jar.c (JAR_DUMP=dir
@@ -649,7 +650,7 @@ static void bars(void) {
   }
 }
 
-/* A note across the top of the body: away earnings, a parcel, a heart. */
+/* A note across the top of the body: a parcel, a heart. */
 static void note(void) {
   int w;
   if (!G.msg[0] || (int32_t)(api->ticks_ms() - G.msg_until) > 0) return;
@@ -714,7 +715,7 @@ static void render_zoomed(int k) {
   }
   SY0 = o0;
   SY1 = o0 + SH > SHT ? SHT : o0 + SH;
-  /* on top, at full size: a banner (a parcel, a heart, away earnings) and
+  /* on top, at full size: a banner (a parcel, a heart) and
    * the mark that this is the zoomed view */
   note();
   if (SY0 < 12) {
@@ -1116,7 +1117,7 @@ static void first_run(void) {
 
 static void load(void) {
   int i;
-  uint32_t now = api->epoch(), gone, jars;
+  uint32_t now = api->epoch();
   jst_dirs(api);
   if (jst_load(api, &J, SCR.text, sizeof SCR.text) != 0) { first_run(); return; }
   js_settle_beds(&J, now);
@@ -1125,12 +1126,7 @@ static void load(void) {
     if (item_read(J.want[i].id) == 0) js_place(&J, &SCR.io.it, x, y);
   }
   J.nwant = 0;                                     /* placed, or gone from the card */
-  gone = now && J.seen && now > J.seen ? now - J.seen : 0;
-  jars = js_away(&J, now);
-  if (jars && gone >= 600) {                       /* not for a trip to the shop */
-    api->fmt(G.msg, sizeof G.msg, "While you were away: %u jars", (unsigned)jars);
-    G.msg_until = api->ticks_ms() + 7000;
-  }
+  js_away(&J, now);                                /* nothing is made off screen */
   /* Jar Shop or Jar Post asked for an item to be put in the jar. */
   if (J.decor) {
     uint32_t id = J.decor;

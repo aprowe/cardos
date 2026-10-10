@@ -248,34 +248,33 @@ void test_jar_places_what_a_companion_asked_for(void) {
   CHECK_EQ(G.view, V_JAR);
 }
 
-void test_jar_restart_brings_back_the_jar_and_pays_for_time_away(void) {
-  uint32_t coins, owned, placed;
-  int32_t rate;
+/* A save stamped hours ago loads with the same coins and jam: nothing is
+ * made while the jar is off screen. Only running the scene makes any. */
+void test_jar_restart_brings_back_the_jar_and_makes_nothing_away(void) {
+  uint32_t coins, owned, placed, dock, shipped;
   start(T0);
   J.coins = 77;
   J.nbeds = 3;
+  J.dock = 2;
   save();
   coins = J.coins; owned = J.nowned; placed = J.nplaced;
-  rate = js_rate_ph(&J);
-  /* Opened again an hour later, on the same card. */
-  fakeapi_epoch = T0 + 3600;
+  dock = J.dock + J.snail.load; shipped = J.shipped;
+  /* Opened again five hours later, on the same card. */
+  fakeapi_epoch = T0 + 5 * 3600;
   reopen();
   CHECK_EQ(J.coins, coins);
+  CHECK_EQ(J.dock, dock);
+  CHECK_EQ(J.shipped, shipped);
   CHECK_EQ(J.nowned, owned);
   CHECK_EQ(J.nplaced, placed);
   CHECK_EQ(J.nbeds, 3);
-  CHECK_EQ(J.dock, (uint32_t)rate);
-  CHECK(G.msg[0] != 0);                   /* "While you were away: ..." */
-  dump("02_away");
-  /* it ships quickly, a coin a jar */
+  CHECK_EQ(J.seen, T0 + 5 * 3600);
+  CHECK_EQ(G.msg[0], 0);                  /* no "while you were away" */
+  dump("02_back_after_hours");
+  /* and on screen it makes jam again, a coin a jar */
   ticks(60000);
-  CHECK(J.coins >= coins + (uint32_t)rate * 9 / 10);
-  CHECK_EQ(J.coins - coins, J.shipped);
-  /* back from a minute in the shop: paid, but no banner about it */
-  save();
-  fakeapi_epoch += 60;
-  reopen();
-  CHECK_EQ(G.msg[0], 0);
+  CHECK(J.coins > coins);
+  CHECK_EQ(J.coins - coins, J.shipped - shipped);
 }
 
 void test_jar_no_clock_still_runs(void) {

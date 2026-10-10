@@ -1,5 +1,5 @@
 /* Jar Factory's world on the host: apps/jarsim.h. Where coins come from,
- * away time and its cap, upgrades, items and their habits, the save. */
+ * that time away makes nothing, upgrades, items and their habits, the save. */
 #include <stdio.h>
 #include <string.h>
 
@@ -68,31 +68,27 @@ void test_jarsim_starts_at_about_three_a_minute(void) {
   CHECK(js_rate_ph(&J) <= 220);
 }
 
-void test_jarsim_away_earnings_are_a_pile_the_snail_ships(void) {
-  uint32_t jars;
-  int32_t rate;
+/* Nothing is made off screen: hours away leave the coins, the dock and the
+ * berries as they were; only `seen` moves. */
+void test_jarsim_time_away_makes_nothing(void) {
+  int i;
+  int32_t grow[JS_MAX_BEDS];
+  uint8_t ready[JS_MAX_BEDS];
   fresh(3);
-  rate = js_rate_ph(&J);
+  J.coins = 123;
+  J.dock = 2;
   J.seen = T0;
-  jars = js_away(&J, T0 + 1800);
-  CHECK_EQ(jars, (uint32_t)rate / 2);
-  CHECK_EQ(J.dock, jars);
-  CHECK_EQ(J.coins, 0);                   /* nothing until it has left */
-  CHECK_EQ(J.seen, T0 + 1800);
-  /* shipped out quickly: well inside two minutes */
-  run_s(120);
-  CHECK(J.coins >= jars);
-  CHECK_EQ(J.coins, J.shipped * JS_JAR_VALUE);
-  CHECK(J.dock < 4);
-}
-
-void test_jarsim_away_is_capped_at_eight_hours(void) {
-  fresh(3);
-  J.seen = T0;
-  CHECK_EQ(js_away(&J, T0 + 2 * 86400), (uint32_t)js_rate_ph(&J) * 8);
-  /* the plants grew while away */
-  CHECK(J.bed[0].ready);
-  CHECK(J.bed[1].ready);
+  for (i = 0; i < JS_MAX_BEDS; i++) { grow[i] = J.bed[i].grow; ready[i] = J.bed[i].ready; }
+  CHECK_EQ(js_away(&J, T0 + 1800), 0);
+  CHECK_EQ(js_away(&J, T0 + 2 * 86400), 0);
+  CHECK_EQ(J.coins, 123);
+  CHECK_EQ(J.dock, 2);
+  CHECK_EQ(J.shipped, 0);
+  CHECK_EQ(J.seen, T0 + 2 * 86400);
+  for (i = 0; i < JS_MAX_BEDS; i++) {
+    CHECK_EQ(J.bed[i].grow, grow[i]);
+    CHECK_EQ(J.bed[i].ready, ready[i]);
+  }
 }
 
 void test_jarsim_no_clock_no_away(void) {

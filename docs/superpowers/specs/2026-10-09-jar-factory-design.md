@@ -75,8 +75,8 @@ From the jar: S shop, D decorate, P plant (garden), H shelf, F friends, M mail.
   bars.
 - State is saved on every purchase, placement and gift, and at least every 5
   minutes.
-- The device needs the real date and time for plant growth, daily stock and away
-  earnings. With no time available, those three features pause and everything
+- The device needs the real date and time for plant growth and daily
+  stock. With no time available, those two features pause and everything
   else works.
 
 ## The space: a factory in a jar
@@ -120,7 +120,7 @@ income.
 | Starting output | 3 jars per minute |
 | Shop item price range | 45 to 200 coins |
 | Postage per gift | 10 coins |
-| Away earnings cap | 8 hours of output |
+| Away earnings | none: only on screen (2026-10-10) |
 
 ### Idle life
 
@@ -135,9 +135,10 @@ each occasional and self-resolving:
 
 ### Away time
 
-On start, compute earnings for the time the device was off from the current
-output rate, capped as above, and show them as a pile of jars on the dock that
-ships out quickly. Plants advance by the real time elapsed.
+Changed 2026-10-10, the owner's rule: jam and coins are made only while the
+jar is on screen. Time away earns nothing -- no pile on the dock, no banner,
+no berries ripened -- and the companion apps do not run the factory either.
+Plants still come of age by the real time elapsed (three days to grow).
 
 ## Items
 
