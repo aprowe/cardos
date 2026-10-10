@@ -11,6 +11,17 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.11.3 -- 2026-10-10
+
+- **Jar Factory menu:** the bottom bar is just "Ent menu  Z zoom" now.
+  Enter opens a full-screen menu of eight tiles in 2x text (Shop, Decorate,
+  Garden, Shelf, Upgrades, Friends, Mail, Zoom), each tile showing its key.
+  Arrows choose, Enter opens, Esc closes. With parcels waiting it opens on
+  Mail, showing the count. The letter keys still work straight from the jar.
+- **Jar Shop testing keys:** `r` asks the server for a new stock straight
+  away (`POST /jar/day?fresh=1`; this still counts toward the daily asks),
+  and `$` adds 1000 coins.
+
 ## v0.11.2 -- 2026-10-10
 
 - **Jar Factory zoom:** Z shows the jar at exactly 2x -- every scene pixel

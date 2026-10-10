@@ -605,6 +605,20 @@ class Routes(unittest.TestCase):
         self.assertEqual(self.req("GET", "/jar/item?i=0", self.sam)[0], 404)   # sam's own: none
         self.assertEqual(self.req("GET", "/jar/day", None)[0], 403)
 
+    def test_fresh_makes_a_new_stock_the_same_day(self):
+        # The shop's r, for trying things out: a new batch even though today's
+        # is made. Without it a POST makes nothing more.
+        self.make_day(self.alex)
+        first = jar.decode(self.item(self.alex, 0))["id"]
+        self.assertEqual(self.req("POST", "/jar/day?fresh=1", self.alex, ""), (200, "pending\n"))
+        for _ in range(200):
+            s, body = self.req("GET", "/jar/day", self.alex)
+            if not body.startswith("pending"):
+                break
+            time.sleep(0.02)
+        self.assertTrue(body.startswith("ok "), body)
+        self.assertNotEqual(jar.decode(self.item(self.alex, 0))["id"], first)
+
     def test_a_failed_day_says_why_and_a_post_tries_again(self):
         with mock.patch("server.ask.ask_shape", Stub(*[ask.Invalid("did not fit")] * 3)):
             s, body = self.make_day(self.alex)

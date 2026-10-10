@@ -175,10 +175,28 @@ void test_jar_keys_open_the_companions_after_saving(void) {
       CHECK(strstr(fakefs_get("/var/jar/jar.txt"), want) != 0);    /* saved first */
     }
   }
-  /* Enter does nothing without a parcel on the dock */
+  /* Enter opens the menu: big tiles, arrows choose, Enter opens, Esc closes */
   RAN[0] = 0;
   key(CAPP_KEY_ENTER);
+  CHECK_EQ(G.menu, 1);
   CHECK_EQ(RAN[0], 0);
+  dump("22_menu");
+  key(CAPP_KEY_ESC);
+  CHECK_EQ(G.menu, 0);
+  key(CAPP_KEY_ENTER);
+  G.msel = 0;
+  key(CAPP_KEY_DOWN);                     /* Shop -> Garden, a row down */
+  CHECK_EQ(G.msel, 2);
+  key(CAPP_KEY_RIGHT);                    /* -> Shelf */
+  CHECK_EQ(G.msel, 3);
+  key(CAPP_KEY_ENTER);
+  CHECK_EQ(G.menu, 0);
+  CHECK(strcmp(RAN, "Jar Shop") == 0 && strcmp(RAN_ARGS, "shelf") == 0);
+  RAN[0] = 0;
+  key(CAPP_KEY_ENTER);                    /* a letter in the menu works as from the jar */
+  key('u');
+  CHECK(strcmp(RAN, "Jar Shop") == 0 && strcmp(RAN_ARGS, "up") == 0);
+  RAN[0] = 0;
   /* decorate's N picks from My Stuff, in Jar Shop */
   key('d');
   CHECK_EQ(G.view, V_DECOR);
@@ -386,10 +404,14 @@ void test_jar_a_gift_floats_down_and_a_thank_you_is_hearts(void) {
   ticks(5000);
   CHECK_EQ(G.para_y, 0);                    /* landed: waiting on the dock */
   dump("18_parcels_on_the_dock");
-  /* Enter opens the post (the first key only brings the bars back) */
+  /* Enter opens the menu on Mail, Enter again the post (the first key only
+   * brings the bars back) */
   key(CAPP_KEY_ENTER);
   CHECK_EQ(RAN[0], 0);
   ticks(400);
+  key(CAPP_KEY_ENTER);
+  CHECK_EQ(G.menu, 1);
+  CHECK_EQ(G.msel, M_MAIL);
   key(CAPP_KEY_ENTER);
   CHECK(strcmp(RAN, "Jar Post") == 0 && strcmp(RAN_ARGS, "mail") == 0);
   /* the same gift is not announced twice, after a restart either */

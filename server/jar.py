@@ -880,16 +880,18 @@ def _make_day(chat, person, req, date, store):
             _running.discard(key)
 
 
-def start_day(chat, person, req, now=None, store=None):
+def start_day(chat, person, req, now=None, store=None, fresh=False):
     """("pending" | "ok", date): today's stock, started if it is not made or
-    making. A failed one is tried again."""
+    making. A failed one is tried again. `fresh` makes a new one even when
+    today's is done -- the shop's `r`, for trying things out; it still counts
+    against the person's daily asks, so it cannot run away."""
     st = store or kv.store()
     date = _today(now)
     key = (person, date.isoformat())
     with _day_lock:
         cur = day_state(person, st)
         if cur and cur.get("date") == key[1]:
-            if cur["state"] == "ok":
+            if cur["state"] == "ok" and not fresh:
                 return "ok", key[1]
             if cur["state"] == "pending" and key in _running:
                 return "pending", key[1]
@@ -1013,7 +1015,8 @@ def post_day(h, args):
     if not _chat_ok(h):
         h.text("error this server runs without Claude\n", 503)
         return
-    state, date = start_day(h.chat, kv.me(), parse_request(body))
+    state, date = start_day(h.chat, kv.me(), parse_request(body),
+                            fresh=(args.get("fresh") or ["0"])[0] == "1")
     h.text("ok %s\n" % date if state == "ok" else "pending\n")
 
 

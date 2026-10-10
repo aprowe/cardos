@@ -193,14 +193,18 @@ static int day_body(void) {
 
 /* Ask for today's stock: once a session, and only when the stock here is
  * not today's. Without a clock there is no "today", so nothing. */
+static int s_fresh;                               /* r: a new batch now, not tomorrow */
+
 static void start_day(void) {
   if (G.tried || U.net || !api->epoch()) return;
-  if (S.date[0] && S.gen == today_gen()) return;
+  if (!s_fresh && S.date[0] && S.gen == today_gen()) return;
   if (need_pub()) return;                        /* the key first; then here again */
   G.tried = 1;
   day_body();
-  if (send(N_DAY_POST, "POST", "/jar/day", NET) == 0) net_status("asking for today's stock");
+  if (send(N_DAY_POST, "POST", s_fresh ? "/jar/day?fresh=1" : "/jar/day", NET) == 0)
+    net_status(s_fresh ? "asking for a new stock" : "asking for today's stock");
   else G.tried = 0;
+  s_fresh = 0;
 }
 
 static void next_item(void) {
@@ -674,6 +678,22 @@ static int app_key(void *st, uint8_t k) {
   (void)st;
   U.dirty = 1;
   if (U.msg[0]) U.msg[0] = 0;
+  /* For trying things out: r asks the server for a new stock now (it makes
+   * one even though today's is done), $ is 1000 coins. */
+  if (k == 'r' && (G.view == V_STOCK || G.view == V_STUFF)) {
+    if (U.net) { say("Already asking the server"); return 1; }
+    if (!api->epoch()) { say("No clock yet: no stock to refresh"); return 1; }
+    s_fresh = 1;
+    G.tried = 0;
+    start_day();
+    return 1;
+  }
+  if (k == '$') {
+    J.coins += 1000;
+    save();
+    say("+1000 coins (for testing)");
+    return 1;
+  }
   switch (G.view) {
   case V_STOCK: case V_STUFF: return key_grid(k);
   case V_CARD:    return key_card(k);
@@ -710,6 +730,8 @@ const CappInfo capp_info = {
   "Enter\tbuy; on an item, put it in the jar\n"
   "G\tsend as a gift (Jar Post)\n"
   "H\tput on the shelf\n"
+  "r\ta new stock from the server now (testing)\n"
+  "$\t1000 coins (testing)\n"
   "Esc\tback to the jar\n",
 };
 

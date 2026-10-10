@@ -104,6 +104,8 @@ static struct {
   int zoom;
   int zx, zy;                           /* the view's top left, in scene pixels */
   int follow;                           /* 0..moss-1 a mossling, JS_MAX_MOSS the snail, -1 free */
+  /* the menu: big tiles in place of seven squeezed words */
+  int menu, msel;
 } G;
 
 /* ---- small helpers ------------------------------------------------------- */
@@ -547,19 +549,51 @@ static void hints(int y, const char *const *h) {
   }
 }
 
-/* The jar's seven keys, each a word with its key as a light cap inside it:
- * seven caps and seven words side by side do not fit in 240 pixels. */
-static void jar_keys(int y) {
-  static const char *const W[] = { "Shop", "Deco", "Plant", "sHelf", "Friends", "Mail", "Up", "Zoom", 0 };
-  int x = 3, i, k;
-  char c[2];
-  c[1] = 0;
-  for (i = 0; W[i]; i++, x += 3)
-    for (k = 0; W[i][k]; k++, x += 6) {
-      c[0] = W[i][k];
-      if (c[0] >= 'A' && c[0] <= 'Z') { fill(x - 1, y + 2, 7, 9, C_TEXT); text(x, y + 3, c, C_BG); }
-      else text(x, y + 3, c, C_DIM);
+/* Text at twice the size: each pixel of the font as 2x2. */
+static void text2(int x, int y, const char *s, uint16_t c) {
+  int col, r;
+  for (; *s; s++, x += 12) {
+    const uint8_t *g;
+    if ((unsigned char)*s < FONT_FIRST || (unsigned char)*s > FONT_LAST) continue;
+    g = font6x8[(unsigned char)*s - FONT_FIRST];
+    for (col = 0; col < 5; col++)
+      for (r = 0; r < 8; r++)
+        if (g[col] >> r & 1) fill(x + 2 * col, y + 2 * r, 2, 2, c);
+  }
+}
+
+/* The jar's menu: Enter opens it, every command a big tile with its key in
+ * the corner (the letters still work from the jar without it). */
+enum { M_SHOP, M_DECOR, M_GARDEN, M_SHELF, M_UP, M_FRIENDS, M_MAIL, M_ZOOM, M_N };
+static const char *const MENU_NAME[M_N] = {
+  "Shop", "Decorate", "Garden", "Shelf", "Upgrades", "Friends", "Mail", "Zoom" };
+static const char MENU_KEY[M_N] = { 'S', 'D', 'P', 'H', 'U', 'F', 'M', 'Z' };
+#define MENU_TOP   (BAR + 2)
+#define MENU_ROW   26
+#define MENU_W     116
+
+static int parcels(void);
+
+static void menu(void) {
+  int i;
+  fill(0, BAR, SW, SHT - 2 * BAR, C_BG);
+  for (i = 0; i < M_N; i++) {
+    int x = 3 + (i % 2) * (MENU_W + 2), y = MENU_TOP + (i / 2) * MENU_ROW, sel = i == G.msel;
+    char k[2];
+    fill(x, y, MENU_W, MENU_ROW - 2, sel ? mix(C_PANEL, 0x50, 0x48, 0x80, 90) : C_PANEL);
+    if (sel) frame(x, y, MENU_W, MENU_ROW - 2, C_GOLD);
+    text2(x + 6, y + 4, MENU_NAME[i], sel ? C_TEXT : C_DIM);
+    k[0] = MENU_KEY[i];
+    k[1] = 0;
+    fill(x + MENU_W - 12, y + 3, 9, 9, C_TEXT);           /* its key, as a cap */
+    text(x + MENU_W - 10, y + 4, k, C_BG);
+    if (i == M_MAIL && parcels()) {                       /* parcels waiting */
+      char n[6];
+      api->fmt(n, sizeof n, "%d", parcels());
+      fill(x + MENU_W - 12 - (slen(n) * 6 + 4) - 2, y + 13, slen(n) * 6 + 4, 9, C_PINK);
+      text(x + MENU_W - 12 - (slen(n) * 6 + 4), y + 14, n, C_BG);
     }
+  }
 }
 
 static void rate_text(char *b, int n) {
@@ -604,7 +638,13 @@ static void bars(void) {
   }
   if (by + BAR > SY0 && by < SY1) {
     fill(0, by, SW, BAR, C_BG);
-    if (G.view == V_JAR) jar_keys(by);
+    if (G.view == V_JAR && G.menu) {
+      static const char *const H_MENU[] = { "<>^v", "choose", "Ent", "open", "Esc", "close", 0 };
+      hints(by, H_MENU);
+    } else if (G.view == V_JAR) {
+      static const char *const H_JAR[] = { "Ent", "menu", "Z", "zoom", 0 };
+      hints(by, H_JAR);
+    }
     else hints(by, !G.dmove ? H_DSEL : J.placed[G.dsel].kind == JK_HANGING ? H_DMOVE : H_DMOVE2);
   }
 }
@@ -639,6 +679,7 @@ static void decor_overlay(void) {
 static void render(void) {
   scene();
   if (G.view == V_DECOR) decor_overlay();
+  if (G.view == V_JAR && G.menu) menu();
   bars();
   note();
 }
@@ -859,6 +900,17 @@ static int app_key(void *st, unsigned char k) {
   if (G.view == V_JAR && G.bars > 0) { G.last_key = now; return 1; }
   G.last_key = now;
   if (G.view == V_DECOR) return key_decor(k);
+  if (G.menu) {
+    switch (k) {
+    case CAPP_KEY_ESC: case CAPP_KEY_BACK: G.menu = 0; return 1;
+    case CAPP_KEY_LEFT:  G.msel = (G.msel + M_N - 1) % M_N; return 1;
+    case CAPP_KEY_RIGHT: G.msel = (G.msel + 1) % M_N; return 1;
+    case CAPP_KEY_UP:    G.msel = (G.msel + M_N - 2) % M_N; return 1;
+    case CAPP_KEY_DOWN:  G.msel = (G.msel + 2) % M_N; return 1;
+    case CAPP_KEY_ENTER: G.menu = 0; k = (unsigned char)(MENU_KEY[G.msel] - 'A' + 'a'); break;
+    default: G.menu = 0; break;                     /* a letter: as from the jar */
+    }
+  }
   switch (k) {
   case 's': case 'S': open_app("Jar Shop", "shop"); return 1;
   case 'd': case 'D': G.view = V_DECOR; G.dmove = 0; decor_select(G.dsel); return 1;
@@ -873,7 +925,9 @@ static int app_key(void *st, unsigned char k) {
   case 'f': case 'F': open_app("Jar Post", "friends"); return 1;
   case 'm': case 'M': open_app("Jar Post", "mail"); return 1;
   case CAPP_KEY_ENTER:
-    if (parcels()) open_app("Jar Post", "mail");     /* the parcel on the dock */
+    /* the menu; with parcels on the dock, on Mail */
+    G.menu = 1;
+    G.msel = parcels() ? M_MAIL : G.msel;
     return 1;
   }
   return 0;
