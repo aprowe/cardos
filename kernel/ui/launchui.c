@@ -583,7 +583,9 @@ static void leave_app_ex(int show) {
  * (`cli`) takes no screen, so nothing is let go for one. The back stack is
  * left as it is. Nonzero if it let one go. */
 static int leave_for(const AppDef *next, int cli) {
-  if (!s_app || s_app == next || cli || capprun_caller()) return 0;
+  /* A captured console line (cardctl sh, Dashboard Link) never takes the
+   * screen, so it must not close the app that has it either. */
+  if (!s_app || s_app == next || cli || capprun_caller() || con_capturing()) return 0;
   leave_app_ex(0);
   return 1;          /* the row is due a paint if nothing takes the screen */
 }
