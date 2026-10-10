@@ -201,9 +201,10 @@ into the instruction bus (`kernel/app/xipcache.c` is the ring, host-tested;
 inside its code, hold its data's addresses: flash code is valid for one data
 address. `xip` lists the cache, `xip wipe` empties it (always safe), `mem`
 shows both. Headless commands and a second desktop window load as before
-(heap data, RAM code); the icon scan loads only the data (`capp_load_info`,
-2026-10-10), because with the arena held its RAM-code loads failed at boot
-and the big apps vanished from the launcher. `CAPP_CODE_IN_RAM` keeps an
+(heap data, RAM code); the icon scan loads each app's data and constants
+into RAM, not its code (`capp_load_info`, 2026-10-10), because with the arena
+held its RAM-code loads failed at boot and the big apps vanished from the
+launcher. `CAPP_CODE_IN_RAM` keeps an
 inner loop in RAM; no app needs it (Kart, Calc, Pinball and Noodle measured
 no slower from flash). The budget is now the data block (`.data` and the largest overlay) <= 28 KB, and code <= 16 KB
 only for those. A device updated over the air from the old table has no

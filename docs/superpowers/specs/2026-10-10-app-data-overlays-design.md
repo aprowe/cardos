@@ -213,8 +213,11 @@ switch times (20480-byte overlay 0 and 6000-byte overlay 1):
 | 3 | 46 ms | 59 ms | 82 ms | 103 ms |
 
 0->1 saves 20 KB and reads 6 KB; 1->0 saves 6 KB and reads 20 KB. The
-first run on each device was the slowest; every run but one (204 ms)
-is inside the 50-150 ms the design expected.
+0->1 was slowest on the first run on each device (204 ms and 149 ms) and
+fell on later runs (46-119 ms); 1->0 did not change run to run (59-63 ms on
+the Cardputer, 103-107 ms on the ADV). The design expected 50-150 ms: ten of
+twelve times are inside it, 204 ms is above it and the Cardputer's 46 ms is
+below it.
 
 - **ovltest's data block is 20560 bytes**: `.data` 68 rounded to 80, plus
   20480, not plus 26480. The loader printed `loaded /apps/ovltest.capp

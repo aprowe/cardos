@@ -12,7 +12,7 @@
 #include "freertos/semphr.h"
 #include "kernel/fs/path.h"
 #include "kernel/sys/applog.h"
-#include "soc/ext_mem_defs.h"
+#include "esp_mmu_map.h"
 
 static const char *TAG = "xip";
 
@@ -21,10 +21,10 @@ static const char *TAG = "xip";
 static const esp_partition_t       *s_part;
 static esp_partition_mmap_handle_t  s_map;
 static const void                  *s_base;
-static esp_partition_mmap_handle_t  s_dmap;
 static const void                  *s_drom;
 static XipCache                     s_cache;
 static int                          s_ready;
+static int                          s_warned;
 static SemaphoreHandle_t            s_lock;
 
 void xipflash_lock(void) {
@@ -49,11 +49,16 @@ static int p_read(void *ctx, uint32_t off, void *buf, uint32_t n) {
  * flash_mmap.c), and that is the instruction-bus one. */
 static void drop_dcache(uint32_t off, uint32_t n) {
   uint32_t a, b;
+  esp_err_t err;
   if (!s_drom) return;
   a = ((uint32_t)(uintptr_t)s_drom + off) & ~63u;
   b = ((uint32_t)(uintptr_t)s_drom + off + n + 63u) & ~63u;
-  esp_cache_msync((void *)(uintptr_t)a, b - a,
-                  ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
+  err = esp_cache_msync((void *)(uintptr_t)a, b - a,
+                        ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
+  if (err != ESP_OK && !s_warned) {
+    s_warned = 1;
+    applogf("xip", "dcache sync failed %d", (int)err);
+  }
 }
 static int p_write(void *ctx, uint32_t off, const void *buf, uint32_t n) {
   int rc;
@@ -87,36 +92,32 @@ int xipflash_init(void) {
     ESP_LOGE(TAG, "cannot map appcode: app code loads into RAM");
     return -1;
   }
-  /* And through the data bus, for the constants beside each app's code: the
-   * instruction bus allows only aligned 32-bit loads, and a string is read
-   * a byte at a time. IDF maps one flash range twice by sharing the pages
-   * (ESP_MMU_MMAP_FLAG_PADDR_SHARED); on the S3 the two buses share one MMU
-   * table anyway. Both views or neither: code in flash with its constants
-   * in RAM would be code relocated against a heap address, which no cache
-   * entry can be valid for. */
-  if (esp_partition_mmap(s_part, 0, s_part->size, ESP_PARTITION_MMAP_DATA,
-                         &s_drom, &s_dmap) != ESP_OK) {
-    esp_partition_munmap(s_map);
-    s_base = NULL;
-    ESP_LOGE(TAG, "cannot map appcode for data: app code loads into RAM");
-    return -1;
+  /* And the data-bus address of the same pages, for the constants beside each
+   * app's code: the instruction bus allows only aligned 32-bit loads, and a
+   * string is read a byte at a time. A second esp_partition_mmap would not
+   * make a second mapping (IDF's PADDR_SHARED hands back the existing
+   * instruction-bus block, and a byte load from 0x42xxxxxx is a
+   * LoadStoreError), but the S3's two buses share one MMU table, so the
+   * entries are valid for data and this finds the data address of the first
+   * one. Both views or neither: code in flash with its constants in RAM would
+   * be code relocated against a heap address, which no cache entry can be
+   * valid for. */
+  {
+    void *v = NULL;
+    if (esp_mmu_paddr_to_vaddr(s_part->address, MMU_TARGET_FLASH0,
+                               MMU_VADDR_DATA, &v) != ESP_OK) {
+      esp_partition_munmap(s_map);
+      s_base = NULL;
+      ESP_LOGE(TAG, "cannot find appcode on the data bus: app code loads into RAM");
+      return -1;
+    }
+    s_drom = v;
   }
-  /* On the S3 that second map does not make a second mapping: there is one
-   * linear address space, IDF finds the pages already mapped and hands back
-   * the instruction-bus address (ESP_ERR_INVALID_STATE, taken as success by
-   * spi_flash_mmap). A byte load from 0x42xxxxxx is a LoadStoreError -- the
-   * first constant string read at app start. The same MMU entry answers at
-   * the data-bus base too, so the data view is the same linear address
-   * there. */
-  if (((uint32_t)(uintptr_t)s_drom & ~(uint32_t)SOC_MMU_LINEAR_ADDR_MASK) == SOC_MMU_IBUS_VADDR_BASE)
-    s_drom = (const void *)(uintptr_t)(SOC_MMU_DBUS_VADDR_BASE |
-                                       ((uint32_t)(uintptr_t)s_drom & SOC_MMU_LINEAR_ADDR_MASK));
   /* Before xip_open, so nothing can reach the cache without it; dropped
    * again below if the cache never becomes ready. */
   s_lock = xSemaphoreCreateRecursiveMutex();
   if (!s_lock) {
     esp_partition_munmap(s_map);
-    esp_partition_munmap(s_dmap);
     s_drom = NULL;
     ESP_LOGE(TAG, "no memory for the appcode lock: app code loads into RAM");
     return -1;
@@ -130,7 +131,6 @@ int xipflash_init(void) {
     /* Nothing will ever run from the mapping, so give the address space
      * back; and with no cache there is nothing to lock. */
     esp_partition_munmap(s_map);
-    esp_partition_munmap(s_dmap);
     s_drom = NULL;
     s_base = NULL;
     vSemaphoreDelete(s_lock);

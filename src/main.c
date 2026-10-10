@@ -1539,6 +1539,15 @@ void app_main(void) {
      * their /config mirrors, so a reflash never means retyping a password
      * or repeating the Google consent dance. */
     if (nvs_erased) applogf("nvs", "erased at boot: %s", nvs_erased);
+    /* So the next drop nobody explains explains itself. */
+    {
+      esp_reset_reason_t rr = esp_reset_reason();
+      const char *rn = rr == ESP_RST_POWERON ? "POWERON" : rr == ESP_RST_SW ? "SW" :
+                       rr == ESP_RST_PANIC ? "PANIC" : rr == ESP_RST_INT_WDT ? "INT_WDT" :
+                       rr == ESP_RST_TASK_WDT ? "TASK_WDT" : rr == ESP_RST_WDT ? "WDT" :
+                       rr == ESP_RST_BROWNOUT ? "BROWNOUT" : rr == ESP_RST_USB ? "USB" : "other";
+      applogf("boot", "reset reason %d (%s)", (int)rr, rn);
+    }
     if (wifi_restore_from_card())  con_write("wifi: network restored from /config/wifi.txt\n");
     forget_google();
     if (env_restore_from_card())   con_write("env: variables restored from /config/env.txt\n");
