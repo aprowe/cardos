@@ -190,24 +190,21 @@ def code_data(path):
     return code, dat
 
 
-# The size budget. An app's data is one heap block and its code one block of
-# executable RAM, found at load time in a heap that breaks up over hours
-# (CLAUDE.md, "An app's data is one block"): after a day the largest free
-# piece was 39 KB. Past these an app may build fine and then not open.
-DATA_BUDGET = 28 * 1024
-TOTAL_BUDGET = 44 * 1024
+# The size budget, since app code runs from flash
+# (docs/superpowers/specs/2026-10-09-xip-app-code-design.md). An app's data
+# goes in the 28 KB arena when it is the one on screen -- ARENA_SIZE in
+# kernel/app/arena.h -- and its code into the flash cache, so neither needs
+# a piece of a heap that breaks up over hours. An app that keeps its code in
+# RAM (CAPP_CODE_IN_RAM, for an inner loop) still needs one block of
+# executable RAM, and after a day the largest was 24 KB.
+DATA_BUDGET = 28 * 1024          # ARENA_SIZE
+RAM_CODE_BUDGET = 16 * 1024      # CAPP_CODE_IN_RAM apps
+MAX_CODE = 96 * 1024             # CAPP_MAX_CODE in kernel/app/elfload.c
+CAPP_CODE_IN_RAM = 0x0040
 
 # Apps allowed over the budget for now, each with why. Take one off as soon
 # as it is back under -- the build says when.
 OVER_BUDGET = {
-    # Its data is under 28 KB since E.good went to the card and FlCell.next
-    # to 16 bits; the code is the rest -- a parser, an evaluator, an editor
-    # and the game, 21 KB of it, in its own block of executable RAM.
-    "forklift": "code+data only: 21 KB of code (Forklang, its editor and the game)",
-    # Was 44.5 KB of 44; the script machine (apps/jarvm.h, phase 2) added
-    # 1.8 KB of code and 1.3 KB of data (a 768-byte script pool). Its data
-    # is well under 28 KB. Take it off when the app is split (a companion
-    # app for the menus) and is back under.
 }
 
 
@@ -217,20 +214,24 @@ def check_budget(built):
     rows, bad = [], []
     for name, elf in built:
         code, dat = code_data(elf)
+        flags = read_info(elf)[0]
+        in_ram = bool(flags & CAPP_CODE_IN_RAM)
         over = []
         if dat > DATA_BUDGET:
-            over.append("data %d > %d" % (dat, DATA_BUDGET))
-        if code + dat > TOTAL_BUDGET:
-            over.append("code+data %d > %d" % (code + dat, TOTAL_BUDGET))
-        rows.append((name, code, dat, over))
+            over.append("data %d > %d (the arena)" % (dat, DATA_BUDGET))
+        if in_ram and code > RAM_CODE_BUDGET:
+            over.append("code %d > %d for CAPP_CODE_IN_RAM" % (code, RAM_CODE_BUDGET))
+        if code > MAX_CODE:
+            over.append("code %d > %d" % (code, MAX_CODE))
+        rows.append((name, code, dat, in_ram, over))
     with open(os.path.join(OUT, "sizes.txt"), "w", encoding="utf-8", newline="\n") as f:
-        f.write("# app        code    data   total  (bytes; budget data %d, total %d)\n"
-                % (DATA_BUDGET, TOTAL_BUDGET))
-        for name, code, dat, over in rows:
-            f.write("%-10s %7d %7d %7d%s\n" % (name, code, dat, code + dat,
+        f.write("# app        code    data  where  (bytes; data <= %d, RAM code <= %d)\n"
+                % (DATA_BUDGET, RAM_CODE_BUDGET))
+        for name, code, dat, in_ram, over in rows:
+            f.write("%-10s %7d %7d  %s%s\n" % (name, code, dat, "ram  " if in_ram else "flash",
                                               "  OVER" if over else ""))
     print("  %s" % os.path.relpath(os.path.join(OUT, "sizes.txt"), ROOT))
-    for name, code, dat, over in rows:
+    for name, code, dat, in_ram, over in rows:
         if over and name in OVER_BUDGET:
             print("  warning: %s is over budget (%s), allowed: %s"
                   % (name, "; ".join(over), OVER_BUDGET[name]))
@@ -240,7 +241,7 @@ def check_budget(built):
             print("  note: %s is under budget now -- take it out of OVER_BUDGET" % name)
     if bad:
         raise SystemExit(
-            "over the app size budget (an app's data must be one free heap block; "
+            "over the app size budget (data must fit the 28 KB arena; "
             "see OVER_BUDGET in tools/build_apps.py):\n  " + "\n  ".join(bad))
 
 
