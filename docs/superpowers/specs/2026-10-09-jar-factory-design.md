@@ -501,3 +501,137 @@ The repository must be there (it is: Build runs in it), because the enums
 are read from `apps/jaritem.h` at run time. `CARDOS_STATE/sign_key.pem` is
 the key every item is signed with: back it up, and never let it be
 regenerated, or every item already given out stops verifying.
+
+## Scripts: the machine and the language (step 7, 2026-10-09)
+
+Phase 2 as built. The files:
+
+| File | What |
+|---|---|
+| `apps/jarvm.def` | **The** instruction table, and the language's words (events, actions, senses, names), as X-macro lines. Both sides read it. |
+| `apps/jarvm.h` | The device's machine: portable, libc-free, no allocation. |
+| `apps/jarsim.h` | The hook: `js_item_event` asks the script first. |
+| `server/jarvm.py` | Reads the `.def` at import; the compiler, the same machine in Python, the simulated day, `LANGUAGE_GUIDE`. |
+| `tools/make_jarvm_fixtures.py` | Writes `test/fixtures/jarvm_*`: scripts, events, and the Python machine's trace. `test/test_jarvm.c` replays them through the C machine and needs the same trace byte for byte. |
+
+### The bytes
+
+A script is at most 256 bytes, in the record's script field:
+
+    byte 0     format, 1. Anything else: the script is ignored.
+    byte 1     entries, 0..16
+    then       entries x { event, filter, offset of its code }
+    then       code
+
+Jump targets and entry offsets are byte offsets from the start of the script,
+so every one fits in a byte. Before a placed item's script is used,
+`jv_check` walks it whole: every entry and jump on an instruction, every
+opcode known, every slot, sense and action in range. Anything else and the
+script is left out -- the recipe does everything, as in phase 1. That is the
+spec's "unknown instruction or newer format: ignore the script".
+
+The instructions (`apps/jarvm.def` is the truth): `END`, `PUSH8 b`,
+`PUSH16 lo hi`, `LOAD k`, `STORE k`, `SENSE k`, `RAND`, `ADD SUB MUL DIV
+MOD NEG`, `EQ NE LT LE GT GE`, `NOT AND OR`, `JMP a`, `JZ a`, `ACT k` (the
+argument from the stack) and `ACTK k b` (a constant argument). Values are
+16-bit signed and wrap; division goes toward zero and by zero gives 0; a
+sense is clamped to 16 bits.
+
+### The machine
+
+One entry runs per event: the first whose event matches and whose filter is 0
+or equals the event's argument (for tick the filter is a period: every Nth
+tick). A stack of 8, the item's 8 memory slots, at most 64 instructions.
+
+| Result | Meaning | What the jar does |
+|---|---|---|
+| done | reached `END` | the event is handled; the recipe is skipped |
+| none | no handler for this event | the recipe's habits take it |
+| limit | 64 instructions without `END` | a `?` bubble; the recipe takes this event |
+| fault | stack under- or overflow, a jump or read outside the script, a slot, sense or action out of range | as limit |
+
+"Until the next event" is literal: the next event asks the script again. The
+machine reaches the world only through three callbacks -- `js_sense`,
+`js_act`, `js_rnd` -- so a script has no way to files, the network, coins or
+another item's memory: no instruction names them.
+
+**Memory persists in the record.** A script's writes land in the placed
+item's `mem` and set `mem_dirty`; `js_mem_sync(j, i, &item)` copies them into
+the item's record, which the app writes back to the card when it saves. The
+server's signature does not cover bytes 136..151 (the memory), so writing
+them does not break it.
+
+**Room.** Placed items' scripts share one 768-byte pool (`JS_SPOOL`), packed
+end to end and closed up when an item is put away; a script that does not
+fit is left out and the recipe runs. The `?` is a fifth bubble slot every
+placed item has.
+
+### The language
+
+Small and readable, so an AI writes it reliably; compiled on the server only.
+`server/jarvm.py`'s `LANGUAGE_GUIDE` is the page the generation prompt gets.
+
+    script    := handler+
+    handler   := "on" EVENT [FILTER] ":" block "end"
+    block     := { statement (";" | newline) }
+    statement := ACTION [argument]
+               | "mem" "[" 0..7 "]" ("=" | "+=" | "-=") expr
+               | "if" expr "then" block { "elif" expr "then" block } [ "else" block ] "end"
+               | "return"
+    expr      := or-expression over: numbers -32768..32767, mem[K], rand(N),
+                 senses, names, ( ), unary -, * / %, + -, == != < <= > >=
+                 (one comparison, no chains), not, and, or
+
+`#` starts a comment; words are not case-sensitive. There are no loops.
+
+Events and their filters: `on tick:`, `on tick every N:`, `on poke:`,
+`on near:` / `on near moss|snail|critter|decor:`, `on shipped:`, `on jam:` /
+`on jam jammed|fixed:`, `on gift:`, `on time:` / `on time
+dawn|day|dusk|night:`, `on weather:` / `on weather N:`. A script may have
+one handler for each event and filter; a filtered one is found before the
+plain one, so the narrower wins.
+
+Statements, each an action through `js_act`:
+
+| Statement | Does |
+|---|---|
+| `say N` | its bubble N for 2 s -- counted **from 1** |
+| `hop` / `hop N` | jump, N pixels high (none: 6) |
+| `walk to ZONE` | `garden works dock water high anywhere` |
+| `float` / `float N` | start its bob again |
+| `face` | turn to the nearest mossling |
+| `stop` | stop walking |
+| `frame N` | show picture N, counted from 1 |
+| `flip` | turn round |
+| `glow on` / `off` / `toggle` | |
+| `emit PARTICLE` | `sparkle heart note zzz puff` |
+| `wait N` | hold still N ticks |
+
+Senses: `x`, `zone`, `near` (the nearest thing's kind), `distance`, `time`,
+`weather`, `days` (since made), `gift` (1 if it was one), `random` (0..255);
+and `rand(N)` for 0..N-1. Zones, particles, kinds and times are names any
+expression may use (`if time == night`, `if near == snail`).
+
+    on poke: say 1; hop; end
+    on tick: if rand(100) < 5 then emit sparkle end
+    end
+    on near critter: mem[0] = mem[0] + 1; if mem[0] > 3 then say 2 end
+    end
+    on time night: glow on
+    end
+
+Compile errors name the line and what was expected -- `line 2: expected
+'then' after the condition, found 'say'`, `line 3: expected a zone after
+'walk' (garden, works, ...), found 'moon'`, `line 1: 'say 3': this item has
+bubbles 1..2` -- so a generator can hand the message back and try again.
+
+### The simulated day
+
+`simulate_day(code, nbub, nframes)` fires a compressed day at a script: 24
+hours of 120 ticks, a near every 30 ticks, a shipped jar every 40, a jam and
+its fix, three pokes, a gift, a weather change, and dawn, day, dusk and
+night. It fails the script if any run faults or reaches the step limit, if it
+says a bubble the item does not have, or if nothing visible (anything but
+`wait` and `stop`) ever happens. `prepare_script(source, nbub, nframes)` is
+compile + check + day: the bytes, or a `ScriptError` whose message says what
+to fix.

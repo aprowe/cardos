@@ -33,6 +33,7 @@
 
 #include <stdint.h>
 #include "apps/jaritem.h"
+#include "apps/jarvm.h"
 
 #if defined(__GNUC__)
 #define JS_OPT __attribute__((unused))
@@ -63,6 +64,7 @@
 #define JS_MAX_PLACED  24
 #define JS_POOL        32              /* placed items' frames, 96 bytes each */
 #define JS_MAX_OWNED   64
+#define JS_SPOOL       768             /* placed items' scripts, packed */
 
 #define JS_GROW_MS     32000           /* a mature plant's berry, every so often */
 #define JS_WORK_MS     30000           /* a jar's machine time, shared out */
@@ -146,7 +148,7 @@ typedef struct {
   uint32_t id;
   uint8_t  kind, move, speed, zone, nhab, nframes, nbub, flags;
   JHabit   hab[JI_MAX_HAB];
-  char     bub[JI_MAX_BUB][JI_BUB + 1];
+  char     bub[JI_MAX_BUB + 1][JI_BUB + 1];  /* the last is "?": a script stopped */
   int16_t  mem[JI_MEM];
   uint16_t pal[8];                     /* plain RGB565, as in the record */
   uint16_t tags;                       /* JT_* */
@@ -160,6 +162,10 @@ typedef struct {
   int16_t  t, wait, say_t, phase, near_cd;
   uint8_t  cur, flip, glow, moving, dirty;
   int8_t   say;
+  /* phase 2: its script in j->spool, 0 bytes for none; mem changed since
+   * the item's record was last written (js_mem_sync) */
+  uint16_t soff, slen;
+  uint8_t  mem_dirty;
 } JPlaced;
 
 typedef struct { uint32_t id; int16_t x, y; } JWant;
@@ -192,6 +198,8 @@ typedef struct {
   uint8_t pool_used[JS_POOL];
   JWant   want[JS_MAX_PLACED];         /* what the save said was placed */
   uint8_t nwant;
+  uint8_t spool[JS_SPOOL];             /* the placed items' scripts, end to end */
+  uint16_t sused;
 
   /* the air */
   JPart  part[JS_PARTS];
@@ -382,6 +390,7 @@ static JS_OPT int js_place(Jar *j, const JItem *it, int x, int y) {
   p->made = it->made;
   ji_copy(p->hab, it->hab, (int)sizeof p->hab);
   for (i = 0; i < it->nbub; i++) ji_copy(p->bub[i], it->bub[i], JI_BUB + 1);
+  p->bub[JI_MAX_BUB][0] = '?';
   for (i = 0; i < JI_MEM; i++) p->mem[i] = it->mem[i];
   for (i = 0; i < 8; i++) p->pal[i] = it->pal[i];
   p->tags = js_tags(it->tags);
@@ -396,6 +405,15 @@ static JS_OPT int js_place(Jar *j, const JItem *it, int x, int y) {
     p->nframes++;
   }
   if (!p->nframes) return -1;
+  /* Its script, if this machine can run it and there is room: else the
+   * recipe does everything, as in phase 1. */
+  if (it->script_len && jv_check(it->script, it->script_len) == 0 &&
+      j->sused + it->script_len <= JS_SPOOL) {
+    p->soff = j->sused;
+    p->slen = it->script_len;
+    ji_copy(j->spool + p->soff, it->script, p->slen);
+    j->sused = (uint16_t)(j->sused + p->slen);
+  }
   x = js_clamp(x, 10, 226);
   if (p->kind == JK_HANGING) x = js_clamp(x, JS_HANG_LO, JS_HANG_HI);
   p->home_x = (int16_t)x;
@@ -416,6 +434,13 @@ static JS_OPT void js_unplace(Jar *j, int i) {
   if (i < 0 || i >= j->nplaced) return;
   for (k = 0; k < JI_MAX_FRAMES; k++)
     if (j->placed[i].slot[k] < JS_POOL) j->pool_used[j->placed[i].slot[k]] = 0;
+  if (j->placed[i].slen) {                    /* close the gap its script leaves */
+    int at = j->placed[i].soff, n = j->placed[i].slen;
+    ji_copy(j->spool + at, j->spool + at + n, j->sused - at - n);
+    j->sused = (uint16_t)(j->sused - n);
+    for (k = 0; k < j->nplaced; k++)
+      if (j->placed[k].slen && j->placed[k].soff > at) j->placed[k].soff = (uint16_t)(j->placed[k].soff - n);
+  }
   for (k = i; k + 1 < j->nplaced; k++) ji_copy(&j->placed[k], &j->placed[k + 1], (int)sizeof j->placed[k]);
   j->nplaced--;
 }
@@ -546,11 +571,60 @@ static JS_OPT int js_act(Jar *j, int i, int action, int arg) {
   }
 }
 
-/* An event reaches item i: each habit it matches does its action. Returns
- * how many fired. */
+/* ---- phase 2: an item's script runs through the same senses and actions --- */
+
+typedef struct { Jar *j; int i; } JsVm;
+
+static JS_OPT int js_vm_sense(void *c, int s) { return js_sense(((JsVm *)c)->j, ((JsVm *)c)->i, s); }
+static JS_OPT int js_vm_act(void *c, int a, int arg) { return js_act(((JsVm *)c)->j, ((JsVm *)c)->i, a, arg); }
+static JS_OPT uint32_t js_vm_rnd(void *c) { return js_rnd(((JsVm *)c)->j); }
+
+/* Run item i's script for an event: a JV_* result (apps/jarvm.h). */
+static JS_OPT int js_script(Jar *j, int i, int ev, int arg) {
+  JPlaced *p = &j->placed[i];
+  JsVm c;
+  JvIo io;
+  int16_t was[JI_MEM];
+  int k, r;
+  c.j = j;
+  c.i = i;
+  io.ctx = &c;
+  io.sense = js_vm_sense;
+  io.act = js_vm_act;
+  io.rnd = js_vm_rnd;
+  ji_copy(was, p->mem, (int)sizeof was);
+  r = jv_run(j->spool + p->soff, p->slen, ev, arg, p->mem, &io, 0);
+  for (k = 0; k < JI_MEM; k++) if (was[k] != p->mem[k]) p->mem_dirty = 1;
+  return r;
+}
+
+/* The app, saving: if item i's memory changed, copy it into `it` (the same
+ * item's record, read from the card) and say 1 -- the app writes it back.
+ * This is how the 8 slots persist. */
+static JS_OPT int js_mem_sync(Jar *j, int i, JItem *it) {
+  JPlaced *p = &j->placed[i];
+  if (!p->mem_dirty || p->id != it->id) return 0;
+  ji_copy(it->mem, p->mem, (int)sizeof it->mem);
+  p->mem_dirty = 0;
+  return 1;
+}
+
+/* An event reaches item i: its script, if it has one, else each habit it
+ * matches does its action. Returns how many fired. */
 static JS_OPT int js_item_event(Jar *j, int i, int ev, int arg) {
   JPlaced *p = &j->placed[i];
   int h, n = 0;
+  /* ---- PHASE 2 SCRIPT HOOK -------------------------------------------------
+   * The script has this event first. It returned: the event is handled and
+   * the recipe is skipped. No handler: the recipe takes it. Stopped (the
+   * step limit, or a fault): a ? bubble, and the recipe takes this event --
+   * the script is tried again at the next one. */
+  if (p->slen) {
+    int r = js_script(j, i, ev, arg);
+    if (r == JV_DONE) return 1;
+    if (r == JV_LIMIT || r == JV_FAULT) { p->say = JI_MAX_BUB; p->say_t = JS_SAY_STEPS; }
+  }
+  /* ---- end of the hook ---------------------------------------------------- */
   for (h = 0; h < p->nhab; h++) {
     const JHabit *hb = &p->hab[h];
     if (hb->event != ev) continue;

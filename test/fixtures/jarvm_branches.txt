@@ -1,0 +1,97 @@
+# branches: written by tools/make_jarvm_fixtures.py -- do not edit
+seed 99
+sense 0 40
+sense 1 0
+sense 2 2
+sense 3 3
+sense 4 4
+sense 5 2
+sense 6 0
+sense 7 0
+mem 0 0 0 0 0 0 0 0
+ev 0 0
+ev 0 1
+ev 0 2
+ev 0 3
+ev 0 4
+ev 0 5
+ev 0 6
+ev 0 7
+ev 0 8
+ev 0 9
+ev 2 2
+ev 2 1
+ev 2 3
+ev 2 0
+ev 6 4
+ev 6 1
+ev 4 1
+ev 4 2
+ev 7 2
+ev 7 1
+ev 1 0
+ev 5 0
+--
+check 0
+act 9 2
+ret 0 2
+mem 0 0 0 0 0 0 0 0
+act 1 0
+ret 0 11
+mem 1 0 0 0 0 0 0 0
+act 1 0
+ret 0 11
+mem 2 0 0 0 0 0 0 0
+act 1 0
+ret 0 11
+mem 3 0 0 0 0 0 0 0
+act 9 2
+ret 0 2
+mem 3 0 0 0 0 0 0 0
+act 10 1
+ret 0 13
+mem 10 0 0 0 0 0 0 0
+act 7 0
+ret 0 12
+mem 0 0 0 0 0 0 0 0
+act 1 0
+ret 0 11
+mem 1 0 0 0 0 0 0 0
+act 9 2
+ret 0 2
+mem 1 0 0 0 0 0 0 0
+act 1 0
+ret 0 11
+mem 2 0 0 0 0 0 0 0
+act 10 0
+ret 0 2
+mem 2 0 0 0 0 0 0 0
+act 9 1
+ret 0 11
+mem 2 0 0 0 0 0 0 0
+act 9 1
+ret 0 11
+mem 2 0 0 0 0 0 0 0
+act 9 1
+ret 0 11
+mem 2 0 0 0 0 0 0 0
+act 8 1
+ret 0 2
+mem 2 0 0 0 0 0 0 0
+act 8 0
+ret 0 2
+mem 2 0 0 0 0 0 0 0
+ret 0 5
+mem 2 0 0 0 0 0 0 0
+act 10 2
+ret 0 2
+mem 2 0 0 0 0 0 0 0
+act 2 3
+ret 0 2
+mem 2 0 0 0 0 0 0 0
+ret 1 0
+mem 2 0 0 0 0 0 0 0
+ret 1 0
+mem 2 0 0 0 0 0 0 0
+ret 1 0
+mem 2 0 0 0 0 0 0 0

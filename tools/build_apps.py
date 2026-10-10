@@ -198,6 +198,11 @@ OVER_BUDGET = {
     # to 16 bits; the code is the rest -- a parser, an evaluator, an editor
     # and the game, 21 KB of it, in its own block of executable RAM.
     "forklift": "code+data only: 21 KB of code (Forklang, its editor and the game)",
+    # Was 44.5 KB of 44; the script machine (apps/jarvm.h, phase 2) added
+    # 1.8 KB of code and 1.3 KB of data (a 768-byte script pool). Its data
+    # is well under 28 KB. Take it off when the app is split (a companion
+    # app for the menus) and is back under.
+    "jar": "code+data only: the phase 2 script machine, until the app is split",
 }
 
 

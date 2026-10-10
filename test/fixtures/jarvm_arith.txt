@@ -1,0 +1,25 @@
+# arith: written by tools/make_jarvm_fixtures.py -- do not edit
+seed 7
+sense 0 120
+sense 1 1
+sense 2 3
+sense 3 14
+sense 4 4
+sense 5 0
+sense 6 0
+sense 7 0
+mem 5 0 0 0 32700 0 0 0
+ev 1 0
+ev 5 0
+ev 1 0
+ev 5 0
+--
+check 0
+ret 0 23
+mem -25531 -3 -1 0 0 -14468 -32768 0
+ret 0 47
+mem 0 0 -30 7 300 -14588 -32768 0
+ret 0 23
+mem -25536 -3 -1 0 0 -14458 -32768 0
+ret 0 47
+mem 0 0 -30 7 300 -14578 -32768 0

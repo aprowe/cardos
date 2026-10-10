@@ -1,0 +1,9 @@
+# off_end: written by tools/make_jarvm_fixtures.py -- do not edit
+seed 1
+mem 0 0 0 0 0 0 0 0
+ev 1 0
+--
+check 0
+act 1 0
+ret -2 1
+mem 0 0 0 0 0 0 0 0
