@@ -869,7 +869,7 @@ static int shop_key(void *st, uint8_t k) {
   (void)st;
   U.dirty = 1;
   if (U.msg[0]) U.msg[0] = 0;
-  if ((k == 't' || k == 'T') && (G.view == V_STOCK || G.view == V_STUFF)) {
+  if ((k == 't' || k == 'T') && !G.pay && (G.view == V_STOCK || G.view == V_STUFF)) {
     save();                                       /* Tibbs is Jar Post's */
     if (ui_run("Jar Post", "talk") != 0) say("No Jar Post app");
     return 1;
