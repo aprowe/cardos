@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 from http.server import ThreadingHTTPServer
-from server import accounts, app, ask, jar, kv, people, sign
+from server import accounts, app, ask, jar, kv, people, shopkeep, sign
 from server import chat as chatmod
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -105,10 +105,20 @@ class Stub:
         self.calls = []
         self.lock = threading.Lock()
         self.serial = 0
+        self.beats, self.talks = [], []
 
     def __call__(self, chat, prompt, schema, **kw):
         with self.lock:
-            n = schema["properties"]["items"]["maxItems"]
+            props = schema["properties"]
+            if "briefs" in props:                       # Tibbs's beat
+                self.beats.append(prompt)
+                n = props["briefs"]["maxItems"]
+                return {"line": "A crate came in.",
+                        "briefs": ["find %d of the day" % (i + 1) for i in range(n)]}
+            if "reply" in props:                        # Tibbs talking
+                self.talks.append(prompt)
+                return {"reply": "Hm, I know a fellow."}
+            n = props["items"]["maxItems"]
             self.calls.append((n, prompt, kw))
             if self.batches:
                 b = self.batches.pop(0)
@@ -389,26 +399,10 @@ class Checks(unittest.TestCase):
         self.assertEqual(req["tz"], "PST8PDT,M3.2.0,M11.1.0")
         self.assertEqual(req["hint"], "")
 
-    def test_a_hint_is_a_nudge_to_a_dealer(self):
-        req = jar.parse_request('hint could use more "red" things, ' + "x" * 80 + "\n")
-        self.assertTrue(req["hint"].startswith("could use more 'red' things"))
-        self.assertLessEqual(len(req["hint"]), jar.HINT_LEN)
-        self.assertEqual(jar.parse_request("hint shit everywhere\n")["hint"], "")
-        day = {"date": "d", "season": "s", "moon": "m"}
-        p = jar.prompt_for(8, ["cosy"], day, [], hint="more industrial stuff")
-        self.assertIn('"more industrial stuff"', p)
-        self.assertIn("not a wish-granter", p)
-        self.assertNotIn("shopkeeper", jar.prompt_for(8, ["cosy"], day, []))
-
-    def test_request_tags_facts(self):
-        req = jar.parse_request("garden mushroom=4,flower=2,weed=9,cactus=x\n"
-                                "shelf spooky,Bad Tag,cosy\n")
-        facts = {"season": "autumn", "weather": "rainy", "full_moon": True, "moon": "full moon"}
-        tags = jar.day_tags(req, facts, "x")
-        self.assertEqual(tags[0], "spooky")                    # 4 from mushrooms, 1 shelf
-        self.assertEqual(set(tags[1:3]), {"odd", "glowing"})
-        self.assertEqual(tags[3:], ["autumn", "rainy", "full-moon"])
-        self.assertEqual(jar.record_tags(tags), ",".join(tags[:3]))
+    def test_the_jar_is_in_the_request(self):
+        req = jar.parse_request("jar Moon Moth,Kettle Imp,%s\n" % ("x" * 30))
+        self.assertEqual(req["jar"][:2], ["Moon Moth", "Kettle Imp"])
+        self.assertLessEqual(len(req["jar"][2]), jar.NAME_LEN)
         self.assertLessEqual(len(jar.record_tags(["a" * 30])), 24)
 
     def test_the_day(self):
@@ -442,7 +436,7 @@ class Generate(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         self.req = jar.parse_request("garden fern=3\nshelf cosy\nowned Moth\ntz CET-1CEST\n")
-        self.date = datetime.date(2026, 10, 9)                 # no full moon, no new season
+        self.date = datetime.date(2026, 10, 9)
 
     def tearDown(self):
         kv.close_all()
@@ -462,22 +456,23 @@ class Generate(unittest.TestCase):
         p = mock.patch("server.ask.ask_shape", stub)
         p.start()
         self.addCleanup(p.stop)
-        tags, recs = jar.generate(None, "alex", self.req, self.date, now=1791590400,
-                                  on_item=lambda k, rec: got.append((k, rec)))
-        self.assertEqual(len(recs), 8)
+        briefs = ["a brass beetle that ticks", "a felt cloud"]
+        recs = jar.generate(None, "alex", self.req, self.date, now=1791590400,
+                            on_item=lambda k, rec: got.append((k, rec)), want=4, briefs=briefs)
+        self.assertEqual(len(recs), 4)
         self.assertEqual(got, list(enumerate(recs)))           # each as it was made
-        self.assertEqual(len(stub.calls), 8)                    # one item a call
-        self.assertEqual([c[0] for c in stub.calls], [1] * 8)
+        self.assertEqual([c[0] for c in stub.calls], [1] * 4)   # one item a call
         n, prompt, kw = stub.calls[0]
+        self.assertIn('"a brass beetle that ticks"', prompt)    # Tibbs's brief
+        self.assertIn('"a felt cloud"', stub.calls[1][1])
+        self.assertIn("a find suggested by", stub.calls[2][1])  # no brief: loose sparks
         self.assertIn("Make it a critter", prompt)              # its kind, given
         self.assertIn("Thing 1", stub.calls[1][1])              # what is already made
-        self.assertIn("rainy", prompt)
-        self.assertIn("cosy", prompt)
         self.assertIn("Moth", prompt)                          # owned: not again
+        for word in ("tags", "autumn", "rainy", "fern", "shelf"):
+            self.assertNotIn(word, prompt)                      # nothing steers it but the brief
         self.assertEqual(kw["user"], "alex")
-        self.assertEqual(tags[0], "cosy")                      # 3 ferns and the shelf
-        self.assertEqual(set(tags[1:3]), {"soft", "sleepy"})
-        self.assertEqual(tags[3:], ["autumn", "rainy"])
+        self.assertIn("It will sell for", prompt)              # a price, chosen first
         ids = set()
         st = kv.store()
         for rec in recs:
@@ -485,20 +480,18 @@ class Generate(unittest.TestCase):
             self.assertTrue(jar.verified(rec))
             self.assertEqual(it["maker"], "Jar Works")
             self.assertEqual(it["made"], 1791590400)
-            self.assertEqual(it["tags"], jar.record_tags(tags))
             self.assertGreater(it["id"], jar.ID_BASE)
             self.assertEqual(st.get(jar.NS, "own/%d" % it["id"]), b"alex")
             ids.add(it["id"])
-        self.assertEqual(len(ids), 8)
-        kinds = [jar.decode(r)["kind"] for r in recs]
+        self.assertEqual(len(ids), 4)
         e = jar.enums()["kinds"]
-        self.assertEqual(kinds, [e[k] for k in jar.KIND_PLAN])
+        self.assertEqual([jar.decode(r)["kind"] for r in recs], [e[k] for k in jar.KIND_PLAN[:4]])
 
     def test_failures_are_asked_for_again(self):
         flat = [r.replace("3", "2").replace("7", "2").replace("1", "2") for r in sprite()]
         stub = Stub([raw_item("Good 0")], [raw_item("Flat", frames=[flat])],
                     [raw_item("Damn Shit")])
-        tags, recs = self.run_with(stub)
+        recs = self.run_with(stub)
         self.assertEqual(len(recs), 8)
         self.assertEqual(len(stub.calls), 10)                    # the two again
         names = [jar.decode(r)["name"] for r in recs]
@@ -509,13 +502,13 @@ class Generate(unittest.TestCase):
     def test_bounded_and_fewer_is_fine(self):
         bad = [raw_item("Bad", frames=[["0" * 16] * 16])]
         stub = Stub([raw_item("One")], bad, bad, ask.Invalid("did not fit"), bad)
-        tags, recs = self.run_with(stub)
+        recs = self.run_with(stub)
         self.assertEqual(len(recs), 1)
         self.assertEqual(len(stub.calls), 1 + jar.MAX_FAILS)
 
     def test_out_of_asks_keeps_what_came(self):
         stub = Stub([raw_item("One")], [raw_item("Two")], ask.RateLimited("the day's limit"))
-        tags, recs = self.run_with(stub)
+        recs = self.run_with(stub)
         self.assertEqual(len(recs), 2)
 
     def test_nothing_at_all_is_an_error(self):
@@ -523,12 +516,24 @@ class Generate(unittest.TestCase):
         with self.assertRaises(ask.Invalid):
             self.run_with(stub)
 
-    def test_a_hint_goes_to_a_few_items(self):
-        self.req["hint"] = "more red things"
+    def test_prices_are_chosen_first_and_dear_ones_get_more_care(self):
+        rng = random.Random(3)
+        seen = {}
+        for _ in range(2000):
+            name, price, effort, words = jar.pick_tier(rng)
+            seen.setdefault(name, []).append(price)
+            self.assertEqual(price % 5, 0)
+        self.assertEqual(set(seen), {t[0] for t in jar.TIERS})
+        self.assertGreater(len(seen["common"]), len(seen["rare"]) * 2)
+        self.assertGreater(min(seen["treasure"]), max(seen["common"]))
         stub = Stub()
-        self.run_with(stub)
-        hinted = [k for k, c in enumerate(stub.calls) if "more red things" in c[1]]
-        self.assertEqual(hinted, list(jar.HINTED))
+        recs = self.run_with(stub)
+        for (n, prompt, kw), rec in zip(stub.calls, recs):
+            price = jar.decode(rec)["price"]
+            tier = [t for t in jar.TIERS if t[2][0] <= price <= t[2][1]][0]
+            self.assertIn("sell for %d coins" % price, prompt)
+            self.assertEqual(kw["effort"], tier[3])
+            self.assertTrue(jar.verified(rec))                  # the price is signed too
 
     def test_seed_fills_the_pool_for_nobody(self):
         stub = Stub()
@@ -548,14 +553,91 @@ class Generate(unittest.TestCase):
         self.assertEqual(len(jar.pool_ids(st)), 4)
         self.assertEqual(st.get(jar.NS, "own/%d" % got[0]), b"kit")
 
-    def test_a_full_moon_adds_one(self):
-        self.date = datetime.date(2026, 10, 26)
+
+# ---- the shopkeeper ------------------------------------------------------------------------
+
+class Shopkeeper(unittest.TestCase):
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        os.environ["CARDOS_STATE"] = self.dir
+
+    def tearDown(self):
+        kv.close_all()
+        os.environ.pop("CARDOS_STATE", None)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_the_dice_are_rolled_by_the_code(self):
+        # Two beats on the same journal differ in their event and sparks: the
+        # variety does not depend on the model choosing to vary.
+        j = shopkeep.journal("alex")
+        a = shopkeep.beat_prompt(j, 2, random.Random(1), False)
+        b = shopkeep.beat_prompt(j, 2, random.Random(2), False)
+        self.assertNotEqual(a, b)
+        self.assertIn("find 1 sparks:", a)
+        self.assertIn("find 2 sparks:", a)
+        self.assertIn("Today, by chance:", a)
+
+    def test_purchases_are_history_not_a_brief(self):
+        shopkeep.note_bought("alex", [("Fluffpup", "critter", 60), ("Bunbun", "critter", 45)])
+        shopkeep.note_jar("alex", ["Moon Moth"])
+        p = shopkeep.beat_prompt(shopkeep.journal("alex"), 2, random.Random(1), False)
+        self.assertIn("history, nothing more", p)
+        self.assertIn("Fluffpup", p)
+        self.assertIn("Do not make them like what the player bought", p)
+        self.assertIn("Moon Moth", p)                            # he knows the jar
+
+    def test_whether_a_find_answers_the_player_is_a_coin_the_code_tosses(self):
+        j = shopkeep.journal("alex")
+        j["chat"].append({"who": "me", "text": "got any industrial scrap?"})
+        yes = shopkeep.beat_prompt(j, 2, random.Random(1), True)
+        no = shopkeep.beat_prompt(j, 2, random.Random(1), False)
+        self.assertIn("Find 1 is his loose answer", yes)
+        self.assertNotIn("Find 1 is his loose answer", no)
+        self.assertIn("None of today's finds answers", no)
+        self.assertIn("industrial scrap", no)                    # he heard it all the same
+        quiet = shopkeep.beat_prompt(shopkeep.journal("kit"), 2, random.Random(1), True)
+        self.assertNotIn("answer", quiet.split("Recent finds")[0].split("ASCII")[0][-400:])
+
+    def test_a_beat_is_kept_and_recent_finds_are_not_repeated(self):
         stub = Stub()
-        tags, recs = self.run_with(stub)
-        self.assertEqual(len(recs), 9)
-        self.assertIn("special", stub.calls[8][1])                # the last one
-        self.assertNotIn("special", stub.calls[0][1])
-        self.assertIn("full-moon", tags)
+        with mock.patch("server.ask.ask_shape", stub):
+            line, briefs = shopkeep.day_beat(None, "alex", 2)
+            self.assertEqual((line, briefs), ("A crate came in.", ["find 1 of the day",
+                                                                  "find 2 of the day"]))
+            shopkeep.day_beat(None, "alex", 2)
+        self.assertIn("A crate came in.", stub.beats[1])         # the story carries on
+        self.assertIn("do not repeat their themes: find 1 of the day", stub.beats[1])
+        self.assertEqual(stub.beats[0].count("find 1 sparks"), 1)
+
+    def test_no_claude_is_a_note_on_the_door(self):
+        with mock.patch("server.ask.ask_shape", side_effect=ask.Invalid("x")):
+            line, briefs = shopkeep.day_beat(None, "alex", 2)
+        self.assertIn("note on the door", line)
+        self.assertEqual(len(briefs), 2)
+        self.assertEqual(shopkeep.journal("alex")["beats"], [])  # not part of his story
+
+    def test_a_brief_a_little_long_is_trimmed_not_refused(self):
+        long = "x" * (shopkeep.BRIEF_LEN + 20)
+        with mock.patch("server.ask.ask_shape", return_value={"line": "Hm.", "briefs": [long]}):
+            line, briefs = shopkeep.day_beat(None, "alex", 1)
+        self.assertEqual(len(briefs[0]), shopkeep.BRIEF_LEN)
+        self.assertEqual(line, "Hm.")
+
+    def test_talking(self):
+        stub = Stub()
+        with mock.patch("server.ask.ask_shape", stub):
+            self.assertTrue(shopkeep.say(None, "alex", "got any red things?"))
+            for _ in range(200):
+                if shopkeep.talk_state("alex")["state"] != "pending":
+                    break
+                time.sleep(0.01)
+        text = shopkeep.talk_text("alex")
+        self.assertEqual(text.splitlines()[0], "ok")
+        self.assertIn("me\tgot any red things?", text)
+        self.assertIn("him\tHm, I know a fellow.", text)
+        self.assertIn("got any red things?", stub.talks[0])
+        self.assertIn("makes no promise", stub.talks[0])
 
 
 # ---- the routes, with accounts -----------------------------------------------------------
@@ -648,10 +730,12 @@ class Routes(unittest.TestCase):
         today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
         lines = body.splitlines()
         self.assertEqual(lines[0], "ok " + today)
-        self.assertTrue(lines[1].startswith("tags odd, "), lines[1])
+        self.assertEqual(lines[1], "tags ")                     # no tags any more
         n = int(lines[2].split()[1])
-        self.assertIn(n, (4, 5))                                # an empty pool: all new
+        self.assertEqual(n, 4)                                  # an empty pool: all new
         self.assertTrue(lines[3].startswith("batch "), lines[3])
+        self.assertEqual(lines[4], "say A crate came in.")      # Tibbs's line of the day
+        self.assertTrue(all(l.startswith("seed ") for l in lines[5:]), lines)
         # once made, a POST says so, with the whole answer GET gives ("ok
         # DATE" alone emptied the shop), and makes nothing more
         self.assertEqual(self.req("POST", "/jar/day", self.alex, ""), (200, body))

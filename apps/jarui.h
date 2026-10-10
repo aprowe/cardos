@@ -62,7 +62,7 @@ static uint16_t PB[32 * 8];             /* a picture, eight rows at a time */
 typedef struct {
   uint32_t id;
   uint16_t price, pal[8];
-  uint8_t kind, move, flags, in_jar, shelved, sold, held, ok;
+  uint8_t kind, move, flags, in_jar, shelved, sold, held, seed, ok;
   uint8_t frame[JI_FRAME_BYTES];
 } Tile;
 
@@ -335,19 +335,6 @@ static JU_OPT int card_key(int k) {
   if (k == CAPP_KEY_ENTER) {
     J.decor = U.card.id;                          /* the jar places it, then decorates */
     to_jar();
-    return 1;
-  }
-  if (k == 'h' || k == 'H') {
-    int at = js_on_shelf(&J, U.card.id), i;
-    if (at >= 0) { J.shelf[at] = 0; say("Off the shelf"); }
-    else {
-      for (i = 0; i < JS_SHELF && J.shelf[i]; i++) {}
-      if (i == JS_SHELF) { say("The shelf is full: 4"); return 1; }
-      J.shelf[i] = U.card.id;
-      say("On the shelf");
-    }
-    save();
-    U.card.shelved = (uint8_t)(at < 0);
     return 1;
   }
   return 0;

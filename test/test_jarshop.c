@@ -131,7 +131,7 @@ void test_jarshop_buys_from_the_hand_made_stock(void) {
   CHECK(strcmp(RAN, "Jar Factory") == 0);
 }
 
-void test_jarshop_my_stuff_card_shelf_and_place(void) {
+void test_jarshop_my_stuff_card_and_place(void) {
   card(0);
   launch("stuff");
   CHECK_EQ(G.view, V_STUFF);
@@ -141,11 +141,6 @@ void test_jarshop_my_stuff_card_shelf_and_place(void) {
   key(CAPP_KEY_RIGHT);
   key(CAPP_KEY_ENTER);
   CHECK_EQ(G.view, V_CARD);
-  key('h');                                      /* on the shelf */
-  CHECK_EQ(J.shelf[0], U.card.id);
-  CHECK(strstr(saved(), "shelf 2 0 0 0") != 0);
-  key('h');                                      /* and off */
-  CHECK_EQ(J.shelf[0], 0);
   /* Enter: into the jar -- the jar does the placing */
   key(CAPP_KEY_ENTER);
   CHECK(strcmp(RAN, "Jar Factory") == 0);
@@ -186,6 +181,7 @@ void test_jarshop_upgrades(void) {
 void test_jarshop_garden_plants_and_asks_before_pulling_up(void) {
   card(200);
   launch("garden");
+  CHECK_EQ(SEEDS[JPL_CACTUS], 1);         /* a card with no seeds file starts with one of each */
   CHECK_EQ(G.view, V_GARDEN);
   shot("s06_garden");
   key(CAPP_KEY_ENTER);                    /* bed 1: a grown berry bush */
@@ -205,7 +201,9 @@ void test_jarshop_garden_plants_and_asks_before_pulling_up(void) {
   key('y');
   CHECK_EQ(J.bed[0].type, JPL_CACTUS);
   CHECK(J.bed[0].young);
-  CHECK_EQ(J.coins, 160);
+  CHECK_EQ(J.coins, 200);                 /* seeds, not coins */
+  CHECK_EQ(SEEDS[JPL_CACTUS], 0);
+  CHECK(strcmp(fakefs_get("/var/jar/seeds.txt"), "1 1 1 1 0 ") == 0);
   CHECK(strstr(saved(), "plant 4 1800000000 ") != 0);
   CHECK_EQ(G.view, V_GARDEN);
   /* a young bed is replanted without asking */
@@ -214,29 +212,18 @@ void test_jarshop_garden_plants_and_asks_before_pulling_up(void) {
   key(CAPP_KEY_ENTER);
   CHECK(!G.asking);
   CHECK_EQ(J.bed[0].type, JPL_FLOWER);
+  /* no cactus seeds left: nothing planted */
+  key(CAPP_KEY_ENTER);
+  key(CAPP_KEY_DOWN);
+  key(CAPP_KEY_ENTER);
+  CHECK_EQ(J.bed[0].type, JPL_FLOWER);
+  CHECK(strstr(U.msg, "No seeds") != 0);
+  key(CAPP_KEY_ESC);
   /* beds not bought yet */
   key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT);
   key(CAPP_KEY_ENTER);
   CHECK_EQ(G.view, V_GARDEN);
   shot("s09_garden_planted");
-}
-
-void test_jarshop_shelf(void) {
-  card(0);
-  launch("shelf");
-  CHECK_EQ(G.view, V_SHELF);
-  key(CAPP_KEY_RIGHT);
-  key(CAPP_KEY_ENTER);                    /* fill slot 2 from My Stuff */
-  CHECK_EQ(G.pick, P_SHELF);
-  key(CAPP_KEY_RIGHT);
-  key(CAPP_KEY_ENTER);
-  CHECK_EQ(G.view, V_SHELF);
-  CHECK_EQ(J.shelf[1], 2);
-  CHECK(G.shelf[1].ok);
-  CHECK(G.shelf_tags[0] != 0);
-  shot("s10_shelf");
-  key('x');
-  CHECK_EQ(J.shelf[1], 0);
 }
 
 /* ---- the day's stock -------------------------------------------------------- */
@@ -271,12 +258,6 @@ void test_jarshop_fetches_the_days_stock_and_checks_each_record(void) {
   jf_handler = day_server;
   DAY_POLLS = 0;
   FORGE = 1;
-  /* a garden with something growing, and a shelf */
-  launch("shelf");
-  J.shelf[0] = 2;
-  js_plant(&J, 1, JPL_SHROOM, T0 - 4 * 86400);
-  js_settle_beds(&J, T0);
-  save();
   launch("shop");
   CHECK_EQ(jf_count("/jar/pubkey"), 1);       /* the key first, pinned */
   tick(10);
@@ -284,8 +265,9 @@ void test_jarshop_fetches_the_days_stock_and_checks_each_record(void) {
   CHECK_EQ(jf_count("/jar/day"), 1);
   r = jf_last("/jar/day");
   CHECK(strcmp(r->method, "POST") == 0);
-  CHECK(strstr(r->body, "garden mushroom=1,berry=1,fern=0,flower=0,cactus=0\n") != 0);
-  CHECK(strstr(r->body, "\nshelf ") != 0);
+  CHECK(strstr(r->body, "jar Moss Bench") == r->body);   /* what is in the jar: Tibbs knows */
+  CHECK(strstr(r->body, "garden") == 0);                 /* plants and the shelf steer nothing */
+  CHECK(strstr(r->body, "shelf") == 0);
   CHECK(strstr(r->body, "\nowned ") != 0 && strstr(r->body, "Dandelion") != 0);
   CHECK(strstr(r->body, "\ntz PST8PDT,M3.2.0,M11.1.0\n") != 0);
   shot("s11_arriving");
@@ -527,36 +509,61 @@ void test_jarshop_a_refused_item_is_said_and_not_fetched_again(void) {
   CHECK(strstr(U.msg, "1 failed") != 0);
 }
 
-void test_jarshop_a_word_to_the_shopkeeper(void) {
-  const JfReq *r;
-  const char *s;
-  card(500);
-  jf_handler = day_server;
+/* Tibbs's line of the day, a seed packet, and prices the server chose. */
+static int tibbs_server(const char *m, const char *path, const char *body, char *out, int cap) {
+  if (!strcmp(path, "/jar/day") && strcmp(m, "POST"))
+    return snprintf(out, (size_t)cap, "ok 2027-01-15\ntags \nitems 3\nbatch 9\n"
+                    "say Power went out, so I sorted the back shelf by candle.\nseed fern 25\n");
+  if (!strncmp(path, "/jar/item?i=", 12)) {
+    JItem it;
+    int k = atoi(path + 12), n;
+    if (k < 0 || k > 2) return -404;
+    jf_item(&it, 9000 + (uint32_t)k, k == 0 ? "Padlock Bug" : "Cork Owl", "");
+    it.price5 = (uint8_t)(k == 0 ? 90 : 0);                /* 450 coins, or none given */
+    n = jf_signed_b64(&it, out, cap - 1, 1);
+    out[n++] = '\n';
+    return n;
+  }
   DAY_POLLS = 5;
+  return day_server(m, path, body, out, cap);
+}
+
+void test_jarshop_tibbs_and_his_seed_packets(void) {
+  card(500);
+  jf_handler = tibbs_server;
   FORGE = 0;
   launch("shop");
   tick(3500);
-  r = jf_last("/jar/day");
-  CHECK(r && strstr(r->body, "hint ") == 0);              /* none yet */
-  key('e');
-  for (s = "more red things"; *s; s++) key(*s);
-  shot("s14_hint");
+  CHECK_EQ(S.n, 3);
+  CHECK(strcmp(SAY, "Power went out, so I sorted the back shelf by candle.") == 0);
+  CHECK(fakefs_exists("/var/jar/say.txt"));
+  CHECK_EQ(S.price[0], 450);                  /* the server's price */
+  CHECK(S.price[1] >= 45 && S.price[1] <= 200); /* none given: worked out as before */
+  CHECK_EQ(S.seed, JPL_FERN + 1);
+  CHECK_EQ(S.seed_price, 25);
+  CHECK(!G.tile[1].seed && !G.tile[2].seed && G.tile[3].seed);   /* only the last is seeds */
+  shot("s14_tibbs");
+  /* the seed packet is the last tile */
+  key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT);
+  CHECK(U.card.seed);
+  CHECK(strcmp(U.name, "fern seeds") == 0);
+  shot("s15_seeds");
+  key(' ');                                   /* seeds are not held */
+  CHECK_EQ(S.held, 0);
   key(CAPP_KEY_ENTER);
-  CHECK(fakefs_exists("/var/jar/hint.txt") && strcmp(fakefs_get("/var/jar/hint.txt"), "more red things") == 0);
-  key('r');                                   /* the next ask carries it */
-  r = jf_last("/jar/day");
-  CHECK(r && strstr(r->body, "\nhint more red things\n") != 0);
-  /* kept: opened again, it is still there; Esc while editing changes nothing */
+  CHECK_EQ((int)J.coins, 475);
+  CHECK_EQ(SEEDS[JPL_FERN], 2);
+  CHECK(S.seed_sold);
+  CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "seed 2 25 1") != 0);
+  key(CAPP_KEY_ENTER);                        /* sold: once */
+  CHECK_EQ((int)J.coins, 475);
+  /* opened again: his line and the sold packet are kept */
   launch("shop");
-  key('e');
-  key(CAPP_KEY_BACK);
-  key(CAPP_KEY_ESC);
-  CHECK(fakefs_exists("/var/jar/hint.txt") && strcmp(fakefs_get("/var/jar/hint.txt"), "more red things") == 0);
-  /* emptied, it is gone */
-  key('e');
-  { int i; for (i = 0; i < 40; i++) key(CAPP_KEY_BACK); }
-  key(CAPP_KEY_ENTER);
-  CHECK(!fakefs_exists("/var/jar/hint.txt"));
+  CHECK(strcmp(SAY, "Power went out, so I sorted the back shelf by candle.") == 0);
+  CHECK(S.seed_sold);
+  /* t: talk to him, in Jar Post */
+  key('t');
+  CHECK(strcmp(RAN, "Jar Post") == 0 && strcmp(RAN_ARGS, "talk") == 0);
 }
 
 void test_jarshop_g_buys_and_goes_to_send_a_gift(void) {

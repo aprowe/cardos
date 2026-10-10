@@ -33,9 +33,23 @@
 
 #include "apps/jarui.h"
 
-enum { V_FRIENDS = 0, V_GIFT, V_MAIL, V_CARD };
-enum { IN_NONE = 0, IN_CODE, IN_NAME, IN_NOTE };
-enum { N_ME = N_APP, N_FRIEND, N_NAME, N_GIFT, N_PEEK, N_ACK, N_THANKS };
+enum { V_FRIENDS = 0, V_GIFT, V_MAIL, V_CARD, V_PICK, V_TALK };
+#define PK_MAX 64
+enum { IN_NONE = 0, IN_CODE, IN_NAME, IN_NOTE, IN_TALK };
+enum { N_ME = N_APP, N_FRIEND, N_NAME, N_GIFT, N_PEEK, N_ACK, N_THANKS, N_SAY, N_HEAR };
+
+/* Talking to Tibbs, the shopkeeper (server/shopkeep.py): the conversation,
+ * wrapped into rows when it arrives (never in paint). */
+#define TK_ROWS 28
+#define TK_COLS 38
+#define TK_SAY  120
+static char TK[TK_ROWS][TK_COLS + 1];
+static int tk_parse(void);
+static void start_input(int mode);
+static int key_input(int k, int max);
+static uint8_t TK_WHO[TK_ROWS];                           /* 0 him, 1 you, 2 his day */
+static int TK_N, TK_PENDING;
+static uint32_t TK_AGAIN;
 
 #define F_MAX 16
 
@@ -45,7 +59,7 @@ static JMail M[JST_MAIL_MAX];
 
 static struct {
   int view, in, inlen;
-  char input[JST_NOTE + 1];
+  char input[TK_SAY + 1];
   char note[JST_NOTE + 1];
   /* friends, from /jar/me */
   char code[16], me[JI_WHO + 1];
@@ -57,6 +71,10 @@ static struct {
   char gift_name[JI_NAME + 1];
   /* mail */
   int mail_n, mail_sel, card_mail, tried_mail;
+  /* sending from the friends list: who, then which of your things */
+  int fsel, npk, psel, ptop;
+  uint32_t pk[PK_MAX];
+  char pkname[PK_MAX][JI_NAME + 1];
 } G;
 
 static int unopened(void) {
@@ -106,6 +124,13 @@ static Friend *mutual_at(int k) {
 }
 
 static const char *who(const Friend *f) { return f ? (f->disp[0] ? f->disp : f->name) : "a friend"; }
+
+/* Friend i's place among the mutual ones (what the gift is addressed by). */
+static int mutual_index(int i) {
+  int k, n = 0;
+  for (k = 0; k < i && k < G.nfr; k++) n += G.fr[k].mutual;
+  return n;
+}
 
 /* ---- gifts ---------------------------------------------------------------------------- */
 
@@ -276,6 +301,19 @@ static void net_reply(int n) {
   case N_PUB:
     if (pub_reply(n)) start_mail();
     return;
+  case N_SAY:                                       /* "pending": ask again shortly */
+    net_status("");
+    if (n < 0) { failed("Tibbs", n); TK_PENDING = 0; return; }
+    if (refused("Tibbs")) { TK_PENDING = 0; return; }
+    if (str_starts(NET, "busy")) say("He is still talking");
+    TK_AGAIN = api->ticks_ms() + 3000;
+    return;
+  case N_HEAR:
+    net_status("");
+    if (n < 0) { failed("Tibbs", n); TK_PENDING = 0; return; }
+    TK_PENDING = tk_parse();
+    if (TK_PENDING) TK_AGAIN = api->ticks_ms() + 3000;
+    return;
   case N_ME:
     net_status("");
     if (n < 0) { failed("Friends", n); return; }
@@ -357,14 +395,143 @@ static void paint_friends(void) {
                                    : "Not heard from the server yet.", 37, 4, C_DIM, C_BG);
   for (i = 0; i < G.nfr && i < 9; i++) {
     const Friend *f = &G.fr[i];
-    int y = BAR + 27 + i * 9;
-    textn(8, y, who(f), 12, C_TEXT, C_BG);
-    text(86, y, f->mutual ? "friends" : "waiting", f->mutual ? C_TRAIT : C_DIM, C_BG);
+    int y = BAR + 27 + i * 9, on = i == G.fsel;
+    uint16_t bg = on ? C_PANEL : C_BG;
+    if (on) box(4, y - 1, SW - 8, 9, C_PANEL);
+    textn(8, y, who(f), 12, on ? C_GOLD : C_TEXT, bg);
+    text(86, y, f->mutual ? "friends" : "waiting", f->mutual ? C_TRAIT : C_DIM, bg);
     ago(f->seen, s, sizeof s);
-    text(SW - 6 - slen(s) * 6, y, s, C_DIM, C_BG);
+    text(SW - 6 - slen(s) * 6, y, s, C_DIM, bg);
   }
   if (G.in == IN_CODE) input_box("Their friend code:", G.input);
   else if (G.in == IN_NAME) input_box("Your name, up to 8:", G.input);
+}
+
+/* Which of your things to send: the shop's, signed (hand-made ones stay home). */
+static void paint_pick(void) {
+  int i;
+  char b[48];
+  box(0, BAR, SW, BODY, C_BG);
+  api->fmt(b, sizeof b, "Send to %s:", who(&G.fr[G.fsel]));
+  text(6, BAR + 3, b, C_DIM, C_BG);
+  for (i = 0; i < 9 && G.ptop + i < G.npk; i++) {
+    int k = G.ptop + i, y = BAR + 14 + i * 10, on = k == G.psel;
+    if (on) box(4, y - 1, 132, 10, C_PANEL);
+    text(8, y, G.pkname[k], on ? C_GOLD : C_TEXT, on ? C_PANEL : C_BG);
+  }
+  box(140, BAR + 14, 96, 92, C_PANEL);
+  if (U.card.ok) {
+    pic(U.card.frame, U.card.pal, 1, 16, 16, 172, BAR + 22, 2, C_PANEL);
+    wrapped(144, BAR + 58, U.line, 15, 4, C_DIM, C_PANEL);
+  }
+}
+
+/* Your giftable things into the list: shop items, signed, not hand-made. */
+static void load_pick(void) {
+  int i;
+  G.npk = G.psel = G.ptop = 0;
+  for (i = 0; i < J.nowned && G.npk < PK_MAX; i++) {
+    if (jst_item_read(api, J.owned[i], &IO) < 0) continue;
+    if ((IO.it.flags & JIF_BUILTIN) || IO.raw[204] == 0) continue;
+    G.pk[G.npk] = IO.it.id;
+    ji_copy(G.pkname[G.npk], IO.it.name, JI_NAME + 1);
+    G.npk++;
+  }
+}
+
+static void pick_card(void) {
+  U.card.ok = 0;
+  if (G.psel < G.npk && jst_item_read(api, G.pk[G.psel], &IO) >= 0) {
+    tile_from(&U.card, &IO.it);
+    U.card.ok = 1;
+    words_from(&IO.it);
+  }
+}
+
+/* One said thing into rows, wrapped at spaces; the oldest rows go first. */
+static void tk_add(const char *s, int n, int who) {
+  while (n > 0) {
+    int cut = n, i;
+    if (n > TK_COLS) {
+      for (cut = TK_COLS; cut > 0 && s[cut] != ' '; cut--) {}
+      if (cut == 0) cut = TK_COLS;
+    }
+    if (TK_N == TK_ROWS) {                                /* full: drop the oldest */
+      for (i = 1; i < TK_ROWS; i++) { api->mem_cpy(TK[i - 1], TK[i], TK_COLS + 1); TK_WHO[i - 1] = TK_WHO[i]; }
+      TK_N--;
+    }
+    api->mem_cpy(TK[TK_N], s, (size_t)cut);
+    TK[TK_N][cut] = 0;
+    TK_WHO[TK_N++] = (uint8_t)who;
+    s += cut;
+    n -= cut;
+    while (n > 0 && *s == ' ') { s++; n--; }
+  }
+}
+
+/* GET /jar/talk: "pending" | "ok" | "error WHY", then "day\tTEXT", "me\tTEXT"
+ * and "him\tTEXT" lines. 1 while he is still answering. */
+static int tk_parse(void) {
+  const char *p = NET, *e;
+  char who[8];
+  int pending = str_starts(p, "pending");
+  if (str_starts(p, "error")) say(p[5] ? p + 6 : "He did not hear you");
+  TK_N = 0;
+  for (p = tsv_next_line(p); *p; p = tsv_next_line(p)) {
+    tsv_field(p, 0, who, sizeof who);
+    e = p;
+    while (*e && *e != '\t' && *e != '\n') e++;
+    if (*e != '\t') continue;
+    e++;
+    {
+      const char *end = e;
+      while (*end && *end != '\n') end++;
+      if (str_same(who, "day")) { tk_add(e, (int)(end - e), 2); tk_add("", 0, 2); }
+      else if (str_same(who, "me")) tk_add(e, (int)(end - e), 1);
+      else if (str_same(who, "him")) tk_add(e, (int)(end - e), 0);
+    }
+  }
+  return pending;
+}
+
+static void go_talk(void) {
+  G.view = V_TALK;
+  start_input(IN_TALK);
+  if (!U.net && send(N_HEAR, "GET", "/jar/talk", 0) == 0) net_status("knocking");
+}
+
+static void paint_talk(void) {
+  int rows = 9, first = TK_N - rows, i, y;
+  box(0, BAR, SW, BODY, C_BG);
+  if (!TK_N && !TK_PENDING)
+    wrapped(8, BAR + 8, "Tibbs is behind the counter. Say something: type, then Enter.", 37, 3, C_DIM, C_BG);
+  if (TK_PENDING) first++;
+  if (first < 0) first = 0;
+  for (i = first, y = BAR + 2; i < TK_N; i++, y += 9) {
+    uint16_t c = TK_WHO[i] == 1 ? C_TEXT : TK_WHO[i] == 2 ? C_DIM : C_GOLD;
+    if (TK_WHO[i] == 1) text(SW - 4 - slen(TK[i]) * 6, y, TK[i], c, C_BG);   /* you, on the right */
+    else text(4, y, TK[i], c, C_BG);
+  }
+  if (TK_PENDING) text(4, y, "Tibbs: ...", C_DIM, C_BG);
+  box(2, SHT - BAR - 13, SW - 4, 12, C_PANEL);
+  {
+    int n = slen(G.input), from = n > 37 ? n - 37 : 0;   /* the end of what is typed */
+    text(5, SHT - BAR - 11, G.input + from, C_TEXT, C_PANEL);
+    box(5 + (n - from) * 6, SHT - BAR - 11, 5, 8, C_GOLD);
+  }
+}
+
+static int key_talk(int k) {
+  if (k == CAPP_KEY_ESC) { to_jar(); return 1; }
+  if (key_input(k, TK_SAY)) return 1;
+  if (!G.inlen) return 1;
+  if (TK_PENDING || U.net) { say("He is still talking"); return 1; }
+  jst_clean(G.input);
+  tk_add(G.input, G.inlen, 1);
+  if (send(N_SAY, "POST", "/jar/talk", G.input) != 0) { say("Busy: try again"); return 1; }
+  TK_PENDING = 1;
+  start_input(IN_TALK);
+  return 1;
 }
 
 static void paint_gift(void) {
@@ -418,13 +585,15 @@ static void paint_mail(void) {
 }
 
 static void app_paint(void *st, CRect c) {
-  static const char *const H_FRIENDS[] = { "A", "add", "N", "name", "R", "refresh", "Esc", "jar", 0 };
+  static const char *const H_FRIENDS[] = { "^v", "pick", "Ent", "send gift", "A", "add", "Esc", "jar", 0 };
+  static const char *const H_PICK[] = { "^v", "pick", "Ent", "send this", "Esc", "back", 0 };
+  static const char *const H_TALK[] = { "Ent", "say it", "Esc", "leave", 0 };
   static const char *const H_INPUT[] = { "Ent", "ok", "Esc", "cancel", 0 };
   static const char *const H_GIFT[] = { "^v", "pick", "Ent", "next", "Esc", "back", 0 };
   static const char *const H_SURE[] = { "y", "send", "n", "the note", 0 };
   static const char *const H_POSTING[] = { 0 };
   static const char *const H_MAIL[] = { "^v", "pick", "Ent", "open", "R", "check", "Esc", "jar", 0 };
-  static const char *const H_CARD[] = { "Ent", "in jar", "T", "thanks", "H", "shelf", "Esc", "back", 0 };
+  static const char *const H_CARD[] = { "Ent", "in jar", "T", "thanks", "Esc", "back", 0 };
   const char *const *h = H_FRIENDS;
   const char *where = "Friends";
   (void)st; (void)c;
@@ -436,6 +605,8 @@ static void app_paint(void *st, CRect c) {
     where = "Send a Gift";
     break;
   case V_MAIL:    paint_mail(); h = H_MAIL; where = "Mail"; break;
+  case V_PICK:    paint_pick(); h = H_PICK; where = "Send a Gift"; break;
+  case V_TALK:    paint_talk(); h = H_TALK; where = "Tibbs"; break;
   case V_CARD:
     paint_card(M[G.card_mail].from, M[G.card_mail].note);
     h = H_CARD;
@@ -481,12 +652,43 @@ static int key_friends(int k) {
     return 1;
   }
   switch (k) {
+  case CAPP_KEY_UP:   if (G.fsel > 0) G.fsel--; return 1;
+  case CAPP_KEY_DOWN: if (G.fsel < G.nfr - 1) G.fsel++; return 1;
+  case CAPP_KEY_ENTER: case 'g': case 'G':
+    if (G.fsel >= G.nfr) { say("Add a friend first: A"); return 1; }
+    if (!G.fr[G.fsel].mutual) { say("They have not added you back yet"); return 1; }
+    load_pick();
+    if (!G.npk) { say("Nothing to send: buy from the shop first"); return 1; }
+    pick_card();
+    G.view = V_PICK;
+    return 1;
   case 'a': case 'A': start_input(IN_CODE); return 1;
   case 'n': case 'N': case 'e': case 'E': start_input(IN_NAME); return 1;
   case 'r': case 'R': fetch_me(); return 1;
   case 'm': case 'M': go_mail(); return 1;
+  case 't': case 'T': go_talk(); return 1;
   case CAPP_KEY_ESC: to_jar(); return 1;
   }
+  return 1;
+}
+
+static int key_pick(int k) {
+  switch (k) {
+  case CAPP_KEY_UP:   if (G.psel > 0) G.psel--; break;
+  case CAPP_KEY_DOWN: if (G.psel < G.npk - 1) G.psel++; break;
+  case CAPP_KEY_ENTER:
+    go_gift(G.pk[G.psel], V_FRIENDS);
+    if (G.view != V_GIFT) return 1;              /* it said why */
+    G.gift_sel = mutual_index(G.fsel);         /* the friend is chosen: the note */
+    G.gift_step = 1;
+    start_input(IN_NOTE);
+    return 1;
+  case CAPP_KEY_ESC: G.view = V_FRIENDS; return 1;
+  default: return 1;
+  }
+  if (G.psel < G.ptop) G.ptop = G.psel;
+  if (G.psel >= G.ptop + 9) G.ptop = G.psel - 8;
+  pick_card();
   return 1;
 }
 
@@ -522,6 +724,7 @@ static int key_gift(int k) {
     return 1;
   case CAPP_KEY_ESC:
     if (G.gift_back == V_CARD) G.view = V_CARD;
+    else if (G.gift_back == V_FRIENDS) G.view = V_FRIENDS;
     else to_jar();
     return 1;
   }
@@ -557,6 +760,8 @@ static int app_key(void *st, uint8_t k) {
   switch (G.view) {
   case V_FRIENDS: return key_friends(k);
   case V_GIFT:    return key_gift(k);
+  case V_PICK:    return key_pick(k);
+  case V_TALK:    return key_talk(k);
   case V_MAIL:    return key_mail(k);
   case V_CARD:    return key_card(k);
   }
@@ -574,6 +779,9 @@ static int app_tick(void *st, uint32_t now) {
   if (U.net) {
     int n = api->http_poll(NET, sizeof NET);
     if (n != CAPP_HTTP_PENDING) net_reply(n);
+  } else if (TK_AGAIN && (int32_t)(now - TK_AGAIN) >= 0) {
+    TK_AGAIN = 0;                                   /* is he done talking? */
+    if (G.view != V_TALK || send(N_HEAR, "GET", "/jar/talk", 0) != 0) TK_PENDING = 0;
   }
   if (U.msg[0] && (int32_t)(now - U.msg_until) > 0) { U.msg[0] = 0; U.dirty = 1; }
   if (!U.dirty) return 0;
@@ -593,7 +801,10 @@ const CappInfo capp_info = {
     0x5B, 0x82, 0x5F, 0x82, 0x4E, 0x82, 0x44, 0x82,
     0x40, 0x82, 0x40, 0x82, 0x7F, 0xFE, 0x00, 0x00 },
   "Jar Factory's friends and post\n"
+  "Enter\ton a friend: send them one of your things\n"
+  "T\ttalk to Tibbs, the shopkeeper (also from the shop)\n"
   "A\tadd a friend by their code\n"
+  "R\task the server again\n"
   "N\tyour name, up to 8\n"
   "M\tmail: parcels from friends\n"
   "T\tsay thank you for a gift\n"
@@ -612,7 +823,10 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   G.mail_n = jst_mail_load(api, M, TEXT, sizeof TEXT);
   J.parcels = (uint16_t)unopened();
   if (jst_get(api, JST_FRIENDS, NET, sizeof NET) > 0) parse_me(NET);
+  TK_N = TK_PENDING = 0;
+  TK_AGAIN = 0;
   if (str_same(s, "mail")) go_mail();
+  else if (str_same(s, "talk")) go_talk();
   else if (str_starts(s, "gift ")) {
     const char *p = s + 5;
     G.view = V_FRIENDS;
