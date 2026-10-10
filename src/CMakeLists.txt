@@ -94,6 +94,7 @@ idf_component_register(
     "../kernel/app/appidx.c"
     "../kernel/app/arena.c"
     "../kernel/app/capprel.c"
+    "../kernel/app/xipcache.c"
   INCLUDE_DIRS
     "."
     ".."      # CardOS headers are included as "kernel/..."

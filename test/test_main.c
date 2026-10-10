@@ -940,6 +940,23 @@ void test_raising_changes_who_paints_the_overlap(void);
 void test_calls_arrive_back_to_front(void);
 void test_a_crowded_desktop_still_paints_every_pixel(void);
 void test_painting_consumes_the_damage(void);
+void test_xip_crc32_is_the_usual_one(void);
+void test_xip_path_hash_folds_case(void);
+void test_xip_empty_flash_finds_nothing(void);
+void test_xip_finds_what_it_wrote_after_a_reboot(void);
+void test_xip_another_key_misses(void);
+void test_xip_rewrite_kills_the_old_entry(void);
+void test_xip_a_bad_crc_is_a_miss(void);
+void test_xip_power_cut_leaves_nothing_half_valid(void);
+void test_xip_head_survives_a_reboot(void);
+void test_xip_wraps_and_evicts_the_oldest(void);
+void test_xip_never_erases_an_entry_in_use(void);
+void test_xip_a_killed_entry_in_use_keeps_its_code(void);
+void test_xip_forget_kills_by_path(void);
+void test_xip_too_big_is_full(void);
+void test_xip_one_write_at_a_time(void);
+void test_xip_wipe(void);
+void test_xip_soak_every_live_entry_checks(void);
 
 int main(void) {
   /* Unbuffered, so a crash is reported next to the test that caused it
@@ -1963,5 +1980,23 @@ int main(void) {
   RUN(test_calls_arrive_back_to_front);
   RUN(test_a_crowded_desktop_still_paints_every_pixel);
   RUN(test_painting_consumes_the_damage);
+  printf("-- xipcache --\n");
+  RUN(test_xip_crc32_is_the_usual_one);
+  RUN(test_xip_path_hash_folds_case);
+  RUN(test_xip_empty_flash_finds_nothing);
+  RUN(test_xip_finds_what_it_wrote_after_a_reboot);
+  RUN(test_xip_another_key_misses);
+  RUN(test_xip_rewrite_kills_the_old_entry);
+  RUN(test_xip_a_bad_crc_is_a_miss);
+  RUN(test_xip_power_cut_leaves_nothing_half_valid);
+  RUN(test_xip_head_survives_a_reboot);
+  RUN(test_xip_wraps_and_evicts_the_oldest);
+  RUN(test_xip_never_erases_an_entry_in_use);
+  RUN(test_xip_a_killed_entry_in_use_keeps_its_code);
+  RUN(test_xip_forget_kills_by_path);
+  RUN(test_xip_too_big_is_full);
+  RUN(test_xip_one_write_at_a_time);
+  RUN(test_xip_wipe);
+  RUN(test_xip_soak_every_live_entry_checks);
   return tt_report();
 }
