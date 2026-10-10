@@ -119,6 +119,7 @@ int xipflash_init(void) {
   if (!s_lock) {
     esp_partition_munmap(s_map);
     s_drom = NULL;
+    s_base = NULL;
     ESP_LOGE(TAG, "no memory for the appcode lock: app code loads into RAM");
     return -1;
   }
