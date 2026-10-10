@@ -11,6 +11,15 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.11.1 -- 2026-10-09
+
+- The daily stock asks Claude at effort medium (`ask_shape`'s new default;
+  `ask_once` takes an effort). On the droplet the CLI's own default made one
+  round of generation outlast its 420 s; on the laptop, whose settings say
+  medium, a whole day took 105 s.
+- The server's signing key is backed up on the droplet
+  (`/root/sign_key.pem.bak`): a new key would orphan every item given out.
+
 ## v0.11.0 -- 2026-10-09
 
 **Jar Factory, all seven steps of the owner's spec**, and the server's
