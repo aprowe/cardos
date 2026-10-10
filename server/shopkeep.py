@@ -306,7 +306,7 @@ def stock_schema(n_pick, n_new):
                                      "maxLength": BRIEF_LEN + SLACK, "pattern": "^[ -~]+$"}}}}
 
 
-def stock_prompt(person, pool, n_pick, n_new, rng, asked, friends=()):
+def stock_prompt(person, pool, n_pick, n_new, rng, asked, friends=(), commission=None):
     """`pool`: [(id, name, kind, price, line)] he may pick from; `asked`:
     whether a new find answers what the player asked him for (the code's coin)."""
     lines = ["[%s (account %s) has come in, and their shop shelf needs filling. %s]" % (
@@ -328,7 +328,19 @@ def stock_prompt(person, pool, n_pick, n_new, rng, asked, friends=()):
         lines.append("  find %d sparks: %s" % (i + 1, spark(rng)))
     lines.append("[Make the finds unlike each other and unlike what you have been bringing "
                  "in lately; a junk shop's stock is whatever turned up.]")
-    if asked:
+    if commission is not None:
+        # Paid for: the finds are what he went out for. Still a dealer, not a
+        # genie -- the first two answer the ask loosely, the rest are whatever
+        # else turned up on the way.
+        if commission:
+            lines.append("[%s paid you to go out looking, and asked for: \"%s\". Finds 1 and "
+                         "2 are what your contacts turned up for it -- near the mark, each in "
+                         "its own way, never a literal granting; the rest are whatever else "
+                         "you came across while you were out.]" % (display(person), commission))
+        else:
+            lines.append("[%s paid you to go out looking, for nothing in particular: these "
+                         "finds are what you came back with.]" % display(person))
+    elif asked:
         lines.append("[If %s has asked you to look out for something, find 1 is what your "
                      "contacts turned up for it -- near the mark or a little off, never a "
                      "literal granting. If they have not, ignore this.]" % display(person))
@@ -342,7 +354,8 @@ def stock_prompt(person, pool, n_pick, n_new, rng, asked, friends=()):
     return "\n".join(lines)
 
 
-def stock_turn(chat, person, pool, n_pick, n_new, friends=(), store=None, rng=None, log=None):
+def stock_turn(chat, person, pool, n_pick, n_new, friends=(), store=None, rng=None, log=None,
+               commission=None):
     """His turn for a stock: (line, picks, briefs). picks are ids from `pool`
     (he may get some wrong; the caller checks); if he cannot be asked, a
     note on the door, no picks and loose briefs."""
@@ -350,7 +363,7 @@ def stock_turn(chat, person, pool, n_pick, n_new, friends=(), store=None, rng=No
     rng = rng or random.Random()
     asked = rng.randrange(100) < ANSWER_CHANCE
     schema = stock_schema(n_pick, n_new)
-    prompt = stock_prompt(person, pool, n_pick, n_new, rng, asked, friends)
+    prompt = stock_prompt(person, pool, n_pick, n_new, rng, asked, friends, commission)
     why = None
     for attempt in range(2):
         try:

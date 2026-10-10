@@ -230,7 +230,7 @@ static int DAY_POLLS, FORGE;
 static int day_server(const char *m, const char *path, const char *body, char *out, int cap) {
   (void)body;
   if (!strcmp(path, "/jar/pubkey")) return snprintf(out, (size_t)cap, "%s\n", JF_PUBHEX);
-  if (!strcmp(path, "/jar/day") && !strcmp(m, "POST")) return snprintf(out, (size_t)cap, "pending\n");
+  if (!strncmp(path, "/jar/day", 8) && !strcmp(m, "POST")) return snprintf(out, (size_t)cap, "pending\n");
   if (!strcmp(path, "/jar/day")) {
     if (DAY_POLLS++ < 1) return snprintf(out, (size_t)cap, "pending\n");
     return snprintf(out, (size_t)cap, "ok 2027-01-15\ntags rainy, cosy, moon\nitems 3\n");
@@ -458,7 +458,8 @@ void test_jarshop_held_items_stay_into_the_next_stock(void) {
   key(CAPP_KEY_ENTER);                        /* buy 9000 */
   CHECK(js_owns(&J, 9000));
   key(CAPP_KEY_ESC);
-  key('r');                                   /* a new stock */
+  key('r');                                   /* a new stock, paid for */
+  key('y');
   r = jf_last("/jar/day");
   CHECK(r && strcmp(r->method, "POST") == 0);
   CHECK(r && strstr(r->body, "\nbought 9000\n") != 0);
@@ -524,6 +525,57 @@ static int tibbs_server(const char *m, const char *path, const char *body, char 
   }
   DAY_POLLS = 5;
   return day_server(m, path, body, out, cap);
+}
+
+/* Paying Tibbs, so as not to wait for the next stock: r a new stock now,
+ * f he goes out looking (what for is typed, or nothing) for five new finds.
+ * The coins come back if the server cannot be asked. */
+void test_jarshop_paying_tibbs(void) {
+  const JfReq *r;
+  const char *s;
+  card(500);
+  jf_handler = day_server;
+  DAY_POLLS = 5;
+  FORGE = 0;
+  launch("shop");
+  tick(3500);
+  JF_NREQ = 0;
+  key('r');
+  CHECK_EQ(G.pay, 1);                         /* sure? */
+  shot("s16_restock");
+  key('n');
+  CHECK_EQ(G.pay, 0);
+  CHECK_EQ((int)J.coins, 500);
+  CHECK_EQ(jf_count("/jar/day"), 0);
+  key('r');
+  key('y');
+  CHECK_EQ((int)J.coins, 500 - RESTOCK_COST);
+  r = jf_last("/jar/day?fresh=1");
+  CHECK(r && strcmp(r->method, "POST") == 0 && strstr(r->body, "finds") == 0);
+  tick(3500);
+  key('f');
+  CHECK_EQ(G.pay, 2);                         /* what to look for */
+  for (s = "brass birds"; *s; s++) key(*s);
+  shot("s17_send_tibbs_out");
+  key(CAPP_KEY_ENTER);
+  CHECK_EQ(G.pay, 3);
+  key('y');
+  CHECK_EQ((int)J.coins, 500 - RESTOCK_COST - FIND_COST);
+  r = jf_last("/jar/day?fresh=1");
+  CHECK(r && strstr(r->body, "\nfinds 5\nask brass birds\n") != 0);
+  tick(3500);
+  /* the server refuses: the coins come back */
+  jf_handler = 0;
+  JF_PENDING = 0;
+  key('r');
+  key('y');
+  tick(200);
+  CHECK_EQ((int)J.coins, 500 - RESTOCK_COST - FIND_COST);
+  /* not enough coins: nothing asked */
+  J.coins = 10;
+  key('f');
+  CHECK_EQ(G.pay, 0);
+  CHECK(strstr(U.msg, "Not enough") != 0);
 }
 
 void test_jarshop_tibbs_and_his_seed_packets(void) {

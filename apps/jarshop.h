@@ -59,6 +59,11 @@ typedef struct {
    * done: `more` is that, `live` that this batch is already on show. */
   int more, live, got, quiet, dropped;
   uint32_t wait_until;
+  /* paying Tibbs: 1 a restock (sure?), 2 a commission (what to look for),
+   * 3 a commission (sure?); `paid` is coins taken for a request in flight,
+   * given back if it fails */
+  int pay, paid, finds;
+  char ask[48];
   } g;
 } ShopMem;
 
@@ -74,6 +79,10 @@ static ShopMem SHOP_MEM;
 #define SAY   SHOP_MEM.say
 #define SEEDS SHOP_MEM.seeds
 #define G     SHOP_MEM.g
+
+#define RESTOCK_COST 40        /* r: a new stock now */
+#define FIND_COST    150       /* f: Tibbs goes out looking -- 5 new finds */
+#define FIND_N       5
 
 static const char *const UP_NAME[JU_KINDS] = { "Another mossling", "Another machine", "Faster belt", "Another bed" };
 static const int PLANT_SPR[JPL_KINDS] = { SPR_BUSH, SPR_FERN, SPR_SHROOM, SPR_FLOWER, SPR_CACTUS };
@@ -156,7 +165,8 @@ static void open_card(uint32_t id, int back) {
 
 /* ---- the daily stock ---------------------------------------------------------------- */
 
-static uint32_t today(void) { return api->epoch() / 86400u; }
+#define RESTOCK_S 14400u        /* a new stock every 4 hours (server/jar.py RESTOCK_S) */
+static uint32_t today(void) { return api->epoch() / RESTOCK_S; }
 static int today_gen(void) { return 2 + (int)(today() % 250u); }
 
 /* "TZ=..." from the console's settings, for the server's weather; "" if
@@ -237,10 +247,38 @@ static void start_day(void) {
     return;
   }
   day_body();
+  if (G.finds) {                                 /* a commission: more finds, and what for */
+    int k = slen(NET);
+    k += api->fmt(NET + k, sizeof NET - (size_t)k, "finds %d\n", G.finds);
+    if (G.ask[0]) api->fmt(NET + k, sizeof NET - (size_t)k, "ask %s\n", G.ask);
+  }
   if (send(N_DAY_POST, "POST", s_fresh ? "/jar/day?fresh=1" : "/jar/day", NET) == 0)
-    net_status(s_fresh ? "asking for a new stock" : "asking for today's stock");
+    net_status(G.finds ? "Tibbs goes out looking" : s_fresh ? "asking for a new stock"
+                                                           : "asking for today's stock");
   else G.tried = 0;
   s_fresh = 0;
+  G.finds = 0;
+}
+
+/* Coins taken for a request that failed go back. */
+static void refund(void) {
+  if (!G.paid) return;
+  J.coins += (uint32_t)G.paid;
+  G.paid = 0;
+  save();
+}
+
+/* Pay for a restock (r) or a commission (f, with what was typed) and ask. */
+static void pay_and_ask(int cost, int finds) {
+  if (U.net) { say("Busy: try again"); return; }
+  if (js_spend(&J, (uint32_t)cost)) { say("Not enough coins"); return; }
+  save();
+  G.paid = cost;
+  G.finds = finds;
+  s_fresh = 1;
+  G.tried = 0;
+  start_day();
+  if (!U.net) { refund(); say("No server: coins back"); }
 }
 
 /* The batch so far goes on show: it replaces the old stock, whose records
@@ -372,8 +410,9 @@ static void net_reply(int n) {
   case N_DAY_POST:
   case N_DAY_POLL:
     if (G.quiet && (n < 0 || str_starts(NET, "error"))) { net_status(""); G.quiet = 0; return; }
-    if (n < 0) { net_status(""); failed("Today's stock", n); return; }
-    if (refused("Today's stock")) { net_status(""); return; }
+    if (n < 0) { net_status(""); failed("Today's stock", n); refund(); return; }
+    if (refused("Today's stock")) { net_status(""); refund(); return; }
+    G.paid = 0;                                       /* taken: the stock is coming */
     if (day_reply()) {
       if (G.k < G.nitems) net_status("fetching today's things");
       next_item();
@@ -458,7 +497,7 @@ static void new_stock_in(char *b, int n) {
   uint32_t now = U.now, left;
   if (U.net >= N_DAY_POST || G.again) { api->fmt(b, (size_t)n, "New stock arriving..."); return; }
   if (!now) { api->fmt(b, (size_t)n, "No clock: no new stock"); return; }
-  left = 86400u - now % 86400u;
+  left = RESTOCK_S - now % RESTOCK_S;
   api->fmt(b, (size_t)n, "New stock in %uh %02um", (unsigned)(left / 3600u), (unsigned)(left / 60u % 60u));
 }
 
@@ -598,6 +637,8 @@ static void paint_plant(void) {
 
 static void shop_paint(void *st, CRect c) {
   static const char *const H_STOCK[] = { "Ent", "buy", "Spc", "hold", "T", "Tibbs", "Tab", "stuff", 0 };
+  static const char *const H_ASK[] = { "Ent", "go on", "Esc", "never mind", 0 };
+  static const char *const H_SURE[] = { "y", "pay him", "n", "not now", 0 };
   static const char *const H_STUFF[] = { "Ent", "open", "G", "gift", "Tab", "shop", "Esc", "jar", 0 };
   static const char *const H_PICK[] = { "Ent", "choose", "Esc", "back", 0 };
   static const char *const H_CARD[] = { "Ent", "in jar", "G", "gift", "Esc", "back", 0 };
@@ -608,7 +649,17 @@ static void shop_paint(void *st, CRect c) {
   const char *where = "Shop";
   (void)st; (void)c;
   switch (G.view) {
-  case V_STOCK:  paint_grid(); break;
+  case V_STOCK:
+    paint_grid();
+    if (G.pay == 2) { input_box("Tibbs, look out for... (or nothing)", G.ask); h = H_ASK; }
+    else if (G.pay) {
+      char b[44];
+      api->fmt(b, sizeof b, G.pay == 1 ? "A new stock now, for %d coins?" : "Send Tibbs out for %d coins?",
+               G.pay == 1 ? RESTOCK_COST : FIND_COST);
+      input_box(b, G.pay == 3 && G.ask[0] ? G.ask : "");
+      h = H_SURE;
+    }
+    break;
   case V_STUFF:  paint_grid(); h = G.pick ? H_PICK : H_STUFF;
                  where = G.pick == P_DECOR ? "Add to the jar" : "My Stuff"; break;
   case V_CARD:   paint_card(0, 0); h = H_CARD; where = "Item"; break;
@@ -798,14 +849,34 @@ static int shop_key(void *st, uint8_t k) {
     if (ui_run("Jar Post", "talk") != 0) say("No Jar Post app");
     return 1;
   }
-  /* For trying things out: r asks the server for a new stock now (it makes
-   * one even though today's is done), $ is 1000 coins. */
-  if (k == 'r' && (G.view == V_STOCK || G.view == V_STUFF)) {
+  if (G.pay) {                                    /* paying Tibbs: sure?, or what for */
+    if (G.pay == 2) {
+      int n = slen(G.ask);
+      if (k == CAPP_KEY_ESC) { G.pay = 0; return 1; }
+      if (k == CAPP_KEY_ENTER) { jst_clean(G.ask); G.pay = 3; return 1; }
+      if (k == CAPP_KEY_BACK) { if (n) G.ask[n - 1] = 0; return 1; }
+      if (k >= 32 && k < 127 && n < (int)sizeof G.ask - 1) { G.ask[n] = (char)k; G.ask[n + 1] = 0; }
+      return 1;
+    }
+    {
+      int a = confirm_key(api, k);
+      if (a == CONFIRM_YES) {
+        int restock = G.pay == 1;
+        G.pay = 0;
+        pay_and_ask(restock ? RESTOCK_COST : FIND_COST, restock ? 0 : FIND_N);
+      } else if (a == CONFIRM_NO) G.pay = 0;
+    }
+    return 1;
+  }
+  /* Paying Tibbs: r a new stock now, f he goes out looking (what for is
+   * up to the player; five new finds). $ is 1000 coins, for trying things. */
+  if ((k == 'r' || k == 'f') && (G.view == V_STOCK || G.view == V_STUFF)) {
+    int cost = k == 'r' ? RESTOCK_COST : FIND_COST;
     if (U.net) { say("Already asking the server"); return 1; }
-    if (!api->epoch()) { say("No clock yet: no stock to refresh"); return 1; }
-    s_fresh = 1;
-    G.tried = 0;
-    start_day();
+    if (!api->epoch()) { say("No clock yet: the shop is shut"); return 1; }
+    if (J.coins < (uint32_t)cost) { say("Not enough coins"); return 1; }
+    G.ask[0] = 0;
+    G.pay = k == 'r' ? 1 : 2;
     return 1;
   }
   if (k == '$') {
@@ -822,6 +893,8 @@ static int shop_key(void *st, uint8_t k) {
   }
   return 0;
 }
+
+static int shop_wants_text(void *st) { (void)st; return G.pay == 2; }
 
 static int shop_tick(void *st, uint32_t now) {
   (void)st;

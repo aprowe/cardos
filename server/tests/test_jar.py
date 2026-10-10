@@ -772,9 +772,8 @@ class Routes(unittest.TestCase):
         s, body = self.req("GET", "/jar/day", self.alex)
         self.assertEqual((s, body), (404, "error no stock yet: POST /jar/day\n"))
         s, body = self.make_day(self.alex)
-        today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
         lines = body.splitlines()
-        self.assertEqual(lines[0], "ok " + today)
+        self.assertEqual(lines[0], "ok " + jar._stock_key())
         self.assertEqual(lines[1], "tags ")                     # no tags any more
         n = int(lines[2].split()[1])
         self.assertEqual(n, 8)                                  # 3 random, 3 his, 2 new
@@ -869,6 +868,41 @@ class Routes(unittest.TestCase):
         self.req("POST", "/jar/day?fresh=1", self.sam, "bought %d\n" % second[0])
         self.wait_day(self.sam)
         self.assertEqual(st.get(jar.NS, "own/%d" % second[0]), b"alex")
+
+    def test_a_new_stock_every_four_hours(self):
+        t0 = datetime.datetime(2026, 10, 10, 3, 59, tzinfo=datetime.timezone.utc).timestamp()
+        self.assertEqual(jar._stock_key(t0), "20261010-0")
+        self.assertEqual(jar._stock_key(t0 + 60), "20261010-1")          # 04:00: a new one
+        self.assertEqual(jar._stock_key(t0 + 20 * 3600 + 60), "20261011-0")
+        self.assertLessEqual(len(jar._stock_key(t0)), 11)                 # the shop's 12 bytes
+        st = kv.store()
+        self.assertEqual(jar.start_day(None, "alex", jar.parse_request(""), now=t0, store=st)[0],
+                         "pending")
+        deadline = time.time() + 10
+        while jar._running and time.time() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(jar.start_day(None, "alex", jar.parse_request(""), now=t0 + 30,
+                                       store=st), ("ok", "20261010-0"))  # the same slot
+        self.assertEqual(jar.start_day(None, "alex", jar.parse_request(""), now=t0 + 60,
+                                       store=st)[0], "pending")          # the next: made anew
+
+    def test_a_paid_commission_is_more_new_finds(self):
+        # The shop's f: the player paid Tibbs to go looking. Five new finds,
+        # the rest from the pool; his prompt says what was asked, and the
+        # news that they paid reaches him.
+        self.make_day(self.alex)
+        made = len(self.tibbs.prompts)
+        s, body = self.req("POST", "/jar/day?fresh=1", self.alex, "finds 5\nask brass birds\n")
+        body = self.wait_day(self.alex)
+        self.assertIn("\nitems 8\n", body)
+        p = self.tibbs.prompts[made]
+        self.assertIn("paid you to go out looking, and asked for: \"brass birds\"", p)
+        self.assertIn("Pick 2 of those", p)                    # 8 - 5 new: 2 his, 1 random
+        self.assertEqual(len(re.findall(r"find \d+ sparks", p)), 5)
+        self.assertIn("paid you to go out and find new things", p)   # the news
+        # too many asked for is the most allowed; a word that fails the filter is dropped
+        req = jar.parse_request("finds 99\nask shit birds\n")
+        self.assertEqual((req["finds"], req.get("ask")), (jar.MAX_FINDS, None))
 
     def test_talking_to_tibbs_over_http(self):
         self.befriend(self.alex, self.sam)

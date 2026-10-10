@@ -1249,6 +1249,7 @@ const CappInfo capp_info = {
   "D\tdecorate; ^v moves onto a ledge\n"
   "Z\tzoom 2x; Tab follows a critter\n"
   "Shop\tEnter buys, Space holds, G gifts\n"
+  "R F\tpay Tibbs: restock now, or 5 new finds\n"
   "Esc\tback to the jar\n",
 };
 
@@ -1397,7 +1398,9 @@ static int app_tick(void *st, uint32_t now) {
   return scene_tick(st, now);
 }
 
-static int app_wants_text(void *st) { return SCREEN == SC_POST && post_wants_text(st); }
+static int app_wants_text(void *st) {
+  return SCREEN == SC_POST ? post_wants_text(st) : SCREEN == SC_SHOP ? shop_wants_text(st) : 0;
+}
 
 static CappUi UI;
 

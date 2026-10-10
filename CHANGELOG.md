@@ -11,6 +11,21 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.15.1 -- 2026-10-10
+
+- **A new stock every 4 hours**, not once a day. Each stock is keyed by its
+  4-hour slot of the UTC day ("20261010-1"), and the shop counts down to
+  the next one.
+- **Pay Tibbs instead of waiting:**
+  - `r` (40 coins) gets a new stock now;
+  - `f` (150 coins) sends him out looking: type what for, or nothing, and
+    he comes back with 5 new finds instead of 2.
+
+  Each asks y/n first. The coins go back if the server cannot be asked.
+  His memory hears that you paid him and what you asked for. Commissioned
+  finds answer the request loosely (finds 1 and 2), and the rest are
+  whatever else he came across.
+
 ## v0.15.0 -- 2026-10-10
 
 - **App code runs from flash (XIP).** This was the other session's work,

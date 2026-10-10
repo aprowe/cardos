@@ -594,6 +594,15 @@ def parse_request(body):
             h = wire.flat(rest, HINT_LEN, ascii=True).replace('"', "'")
             if clean(h):
                 out["hint"] = h
+        elif head == "finds":                           # a paid commission: more new finds
+            try:
+                out["finds"] = max(0, min(MAX_FINDS, int(rest)))
+            except ValueError:
+                pass
+        elif head == "ask":                             # ... and what to look for
+            a = wire.flat(rest, ASK_LEN, ascii=True).replace('"', "'")
+            if clean(a):
+                out["ask"] = a
     return out
 
 
@@ -899,6 +908,8 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
 
 STOCK_SIZE = 8                # a shop's stock: held, then random and Tibbs's picks, then new
 NEW_ITEMS = 2                 # new finds in each stock
+MAX_FINDS = 5                 # new finds a paid commission may ask for (the shop: f)
+ASK_LEN = 100                 # what a commission may say to look for
 POOL_SHOWN = 40               # pool items Tibbs is shown to choose from
 MAX_HELD = 4                  # items a person may hold in their shop
 
@@ -1020,6 +1031,17 @@ _running = set()               # (person, date) generating in this process
 _day_lock = threading.Lock()
 
 
+RESTOCK_S = 4 * 3600          # a new stock every 4 hours (UTC); paying Tibbs is not waiting
+
+
+def _stock_key(now=None):
+    """Which stock it is now: "YYYYMMDD-N", N the 4-hour slot of the UTC day.
+    Ten characters: the shop keeps it in a 12-byte field."""
+    t = time.time() if now is None else now
+    d = datetime.datetime.fromtimestamp(t, datetime.timezone.utc)
+    return "%s-%d" % (d.strftime("%Y%m%d"), d.hour * 3600 // RESTOCK_S)
+
+
 def _today(now=None):
     return datetime.datetime.fromtimestamp(time.time() if now is None else now,
                                            datetime.timezone.utc).date()
@@ -1044,11 +1066,12 @@ def _item_note(rec):
                                       it["price"] or 0, it["line"])
 
 
-def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, passed=()):
+def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, passed=(),
+              skey=None):
     """The rest of a stock, after the `base` (held and random) items already
     on show: Tibbs's turn -- his greeting, his picks from the pool, briefs for
     the new finds -- then his picks, then a new item for each brief."""
-    key = (person, date.isoformat())
+    key = (person, skey or _stock_key())
     told = {"say": ""}
     at = [base]
     say_log = lambda s: sys.stderr.write("jar: %s: %s\n" % (person, s))   # noqa: E731
@@ -1078,7 +1101,7 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
         rng.shuffle(pool)
         told["say"], mine, briefs = shopkeep.stock_turn(
             chat, person, pool[:POOL_SHOWN], n_pick, n_new, friends_of(person, store),
-            store=store, log=say_log)
+            store=store, log=say_log, commission=req.get("ask") if req.get("finds") else None)
         with _day_lock:                                 # his picks, if still free
             got = take_from_pool(person, [i for i in mine if i in dict(
                 (p[0], 1) for p in pool[:POOL_SHOWN])][:n_pick], store)
@@ -1125,7 +1148,7 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
     bought nor held goes back to the pool."""
     st = store or kv.store()
     date = _today(now)
-    key = (person, date.isoformat())
+    key = (person, _stock_key(now))
     with _day_lock:
         cur = day_state(person, st)
         if cur and cur.get("date") == key[1]:
@@ -1152,7 +1175,13 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
         held = [i for i in req.get("held", []) if i in prev and i not in bought][:MAX_HELD]
         passed = [i for i in prev if i not in bought and i not in held]
         to_pool(passed, person, st)
-        rest = STOCK_SIZE - len(held) - NEW_ITEMS
+        # A commission -- the player paid Tibbs to go looking -- is more new
+        # finds, fewer from the pool; coins are the device's, taken there.
+        n_new = max(NEW_ITEMS, min(req.get("finds", 0), MAX_FINDS, STOCK_SIZE - len(held)))
+        if req.get("finds"):
+            shopkeep.note("%s paid you to go out and find new things%s." % (
+                who, (" -- they asked for: \"%s\"" % req["ask"]) if req.get("ask") else ""), st)
+        rest = STOCK_SIZE - len(held) - n_new
         n_pick = (rest + 1) // 2                        # Tibbs's choice ...
         picks = pick_from_pool(person, req, rest - n_pick, st, skip=passed)   # ... and chance's
         base = []
@@ -1168,7 +1197,7 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
         _set_day(person, {"state": "pending", "date": key[1], "tags": [], "n": len(base),
                           "batch": batch, "req": req, "seed": seed}, st)
     threading.Thread(target=_make_day, args=(chat, person, req, date, st, batch, len(base),
-                                             n_pick, NEW_ITEMS, seed, set(passed)),
+                                             n_pick, n_new, seed, set(passed), key[1]),
                      daemon=True).start()
     return "pending", key[1]
 
@@ -1179,7 +1208,7 @@ def resume_day(chat, person, store=None, now=None):
     made from. True if it did."""
     st = store or kv.store()
     cur = day_state(person, st)
-    key = (person, _today(now).isoformat())
+    key = (person, _stock_key(now))
     if not cur or cur.get("state") != "pending" or cur.get("date") != key[1]:
         return False
     with _day_lock:
