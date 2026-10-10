@@ -1,0 +1,113 @@
+/* Jar Factory's script machine: THE instruction table, and the words of the
+ * script language. One source of truth -- apps/jarvm.h includes this file
+ * with the macros defined to build its tables, and server/jarvm.py reads the
+ * same lines at import (it parses them; nobody retypes them). Change a line
+ * here and both machines change together; the cross-check fixtures
+ * (tools/make_jarvm_fixtures.py, test/test_jarvm.c) say if they stop
+ * agreeing.
+ *
+ * Keep every entry on one line, in the exact shapes below: the Python side
+ * reads them with a regular expression.
+ *
+ * JV_OP(code, NAME, operand bytes, pops, pushes, "meaning")
+ *   Codes are dense, from 0: a byte >= the number of ops is an unknown
+ *   instruction. Values on the stack are 16-bit signed; arithmetic wraps.
+ *   Operand bytes follow the opcode; a 16-bit one is low byte first.
+ *   Jump targets are byte offsets from the start of the script.
+ */
+JV_OP( 0, END,    0, 0, 0, "return: the event is handled")
+JV_OP( 1, PUSH8,  1, 0, 1, "push the operand as a signed byte")
+JV_OP( 2, PUSH16, 2, 0, 1, "push the operand as a signed 16-bit number")
+JV_OP( 3, LOAD,   1, 0, 1, "push memory slot K (0..7)")
+JV_OP( 4, STORE,  1, 1, 0, "pop into memory slot K (0..7)")
+JV_OP( 5, SENSE,  1, 0, 1, "push sense K, clamped to 16 bits")
+JV_OP( 6, RAND,   0, 1, 1, "pop N, push a random number 0..N-1 (0 when N < 1)")
+JV_OP( 7, ADD,    0, 2, 1, "pop b, pop a, push a + b")
+JV_OP( 8, SUB,    0, 2, 1, "pop b, pop a, push a - b")
+JV_OP( 9, MUL,    0, 2, 1, "pop b, pop a, push a * b")
+JV_OP(10, DIV,    0, 2, 1, "pop b, pop a, push a / b toward zero (0 when b is 0)")
+JV_OP(11, MOD,    0, 2, 1, "pop b, pop a, push the remainder, sign of a (0 when b is 0)")
+JV_OP(12, NEG,    0, 1, 1, "pop a, push -a")
+JV_OP(13, EQ,     0, 2, 1, "pop b, pop a, push 1 if a == b else 0")
+JV_OP(14, NE,     0, 2, 1, "pop b, pop a, push 1 if a != b else 0")
+JV_OP(15, LT,     0, 2, 1, "pop b, pop a, push 1 if a < b else 0")
+JV_OP(16, LE,     0, 2, 1, "pop b, pop a, push 1 if a <= b else 0")
+JV_OP(17, GT,     0, 2, 1, "pop b, pop a, push 1 if a > b else 0")
+JV_OP(18, GE,     0, 2, 1, "pop b, pop a, push 1 if a >= b else 0")
+JV_OP(19, NOT,    0, 1, 1, "pop a, push 1 if a is 0 else 0")
+JV_OP(20, AND,    0, 2, 1, "pop b, pop a, push 1 if both are not 0 else 0")
+JV_OP(21, OR,     0, 2, 1, "pop b, pop a, push 1 if either is not 0 else 0")
+JV_OP(22, JMP,    1, 0, 0, "jump to byte K")
+JV_OP(23, JZ,     1, 1, 0, "pop a, jump to byte K if a is 0")
+JV_OP(24, ACT,    1, 1, 0, "pop an argument, do action K with it")
+JV_OP(25, ACTK,   2, 0, 0, "do action K (first operand) with the second as its argument")
+
+/* JV_EVENT(number, word, C enum, filter, "fires when")
+ *   The word is what follows `on` in a script. The filter says what may come
+ *   after the word: none, every (tick: `every N`), near, time, jam, number. */
+JV_EVENT(0, tick,    JE_TICK,    every,  "4 times a second; `on tick every N:` runs every Nth tick")
+JV_EVENT(1, poke,    JE_POKE,    none,   "the player selects the item")
+JV_EVENT(2, near,    JE_NEAR,    near,   "something comes within 16 px; `on near snail:` narrows it")
+JV_EVENT(3, shipped, JE_SHIPPED, none,   "a jar leaves through the cork door")
+JV_EVENT(4, jam,     JE_JAM,     jam,    "the belt jams or is fixed; `on jam fixed:` narrows it")
+JV_EVENT(5, gift,    JE_GIFT,    none,   "a parcel enters the jar")
+JV_EVENT(6, time,    JE_TIME,    time,   "dawn, day, dusk or night begins; `on time night:` narrows it")
+JV_EVENT(7, weather, JE_WEATHER, number, "the day's weather tag changes")
+
+/* JV_ACTION(number, word, C enum, argument, "what it does")
+ *   The word is the statement in a script. The argument is:
+ *   none, num (an expression, required), opt (an expression, default 0),
+ *   bubble and frame (counted from 1 in a script, from 0 on the wire),
+ *   zone, particle, glow (a name from that group below). */
+JV_ACTION( 0, nothing, JA_NONE,     none,     "do nothing")
+JV_ACTION( 1, hop,     JA_HOP,      opt,      "jump; the height in pixels (0 or none: 6, at most 24)")
+JV_ACTION( 2, walk,    JA_WALK,     zone,     "walk to somewhere in a zone (a critter; decor stays near home)")
+JV_ACTION( 3, float,   JA_FLOAT,    opt,      "start floating again from the bottom of its bob")
+JV_ACTION( 4, face,    JA_FACE,     none,     "turn to face the nearest mossling")
+JV_ACTION( 5, stop,    JA_STOP,     none,     "stop walking")
+JV_ACTION( 6, frame,   JA_FRAME,    frame,    "show picture N (1 to its number of frames)")
+JV_ACTION( 7, flip,    JA_FLIP,     none,     "turn round")
+JV_ACTION( 8, glow,    JA_GLOW,     glow,     "glow on, off, or toggle")
+JV_ACTION( 9, emit,    JA_PARTICLE, particle, "give off one particle")
+JV_ACTION(10, say,     JA_SAY,      bubble,   "show its bubble N (1 to its number of bubbles) for 2 s")
+JV_ACTION(11, wait,    JA_WAIT,     num,      "hold still for N ticks (4 a second, at most 400)")
+
+/* JV_SENSE(number, word, C enum, "what it reads") */
+JV_SENSE(0, x,        JSN_X,         "its own x, 0..239")
+JV_SENSE(1, zone,     JSN_ZONE,      "the zone it is in: garden, works, dock, water")
+JV_SENSE(2, near,     JSN_NEAR_KIND, "the nearest thing's kind: moss, snail, critter, decor")
+JV_SENSE(3, distance, JSN_NEAR_DIST, "how far that is, in pixels")
+JV_SENSE(4, time,     JSN_TIME,      "the time of day: dawn, day, dusk, night (0 when unknown)")
+JV_SENSE(5, weather,  JSN_WEATHER,   "the weather tag (0 when unknown)")
+JV_SENSE(6, days,     JSN_DAYS,      "whole days since it was made")
+JV_SENSE(7, gift,     JSN_GIFT,      "1 if it arrived as a gift, else 0")
+JV_SENSE(8, random,   JSN_RANDOM,    "a random number 0..255")
+
+/* JV_NAME(group, word, value, C enum)
+ *   Names a script may write for a number. Every group is usable in any
+ *   expression; zone, particle and glow are also what walk, emit and glow
+ *   take, and near, time and jam are the event filters. */
+JV_NAME(zone,     garden,   0, JZ_GARDEN)
+JV_NAME(zone,     works,    1, JZ_WORKS)
+JV_NAME(zone,     dock,     2, JZ_DOCK)
+JV_NAME(zone,     water,    3, JZ_WATER)
+JV_NAME(zone,     high,     4, JZ_HIGH)
+JV_NAME(zone,     anywhere, 5, JZ_ANYWHERE)
+JV_NAME(particle, sparkle,  0, JP_SPARKLE)
+JV_NAME(particle, heart,    1, JP_HEART)
+JV_NAME(particle, note,     2, JP_NOTE)
+JV_NAME(particle, zzz,      3, JP_ZZZ)
+JV_NAME(particle, puff,     4, JP_PUFF)
+JV_NAME(near,     moss,     1, JN_MOSS)
+JV_NAME(near,     snail,    2, JN_SNAIL)
+JV_NAME(near,     critter,  3, JN_CRITTER)
+JV_NAME(near,     decor,    4, JN_DECOR)
+JV_NAME(time,     dawn,     1, PH_DAWN)
+JV_NAME(time,     day,      2, PH_DAY)
+JV_NAME(time,     dusk,     3, PH_DUSK)
+JV_NAME(time,     night,    4, PH_NIGHT)
+JV_NAME(jam,      jammed,   1, 1)
+JV_NAME(jam,      fixed,    2, 2)
+JV_NAME(glow,     off,      0, 0)
+JV_NAME(glow,     on,       1, 1)
+JV_NAME(glow,     toggle,   2, 2)
