@@ -42,6 +42,7 @@ DEVICE_OR_DASH = [
     ("GET", "/kv/get"), ("POST", "/kv/put"), ("POST", "/kv/del"), ("GET", "/kv/list"),
     ("POST", "/kv/incr"), ("POST", "/q/push?q=t"), ("GET", "/q/peek?q=t"), ("GET", "/q/len?q=t"),
     ("POST", "/q/ack?q=t"), ("GET", "/q/allow?q=t"), ("POST", "/q/allow?q=t"),
+    ("GET", "/people"), ("POST", "/people/name"),
 ]
 
 DASH = [
