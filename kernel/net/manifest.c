@@ -123,8 +123,8 @@ int manifest_parse(const char *text, Manifest *out) {
        * compared -- what is stale is decided by hashes. Not counted as
        * understood, so a page of them alone is still not a manifest. */
       if ((q = word(q, b, sizeof b)) && (q = word(q, a, sizeof a))) {
-        if (!strcmp(b, "firmware")) snprintf(out->fw_version, sizeof out->fw_version, "%s", a);
-        else if (!strcmp(b, "server")) snprintf(out->server_version, sizeof out->server_version, "%s", a);
+        if (!strcmp(b, "firmware")) snprintf(out->fw_version, sizeof out->fw_version, "%.31s", a);
+        else if (!strcmp(b, "server")) snprintf(out->server_version, sizeof out->server_version, "%.31s", a);
       }
     } else if (!strcmp(kind, "app") && out->napps >= MANIFEST_MAX_APPS) {
       out->dropped++;                 /* said, not lost: see update.c */
