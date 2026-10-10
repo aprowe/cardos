@@ -281,6 +281,9 @@ static void xip_release(uint32_t off) {
   xipflash_unlock();
 }
 
+/* capp_load_ex's `foreground` for capp_load_info. */
+#define LOAD_INFO 2
+
 CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
   Elf32_Ehdr eh;
   Elf32_Shdr *sh = NULL;
@@ -369,6 +372,8 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
   s_short_want = s_short_largest = 0;
   {
     const char *base = strrchr(path, '/');
+    /* The scan (LOAD_INFO) holds the arena only inside this call, so it
+     * never keeps it from an app; if one has it, the data goes on the heap. */
     if (foreground &&
         (data = arena_claim(data_size, sh[data_sec].sh_addralign, base ? base + 1 : path)) != NULL)
       in_arena = 1;
@@ -392,6 +397,13 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
     }
   }
   data_base = (uint32_t)(uintptr_t)data;
+
+  /* The descriptor only: no code, and the data's pointers into it aimed at
+   * nowhere in particular, since none of them is followed. */
+  if (foreground == LOAD_INFO) {
+    code_base = 0;
+    goto data;
+  }
 
   /* Code: from the flash cache when the data is in the arena -- cached code
    * is relocated for one data address, and only the arena keeps one -- and
@@ -426,6 +438,7 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
   }
   code_base = (uint32_t)(uintptr_t)code;
 
+data:
   /* Data last. The arena may hold scratch code from a first launch, so it
    * is cleared first. */
   memset(data, 0, data_size);
@@ -434,7 +447,7 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
   if (rc != CAPP_OK) goto done;
 
   out->info = (const CappInfo *)(data + (info_off - CAPP_DATA_ORIGIN));
-  out->main = (int (*)(const CardApi *, int, char **))(code + main_off);
+  out->main = code ? (int (*)(const CardApi *, int, char **))(code + main_off) : NULL;
   out->code = code;
   out->data = data;
   out->code_size = code_size;
@@ -457,7 +470,8 @@ done:
   }
   if (rc == CAPP_OK)
     ESP_LOGI(TAG, "loaded %s (%s): %u code (%s), %u data (%s), exec free %u",
-             path, out->info->name, (unsigned)out->code_size, in_flash ? "flash" : "RAM",
+             path, out->info->name, (unsigned)out->code_size,
+             in_flash ? "flash" : code ? "RAM" : "not loaded",
              (unsigned)out->data_size, in_arena ? "arena" : "heap",
              (unsigned)capp_exec_free());
   else
@@ -466,6 +480,10 @@ done:
 }
 
 CappResult capp_load(const char *path, LoadedApp *out) { return capp_load_ex(path, out, 0); }
+
+CappResult capp_load_info(const char *path, LoadedApp *out) {
+  return capp_load_ex(path, out, LOAD_INFO);
+}
 
 /* What capp_load_ex took, given back: a reference on the cache entry (the
  * entry itself stays, for the next launch) or the code block, and the arena

@@ -613,7 +613,9 @@ static int load_entry(const char *path, int transient, int keep) {
   e = &s_entry[i];
 
   memset(e, 0, sizeof *e);
-  if (capp_load(path, &la) != CAPP_OK) return -1;
+  /* What it is called and draws as needs only its data; a run kept for a
+   * start needs the code too. */
+  if ((keep ? capp_load(path, &la) : capp_load_info(path, &la)) != CAPP_OK) return -1;
 
   memcpy(e->name, la.info->name, sizeof e->name - 1);
   e->name[sizeof e->name - 1] = 0;

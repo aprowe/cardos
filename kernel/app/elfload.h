@@ -70,6 +70,15 @@ CappResult capp_load(const char *path, LoadedApp *out);
  * cannot be done that way is done as before. */
 CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground);
 
+/* Only what capp_info says -- name, icon, flags, commands -- for the icon
+ * scan: the data, relocated, and no code at all. out->main is not valid and
+ * nothing in the image may be called; capp_unload gives it back. The data
+ * borrows the arena when it is free, the heap otherwise. Loading the code
+ * as well put every app's code in executable RAM once per scan, which the
+ * arena left too little of: at boot, with WiFi starting, the largest piece
+ * was 7.7 KB and every app bigger than that was missing from the launcher. */
+CappResult capp_load_info(const char *path, LoadedApp *out);
+
 /* Called once before the cache writes an app's code (a few hundred
  * milliseconds, the screen frozen during each erase), so the launcher can
  * say "preparing". */

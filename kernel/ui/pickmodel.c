@@ -92,10 +92,15 @@ static void keep_visible(PickModel *m) {
   m->dirty = 1;
 }
 
-/* Read the folder, and put the cursor on `select` if it is there. */
+/* Read the folder, and put the cursor on `select` if it is there.
+ *
+ * Listed straight into m->ent and filtered in place. A PmEntry raw[PM_MAX]
+ * here was 4.6 KB of the shell's 8 KB stack, under an app's capp_main when
+ * it opens the picker at once (Edit with no file): through the serial
+ * link's open, one frame deeper, it overflowed the stack. */
 static void load(PickModel *m, const char *select) {
-  PmEntry raw[PM_MAX];
-  int got, i;
+  PmEntry *raw;
+  int got, i, first, cap;
 
   m->n = 0;
   m->truncated = 0;
@@ -106,11 +111,17 @@ static void load(PickModel *m, const char *select) {
     s->is_dir = 1;
     s->synthetic = 1;
   }
-  got = m->fs.list ? m->fs.list(m->dir, raw, PM_MAX) : -1;
+  first = m->n;
+  cap = PM_MAX - first;
+  raw = &m->ent[first];
+  got = m->fs.list ? m->fs.list(m->dir, raw, cap) : -1;
   if (got < 0) { got = 0; set_note(m, "cannot read this folder"); }
-  if (got >= PM_MAX) m->truncated = 1;
-  for (i = 0; i < got && m->n < PM_MAX; i++)
-    if (wanted(m, &raw[i])) m->ent[m->n++] = raw[i];
+  if (got >= cap) m->truncated = 1;
+  for (i = 0; i < got; i++) {        /* m->n never passes first + i */
+    if (!wanted(m, &raw[i])) continue;
+    if (m->n != first + i) memmove(&m->ent[m->n], &raw[i], sizeof raw[i]);
+    m->n++;
+  }
   sort_entries(m->ent, m->n);
 
   m->sel = 0;
