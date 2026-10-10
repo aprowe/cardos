@@ -137,18 +137,18 @@ is `map_base + slot_offset`.
 **Layout:** a ring of 4 KB sectors. An entry is a run of whole sectors:
 
 ```
-offset 0   header, 64 bytes
+offset 0    header, 128 bytes
   magic        'XIPC'
   seq          uint32, increases per write; the highest seq marks the ring head
   sectors      length of this entry
   key:  path FNV-1a, file size, file mtime      (the appidx key)
-        api version, code size, code CRC32 (of the .capp's raw code, so the
-        same file always means the same bytes)
-  reloc: code vaddr, arena address    (what it was relocated against)
+        api version, code size
+        map base, arena address    (what it was relocated against)
+  flash crc    CRC32 of the code as written, checked on every hit
   path         up to 24 chars, for listings only
   live         0xFFFFFFFF; programmed to 0 to kill the entry (1->0 needs no erase)
   commit       0xFFFFFFFF; programmed to the magic LAST
-offset 64  code (sh_addralign up to 64 honoured; above that, RAM path)
+offset 128  code (sh_addralign up to 128 honoured; above that, RAM code)
 ```
 
 **Boot scan** reads the headers with `esp_partition_read`, walking the ring:
@@ -157,9 +157,31 @@ At most 128 sectors, so the scan costs a few milliseconds. There is no
 separate index file, so there is no index to fall out of step with the
 flash.
 
+**No index in RAM.** A lookup walks the headers on flash (at most 128
+reads of 128 bytes, a few milliseconds), so the only RAM state is the ring
+head, the next seq and the few entries in use. A RAM table of 128 entries
+would have cost 4–9 KB for the uptime.
+
 **Lookup at launch:** stat the `.capp`. If a live, committed entry matches
-the key *and* the reloc pair, map it with no flash write. A matching key with
-a different reloc pair means re-relocate into a new entry.
+the whole key, reloc pair included, and its flash CRC checks, map it with no
+flash write. The raw code's CRC is deliberately not in the key: computing it
+means reading the code from the card on every launch, which the cache exists
+to avoid. Anything else (a new file, a new firmware, a bad CRC) writes a new
+entry.
+
+**Partial overlap cannot happen.** A write starts at the end of the newest
+entry, or at 0. Every entry whose header comes before that point ends at or
+before it, so an erase never leaves a header standing over a hole. Entries
+the erase cuts lose their headers, and their tails read as free sectors. A
+host soak test (hundreds of laps of mixed sizes, every live entry must still
+check) holds the invariant, and the CRC check on every hit backs it up.
+
+**A `.capp` that changes on the card is forgotten at once.** Size and mtime
+are the key, and with no clock FAT stamps every write 1980-01-01. A rebuilt
+app of the same size would then match its old entry, and old code would run
+with new data. So the fs change hook (`fs_on_change`, which already deletes
+`/cache/apps.idx`) also kills the cache entries for any changed path ending
+in `.capp`. The path hash folds case, as FAT does.
 
 **Write:** at the ring head. If `head + n` passes the end, wrap to 0 (the
 tail sectors stay unused until the next lap). Every entry the new one
@@ -186,21 +208,26 @@ a lap every few days, which works out to centuries.
 The order changes: today it allocates code first. Data has to come first now,
 because the flags are in `capp_info`, inside data.
 
-1. Parse headers as today.
-2. If the caller asked for the foreground and the arena is free and big
+1. Parse headers as today, and find `capp_main` and `capp_info` in the
+   symbol table (moved up from the end).
+2. Read only `capp_info`'s first four bytes (version, flags) straight from
+   the file, and check the API version.
+3. If the caller asked for the foreground and the arena is free and big
    enough: data goes into the arena; otherwise into the heap, as today.
-3. Read `capp_info`, check the API version (moved up from the end).
 4. **XIP** if: data is in the arena, the partition exists, and the flags lack
    `CAPP_CODE_IN_RAM`. Look up the cache. On a hit, `code = slot vaddr`. On a
-   miss, relocate and write (below).
+   miss, relocate and write (below). If XIP fails at any point (ring busy,
+   a write error), the code goes to executable RAM and **the data stays in
+   the arena**. RAM code relocated against the arena is as good as any.
    **Otherwise** `code_alloc` from executable RAM, as today.
-5. Relocate data against (data base, code base), as today. Data is always
-   loaded fresh from the `.capp` and relocated in RAM.
+5. Read data into its block and relocate it against (data base, code base).
+   Data is always loaded fresh from the `.capp` and relocated in RAM.
 
 **Relocating code for flash, without a code-sized buffer:** the reason for
 all this is that a 24 KB block may not exist. So the miss path uses the arena
 itself as scratch, *before* data is read into it (the arena is reserved for
-this launch and holds nothing yet). For each window of up to 28 KB of code:
+this launch and holds nothing yet). This is why step 2 reads the flags from
+the file rather than from the loaded data. For each window of up to 28 KB of code:
 read it, apply the `.code` relocations that fall in the window, erase, write.
 Code of 28 KB or less is one window; `CAPP_MAX_CODE` (96 KB) is at most four.
 The relocation arithmetic moves out of `elfload.c` into a portable
@@ -243,7 +270,7 @@ still are.
 | No `appcode` partition (an OTA'd device, older table) | RAM path for all |
 | Arena held, or data > 28 KB | RAM path |
 | `CAPP_CODE_IN_RAM` | Code in exec RAM, data in arena |
-| Write failed, ring full of in-use entries | RAM path, line in `log` |
+| Write failed, ring busy with in-use entries | Code in exec RAM, data stays in arena, line in `log` |
 | Entry's reloc pair stale (new firmware) | Rewritten on this launch |
 
 A big app on the RAM path fails as it does today, with "needs N KB in one
@@ -251,8 +278,7 @@ piece".
 
 ### 7. The opt-out flag
 
-`CAPP_CODE_IN_RAM 0x0020` in `capp.h` (the next free bit; checked against
-every `CAPP_*` flag at implementation time). Adding a flag changes no table
+`CAPP_CODE_IN_RAM 0x0040` in `capp.h` (0x0020 is `CAPP_PAINT_DIRECT`). Adding a flag changes no table
 layout, so **no API bump**. Old apps lack it and go to XIP, which is the
 point.
 
