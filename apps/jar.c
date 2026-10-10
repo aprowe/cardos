@@ -13,8 +13,9 @@
  * shop, My Stuff, upgrades, garden, shelf) and Jar Post (apps/jarpost.c:
  * friends, gifts, mail) -- because the three together were 44.5 KB to load
  * against a heap whose biggest piece is often 27 KB. Quitting either comes
- * back here, and the jar starts again from its save, paid for the time it
- * was away. The world is apps/jarsim.h, the item record apps/jaritem.h, the
+ * back here, and the jar starts again from its save. Nothing is made while
+ * the jar is off screen -- not in the companions, not while shut: jam and
+ * coins come only from this scene running. The world is apps/jarsim.h, the item record apps/jaritem.h, the
  * card apps/jarstore.h, the pictures apps/jar_art.h (tools/make_jar_art.py
  * from tools/jar_art.txt). Host tests: test/test_jarsim.c,
  * test/test_jaritem.c, test/test_jarstore.c, test/test_jar.c (JAR_DUMP=dir
@@ -85,7 +86,7 @@ static union {
 static struct {
   int view;
   int dsel, dmove, dnew;                /* decorate: selection, moving, a new one */
-  int16_t dx0, dy0;
+  int16_t dx0, dy0, dl0;                /* where it was: to put it back on Esc */
   char dname[JI_NAME + 1];              /* the item selected in decorate */
   char dline[JI_LINE + 1];
   char msg[40];
@@ -139,6 +140,12 @@ static uint16_t *SB = SCR.strip;        /* where row SY0 starts (zoom: the buffe
 
 static void px(int x, int y, uint16_t c) {
   if ((unsigned)x < SW && y >= SY0 && y < SY1) SB[(y - SY0) * SW + x] = c;
+}
+
+/* Darken what is already in row y from x, w long, a/256 of the way to black. */
+static void shade(int x, int y, int w, int a) {
+  if (y < SY0 || y >= SY1) return;
+  for (; w > 0; w--, x++) if ((unsigned)x < SW) SB[(y - SY0) * SW + x] = mix(SB[(y - SY0) * SW + x], 0, 0, 0, a);
 }
 
 static void fill(int x, int y, int w, int h, uint16_t c) {
@@ -322,6 +329,74 @@ static void background(void) {
   }
 }
 
+/* Bottle caps: the belt's colours, and the ruler shelf's leg. */
+static const uint16_t CAPS[4] = { CAPP_RGB(0x9a, 0xa0, 0xaa), CAPP_RGB(0xc8, 0x42, 0x3a),
+                                  CAPP_RGB(0x4a, 0x7a, 0xc8), CAPP_RGB(0xff, 0xd1, 0x66) };
+
+/* The ledges at the back (apps/jarsim.h, "Levels"), drawn before anything
+ * stands in front of them. 1: a wooden ruler on a stack of bottle caps (the
+ * climb) and three cotton reels. 2: a lolly stick on a tower of matchboxes
+ * (the climb), its far end hung from the lid on a thread. */
+static void ledges(void) {
+  static const uint16_t THREAD[3] = { CAPP_RGB(0xe8, 0x7a, 0x9a), CAPP_RGB(0x4a, 0xa8, 0xa0), CAPP_RGB(0xe8, 0xe0, 0xc8) };
+  static const uint16_t BOX[4] = { CAPP_RGB(0xc8, 0x42, 0x3a), CAPP_RGB(0x4a, 0x8a, 0x5a),
+                                   CAPP_RGB(0xe0, 0xb0, 0x40), CAPP_RGB(0x3a, 0x6a, 0xb8) };
+  int k, x, y, x0, x1;
+  for (k = 0; k < 10; k++) {                   /* 1: caps, flat, a little out of true */
+    uint16_t c = CAPS[(k * 3 + 1) & 3];
+    int cx = JS_LEDGE_UP[1] - 6 + (int)(hash2(k, 3) % 3), cy = JS_SOIL - 3 - 3 * k;
+    fill(cx + 1, cy, 8, 1, mix(c, 255, 255, 255, 90));
+    fill(cx, cy + 1, 10, 2, mix(c, 0, 0, 0, 100));
+    for (x = 0; x < 10; x += 2) px(cx + x, cy + 1, c);     /* the crimp */
+  }
+  for (k = 0; k < 3; k++) {                    /* ... and three cotton reels */
+    uint16_t t = THREAD[k];
+    int rx = JS_LEDGE_HI[1] - 5, ry = JS_SOIL - 10 - 10 * k;
+    fill(rx, ry, 10, 10, rgb(0x7a, 0x56, 0x34));
+    fill(rx, ry, 10, 1, rgb(0xd0, 0xa4, 0x70));
+    fill(rx, ry + 8, 10, 1, rgb(0xb8, 0x8a, 0x56));
+    fill(rx + 1, ry + 2, 8, 6, t);
+    for (y = 3; y < 8; y += 2) fill(rx + 1, ry + y, 8, 1, mix(t, 0, 0, 0, 50));
+    fill(rx + 2, ry + 2, 1, 6, mix(t, 255, 255, 255, 110));
+  }
+  /* the ruler: a lit edge, a face with its marks, and a shadow */
+  x0 = JS_LEDGE_LO[1] - 6;
+  x1 = JS_LEDGE_HI[1] + 7;
+  y = JS_SOIL - JS_LEDGE_H[1];
+  fill(x0, y, x1 - x0, 1, rgb(0xf4, 0xdc, 0x8c));
+  fill(x0, y + 1, x1 - x0, 2, rgb(0xe0, 0xb8, 0x58));
+  fill(x0, y + 3, x1 - x0, 1, rgb(0x9a, 0x74, 0x38));
+  for (x = x0 + 2; x < x1 - 1; x += 3) fill(x, y + 1, 1, (x - x0) % 15 == 2 ? 2 : 1, rgb(0x6a, 0x50, 0x28));
+  shade(x0 + 3, y + 4, x1 - x0 - 5, 70);
+  /* 2: the matchboxes, any old how: a sleeve, a label with a match on it,
+   * the brown striker at one end */
+  for (k = 0; k < 8; k++) {
+    uint16_t c = BOX[k & 3];
+    int w = 14 - (k & 1), bx = JS_LEDGE_UP[2] - 8 + (int)(hash2(k, 5) % 3), by = JS_SOIL - 6 - 6 * k;
+    int sx = (k & 2) ? bx + w - 2 : bx, lx = (k & 2) ? bx + 2 : bx + 4;
+    fill(bx, by, w, 1, mix(c, 255, 255, 255, 80));
+    fill(bx, by + 1, w, 4, c);
+    fill(sx, by + 1, 2, 4, rgb(0x5a, 0x3c, 0x2a));
+    px(sx + (k & 1), by + 2, rgb(0x8a, 0x64, 0x48));
+    fill(lx, by + 1, 7, 4, rgb(0xf0, 0xe6, 0xc8));
+    fill(lx + 2, by + 3, 4, 1, rgb(0xc8, 0x9a, 0x5a));    /* a match ... */
+    fill(lx + 1, by + 2, 2, 2, rgb(0xd8, 0x2a, 0x2a));    /* ... and its head */
+    fill(bx, by + 5, w, 1, rgb(0x30, 0x20, 0x18));
+  }
+  /* the thread holding up the far end, its knot, and the lolly stick:
+   * rounded ends, a lit edge, a little grain */
+  x0 = JS_LEDGE_LO[2] - 6;
+  x1 = JS_LEDGE_HI[2] + 7;
+  y = JS_SOIL - JS_LEDGE_H[2];
+  fill(x1 - 3, 9, 1, y - 8, rgb(0xc8, 0xc0, 0xb0));
+  fill(x1 - 4, y + 3, 3, 1, rgb(0xc8, 0xc0, 0xb0));
+  fill(x0 + 1, y, x1 - x0 - 2, 1, rgb(0xec, 0xd8, 0xac));
+  fill(x0, y + 1, x1 - x0, 1, rgb(0xd4, 0xb6, 0x82));
+  fill(x0 + 1, y + 2, x1 - x0 - 2, 1, rgb(0x96, 0x78, 0x4c));
+  for (x = x0 + 4; x < x1 - 4; x += 7) px(x + (int)(hash2(x, 9) % 3), y + 1, rgb(0xb8, 0x98, 0x66));
+  shade(x0 + 14, y + 3, x1 - x0 - 18, 70);
+}
+
 static const int PLANT[5] = { SPR_BUSH, SPR_FERN, SPR_SHROOM, SPR_FLOWER, SPR_CACTUS };
 
 static void garden(void) {
@@ -354,9 +429,7 @@ static void garden(void) {
 
 static void works(void) {
   int i, x, working;
-  static const uint16_t CAP[4] = { CAPP_RGB(0x9a, 0xa0, 0xaa), CAPP_RGB(0xc8, 0x42, 0x3a),
-                                   CAPP_RGB(0x4a, 0x7a, 0xc8), CAPP_RGB(0xff, 0xd1, 0x66) };
-  uint16_t cap = CAP[J.belt], capd = mix(cap, 0, 0, 0, 90);
+  uint16_t cap = CAPS[J.belt], capd = mix(cap, 0, 0, 0, 90);
   int off = (int)(J.belt_pos / JS_FX) % 7;
   /* the belt: bottle caps on edge, turning */
   for (x = 112 - 7 + off; x < 166; x += 7) {
@@ -428,8 +501,8 @@ static void item_at(int i, int *x, int *y) {
   if (p->move == JM_FLOATS || p->move == JM_SWAYS) bob = (ph < 128 ? ph : 255 - ph) * 7 / 128 - 3;
   *x = p->x / JS_FX - 8;
   if (p->kind == JK_HANGING) { *y = JS_LID + p->home_y; *x += bob / 2; }
-  else if (p->kind == JK_CRITTER) *y = JS_SOIL - 16 - p->home_y - p->yoff / 16 - (p->move == JM_FLOATS ? bob : 0);
-  else *y = JS_SOIL - 16 - p->yoff / 16;
+  else if (p->kind == JK_CRITTER) *y = JS_SOIL - 16 - p->lift - p->home_y - p->yoff / 16 - (p->move == JM_FLOATS ? bob : 0);
+  else *y = JS_SOIL - 16 - p->lift - p->yoff / 16;
 }
 
 static void items(void) {
@@ -524,6 +597,7 @@ static void parachute(void) {
 
 static void scene(void) {
   background();
+  ledges();
   garden();
   works();
   dock();
@@ -609,6 +683,7 @@ static void bars(void) {
   static const char *const H_DSEL[] = { "<>", "pick", "Ent", "move", "N", "add", "X", "out", "Esc", "done", 0 };
   static const char *const H_DMOVE[] = { "<>", "move", "^v", "string", "Ent", "put", "Esc", "cancel", 0 };
   static const char *const H_DMOVE2[] = { "<>", "move", "Ent", "put", "Esc", "cancel", 0 };
+  static const char *const H_DMOVE3[] = { "<>", "move", "^v", "level", "Ent", "put", "Esc", "cancel", 0 };
   const char *where = "The Jar";
   char b[24];
   int ty = -G.bars, by = SHT - BAR + G.bars;
@@ -645,11 +720,12 @@ static void bars(void) {
       static const char *const H_JAR[] = { "Ent", "menu", "Z", "zoom", 0 };
       hints(by, H_JAR);
     }
-    else hints(by, !G.dmove ? H_DSEL : J.placed[G.dsel].kind == JK_HANGING ? H_DMOVE : H_DMOVE2);
+    else hints(by, !G.dmove ? H_DSEL : J.placed[G.dsel].kind == JK_HANGING ? H_DMOVE :
+                   js_has_levels(&J.placed[G.dsel]) ? H_DMOVE3 : H_DMOVE2);
   }
 }
 
-/* A note across the top of the body: away earnings, a parcel, a heart. */
+/* A note across the top of the body: a parcel, a heart. */
 static void note(void) {
   int w;
   if (!G.msg[0] || (int32_t)(api->ticks_ms() - G.msg_until) > 0) return;
@@ -671,6 +747,18 @@ static void decor_overlay(void) {
   item_at(G.dsel, &x, &y);
   frame(x - 1, y - 1, 18, 18, C_GOLD);
   text(4, BAR + 2, G.dname, C_TEXT);
+  if (G.dmove && js_has_levels(&J.placed[G.dsel])) {
+    /* Moving something that stands: where it is, in words, and each level
+     * it could go dotted along its top -- this one gold, the others dim. */
+    static const char *const WHERE[JS_LEVELS] = { "on the soil", "on the ruler shelf", "on the matchbox ledge" };
+    int lv = J.placed[G.dsel].level, l;
+    for (l = 0; l < JS_LEVELS; l++) {
+      int x0 = l ? JS_LEDGE_LO[l] - 6 : x - 4, x1 = l ? JS_LEDGE_HI[l] + 7 : x + 20;
+      for (; x0 < x1; x0 += 2) px(x0, JS_SOIL - JS_LEDGE_H[l] - 1, l == lv ? C_GOLD : C_DIM);
+    }
+    text(4 + (slen(G.dname) + 1) * 6, BAR + 2, WHERE[lv], C_GOLD);
+    return;
+  }
   textn(4 + (slen(G.dname) + 1) * 6, BAR + 2, G.dline, 38 - slen(G.dname), C_DIM);
 }
 
@@ -714,7 +802,7 @@ static void render_zoomed(int k) {
   }
   SY0 = o0;
   SY1 = o0 + SH > SHT ? SHT : o0 + SH;
-  /* on top, at full size: a banner (a parcel, a heart, away earnings) and
+  /* on top, at full size: a banner (a parcel, a heart) and
    * the mark that this is the zoomed view */
   note();
   if (SY0 < 12) {
@@ -830,6 +918,7 @@ static void place_new(uint32_t id) {
   G.dnew = 1;
   G.dx0 = J.placed[i].home_x;
   G.dy0 = J.placed[i].home_y;
+  G.dl0 = 0;
 }
 
 static int key_decor(int k) {
@@ -839,12 +928,16 @@ static int key_decor(int k) {
     switch (k) {
     case CAPP_KEY_LEFT:  js_move_to(&J, G.dsel, x - step, y); return 1;
     case CAPP_KEY_RIGHT: js_move_to(&J, G.dsel, x + step, y); return 1;
-    case CAPP_KEY_UP:    if (p->kind == JK_HANGING) js_move_to(&J, G.dsel, x, y - 2); return 1;
-    case CAPP_KEY_DOWN:  if (p->kind == JK_HANGING) js_move_to(&J, G.dsel, x, y + 2); return 1;
+    /* Up and down: a hanging thing's string, or what stands -- up onto a
+     * ledge, down to the one below. */
+    case CAPP_KEY_UP: case CAPP_KEY_DOWN:
+      if (p->kind == JK_HANGING) js_move_to(&J, G.dsel, x, k == CAPP_KEY_UP ? y - 2 : y + 2);
+      else js_set_level(&J, G.dsel, k == CAPP_KEY_UP ? p->level + 1 : p->level - 1);
+      return 1;
     case CAPP_KEY_ENTER: G.dmove = 0; G.dnew = 0; save(); return 1;
     case CAPP_KEY_ESC:
       if (G.dnew) { js_unplace(&J, G.dsel); G.dsel = 0; decor_select(0); save(); }
-      else js_move_to(&J, G.dsel, G.dx0, G.dy0);
+      else { p->level = (uint8_t)G.dl0; js_move_to(&J, G.dsel, G.dx0, G.dy0); }
       G.dmove = 0;
       G.dnew = 0;
       return 1;
@@ -860,6 +953,7 @@ static int key_decor(int k) {
     G.dnew = 0;
     G.dx0 = p->home_x;
     G.dy0 = p->home_y;
+    G.dl0 = p->level;
     return 1;
   case 'n': case 'N': open_app("Jar Shop", "decor"); return 1;
   case 'x': case 'X':
@@ -1116,21 +1210,18 @@ static void first_run(void) {
 
 static void load(void) {
   int i;
-  uint32_t now = api->epoch(), gone, jars;
+  uint32_t now = api->epoch();
   jst_dirs(api);
   if (jst_load(api, &J, SCR.text, sizeof SCR.text) != 0) { first_run(); return; }
   js_settle_beds(&J, now);
   for (i = 0; i < J.nwant; i++) {
-    int x = J.want[i].x, y = J.want[i].y;
-    if (item_read(J.want[i].id) == 0) js_place(&J, &SCR.io.it, x, y);
+    int x = J.want[i].x, y = J.want[i].y, k;
+    if (item_read(J.want[i].id) != 0) continue;
+    k = js_place(&J, &SCR.io.it, x, y);
+    if (k >= 0 && J.want[i].lv) js_set_level(&J, k, J.want[i].lv);
   }
   J.nwant = 0;                                     /* placed, or gone from the card */
-  gone = now && J.seen && now > J.seen ? now - J.seen : 0;
-  jars = js_away(&J, now);
-  if (jars && gone >= 600) {                       /* not for a trip to the shop */
-    api->fmt(G.msg, sizeof G.msg, "While you were away: %u jars", (unsigned)jars);
-    G.msg_until = api->ticks_ms() + 7000;
-  }
+  js_away(&J, now);                                /* nothing is made off screen */
   /* Jar Shop or Jar Post asked for an item to be put in the jar. */
   if (J.decor) {
     uint32_t id = J.decor;
@@ -1154,6 +1245,7 @@ const CappInfo capp_info = {
   "I\tMy Stuff: what you own; G there gifts it\n"
   "Z\tzoom to 2x; Tab follows the next critter\n"
   "D\tdecorate: move, add, take out\n"
+  "^v\tmoving: up onto a shelf, or down\n"
   "P\tthe garden: plant the beds\n"
   "H\tthe shelf: what steers the shop\n"
   "F\tfriends\n"
