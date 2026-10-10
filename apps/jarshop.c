@@ -38,6 +38,11 @@ enum { P_BROWSE = 0, P_DECOR, P_SHELF };                 /* what My Stuff is pic
 enum { N_DAY_POST = N_APP, N_DAY_POLL, N_ITEM };
 
 static JStock S;                                          /* the stock on show */
+/* A word to the shopkeeper ("could use more red things"): kept on the card,
+ * sent with every day's request; the server treats it as a nudge to a dealer
+ * with connections, not a wish. e in the shop edits it. */
+static char HINT[JST_HINT_MAX + 1], HIN[JST_HINT_MAX + 1];
+static int hint_editing;
 static JStock NS;                                         /* the day's batch, arriving */
 
 static struct {
@@ -188,6 +193,7 @@ static int day_body(void) {
     }
   k = put(NET, k, sizeof NET, "\n");
   if (tz[0]) { k = put(NET, k, sizeof NET, "tz "); k = put(NET, k, sizeof NET, tz); k = put(NET, k, sizeof NET, "\n"); }
+  if (HINT[0]) { k = put(NET, k, sizeof NET, "hint "); k = put(NET, k, sizeof NET, HINT); k = put(NET, k, sizeof NET, "\n"); }
   return k;
 }
 
@@ -234,11 +240,15 @@ static int day_reply(void) {
   for (c = date; *c; c++) if (*c == ' ') *c = 0;
   ji_zero(&NS, (int)sizeof NS);
   ji_copy(NS.date, date, (int)sizeof NS.date);
-  G.nitems = 0;
+  G.nitems = -1;
   for (p = tsv_next_line(p); *p; p = tsv_next_line(p)) {
     if (str_starts(p, "tags ")) tsv_field(p + 5, 0, NS.tags, sizeof NS.tags);
     else if (str_starts(p, "items ")) { const char *q = p + 6; G.nitems = (int)str_uint(&q); }
   }
+  /* No count is not a count of none: an older server answered a POST for a
+   * stock it had already made with "ok DATE" alone, and that replaced the
+   * stock with nothing. Ask for the whole answer instead. */
+  if (G.nitems < 0) { G.nitems = 0; return 0; }
   /* The batch's records are kept under a number that names the day, so a
    * stock file only ever points at records of its own day. */
   NS.gen = (uint8_t)today_gen();
@@ -260,6 +270,11 @@ static void net_reply(int n) {
     if (n < 0) { net_status(""); failed("Today's stock", n); return; }
     if (refused("Today's stock")) { net_status(""); return; }
     if (day_reply()) { net_status("fetching today's things"); next_item(); return; }
+    if (str_starts(NET, "ok")) {                          /* made, but no count: GET it */
+      G.wait_until = api->ticks_ms();
+      G.again = 1;
+      return;
+    }
     if (++G.polls > 60) { net_status(""); say("The stock is late today"); return; }
     G.wait_until = api->ticks_ms() + 3000;                /* "pending": ask again */
     G.again = 1;
@@ -484,8 +499,9 @@ static void paint_shelf(void) {
 }
 
 static void app_paint(void *st, CRect c) {
-  static const char *const H_STOCK[] = { "Ent", "buy", "G", "gift", "Tab", "stuff", "Esc", "jar", 0 };
-  static const char *const H_STUFF[] = { "Ent", "open", "Tab", "shop", "Esc", "jar", 0 };
+  static const char *const H_STOCK[] = { "Ent", "buy", "G", "gift", "E", "hint", "Tab", "stuff", 0 };
+  static const char *const H_HINT[] = { "Ent", "tell him", "Esc", "never mind", 0 };
+  static const char *const H_STUFF[] = { "Ent", "open", "G", "gift", "Tab", "shop", "Esc", "jar", 0 };
   static const char *const H_PICK[] = { "Ent", "choose", "Esc", "back", 0 };
   static const char *const H_CARD[] = { "Ent", "in jar", "H", "shelf", "G", "gift", "Esc", "back", 0 };
   static const char *const H_UP[] = { "^v", "pick", "Ent", "buy", "Esc", "jar", 0 };
@@ -496,7 +512,10 @@ static void app_paint(void *st, CRect c) {
   const char *where = "Shop";
   (void)st; (void)c;
   switch (G.view) {
-  case V_STOCK:  paint_grid(); break;
+  case V_STOCK:
+    paint_grid();
+    if (hint_editing) { input_box("A word to the shopkeeper:", HIN); h = H_HINT; }
+    break;
   case V_STUFF:  paint_grid(); h = G.pick ? H_PICK : H_STUFF;
                  where = G.pick == P_DECOR ? "Add to the jar" : G.pick == P_SHELF ? "Put on the shelf" : "My Stuff"; break;
   case V_CARD:   paint_card(0, 0); h = H_CARD; where = "Item"; break;
@@ -678,6 +697,26 @@ static int app_key(void *st, uint8_t k) {
   (void)st;
   U.dirty = 1;
   if (U.msg[0]) U.msg[0] = 0;
+  if (hint_editing) {
+    int n = slen(HIN);
+    if (k == CAPP_KEY_ESC) { hint_editing = 0; return 1; }
+    if (k == CAPP_KEY_ENTER) {
+      hint_editing = 0;
+      jst_clean(HIN);
+      ji_copy(HINT, HIN, (int)sizeof HINT);
+      if (HINT[0]) { jst_put(api, JST_HINT, HINT, slen(HINT)); say("He says he'll ask around"); }
+      else { api->remove(JST_HINT); say("Nothing in particular, then"); }
+      return 1;
+    }
+    if (k == CAPP_KEY_BACK) { if (n) HIN[n - 1] = 0; return 1; }
+    if (k >= 32 && k < 127 && n < JST_HINT_MAX) { HIN[n] = (char)k; HIN[n + 1] = 0; }
+    return 1;
+  }
+  if ((k == 'e' || k == 'E') && G.view == V_STOCK) {
+    ji_copy(HIN, HINT, (int)sizeof HIN);
+    hint_editing = 1;
+    return 1;
+  }
   /* For trying things out: r asks the server for a new stock now (it makes
    * one even though today's is done), $ is 1000 coins. */
   if (k == 'r' && (G.view == V_STOCK || G.view == V_STUFF)) {
@@ -728,8 +767,10 @@ const CappInfo capp_info = {
   "Jar Factory's shop, garden and shelf\n"
   "Tab\tStock and My Stuff\n"
   "Enter\tbuy; on an item, put it in the jar\n"
-  "G\tsend as a gift (Jar Post)\n"
+  "G\tsend as a gift (Jar Post), in the shop, My Stuff or a card\n"
   "H\tput on the shelf\n"
+  "E\ta word to the shopkeeper: \"could use more red\".\n"
+  "\the knows people; it nudges what turns up\n"
   "r\ta new stock from the server now (testing)\n"
   "$\t1000 coins (testing)\n"
   "Esc\tback to the jar\n",
@@ -743,6 +784,9 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api->mem_set(&G, 0, sizeof G);
   api->mem_set(&U, 0, sizeof U);
   if (ui_load()) return 0;
+  hint_editing = 0;
+  if (jst_get(api, JST_HINT, HINT, sizeof HINT) < 0) HINT[0] = 0;
+  jst_clean(HINT);
   if (str_same(s, "stuff")) go_stuff(P_BROWSE);
   else if (str_same(s, "decor")) go_stuff(P_DECOR);
   else if (str_same(s, "up")) G.view = V_UP;

@@ -42,6 +42,8 @@
 #define JST_MAILDIR   CAPP_VAR "/jar/mail"
 #define JST_FRIENDS   CAPP_VAR "/jar/friends.txt"
 #define JST_PUB       CAPP_VAR "/jar/server.pub"
+#define JST_HINT      CAPP_VAR "/jar/hint.txt"   /* a word to the shopkeeper */
+#define JST_HINT_MAX  34
 
 #define JST_POSTAGE   10
 #define JST_NOTE      24

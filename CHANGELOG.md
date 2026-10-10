@@ -11,6 +11,24 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.11.4 -- 2026-10-10
+
+- **Fix: the shop's stock could vanish.** Once the day's stock was already
+  made, the server answered the shop's request with "ok DATE" and no item
+  count. Jar Shop read that as a stock of nothing and saved it over the
+  real one. Now the server sends the whole answer (the same one GET gives),
+  and the shop treats a reply with no count as "ask again", never as empty.
+- **A word to the shopkeeper:** `e` in the shop. It is a line of up to 34
+  characters, like "could use more industrial stuff", kept in
+  /var/jar/hint.txt and sent with every day's request. The server tells
+  Claude the shopkeeper is a junk dealer with connections, not a
+  wish-granter. A hint leans two or three items that way, still in keeping
+  with the day's tags, and nothing simply grants it. A hint that fails the
+  word filter is dropped.
+- **Jar menu:** Zoom leaves the menu (Z still works and stays on the bar).
+  A **My Stuff** tile (`i`) takes its place and opens your inventory, where
+  the bar now shows `G gift`.
+
 ## v0.11.3 -- 2026-10-10
 
 - **Jar Factory menu:** the bottom bar is just "Ent menu  Z zoom" now.

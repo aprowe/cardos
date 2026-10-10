@@ -385,6 +385,22 @@ class Checks(unittest.TestCase):
         self.assertEqual(req["shelf"], ["spooky", "cosy"])
         self.assertEqual(req["owned"], ["Snail king", "Moth"])
         self.assertEqual(req["tz"], "PST8PDT,M3.2.0,M11.1.0")
+        self.assertEqual(req["hint"], "")
+
+    def test_a_hint_is_a_nudge_to_a_dealer(self):
+        req = jar.parse_request('hint could use more "red" things, ' + "x" * 80 + "\n")
+        self.assertTrue(req["hint"].startswith("could use more 'red' things"))
+        self.assertLessEqual(len(req["hint"]), jar.HINT_LEN)
+        self.assertEqual(jar.parse_request("hint shit everywhere\n")["hint"], "")
+        day = {"date": "d", "season": "s", "moon": "m"}
+        p = jar.prompt_for(8, ["cosy"], day, [], hint="more industrial stuff")
+        self.assertIn('"more industrial stuff"', p)
+        self.assertIn("not a wish-granter", p)
+        self.assertNotIn("shopkeeper", jar.prompt_for(8, ["cosy"], day, []))
+
+    def test_request_tags_facts(self):
+        req = jar.parse_request("garden mushroom=4,flower=2,weed=9,cactus=x\n"
+                                "shelf spooky,Bad Tag,cosy\n")
         facts = {"season": "autumn", "weather": "rainy", "full_moon": True, "moon": "full moon"}
         tags = jar.day_tags(req, facts, "x")
         self.assertEqual(tags[0], "spooky")                    # 4 from mushrooms, 1 shelf
@@ -592,8 +608,9 @@ class Routes(unittest.TestCase):
         self.assertTrue(lines[1].startswith("tags odd, "), lines[1])
         n = int(lines[2].split()[1])
         self.assertIn(n, (8, 9))
-        # once made, a POST says so and makes nothing more
-        self.assertEqual(self.req("POST", "/jar/day", self.alex, ""), (200, "ok %s\n" % today))
+        # once made, a POST says so, with the whole answer GET gives ("ok
+        # DATE" alone emptied the shop), and makes nothing more
+        self.assertEqual(self.req("POST", "/jar/day", self.alex, ""), (200, body))
         s, pub = self.req("GET", "/jar/pubkey", self.alex)
         self.assertEqual(pub, self.req("GET", "/sign/pubkey", None)[1])
         self.assertEqual(len(pub.strip()), 130)

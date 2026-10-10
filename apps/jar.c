@@ -564,10 +564,10 @@ static void text2(int x, int y, const char *s, uint16_t c) {
 
 /* The jar's menu: Enter opens it, every command a big tile with its key in
  * the corner (the letters still work from the jar without it). */
-enum { M_SHOP, M_DECOR, M_GARDEN, M_SHELF, M_UP, M_FRIENDS, M_MAIL, M_ZOOM, M_N };
+enum { M_SHOP, M_STUFF, M_DECOR, M_GARDEN, M_SHELF, M_UP, M_FRIENDS, M_MAIL, M_N };
 static const char *const MENU_NAME[M_N] = {
-  "Shop", "Decorate", "Garden", "Shelf", "Upgrades", "Friends", "Mail", "Zoom" };
-static const char MENU_KEY[M_N] = { 'S', 'D', 'P', 'H', 'U', 'F', 'M', 'Z' };
+  "Shop", "My Stuff", "Decorate", "Garden", "Shelf", "Upgrades", "Friends", "Mail" };
+static const char MENU_KEY[M_N] = { 'S', 'I', 'D', 'P', 'H', 'U', 'F', 'M' };
 #define MENU_TOP   (BAR + 2)
 #define MENU_ROW   26
 #define MENU_W     116
@@ -913,6 +913,7 @@ static int app_key(void *st, unsigned char k) {
   }
   switch (k) {
   case 's': case 'S': open_app("Jar Shop", "shop"); return 1;
+  case 'i': case 'I': open_app("Jar Shop", "stuff"); return 1;
   case 'd': case 'D': G.view = V_DECOR; G.dmove = 0; decor_select(G.dsel); return 1;
   case 'p': case 'P': open_app("Jar Shop", "garden"); return 1;
   case 'h': case 'H': open_app("Jar Shop", "shelf"); return 1;
@@ -1150,6 +1151,8 @@ const CappInfo capp_info = {
     0x4E, 0x02, 0x44, 0x22, 0x44, 0x72, 0x44, 0x22,
     0x7F, 0xFE, 0x40, 0x02, 0x40, 0x02, 0x3F, 0xFC },
   "S\tthe shop (Tab: My Stuff)\n"
+  "I\tMy Stuff: what you own; G there gifts it\n"
+  "Z\tzoom to 2x; Tab follows the next critter\n"
   "D\tdecorate: move, add, take out\n"
   "P\tthe garden: plant the beds\n"
   "H\tthe shelf: what steers the shop\n"

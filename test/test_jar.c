@@ -185,13 +185,18 @@ void test_jar_keys_open_the_companions_after_saving(void) {
   CHECK_EQ(G.menu, 0);
   key(CAPP_KEY_ENTER);
   G.msel = 0;
-  key(CAPP_KEY_DOWN);                     /* Shop -> Garden, a row down */
+  key(CAPP_KEY_DOWN);                     /* Shop -> Decorate, a row down */
   CHECK_EQ(G.msel, 2);
-  key(CAPP_KEY_RIGHT);                    /* -> Shelf */
+  key(CAPP_KEY_RIGHT);                    /* -> Garden */
   CHECK_EQ(G.msel, 3);
   key(CAPP_KEY_ENTER);
   CHECK_EQ(G.menu, 0);
-  CHECK(strcmp(RAN, "Jar Shop") == 0 && strcmp(RAN_ARGS, "shelf") == 0);
+  CHECK(strcmp(RAN, "Jar Shop") == 0 && strcmp(RAN_ARGS, "garden") == 0);
+  RAN[0] = 0;
+  key(CAPP_KEY_ENTER);                    /* My Stuff, the inventory */
+  G.msel = M_STUFF;
+  key(CAPP_KEY_ENTER);
+  CHECK(strcmp(RAN, "Jar Shop") == 0 && strcmp(RAN_ARGS, "stuff") == 0);
   RAN[0] = 0;
   key(CAPP_KEY_ENTER);                    /* a letter in the menu works as from the jar */
   key('u');

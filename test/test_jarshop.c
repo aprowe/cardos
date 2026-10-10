@@ -338,6 +338,58 @@ void test_jarshop_fetches_the_days_stock_and_checks_each_record(void) {
   CHECK_EQ(JF_NREQ, 0);
 }
 
+/* A server that has the day made already answers the POST "ok DATE" alone
+ * (an older one did): that is not a stock of none -- it once emptied the
+ * shop the second time it was opened. */
+static int made_server(const char *m, const char *path, const char *body, char *out, int cap) {
+  if (!strcmp(path, "/jar/day") && !strcmp(m, "POST")) return snprintf(out, (size_t)cap, "ok 2027-01-15\n");
+  DAY_POLLS = 5;
+  return day_server(m, path, body, out, cap);
+}
+
+void test_jarshop_an_ok_without_a_count_does_not_empty_the_shop(void) {
+  card(500);
+  jf_handler = made_server;
+  FORGE = 0;
+  launch("shop");
+  tick(200);
+  CHECK_EQ(jf_count("/jar/item?i="), 3);
+  CHECK_EQ(S.n, 3);
+  CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "item 9002") != 0);
+}
+
+void test_jarshop_a_word_to_the_shopkeeper(void) {
+  const JfReq *r;
+  const char *s;
+  card(500);
+  jf_handler = day_server;
+  DAY_POLLS = 5;
+  FORGE = 0;
+  launch("shop");
+  tick(3500);
+  r = jf_last("/jar/day");
+  CHECK(r && strstr(r->body, "hint ") == 0);              /* none yet */
+  key('e');
+  for (s = "more red things"; *s; s++) key(*s);
+  shot("s14_hint");
+  key(CAPP_KEY_ENTER);
+  CHECK(fakefs_exists("/var/jar/hint.txt") && strcmp(fakefs_get("/var/jar/hint.txt"), "more red things") == 0);
+  key('r');                                   /* the next ask carries it */
+  r = jf_last("/jar/day");
+  CHECK(r && strstr(r->body, "\nhint more red things\n") != 0);
+  /* kept: opened again, it is still there; Esc while editing changes nothing */
+  launch("shop");
+  key('e');
+  key(CAPP_KEY_BACK);
+  key(CAPP_KEY_ESC);
+  CHECK(fakefs_exists("/var/jar/hint.txt") && strcmp(fakefs_get("/var/jar/hint.txt"), "more red things") == 0);
+  /* emptied, it is gone */
+  key('e');
+  { int i; for (i = 0; i < 40; i++) key(CAPP_KEY_BACK); }
+  key(CAPP_KEY_ENTER);
+  CHECK(!fakefs_exists("/var/jar/hint.txt"));
+}
+
 void test_jarshop_g_buys_and_goes_to_send_a_gift(void) {
   card(500);
   jf_handler = day_server;

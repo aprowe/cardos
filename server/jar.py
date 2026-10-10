@@ -510,8 +510,9 @@ _TAG = re.compile(r"^[a-z][a-z-]{0,15}$")
 
 def parse_request(body):
     """The device's lines -> {"garden": {plant: n}, "shelf": [tags],
-    "owned": [names], "tz": str}. Unknown lines and junk are dropped."""
-    out = {"garden": {}, "shelf": [], "owned": [], "tz": ""}
+    "owned": [names], "tz": str, "hint": str}. Unknown lines and junk are
+    dropped; so is a hint that does not pass the filter."""
+    out = {"garden": {}, "shelf": [], "owned": [], "tz": "", "hint": ""}
     for line in body.splitlines():
         head, _, rest = line.strip().partition(" ")
         rest = rest.strip()
@@ -536,6 +537,10 @@ def parse_request(body):
                     out["owned"].append(n)
         elif head == "tz":
             out["tz"] = rest[:64]
+        elif head == "hint":
+            h = wire.flat(rest, HINT_LEN, ascii=True).replace('"', "'")
+            if clean(h):
+                out["hint"] = h
     return out
 
 
@@ -624,7 +629,10 @@ def _numbered(d):
     return ", ".join("%d %s" % (v, k) for k, v in sorted(d.items(), key=lambda kv_: kv_[1]))
 
 
-def prompt_for(n, tags, facts, owned, special=None, avoid=()):
+HINT_LEN = 40
+
+
+def prompt_for(n, tags, facts, owned, special=None, avoid=(), hint=""):
     e = enums()
     day = "%s, %s, %s" % (facts["date"], facts["season"], facts["moon"])
     if facts.get("weather"):
@@ -647,6 +655,16 @@ def prompt_for(n, tags, facts, owned, special=None, avoid=()):
     if special:
         lines.append("Today is special (%s): make the last item a rare, special one about it."
                      % special)
+    if hint:
+        # A word to the shopkeeper. He is a junk dealer who knows people, not a
+        # genie: it nudges what turns up, it does not order it.
+        lines.append(
+            "The shopkeeper is a junk dealer with connections, not a wish-granter. The "
+            "player mentioned to him in passing: \"%s\". Treat it as a loose guideline, "
+            "the way a dealer would: let it lean two or three of today's items that way, "
+            "loosely and in the spirit of the tags and the day, and leave the rest as they "
+            "would have been. Do not make an item that simply is the request, and do not "
+            "mention the request in any item's text." % hint)
     if owned or avoid:
         lines.append("Do not reuse these names: %s." % ", ".join(list(owned) + list(avoid)))
     lines += [
@@ -805,7 +823,8 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
             len(good) + n >= want else None
         try:
             got = ask.ask_shape(chat, prompt_for(n, tags, facts, req.get("owned", []), sp,
-                                                 [g["name"] for g in good]),
+                                                 [g["name"] for g in good],
+                                                 req.get("hint", "")),
                                 batch_schema(n), user=person, limit=ask.DAILY,
                                 timeout=GEN_TIMEOUT, store=st)
         except ask.RateLimited:
@@ -1017,7 +1036,14 @@ def post_day(h, args):
         return
     state, date = start_day(h.chat, kv.me(), parse_request(body),
                             fresh=(args.get("fresh") or ["0"])[0] == "1")
-    h.text("ok %s\n" % date if state == "ok" else "pending\n")
+    cur = day_state(kv.me()) if state == "ok" else None
+    # The whole answer, as GET gives it: "ok DATE" alone was read by the shop
+    # as a stock of no items, and replaced the one it had with nothing.
+    h.text(_day_text(cur) if cur and cur.get("state") == "ok" else "pending\n")
+
+
+def _day_text(cur):
+    return "ok %s\ntags %s\nitems %d\n" % (cur["date"], ", ".join(cur["tags"]), cur["n"])
 
 
 @kv_route
@@ -1029,7 +1055,7 @@ def get_day(h, args):
     if cur["state"] == "pending":
         h.text("pending\n")
     elif cur["state"] == "ok":
-        h.text("ok %s\ntags %s\nitems %d\n" % (cur["date"], ", ".join(cur["tags"]), cur["n"]))
+        h.text(_day_text(cur))
     else:
         h.text("error %s\n" % cur.get("why", "it failed"))
 
