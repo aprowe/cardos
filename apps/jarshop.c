@@ -58,7 +58,7 @@ static struct {
   int k, nitems, polls, tried, again;
   /* The server makes a stock one item at a time and says "more" until it is
    * done: `more` is that, `live` that this batch is already on show. */
-  int more, live, got, quiet;
+  int more, live, got, quiet, dropped;
   uint32_t wait_until;
 } G;
 
@@ -276,7 +276,10 @@ static void next_item(void) {
     net_status("");
     if (!G.got && G.live) { G.quiet = 0; return; }   /* asked how it stands: as it was */
     show_batch();
-    say(S.n ? "Today's stock is in" : "No stock today");
+    if (G.dropped) {                               /* never quietly: it looks like no stock */
+      api->fmt(p, sizeof p, "%d failed the check (log)", G.dropped);
+      say(p);
+    } else say(S.n ? "Today's stock is in" : "No stock today");
     G.quiet = 0;
     return;
   }
@@ -292,9 +295,11 @@ static int day_reply(void) {
   const char *p = NET;
   char date[12], tags[sizeof NS.tags], *c;
   uint32_t batch = 0;
+  int was_more;
   if (!str_starts(p, "ok")) return 0;
   tsv_field(p + (p[2] ? 3 : 2), 0, date, sizeof date);
   for (c = date; *c; c++) if (*c == ' ') *c = 0;
+  was_more = G.more;                              /* this session is mid-batch */
   G.nitems = -1;
   G.more = 0;
   tags[0] = 0;
@@ -309,12 +314,17 @@ static int day_reply(void) {
    * stock with nothing. Ask for the whole answer instead. */
   if (G.nitems < 0) { G.nitems = 0; return 0; }
   G.got = 0;
-  if (S.date[0] && str_same(S.date, date) && S.batch == batch) {
+  if (was_more && NS.batch == batch && str_same(NS.date, date)) {
+    /* the batch this session is fetching, grown: on from where it got to,
+     * even past items that were refused (they are not fetched again) */
+  } else if (S.date[0] && str_same(S.date, date) && S.batch == batch) {
+    G.dropped = 0;
     /* the stock on show: fetch only what is not here yet */
     ji_copy(&NS, &S, (int)sizeof NS);
     G.k = S.next > S.n ? S.next : S.n;
     G.live = 1;
   } else {
+    G.dropped = 0;
     ji_zero(&NS, (int)sizeof NS);
     ji_copy(NS.date, date, (int)sizeof NS.date);
     NS.batch = batch;
@@ -361,7 +371,8 @@ static void net_reply(int n) {
   case N_ITEM:
     if (n < 0) { net_status(""); failed("Today's things", n); return; }
     G.k++;
-    if (take_record(NET, "stock") > 0 && NS.n < JST_STOCK_N) {
+    if (take_record(NET, "stock") <= 0) G.dropped++;
+    else if (NS.n < JST_STOCK_N) {
       char p[48];
       jst_stock_path(api, NS.gen, NS.n, p, sizeof p);
       if (jst_put(api, p, IO.raw, (int)ji_get16(IO.raw + 2)) == 0) {

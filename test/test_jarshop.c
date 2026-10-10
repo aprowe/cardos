@@ -494,6 +494,39 @@ void test_jarshop_held_items_stay_into_the_next_stock(void) {
   CHECK_EQ(S.held, 0);
 }
 
+/* An item that fails its check while the stock is still being made is not
+ * fetched again every poll, and the shop says items failed rather than
+ * looking as if there were none (it once read "0 here" for an hour). */
+static int DROP_ROUND;
+static int drop_server(const char *m, const char *path, const char *body, char *out, int cap) {
+  if (!strcmp(path, "/jar/day") && strcmp(m, "POST")) {
+    DROP_ROUND++;
+    if (DROP_ROUND < 3) return snprintf(out, (size_t)cap, "ok 2027-01-15\ntags rainy\nitems 2\nbatch 5\nmore\n");
+    return snprintf(out, (size_t)cap, "ok 2027-01-15\ntags rainy\nitems 3\nbatch 5\n");
+  }
+  DAY_POLLS = 5;
+  return day_server(m, path, body, out, cap);
+}
+
+void test_jarshop_a_refused_item_is_said_and_not_fetched_again(void) {
+  card(500);
+  jf_handler = drop_server;
+  DROP_ROUND = 0;
+  FORGE = 1;                                  /* item 1 is forged */
+  launch("shop");
+  tick(3300);
+  CHECK_EQ(S.n, 1);
+  CHECK_EQ(jf_count("/jar/item?i="), 2);
+  tick(4200);                                 /* still being made: asked again */
+  CHECK_EQ(DROP_ROUND, 2);
+  CHECK_EQ(jf_count("/jar/item?i="), 2);      /* nothing fetched twice */
+  tick(4200);
+  CHECK_EQ(DROP_ROUND, 3);
+  CHECK_EQ(jf_count("/jar/item?i="), 3);      /* only the new one */
+  CHECK_EQ(S.n, 2);
+  CHECK(strstr(U.msg, "1 failed") != 0);
+}
+
 void test_jarshop_a_word_to_the_shopkeeper(void) {
   const JfReq *r;
   const char *s;

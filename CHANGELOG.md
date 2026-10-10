@@ -11,6 +11,24 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.12.1 -- 2026-10-10
+
+- **Fix: Jar Shop said "0 here" while every item was being refused.** A
+  device that had been up about 2 hours refused every signed item as
+  "signature bad". The same records verify on the server. The device's own
+  decode built the exact message the server signed (checked byte for byte
+  by running the app's C code on a real record), and a fresh boot of the
+  same source accepted all four. The cause is still unknown. If it comes
+  back:
+  - `api->sig_verify` now logs the crypto library's status, the size and
+    the free heap to `log`;
+  - the shop says "N failed the check (log)" rather than looking empty;
+  - a refused item is no longer fetched again every 5 s while the rest of
+    the stock is made.
+- The firmware's version banner is stamped when the build is configured, so
+  an incremental build can show an old tag (the device said v0.10.0 while
+  running v0.11.0's API 44).
+
 ## v0.12.0 -- 2026-10-10
 
 - **The item pool.** Every item made goes into one pool shared by everyone.
