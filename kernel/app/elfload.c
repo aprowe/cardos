@@ -137,9 +137,9 @@ static int read_at(int fd, uint32_t off, void *buf, size_t n) {
 /* Apply the relocations aimed at section `sec` to the window of it at
  * `win`. Read 32 at a time: one at a time was a seek and a read per entry,
  * and 384 bytes of stack is nothing next to that. */
-static CappResult relocate(int fd, const Elf32_Shdr *sh, int shnum, int sec, int into_code,
+static CappResult relocate(int fd, const Elf32_Shdr *sh, int shnum, int sec, uint32_t origin,
                            uint8_t *win, uint32_t win_off, uint32_t win_len, uint32_t limit,
-                           uint32_t code_base, uint32_t data_base) {
+                           const CappBases *b) {
   CappRela buf[32];
   int i;
   for (i = 0; i < shnum; i++) {
@@ -150,8 +150,7 @@ static CappResult relocate(int fd, const Elf32_Shdr *sh, int shnum, int sec, int
       k = n - j < 32 ? n - j : 32;
       if (read_at(fd, sh[i].sh_offset + j * sizeof(CappRela), buf, k * sizeof(CappRela)) != 0)
         return CAPP_ERR_RELOC;
-      if (capprel_apply(win, win_off, win_len, limit, into_code, buf, k,
-                        code_base, data_base) != 0) {
+      if (capprel_apply(win, win_off, win_len, limit, origin, buf, k, b) != 0) {
         ESP_LOGE(TAG, "a relocation in section %d cannot be applied (types: only R_XTENSA_32 is applied)", sec);
         return CAPP_ERR_RELOC;
       }
@@ -216,6 +215,7 @@ static CappResult xip_place(int fd, const char *path, const Elf32_Shdr *sh, int 
   FsStat st;
   XipKey k;
   uint32_t off, at, n, crc = 0, code_base;
+  CappBases b;
   CappResult rc;
 
   if (!c || fs_stat(path, &st) != 0) return CAPP_ERR_OPEN;
@@ -237,10 +237,11 @@ static CappResult xip_place(int fd, const char *path, const Elf32_Shdr *sh, int 
     return CAPP_ERR_NO_MEMORY;
   }
   code_base = xipflash_base() + off + XIP_HDR;
+  b.code = code_base; b.data = data_base; b.rodata = 0;
   for (at = 0; at < code_size; at += n) {
     n = code_size - at < ARENA_SIZE ? code_size - at : ARENA_SIZE;
     if (read_at(fd, sh[code_sec].sh_offset + at, scratch, n) != 0) { rc = CAPP_ERR_NOT_ELF; goto fail; }
-    rc = relocate(fd, sh, shnum, code_sec, 1, scratch, at, n, code_size, code_base, data_base);
+    rc = relocate(fd, sh, shnum, code_sec, 0, scratch, at, n, code_size, &b);
     if (rc != CAPP_OK) goto fail;
     crc = xip_crc32(crc, scratch, n);
     if (xip_write(c, at, scratch, n) != XIP_OK) { rc = CAPP_ERR_NO_MEMORY; goto fail; }
@@ -432,8 +433,11 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
      * instruction window permits. */
     code_w = writable(code);
     if (read_at(fd, sh[code_sec].sh_offset, code_w, code_size) != 0) { rc = CAPP_ERR_NOT_ELF; goto done; }
-    rc = relocate(fd, sh, eh.e_shnum, code_sec, 1, code_w, 0, code_size, code_size,
-                  (uint32_t)(uintptr_t)code, data_base);
+    {
+      CappBases b;
+      b.code = (uint32_t)(uintptr_t)code; b.data = data_base; b.rodata = 0;
+      rc = relocate(fd, sh, eh.e_shnum, code_sec, 0, code_w, 0, code_size, code_size, &b);
+    }
     if (rc != CAPP_OK) goto done;
   }
   code_base = (uint32_t)(uintptr_t)code;
@@ -443,7 +447,11 @@ data:
    * is cleared first. */
   memset(data, 0, data_size);
   if (read_at(fd, sh[data_sec].sh_offset, data, data_size) != 0) { rc = CAPP_ERR_NOT_ELF; goto done; }
-  rc = relocate(fd, sh, eh.e_shnum, data_sec, 0, data, 0, data_size, data_size, code_base, data_base);
+  {
+    CappBases b;
+    b.code = code_base; b.data = data_base; b.rodata = 0;
+    rc = relocate(fd, sh, eh.e_shnum, data_sec, CAPP_DATA_ORIGIN, data, 0, data_size, data_size, &b);
+  }
   if (rc != CAPP_OK) goto done;
 
   out->info = (const CappInfo *)(data + (info_off - CAPP_DATA_ORIGIN));
