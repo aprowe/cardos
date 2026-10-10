@@ -22,6 +22,7 @@
 #include "kernel/ui/desktop.h"
 #include "kernel/ui/shell.h"
 #include "kernel/app/capprun.h"
+#include "kernel/app/elfload.h"
 #include "kernel/sys/bg.h"
 #include "kernel/net/httpq.h"
 #include "kernel/app/capp.h"
@@ -105,6 +106,9 @@ static void start_app(int slot, const char *name, const char *args) {
   snprintf(s_app_args, sizeof s_app_args, "%s", args ? args : "");
   notify_opened(name);                         /* its notifications are read */
   capprun_start(slot, name, args);
+  /* A "preparing" note (see preparing) was for the start that has now
+   * happened; a failure's reason replaces it in said_why. */
+  if (!capprun_start_error()[0] && s_note[0]) { s_note[0] = 0; s_dirty = 1; }
 }
 
 /* The search (Space): what has been typed, and the best matches for it as
@@ -596,6 +600,17 @@ static int said_why(const char *name) {
   return 1;
 }
 
+/* A first launch from the flash cache writes the app's code (a few hundred
+ * milliseconds, frozen during each erase): say so on the row first. Painted
+ * only in the launcher: the desktop starts apps through the same loader,
+ * and the row drawn over its windows would be worse than saying nothing. */
+static void preparing(const char *path) {
+  const char *base = strrchr(path, '/');
+  snprintf(s_note, sizeof s_note, "preparing %s...", base ? base + 1 : path);
+  s_dirty = 1;
+  if (ui_shell() == UI_LAUNCHER) flush();
+}
+
 static void open_folder(int flat) {
   s_folder = flat;
   s_sel = 0;
@@ -813,6 +828,7 @@ static void need_icons(void) {
 }
 
 void launchui_init(void) {
+  capp_on_prepare(preparing);
   capprun_release(s_app);      /* from the last visit, if any */
   s_app = NULL;
   s_nback = 0;

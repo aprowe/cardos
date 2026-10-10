@@ -701,7 +701,9 @@ const char *capprun_start_error(void) { return s_start_error; }
  * network -- meet_needs, straight after this load, for an app that does --
  * and it lands round the app instead of under it. Nothing is taken that is
  * in use: not WiFi under a request or the share, not Bluetooth under a print
- * or a mouse (bt_radio_down keeps a claimed link). */
+ * or a mouse (bt_radio_down keeps a claimed link).
+ * Data in the arena never needs this; only a RAM code block or a heap data
+ * block can be what failed. */
 static void make_room(void) {
   size_t before = heap_caps_get_largest_free_block(MALLOC_CAP_EXEC);
   size_t before8 = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
@@ -719,13 +721,13 @@ static void make_room(void) {
           (unsigned)after, (unsigned)before8, (unsigned)after8);
 }
 
-static int ensure_loaded(Run *s) {
+static int ensure_loaded(Run *s, int foreground) {
   CappResult r;
   if (s->loaded) return 0;
-  r = capp_load(s->entry->path, &s->la);
+  r = capp_load_ex(s->entry->path, &s->la, foreground);
   if (r == CAPP_ERR_NO_MEMORY) {
     make_room();
-    r = capp_load(s->entry->path, &s->la);
+    r = capp_load_ex(s->entry->path, &s->la, foreground);
   }
   if (r != CAPP_OK) {
     uint32_t want = 0, largest = 0;
@@ -961,7 +963,7 @@ int capprun_start(int slot, const char *name, const char *args) {
    * the twenty seconds of joining a network belong to "starting Web" instead
    * of to "Web is broken". Failure is not fatal: caps_ok() reports what was
    * actually found and the app decides what to say about it. */
-  if (ensure_loaded(s) != 0) { release_run(s); return -1; }
+  if (ensure_loaded(s, 1) != 0) { release_run(s); return -1; }
   s_caps_ok = meet_needs(s->flags);
 
   s_running = s;
@@ -1106,7 +1108,7 @@ static int command_inner(const char *app, const char *cmd, int nwords,
     }
     mainargv[0] = s->name;
     s->has_ui = 0;
-    if (ensure_loaded(s) != 0) {
+    if (ensure_loaded(s, 0) != 0) {
       release_run(s);
       snprintf(out, n, "could not load %s: not enough memory for its code", app);
       return -1;

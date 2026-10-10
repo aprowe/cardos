@@ -27,11 +27,17 @@
 #include "kernel/app/capp.h"
 
 typedef struct {
-  void           *code;      /* executable RAM, instruction-window address */
-  void           *data;      /* ordinary heap: rodata, data and bss */
+  void           *code;      /* instruction address: executable RAM or the flash cache */
+  void           *data;      /* the arena or the heap: rodata, data and bss */
   uint32_t        code_size;
   uint32_t        data_size;
   uint32_t        code_cap;  /* the block's size, which a spare may exceed */
+
+  /* Where the halves went: code from the flash cache (xip_off is its entry,
+   * code is the mapped address) or executable RAM (-1); data in the arena
+   * or on the heap. See docs/superpowers/specs/2026-10-09-xip-app-code-design.md. */
+  int32_t         xip_off;
+  uint8_t         data_in_arena;
 
   /* Read from the image without running it -- name, icon and flags are needed
    * to draw an icon, and executing a program to find out what it is called is
@@ -57,6 +63,18 @@ typedef enum {
 } CappResult;
 
 CappResult capp_load(const char *path, LoadedApp *out);
+
+/* As capp_load, for the app being started on screen when foreground is 1:
+ * its data goes in the arena if it is free and fits, and its code then runs
+ * from the flash cache unless it says CAPP_CODE_IN_RAM. Anything that
+ * cannot be done that way is done as before. */
+CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground);
+
+/* Called once before the cache writes an app's code (a few hundred
+ * milliseconds, the screen frozen during each erase), so the launcher can
+ * say "preparing". */
+void capp_on_prepare(void (*fn)(const char *path));
+
 void       capp_unload(LoadedApp *la);
 const char *capp_strerror(CappResult r);
 
