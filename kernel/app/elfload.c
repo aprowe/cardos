@@ -1,6 +1,7 @@
 /* Loader for CardOS app binaries. See elfload.h. */
 
 #include "kernel/app/elfload.h"
+#include "kernel/app/capprel.h"
 #include "kernel/fs/fs.h"
 #include "kernel/sys/applog.h"
 
@@ -25,11 +26,6 @@ static const char *TAG = "capp";
 #define SHT_NOBITS   8
 #define SHF_ALLOC    0x2
 
-#define R_XTENSA_NONE       0
-#define R_XTENSA_32         1
-#define R_XTENSA_ASM_EXPAND 11
-#define R_XTENSA_SLOT0_OP   20
-
 typedef struct {
   uint8_t  e_ident[16];
   uint16_t e_type, e_machine;
@@ -47,17 +43,6 @@ typedef struct {
   uint8_t  st_info, st_other;
   uint16_t st_shndx;
 } Elf32_Sym;
-
-typedef struct {
-  uint32_t r_offset, r_info;
-  int32_t  r_addend;
-} Elf32_Rela;
-
-#define ELF32_R_TYPE(i) ((i) & 0xFF)
-
-/* Where capp.ld links each half. Code at 0, data far away, so an absolute
- * value says which half it points into without any symbol lookup. */
-#define CAPP_DATA_ORIGIN 0x10000000u
 
 /* An app larger than this is a mistake, not an app: executable RAM is the
  * scarce resource on this board. */
@@ -144,6 +129,32 @@ static uint8_t *writable(uint8_t *exec) {
 static int read_at(int fd, uint32_t off, void *buf, size_t n) {
   if (fs_seek(fd, (int32_t)off, FS_SEEK_SET) < 0) return -1;
   return fs_read(fd, buf, n) == (int)n ? 0 : -1;
+}
+
+/* Apply the relocations aimed at section `sec` to the window of it at
+ * `win`. Read 32 at a time: one at a time was a seek and a read per entry,
+ * and 384 bytes of stack is nothing next to that. */
+static CappResult relocate(int fd, const Elf32_Shdr *sh, int shnum, int sec, int into_code,
+                           uint8_t *win, uint32_t win_off, uint32_t win_len, uint32_t limit,
+                           uint32_t code_base, uint32_t data_base) {
+  CappRela buf[32];
+  int i;
+  for (i = 0; i < shnum; i++) {
+    uint32_t n, j, k;
+    if (sh[i].sh_type != SHT_RELA || (int)sh[i].sh_info != sec) continue;
+    n = sh[i].sh_size / sizeof(CappRela);
+    for (j = 0; j < n; j += k) {
+      k = n - j < 32 ? n - j : 32;
+      if (read_at(fd, sh[i].sh_offset + j * sizeof(CappRela), buf, k * sizeof(CappRela)) != 0)
+        return CAPP_ERR_RELOC;
+      if (capprel_apply(win, win_off, win_len, limit, into_code, buf, k,
+                        code_base, data_base) != 0) {
+        ESP_LOGE(TAG, "a relocation in section %d cannot be applied", sec);
+        return CAPP_ERR_RELOC;
+      }
+    }
+  }
+  return CAPP_OK;
 }
 
 CappResult capp_load(const char *path, LoadedApp *out) {
@@ -252,70 +263,19 @@ CappResult capp_load(const char *path, LoadedApp *out) {
     goto done;
   }
 
-  /* Relocate. Each half was linked at a known origin, so an absolute value
-   * says which half it points into and therefore which base to add. Only
-   * absolute references move; PC-relative ones are unchanged by shifting a
-   * whole section, which is the entire reason this loader is short.
-   *
-   * Code is patched through its data-window alias, because the compiler is
-   * free to implement the read-modify-write with narrower accesses than the
-   * instruction window permits. */
+  /* Relocate. Code is patched through its data-window alias, because the
+   * compiler is free to implement the read-modify-write with narrower
+   * accesses than the instruction window permits. */
   {
     uint32_t code_base = (uint32_t)(uintptr_t)code;
     uint32_t data_base = (uint32_t)(uintptr_t)data;
-
-    for (i = 0; i < eh.e_shnum; i++) {
-      Elf32_Rela rela;
-      uint32_t n, j;
-      int into_code;
-
-      if (sh[i].sh_type != SHT_RELA) continue;
-      if ((int)sh[i].sh_info == code_sec) into_code = 1;
-      else if ((int)sh[i].sh_info == data_sec) into_code = 0;
-      else continue;
-
-      n = sh[i].sh_size / sizeof(Elf32_Rela);
-      for (j = 0; j < n; j++) {
-        uint32_t type, off, v;
-        uint32_t *slot;
-
-        if (read_at(fd, sh[i].sh_offset + j * sizeof rela, &rela, sizeof rela) != 0) {
-          rc = CAPP_ERR_RELOC;
-          goto done;
-        }
-        type = ELF32_R_TYPE(rela.r_info);
-
-        if (type == R_XTENSA_NONE || type == R_XTENSA_SLOT0_OP ||
-            type == R_XTENSA_ASM_EXPAND) {
-          continue;               /* PC-relative, or nothing at all */
-        }
-        if (type != R_XTENSA_32) {
-          ESP_LOGE(TAG, "unsupported relocation type %u", (unsigned)type);
-          rc = CAPP_ERR_RELOC;
-          goto done;
-        }
-
-        /* r_offset is a link-time address, so it carries its section's origin
-         * with it. */
-        off = into_code ? rela.r_offset : rela.r_offset - CAPP_DATA_ORIGIN;
-        /* Written so it cannot wrap: an r_offset just below the section's
-         * origin gave an `off` near 2^32, and `off + 4` came round to
-         * something small that passed. Word-aligned too: a relocation on
-         * an odd address is not something a linker emits. */
-        {
-          uint32_t limit = into_code ? code_size : data_size;
-          if (off >= limit || limit - off < 4 || (off & 3u)) {
-            rc = CAPP_ERR_RELOC;
-            goto done;
-          }
-        }
-
-        slot = (uint32_t *)((into_code ? code_w : data) + off);
-        v = *slot;
-        *slot = (v >= CAPP_DATA_ORIGIN) ? (v - CAPP_DATA_ORIGIN) + data_base
-                                        : v + code_base;
-      }
-    }
+    rc = relocate(fd, sh, eh.e_shnum, code_sec, 1, code_w, 0, code_size, code_size,
+                  code_base, data_base);
+    if (rc == CAPP_OK && data_sec >= 0)
+      rc = relocate(fd, sh, eh.e_shnum, data_sec, 0, data, 0, data_size, data_size,
+                    code_base, data_base);
+    if (rc != CAPP_OK) goto done;
+    rc = CAPP_ERR_OPEN;     /* what the code below expects until it succeeds */
   }
 
   /* Two exported symbols: the descriptor and the entry point. Found by name

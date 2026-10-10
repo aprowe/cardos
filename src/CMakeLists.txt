@@ -93,6 +93,7 @@ idf_component_register(
     "../kernel/app/capprun.c"
     "../kernel/app/appidx.c"
     "../kernel/app/arena.c"
+    "../kernel/app/capprel.c"
   INCLUDE_DIRS
     "."
     ".."      # CardOS headers are included as "kernel/..."
