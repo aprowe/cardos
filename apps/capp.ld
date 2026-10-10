@@ -53,6 +53,21 @@ SECTIONS {
     . = ALIGN(4);
   }
 
+  /* The overlay region (docs/superpowers/specs/2026-10-10-app-data-overlays-design.md):
+   * one output section per overlay, all at the same address after .data, so
+   * the region is as big as the largest. NOBITS, so the file carries nothing
+   * for them, and the loader's zeroed block is their start. They reach here
+   * because nothing above names .sbss: a .bss. name would have gone into
+   * .data with the rest. The linker drops an empty one, so an app without
+   * overlays links exactly as before. */
+  . = ALIGN(16);
+  OVERLAY : {
+    .ovl0 { *(.sbss.capp_ovl0) }
+    .ovl1 { *(.sbss.capp_ovl1) }
+    .ovl2 { *(.sbss.capp_ovl2) }
+    .ovl3 { *(.sbss.capp_ovl3) }
+  }
+
   /* The constants: never written, so they can run from flash
    * (docs/superpowers/specs/2026-10-10-app-constants-in-flash-design.md).
    * ALIGN(4) at the end because relocation windows are whole words. */

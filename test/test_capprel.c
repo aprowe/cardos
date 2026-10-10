@@ -74,7 +74,8 @@ static int load_capp(const char *name, Capp *c) {
 
 static const CappBases BASES = { CODE_BASE, DATA_BASE, RO_BASE };
 
-static const char *FIXTURES[] = { "capp_jar.capp", "capp_forklift.capp", "capp_cat.capp" };
+static const char *FIXTURES[] = { "capp_jar.capp", "capp_forklift.capp", "capp_cat.capp",
+                                  "capp_ovltest.capp" };
 #define NFIX (sizeof FIXTURES / sizeof *FIXTURES)
 
 /* One section relocated whole, then in windows of every awkward size: the

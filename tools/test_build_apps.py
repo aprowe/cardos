@@ -54,5 +54,100 @@ class Constants(unittest.TestCase):
         self.assertTrue(img.cstr(help_))
 
 
+OVL = os.path.join(OUT, "ovltest.capp")
+
+INIT = """#include "kernel/app/capp.h"
+CAPP_OVERLAY(1) static int counter = 5;
+const CappInfo capp_info = { CAPP_API_VERSION, CAPP_CLI, "ovlinit" };
+int capp_main(const CardApi *api, int argc, char **argv) {
+  (void)api; (void)argc; (void)argv;
+  return counter++;
+}
+"""
+
+INFO = """#include "kernel/app/capp.h"
+CAPP_OVERLAY(1) static char helpbuf[64];
+const CappInfo capp_info = { CAPP_API_VERSION, CAPP_CLI, "ovlinfo", { 0 }, helpbuf };
+int capp_main(const CardApi *api, int argc, char **argv) {
+  (void)api; (void)argc; (void)argv;
+  helpbuf[0] = 'x';
+  return helpbuf[1];
+}
+"""
+
+FIVE = """#include "kernel/app/capp.h"
+CAPP_OVERLAY(4) static char spare[64];
+const CappInfo capp_info = { CAPP_API_VERSION, CAPP_CLI, "ovlfive" };
+int capp_main(const CardApi *api, int argc, char **argv) {
+  (void)api; (void)argc; (void)argv;
+  spare[0] = 'x';
+  return spare[1];
+}
+"""
+
+
+@unittest.skipUnless(os.path.isfile(OVL), "run tools/build_apps.py first")
+class Overlays(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def fixture(self, name, text):
+        src = os.path.join(self.tmp, name + ".c")
+        with open(src, "w", encoding="utf-8") as f:
+            f.write(text)
+        return src
+
+    def test_the_overlays_overlap(self):
+        secs, _ = build_apps.sections(OVL)
+        ovl = {s["name"]: s for s in secs if s["name"].startswith(".ovl")}
+        self.assertEqual(sorted(ovl), [".ovl0", ".ovl1"])
+        self.assertEqual(ovl[".ovl0"]["addr"], ovl[".ovl1"]["addr"])
+        for s in ovl.values():
+            self.assertEqual(s["type"], build_apps.SHT_NOBITS)
+        data = [s for s in secs if s["name"] == ".data"][0]
+        self.assertGreaterEqual(ovl[".ovl0"]["addr"], data["addr"] + data["size"])
+        self.assertEqual(ovl[".ovl0"]["addr"] % 16, 0)
+
+    def test_the_budget_counts_the_larger_overlay(self):
+        lay = build_apps.layout(OVL)
+        self.assertEqual(lay["ovl"], {0: 20480, 1: 6000})
+        start = min(lay["ovl_addr"]) - build_apps.DATA_BASE
+        self.assertEqual(lay["block"], start + 20480)
+        self.assertLess(lay["block"], lay["data"] + 20480 + 6000)
+
+    def test_an_initialised_overlay_variable_is_refused(self):
+        with self.assertRaises(SystemExit):
+            build_apps.compile_link(self.fixture("ovlinit", INIT), self.tmp)
+
+    def test_capp_info_pointing_into_an_overlay_is_refused(self):
+        elf = build_apps.compile_link(self.fixture("ovlinfo", INFO), self.tmp)
+        with self.assertRaises(SystemExit):
+            build_apps.check_layout(elf, "ovlinfo")
+
+    def test_an_overlay_past_three_is_refused(self):
+        elf = build_apps.compile_link(self.fixture("ovlfive", FIVE), self.tmp)
+        with self.assertRaises(SystemExit):
+            build_apps.check_layout(elf, "ovlfive")
+
+    def test_an_overlay_with_bytes_in_the_file_is_refused(self):
+        d = build_apps.DATA_BASE
+        secs = [{"name": ".data", "type": build_apps.SHT_PROGBITS, "addr": d, "size": 0x40},
+                {"name": ".ovl1", "type": build_apps.SHT_PROGBITS, "addr": d + 0x40, "size": 100}]
+        with self.assertRaises(SystemExit):
+            build_apps.check_overlays(secs, "fake")
+
+    def test_overlays_at_two_addresses_are_refused(self):
+        d = build_apps.DATA_BASE
+        secs = [{"name": ".data", "type": build_apps.SHT_PROGBITS, "addr": d, "size": 0x40},
+                {"name": ".ovl0", "type": build_apps.SHT_NOBITS, "addr": d + 0x40, "size": 100},
+                {"name": ".ovl1", "type": build_apps.SHT_NOBITS, "addr": d + 0x50, "size": 100}]
+        with self.assertRaises(SystemExit):
+            build_apps.check_overlays(secs, "fake")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

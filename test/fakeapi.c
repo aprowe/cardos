@@ -146,6 +146,8 @@ static int d_run_command(const char *a, const char *l, char *o, size_t n) {
 static int d_shell(const char *l, char *o, size_t n) { (void)l; if (n) o[0] = 0; return -1; }
 int fakeapi_paint_direct = -1;
 static void d_paint_direct(int on) { fakeapi_paint_direct = on; }
+static int d_overlay(int n, int flags) { (void)n; (void)flags; return -1; }   /* no overlays */
+static int d_overlay_live(void) { return -1; }
 static int d_sig_verify(const uint8_t pub[65], const void *m, size_t n, const uint8_t sig[64]) {
   (void)pub; (void)m; (void)n; (void)sig;
   return -1;                                   /* could not check */
@@ -227,6 +229,8 @@ void fakeapi_init(CardApi *a) {
   a->link = d_link;
   a->sig_verify = d_sig_verify;
   a->paint_direct = d_paint_direct;
+  a->overlay = d_overlay;
+  a->overlay_live = d_overlay_live;
   fakeapi_paint_direct = -1;
   a->key_repeat = d_key_repeat;
   a->key_pending = d_key_pending;

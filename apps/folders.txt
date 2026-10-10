@@ -24,6 +24,7 @@ files     System
 hub       System
 forklift  Games
 grep      -
+ovltest   -
 habits    Plan
 ide       Make
 level     Make

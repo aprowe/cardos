@@ -95,6 +95,40 @@ typedef struct {
  * before. A flag, not an API change: older apps simply do not have it. */
 #define CAPP_PAINT_DIRECT 0x0020
 
+/* Data overlays (API 46): docs/superpowers/specs/2026-10-10-app-data-overlays-design.md.
+ *
+ * State that belongs to one mode of an app -- an editor's buffers, a
+ * player's tracks, a shop -- can go in overlay 0..3. All of an app's
+ * overlays share one region at the end of its data block, so they cost the
+ * largest of them rather than their sum. One is live at a time;
+ * api->overlay switches, keeping the outgoing one on the card. Overlay 0 is
+ * live, and zeroed, when the app starts. Zero-initialised variables only:
+ * no initialiser (the compiler refuses one).
+ *
+ *     CAPP_OVERLAY(1) static ShopState shop;
+ *
+ * THE RULE: a pointer into an overlay is good only while that overlay is
+ * live. Nothing traps a stray access -- there is no MMU over RAM -- and
+ * touching overlay 1 while 2 is live writes into 2. Reach each mode's state
+ * only through that mode's functions. Headless commands run with overlay 0
+ * live, so a command keeps to the common part or overlay 0.
+ *
+ * n is a literal 0..3, or a macro for one. The section is .sbss.capp_ovlN
+ * because GCC makes any .sbss.* section NOBITS -- no zeros in the file --
+ * and refuses a nonzero initialiser there; a .bss.* name would be swallowed
+ * by the *(.bss .bss.*) in apps/capp.ld's .data before its OVERLAY saw it.
+ * On the host compiler it is an ordinary static. */
+#define CAPP_OVL_MAX     4
+#define CAPP_OVL_KEEP    0     /* save the live overlay before switching */
+#define CAPP_OVL_DISCARD 1     /* throw it away: next time it comes back zeroed */
+#define CAPP_OVL_STR_(n) #n
+#define CAPP_OVL_STR(n)  CAPP_OVL_STR_(n)
+#if defined(__GNUC__)
+#define CAPP_OVERLAY(n) __attribute__((section(".sbss.capp_ovl" CAPP_OVL_STR(n))))
+#else
+#define CAPP_OVERLAY(n)
+#endif
+
 /* What caps_ok() returns: the same bits, set when that need was met. */
 #define CAPP_CAP_NET     CAPP_NEEDS_NET
 #define CAPP_CAP_PROXY   CAPP_NEEDS_PROXY
@@ -953,6 +987,24 @@ typedef struct {
    * app with screens of both kinds -- Jar Factory's scene and its shop. The
    * flag in capp_info is where it starts. */
   void (*paint_direct)(int on);
+
+  /* ---- data overlays (API 46) ----
+   *
+   * See CAPP_OVERLAY. overlay(n, flags) makes overlay n live. With
+   * CAPP_OVL_KEEP the live one is written to the card first (/cache/ovl,
+   * deleted when the app closes); with CAPP_OVL_DISCARD it is dropped and
+   * comes back zeroed. A first visit is zeroed. Switching to the live one
+   * does nothing and returns 0. Returns 0, or -1:
+   *   - the save failed (no card, card full): nothing changed, the old
+   *     overlay is still live;
+   *   - the read failed: n is live and zeroed -- that mode is empty, and
+   *     this is how the app hears it;
+   *   - n is out of range, or the app has no overlays.
+   * overlay_live() says which is live, -1 for an app without overlays. A
+   * switch is a write and a read on the card, 50-150 ms for 20 KB: a mode
+   * change, never a frame. */
+  int (*overlay)(int n, int flags);
+  int (*overlay_live)(void);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

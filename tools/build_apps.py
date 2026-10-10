@@ -475,6 +475,28 @@ def check_info(elf, name):
             ok("command %d param %d about" % (i, j), img.u32(p + 8))
 
 
+def check_overlays(secs, name):
+    """The overlay sections as apps/capp.ld's OVERLAY lays them out: zeroed
+    state only (NOBITS -- the compiler refuses an initialiser, this is the
+    backstop), all at one 16-aligned address after .data, which is what lets
+    them share the region."""
+    ovl = [s for s in secs if re.match(r"\.ovl[0-9]$", s["name"]) and s["size"]]
+    if not ovl:
+        return
+    for s in ovl:
+        if s["type"] != SHT_NOBITS:
+            raise SystemExit(
+                "%s: %s holds initialised bytes; an overlay may hold only zeroed state "
+                "(a CAPP_OVERLAY variable takes no initialiser)" % (name, s["name"]))
+    data = [s for s in secs if s["name"] == ".data"]
+    end = data[0]["addr"] + data[0]["size"] if data else DATA_BASE
+    addrs = {s["addr"] for s in ovl}
+    if len(addrs) != 1 or min(addrs) < end or min(addrs) % 16:
+        raise SystemExit(
+            "%s: overlays must all start at one 16-aligned address after .data; found %s"
+            % (name, ", ".join("%s at 0x%08x" % (s["name"], s["addr"]) for s in ovl)))
+
+
 def check_layout(elf, name):
     """Refuse a layout the loader does not expect: a section it would not
     place, constants that are writable, misplaced or over-aligned, capp_info
@@ -499,6 +521,7 @@ def check_layout(elf, name):
                 raise SystemExit(
                     "%s: .rodata wants %d-byte alignment; the flash cache places constants "
                     "on a 16-byte boundary" % (name, s["align"]))
+    check_overlays(secs, name)
     syms = run([READELF, "-s", "--wide", elf])
     m = re.search(r"^\s*\d+:\s+([0-9a-f]{8})\s+\d+\s+OBJECT\s+GLOBAL\s+\S+\s+\S+\s+capp_info\s*$",
                   syms, re.M)
