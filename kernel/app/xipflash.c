@@ -5,12 +5,14 @@
 #include <string.h>
 #include <strings.h>
 
+#include "esp_cache.h"
 #include "esp_log.h"
 #include "esp_partition.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "kernel/fs/path.h"
 #include "kernel/sys/applog.h"
+#include "soc/ext_mem_defs.h"
 
 static const char *TAG = "xip";
 
@@ -39,13 +41,33 @@ static int p_read(void *ctx, uint32_t off, void *buf, uint32_t n) {
 /* IDF flushes the cache over what it wrote (flash_end_flush_cache in
  * esp_flash_api.c), so a rewritten entry is not served stale -- checked on
  * the device in Task 8, not assumed. */
+/* ...but only through the view the pages were first mapped with, the
+ * instruction bus, so the I-cache. The constants are read through the data
+ * bus alias of the same pages, and its D-cache lines would still hold what
+ * the flash said before: a rewritten entry's old strings. IDF invalidates
+ * by the address the region was mapped at (is_page_mapped_in_cache in
+ * flash_mmap.c), and that is the instruction-bus one. */
+static void drop_dcache(uint32_t off, uint32_t n) {
+  uint32_t a, b;
+  if (!s_drom) return;
+  a = ((uint32_t)(uintptr_t)s_drom + off) & ~63u;
+  b = ((uint32_t)(uintptr_t)s_drom + off + n + 63u) & ~63u;
+  esp_cache_msync((void *)(uintptr_t)a, b - a,
+                  ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
+}
 static int p_write(void *ctx, uint32_t off, const void *buf, uint32_t n) {
+  int rc;
   (void)ctx;
-  return esp_partition_write(s_part, off, buf, n) == ESP_OK ? 0 : -1;
+  rc = esp_partition_write(s_part, off, buf, n) == ESP_OK ? 0 : -1;
+  drop_dcache(off, n);
+  return rc;
 }
 static int p_erase(void *ctx, uint32_t off, uint32_t n) {
+  int rc;
   (void)ctx;
-  return esp_partition_erase_range(s_part, off, n) == ESP_OK ? 0 : -1;
+  rc = esp_partition_erase_range(s_part, off, n) == ESP_OK ? 0 : -1;
+  drop_dcache(off, n);
+  return rc;
 }
 
 int xipflash_init(void) {
@@ -79,6 +101,16 @@ int xipflash_init(void) {
     ESP_LOGE(TAG, "cannot map appcode for data: app code loads into RAM");
     return -1;
   }
+  /* On the S3 that second map does not make a second mapping: there is one
+   * linear address space, IDF finds the pages already mapped and hands back
+   * the instruction-bus address (ESP_ERR_INVALID_STATE, taken as success by
+   * spi_flash_mmap). A byte load from 0x42xxxxxx is a LoadStoreError -- the
+   * first constant string read at app start. The same MMU entry answers at
+   * the data-bus base too, so the data view is the same linear address
+   * there. */
+  if (((uint32_t)(uintptr_t)s_drom & ~(uint32_t)SOC_MMU_LINEAR_ADDR_MASK) == SOC_MMU_IBUS_VADDR_BASE)
+    s_drom = (const void *)(uintptr_t)(SOC_MMU_DBUS_VADDR_BASE |
+                                       ((uint32_t)(uintptr_t)s_drom & SOC_MMU_LINEAR_ADDR_MASK));
   /* Before xip_open, so nothing can reach the cache without it; dropped
    * again below if the cache never becomes ready. */
   s_lock = xSemaphoreCreateRecursiveMutex();
