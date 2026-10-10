@@ -19,7 +19,8 @@
  * the 6x8 one; key_repeat, headless and key_pending read fakeapi_repeat,
  * fakeapi_headless and fakeapi_key_pending; out and out_line append to fakeapi_out;
  * proxy is "http://srv"; audio, midi, link and agent are tables that do
- * nothing; anything that would start something else returns -1.
+ * nothing; anything that would start something else returns -1;
+ * sig_verify answers -1, could not check.
  *
  * fakeapi.c is not a test file (gen_test_main.py scans test_*.c only); the
  * host build compiles it with everything else under test/.

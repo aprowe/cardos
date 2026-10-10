@@ -300,6 +300,31 @@ static JI_OPT int jitem_decode(JItem *it, const uint8_t *in, int n) {
   return 0;
 }
 
+/* What the server signed: the record as it would be with no signature and
+ * no memory -- the header with its signature length (offset 204) zeroed,
+ * its eight memory slots (136..151, which scripts write, so a gift must
+ * verify whatever they hold) zeroed, and its total length (offset 2) less
+ * the signature; then everything after the signature. Fixed with
+ * server/jar.py (2026-10-09). The signature itself is at
+ * [hdr, hdr + in[204]). The message's length, or -1 if `in` is not a record
+ * whose lengths agree or the message does not fit in `cap`. */
+static JI_OPT int ji_signed_message(const uint8_t *in, int n, uint8_t *out, int cap) {
+  int hdr, total, sig, rest;
+  if (n < JI_HDR || in[0] == 0) return -1;
+  hdr = in[1];
+  total = (int)ji_get16(in + 2);
+  sig = in[204];
+  if (hdr < JI_HDR || total > n || total < hdr + sig || sig > JI_SIG_MAX) return -1;
+  rest = total - hdr - sig;
+  if (hdr + rest > cap) return -1;
+  ji_copy(out, in, hdr);
+  out[204] = 0;
+  ji_zero(out + 136, 2 * JI_MEM);
+  ji_put16(out + 2, (unsigned)(total - sig));
+  ji_copy(out + hdr, in + hdr + sig, rest);
+  return hdr + rest;
+}
+
 /* The display number, "No. 0042". */
 static JI_OPT void jitem_number(uint32_t id, char *out) {
   int i;

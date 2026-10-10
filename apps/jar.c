@@ -3,50 +3,60 @@
  * Mosslings carry berries from the garden beds to a thimble vat; a matchbox
  * press, a cotton spool and a twig crane, joined by a bottle-cap belt, make
  * them into jam; a snail carries the jars out through the cork door, and the
- * coins land as it leaves the screen. Coins buy upgrades (another mossling,
- * machine, bed, a faster belt) and items from the shop, which go in the jar
- * and do small things of their own. Nothing needs attention: leave it on.
+ * coins land as it leaves the screen. Coins buy upgrades, plants and items
+ * from the shop, which go in the jar and do small things of their own, or to
+ * a friend. Nothing needs attention: leave it on.
  *
- * The design is docs/superpowers/specs/2026-10-09-jar-factory-design.md;
- * this is its steps 1 to 3, offline. The world is apps/jarsim.h, the item
- * record apps/jaritem.h, the pictures apps/jar_art.h (tools/make_jar_art.py
+ * The design is docs/superpowers/specs/2026-10-09-jar-factory-design.md.
+ * This app is the scene and Decorate; everything with a menu is in two
+ * companion apps it opens after saving -- Jar Shop (apps/jarshop.c: the
+ * shop, My Stuff, upgrades, garden, shelf) and Jar Post (apps/jarpost.c:
+ * friends, gifts, mail) -- because the three together were 44.5 KB to load
+ * against a heap whose biggest piece is often 27 KB. Quitting either comes
+ * back here, and the jar starts again from its save, paid for the time it
+ * was away. The world is apps/jarsim.h, the item record apps/jaritem.h, the
+ * card apps/jarstore.h, the pictures apps/jar_art.h (tools/make_jar_art.py
  * from tools/jar_art.txt). Host tests: test/test_jarsim.c,
- * test/test_jaritem.c, test/test_jar.c (JAR_DUMP=dir writes frames).
+ * test/test_jaritem.c, test/test_jarstore.c, test/test_jar.c (JAR_DUMP=dir
+ * writes frames).
  *
- * DRAWING. The scene moves every frame, so the whole screen -- scene, bars
- * and menus alike -- is composed here a strip at a time into one buffer and
- * blitted whole (CAPP_PAINT_DIRECT, as Kart and Noodle), so nothing is ever
- * filled and then drawn over on the panel. A strip that came out the same as
- * last time is not sent: the soil and a still menu cost nothing. The strip is
- * 8 rows, not 16: at 16 the app was 3.7 KB over the 44 KB budget, and the
- * strip was the one piece of data that could shrink without the game losing
- * anything.
+ * GIFTS ARRIVE HERE. While online (and once at the start) the jar asks the
+ * server how many parcels wait (GET /q/len?q=jar.gifts), and for a new one
+ * who sent it (GET /q/peek?q=jar.gifts&after=LAST&max=1): it floats down on
+ * a parachute, the critters look up, a banner names the sender, and it waits
+ * on the dock; Enter opens Jar Post's mail, which collects it. A thank-you
+ * (q=jar.thanks, "FROM\tID") is hearts over the dock and a banner, then
+ * acknowledged. Through http_start/http_poll, never blocking, every three
+ * minutes while the network is up and not at all while it is down.
  *
- * ON THE CARD. /var/jar/jar.txt is the jar (apps/jarsim.h, js_save), saved
- * on every purchase and placement and every five minutes; /var/jar/items/
- * holds one record per owned item. Both go through apps/safefile.h.
+ * DRAWING. The scene moves every frame, so the whole screen is composed here
+ * a strip at a time into one buffer and blitted whole (CAPP_PAINT_DIRECT, as
+ * Kart and Noodle), so nothing is ever filled and then drawn over on the
+ * panel. A strip that came out the same as last time is not sent.
+ *
+ * ON THE CARD. /var/jar/jar.txt is the jar (js_save), saved on every
+ * placement, before opening a companion and every five minutes;
+ * /var/jar/items/ holds one record per owned item (apps/jarstore.h).
  */
 
 #include "kernel/app/capp.h"
 #include "kernel/console/font6x8.h"
 #include "apps/str.h"
-#include "apps/safefile.h"
 #include "apps/datetime.h"
-#include "apps/jarsim.h"
-#include "apps/jar_art.h"
+#include "apps/jarstore.h"
 
 #define SW 240
 #define SHT 135
-#define SH 8                            /* rows a strip: 3.75 KB, see below */
+#define SH 8                            /* rows a strip: 3.75 KB */
 #define NSTRIP ((SHT + SH - 1) / SH)
 #define BAR 13
 #define FRAME_MS 66                     /* the scene at 15 frames a second */
 #define BARS_IDLE_MS 10000
 #define SAVE_MS (5u * 60u * 1000u)
-
-#define DIR_JAR   CAPP_VAR "/jar"
-#define DIR_ITEMS CAPP_VAR "/jar/items"
-#define SAVE_PATH CAPP_VAR "/jar/jar.txt"
+#define NET_EVERY_MS (3u * 60u * 1000u) /* how often to ask after the post */
+#define NET_FIRST_MS 3000               /* ... and the first time, once drawn */
+#define PARCEL_X 211                    /* parcels wait on the top crate */
+#define PARCEL_Y (JS_SOIL - 29)
 
 /* The interface palette (spec, "Screens and look"). */
 #define C_BG     CAPP_RGB(0x17, 0x13, 0x2a)
@@ -58,43 +68,24 @@
 #define C_WARN   CAPP_RGB(0xff, 0x6b, 0x5a)
 #define C_PINK   CAPP_RGB(0xff, 0x8f, 0xab)
 
-enum { V_JAR = 0, V_DECOR, V_UP, V_SHOP, V_CARD };
+enum { V_JAR = 0, V_DECOR };
+enum { Q_IDLE = 0, Q_LEN, Q_PEEK, Q_THANKS, Q_ACK };   /* asking after the post */
 
 static const CardApi *api;
 static Jar J;
 
-/* The strip, and the same memory for card I/O, which never happens while a
- * strip is being drawn. */
+/* The strip, and the same memory for the card and the network, which never
+ * happen while a strip is being drawn. */
 static union {
   uint16_t strip[SW * SH];
-  struct { uint8_t raw[JI_MAX]; JItem it; } io;
+  JIo io;
   char text[2048];
 } SCR;
 
-/* What a shop tile or a detail panel shows of an item. */
-typedef struct {
-  uint32_t id;
-  uint16_t price, pal[8];
-  uint8_t kind, move, flags, placed, sold, ok;
-  uint8_t frame[JI_FRAME_BYTES];
-} Tile;
-
-typedef struct {
-  char name[JI_NAME + 1], line[JI_LINE + 1], maker[JI_WHO + 1], tags[JI_TAGS + 1], gifted[JI_WHO + 1];
-  uint32_t made;
-} Words;
-
 static struct {
-  int view, tab, sel, top;              /* shop: tab 0 stock, 1 my stuff */
-  int pick;                             /* my stuff opened from decorate */
-  int up_sel;
+  int view;
   int dsel, dmove, dnew;                /* decorate: selection, moving, a new one */
   int16_t dx0, dy0;
-  int card_from;
-  Tile tile[8];
-  int ntile;
-  Tile card;                            /* the item card's picture, and the detail panel's */
-  Words w;                              /* its words */
   char dname[JI_NAME + 1];              /* the item selected in decorate */
   char dline[JI_LINE + 1];
   char msg[40];
@@ -103,6 +94,12 @@ static struct {
   int bars, menu_dirty, asked;
   int sky[6];                           /* top and bottom of the background, r g b */
   uint32_t hash[NSTRIP];
+  /* the post */
+  int q, waiting, failed, asked_post;
+  uint32_t next_q;
+  int32_t para_y;                       /* a parcel on its way down, 1/16 px; 0 none */
+  int16_t para_x;
+  int hearts;                           /* hearts still to rise from the dock */
 } G;
 
 /* ---- small helpers ------------------------------------------------------- */
@@ -227,21 +224,6 @@ static void textn(int x, int y, const char *s, int cols, uint16_t c) {
   text(x, y, b, c);
 }
 
-/* Text wrapped at spaces into `cols` columns, at most `lines` lines. */
-static void wrapped(int x, int y, const char *s, int cols, int lines, uint16_t c) {
-  while (*s && lines-- > 0) {
-    int n = slen(s), cut = n;
-    if (n > cols) {
-      for (cut = cols; cut > 0 && s[cut] != ' '; cut--) {}
-      if (cut == 0) cut = cols;
-    }
-    textn(x, y, s, cut, c);
-    s += cut;
-    while (*s == ' ') s++;
-    y += 9;
-  }
-}
-
 /* A speech bubble pointing down at (cx, by). */
 static void bubble(int cx, int by, const char *s) {
   int w = slen(s) * 6 + 5, x = cx - w / 2, y = by - 13;
@@ -341,6 +323,14 @@ static void garden(void) {
     int bx = JS_BED_X(i);
     fill(bx - 5, JS_SOIL - 1, 11, 2, rgb(0x5a, 0x3e, 0x2a));
     fill(bx - 4, JS_SOIL - 2, 9, 1, rgb(0x6a, 0x4a, 0x32));
+    if (J.bed[i].young) {                     /* newly planted: a shoot, no berries */
+      uint16_t g = rgb(0x5a, 0xa8, 0x48);
+      int sway = (int)((J.steps / 48 + (uint32_t)i) & 1);
+      fill(bx, JS_SOIL - 7, 1, 5, g);
+      fill(bx - 2 + sway, JS_SOIL - 7, 2, 1, g);
+      fill(bx + 1 + sway, JS_SOIL - 5, 2, 1, g);
+      continue;
+    }
     spr(PLANT[J.bed[i].type % 5], (int)((J.steps / 48 + (uint32_t)i) & 1), bx - 6, JS_SOIL - 13, 0);
     if (J.bed[i].ready) spr(SPR_BERRY, 0, bx - 2, JS_SOIL - 15 + (int)((J.steps / 20 + (uint32_t)i) & 1), 0);
     else if (J.bed[i].grow > JS_GROW_MS * 2 / 3) px(bx, JS_SOIL - 13, rgb(0xd2, 0x80, 0x90));
@@ -415,6 +405,9 @@ static void dock(void) {
     api->fmt(b, sizeof b, "x%u", (unsigned)J.dock);
     text(JS_PILE_X - slen(b) * 3, JS_SOIL - 34, b, C_GOLD);
   }
+  /* parcels from friends, waiting to be opened (one may still be falling) */
+  n = J.parcels + G.waiting - (G.para_y ? 1 : 0);
+  for (i = 0; i < n && i < 3; i++) spr(SPR_PARCEL, 0, PARCEL_X - 4 + (i & 1) * 2, PARCEL_Y - i * 7, 0);
   /* the cork door, pulled up while the snail goes through */
   open = J.snail.x / JS_FX > JS_DOOR_X - 14;
   if (open) fill(JS_DOOR_X, JS_SOIL - 20, 8, 20, rgb(0x0b, 0x0f, 0x18));
@@ -507,6 +500,21 @@ static void talk(void) {
     }
 }
 
+/* A parcel from a friend, swinging under a striped parachute. */
+static void parachute(void) {
+  int y = G.para_y / 16, t = (int)((J.steps / 5) % 16u), sway = t < 8 ? t - 4 : 12 - t, x, dx, dy;
+  if (!G.para_y) return;
+  x = G.para_x + sway / 2;
+  for (dy = -8; dy <= 0; dy++)                       /* the canopy: a striped dome */
+    for (dx = -9; dx <= 9; dx++)
+      if (dx * dx + dy * dy * 2 <= 90) px(x + dx, y - 13 + dy, ((dx + 9) / 3) & 1 ? C_PINK : C_TEXT);
+  for (dy = 0; dy < 12; dy++) {                       /* the strings */
+    px(x - 8 + dy * 5 / 12, y - 12 + dy, C_DIM);
+    px(x + 8 - dy * 5 / 12, y - 12 + dy, C_DIM);
+  }
+  spr(SPR_PARCEL, 0, x - 4, y, 0);
+}
+
 static void scene(void) {
   background();
   garden();
@@ -514,6 +522,7 @@ static void scene(void) {
   dock();
   items();
   workers();
+  parachute();
   air();
   talk();
 }
@@ -533,59 +542,69 @@ static void hints(int y, const char *const *h) {
   }
 }
 
+/* The jar's seven keys, each a word with its key as a light cap inside it:
+ * seven caps and seven words side by side do not fit in 240 pixels. */
+static void jar_keys(int y) {
+  static const char *const W[] = { "Shop", "Deco", "Plant", "sHelf", "Friends", "Mail", "Upgrade", 0 };
+  int x = 3, i, k;
+  char c[2];
+  c[1] = 0;
+  for (i = 0; W[i]; i++, x += 3)
+    for (k = 0; W[i][k]; k++, x += 6) {
+      c[0] = W[i][k];
+      if (c[0] >= 'A' && c[0] <= 'Z') { fill(x - 1, y + 2, 7, 9, C_TEXT); text(x, y + 3, c, C_BG); }
+      else text(x, y + 3, c, C_DIM);
+    }
+}
+
 static void rate_text(char *b, int n) {
   int32_t r = js_rate_ph(&J) * 10 / 60;
   api->fmt(b, (size_t)n, "%d.%d/min", (int)(r / 10), (int)(r % 10));
 }
 
+/* Parcels on the dock or on their way: what Jar Post has collected and not
+ * opened, and what the server still holds. */
+static int parcels(void) { return J.parcels + G.waiting; }
+
 static void bars(void) {
-  static const char *const H_JAR[] = { "S", "shop", "D", "decorate", "U", "upgrades", 0 };
   static const char *const H_DSEL[] = { "<>", "pick", "Ent", "move", "N", "add", "X", "out", "Esc", "done", 0 };
   static const char *const H_DMOVE[] = { "<>", "move", "^v", "string", "Ent", "put", "Esc", "cancel", 0 };
   static const char *const H_DMOVE2[] = { "<>", "move", "Ent", "put", "Esc", "cancel", 0 };
-  static const char *const H_UP[] = { "^v", "pick", "Ent", "buy", "Esc", "back", 0 };
-  static const char *const H_STOCK[] = { "<>^v", "pick", "Ent", "buy", "Tab", "my stuff", "Esc", "back", 0 };
-  static const char *const H_STUFF[] = { "<>^v", "pick", "Ent", "open", "Tab", "stock", "Esc", "back", 0 };
-  static const char *const H_PICK[] = { "<>^v", "pick", "Ent", "place", "Esc", "back", 0 };
-  static const char *const H_CARD[] = { "Ent", "place in jar", "Esc", "keep", 0 };
-  static const char *const H_CARD2[] = { "Ent", "find in jar", "X", "take out", "Esc", "back", 0 };
-  const char *const *h = H_JAR;
   const char *where = "The Jar";
   char b[24];
   int ty = -G.bars, by = SHT - BAR + G.bars;
   if (ty + BAR > SY0 && ty < SY1) {
+    int x;
     fill(0, ty, SW, BAR, C_BG);
     spr(SPR_COIN, 0, 3, ty + 3, 0);
     api->fmt(b, sizeof b, "%u", (unsigned)J.coins);
     text(13, ty + 3, b, C_GOLD);
-    if (G.view == V_JAR || G.view == V_UP) {
-      int x = 13 + slen(b) * 6 + 6;
+    if (G.view == V_JAR) {
+      x = 13 + slen(b) * 6 + 6;
       rate_text(b, sizeof b);
       text(x, ty + 3, b, C_DIM);
+    } else {
+      api->fmt(b, sizeof b, "Decorate %u/%d", (unsigned)J.nplaced, JS_MAX_PLACED);
+      where = b;
     }
-    switch (G.view) {
-    case V_DECOR: api->fmt(b, sizeof b, "Decorate %u/%d", (unsigned)J.nplaced, JS_MAX_PLACED); where = b; break;
-    case V_UP:    where = "Upgrades"; break;
-    case V_SHOP:  where = G.pick ? "Add to the jar" : G.tab ? "My Stuff" : "Shop"; break;
-    case V_CARD:  where = "Item"; break;
+    x = SW - 4 - slen(where) * 6;
+    text(x, ty + 3, where, C_DIM);
+    if (parcels()) {                                   /* the mail indicator */
+      char m[8];
+      api->fmt(m, sizeof m, "%d", parcels());
+      x -= slen(m) * 6 + 17;
+      spr(SPR_PARCEL, 0, x, ty + 3, 0);
+      text(x + 11, ty + 3, m, C_PINK);
     }
-    text(SW - 4 - slen(where) * 6, ty + 3, where, C_DIM);
   }
   if (by + BAR > SY0 && by < SY1) {
-    switch (G.view) {
-    case V_DECOR:
-      h = !G.dmove ? H_DSEL : J.placed[G.dsel].kind == JK_HANGING ? H_DMOVE : H_DMOVE2;
-      break;
-    case V_UP:   h = H_UP; break;
-    case V_SHOP: h = G.pick ? H_PICK : G.tab ? H_STUFF : H_STOCK; break;
-    case V_CARD: h = G.card.placed ? H_CARD2 : H_CARD; break;
-    }
     fill(0, by, SW, BAR, C_BG);
-    hints(by, h);
+    if (G.view == V_JAR) jar_keys(by);
+    else hints(by, !G.dmove ? H_DSEL : J.placed[G.dsel].kind == JK_HANGING ? H_DMOVE : H_DMOVE2);
   }
 }
 
-/* A note across the top of the body: "not enough coins", away earnings. */
+/* A note across the top of the body: away earnings, a parcel, a heart. */
 static void note(void) {
   int w;
   if (!G.msg[0] || (int32_t)(api->ticks_ms() - G.msg_until) > 0) return;
@@ -610,139 +629,11 @@ static void decor_overlay(void) {
   textn(4 + (slen(G.dname) + 1) * 6, BAR + 2, G.dline, 38 - slen(G.dname), C_DIM);
 }
 
-/* ---- menus --------------------------------------------------------------- */
-
-static const char *const UP_NAME[JU_KINDS] = { "Another mossling", "Another machine", "Faster belt", "Another bed" };
-static const char *const KIND_NAME[JK_KINDS] = { "floor decor", "hanging decor", "critter" };
-static const char *const MOVE_NAME[JM_KINDS] = { "sits", "hops", "wanders", "sways", "floats" };
-
-static void price(int x, int y, int cost, int warn) {
-  char b[12];
-  spr(SPR_COIN, 0, x, y, 0);
-  api->fmt(b, sizeof b, "%d", cost);
-  text(x + 9, y, b, warn ? C_WARN : C_GOLD);
-}
-
-static void upgrades(void) {
-  int k;
-  char b[40], r1[16], r2[16];
-  fill(0, BAR, SW, SHT - 2 * BAR, C_BG);
-  for (k = 0; k < JU_KINDS; k++) {
-    int y = BAR + 3 + k * 23, cost = js_up_cost(&J, k), lv = js_up_level(&J, k);
-    fill(4, y, SW - 8, 21, C_PANEL);
-    if (k == G.up_sel) frame(4, y, SW - 8, 21, C_GOLD);
-    switch (k) {
-    case JU_MOSS: spr(SPR_MOSS, 0, 9, y + 6, 0); break;
-    case JU_MACH: spr(SPR_SPOOL, 0, 8, y + 3, 0); break;
-    case JU_BELT: fill(7, y + 9, 6, 3, rgb(0xc8, 0x42, 0x3a)); fill(14, y + 9, 6, 3, rgb(0x4a, 0x7a, 0xc8)); break;
-    default:      spr(SPR_BUSH, 0, 8, y + 4, 0); break;
-    }
-    text(26, y + 3, UP_NAME[k], C_TEXT);
-    if (cost < 0) {
-      api->fmt(b, sizeof b, "all %d", js_up_max(k) + (k == JU_BELT));
-      text(26, y + 12, b, C_DIM);
-      text(SW - 34, y + 7, "max", C_DIM);
-      continue;
-    }
-    {
-      int32_t r = js_rate_ph(&J) * 10 / 60, n = js_rate_after(&J, k) * 10 / 60;
-      api->fmt(r1, sizeof r1, "%d.%d", (int)(r / 10), (int)(r % 10));
-      api->fmt(r2, sizeof r2, "%d.%d", (int)(n / 10), (int)(n % 10));
-    }
-    if (k == JU_MACH) api->fmt(b, sizeof b, "%s  %s->%s/min", lv == 2 ? "press" : "spool", r1, r2);
-    else api->fmt(b, sizeof b, "%d of %d  %s->%s/min", lv + (k == JU_BELT), js_up_max(k) + (k == JU_BELT), r1, r2);
-    text(26, y + 12, b, C_DIM);
-    price(SW - 46, y + 7, cost, (uint32_t)cost > J.coins);
-  }
-}
-
-/* The detail panel, right of a shop grid. */
-static void detail(void) {
-  const Tile *t = &G.card;
-  int x = 128;
-  char b[32];
-  fill(x - 2, BAR + 2, SW - x, SHT - 2 * BAR - 4, C_PANEL);
-  if (!t->ok) {
-    wrapped(x + 2, BAR + 8, G.tab || G.pick ? "Nothing here yet. The shop has more." : "Sold. More with the next batch.", 17, 4, C_DIM);
-    return;
-  }
-  pic(t->frame, t->pal, 1, 16, 16, x + 36, BAR + 5, 0, 2);
-  textn(x + 2, BAR + 41, G.w.name, 17, C_TEXT);
-  wrapped(x + 2, BAR + 51, G.w.line, 17, 2, C_DIM);
-  api->fmt(b, sizeof b, "%s, %s", t->kind == JK_CRITTER ? "critter" : t->kind == JK_HANGING ? "hanging" : "floor",
-           MOVE_NAME[t->move % JM_KINDS]);
-  textn(x + 2, BAR + 71, b, 17, C_TRAIT);
-  if (G.tab || G.pick) text(x + 2, BAR + 84, t->placed ? "in the jar" : "in My Stuff", t->placed ? C_GOLD : C_DIM);
-  else price(x + 2, BAR + 84, t->price, t->price > J.coins);
-}
-
-static void grid(void) {
-  int i, rows = 2;
-  char b[32];
-  fill(0, BAR, SW, SHT - 2 * BAR, C_BG);
-  if (G.tab || G.pick) api->fmt(b, sizeof b, "%u things", (unsigned)J.nowned);
-  else api->fmt(b, sizeof b, "No new stock offline");
-  text(4, BAR + 3, b, C_DIM);
-  for (i = 0; i < rows * 4; i++) {
-    const Tile *t = &G.tile[i];
-    int x = 4 + (i % 4) * 30, y = BAR + 13 + (i / 4) * 30;
-    fill(x, y, 28, 28, C_PANEL);
-    if (i < G.ntile && t->ok) {
-      pic(t->frame, t->pal, 1, 16, 16, x + 6, y + 2, 0, 1);
-      if (G.tab || G.pick) { if (t->placed) fill(x + 23, y + 2, 3, 3, C_GOLD); }
-      else {
-        api->fmt(b, sizeof b, "%u", (unsigned)t->price);
-        text(x + 14 - slen(b) * 3, y + 19, b, t->price > J.coins ? C_WARN : C_GOLD);
-      }
-    }
-    if (i == G.sel - G.top * 4) frame(x - 1, y - 1, 30, 30, C_GOLD);
-  }
-  if (!G.tab && !G.pick) {
-    fill(4, BAR + 76, 118, 30, C_PANEL);
-    text(8, BAR + 79, "Today", C_TRAIT);
-    wrapped(8, BAR + 88, "hand-made: cosy, garden, glow", 18, 2, C_DIM);
-  } else if (J.nowned > 8) {
-    api->fmt(b, sizeof b, "%d/%d", G.top + 1, (J.nowned + 3) / 4 - 1);
-    text(122 - slen(b) * 6, BAR + 3, b, C_DIM);
-  }
-  detail();
-}
-
-static void card(void) {
-  const Tile *t = &G.card;
-  char b[40];
-  fill(0, BAR, SW, SHT - 2 * BAR, C_BG);
-  fill(4, BAR + 3, SW - 8, SHT - 2 * BAR - 6, C_PANEL);
-  pic(t->frame, t->pal, 1, 16, 16, 12, BAR + 10, 0, 2);
-  jitem_number(t->id, b);
-  text(SW - 9 - slen(b) * 6, BAR + 9, b, C_DIM);
-  text(54, BAR + 9, G.w.name, C_TEXT);
-  wrapped(54, BAR + 21, G.w.line, 30, 2, C_DIM);
-  api->fmt(b, sizeof b, "%s, %s", KIND_NAME[t->kind % JK_KINDS], MOVE_NAME[t->move % JM_KINDS]);
-  text(54, BAR + 42, b, C_TRAIT);
-  if (G.w.tags[0]) { api->fmt(b, sizeof b, "tags: %s", G.w.tags); textn(54, BAR + 52, b, 30, C_TRAIT); }
-  {
-    static const char *const MON[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
-    int y = 0, m = 1, d = 1;
-    if (G.w.made) dt_civil_from_days((int32_t)(G.w.made / 86400u), &y, &m, &d);
-    if (G.w.made) api->fmt(b, sizeof b, "made by %s, %d %s %d", G.w.maker[0] ? G.w.maker : "someone", d, MON[(m - 1) % 12], y);
-    else api->fmt(b, sizeof b, "made by %s", G.w.maker[0] ? G.w.maker : "someone");
-    textn(12, BAR + 66, b, 37, C_DIM);
-  }
-  if (G.w.gifted[0]) { api->fmt(b, sizeof b, "a gift from %s", G.w.gifted); text(12, BAR + 76, b, C_PINK); }
-  else text(12, BAR + 76, (t->flags & JIF_BUILTIN) ? "hand-made, built in" : "from the shop", C_DIM);
-  text(12, BAR + 88, t->placed ? "In your jar." : "In My Stuff.", t->placed ? C_GOLD : C_TEXT);
-}
-
 /* ---- painting ------------------------------------------------------------ */
 
 static void render(void) {
-  if (G.view == V_JAR || G.view == V_DECOR) {
-    scene();
-    if (G.view == V_DECOR) decor_overlay();
-  } else if (G.view == V_UP) upgrades();
-  else if (G.view == V_SHOP) grid();
-  else card();
+  scene();
+  if (G.view == V_DECOR) decor_overlay();
   bars();
   note();
 }
@@ -771,168 +662,45 @@ static void app_paint(void *st, CRect c) {
   }
 }
 
-/* ---- items on the card ------------------------------------------------------- */
+/* ---- the card ------------------------------------------------------------- */
 
-static void item_path(uint32_t id, char *p, int n) { api->fmt(p, (size_t)n, DIR_ITEMS "/%u.itm", (unsigned)id); }
+/* Owned item `id` into SCR.io. 0, or -1. */
+static int item_read(uint32_t id) { return jst_item_read(api, id, &SCR.io) >= 0 ? 0 : -1; }
 
-/* A built-in, as the record it would be. */
-static void from_builtin(const JBuiltin *b, JItem *it) {
-  const char *s = b->text;
-  static const uint8_t LIM[4] = { JI_NAME, JI_LINE, JI_TAGS, JI_WHO };
-  char *fld[4];
-  int i, k;
-  ji_zero(it, (int)sizeof *it);
-  it->version = JI_VERSION;
-  it->id = b->id;
-  it->kind = b->kind;
-  it->nframes = b->nframes;
-  it->flags = JIF_BUILTIN;
-  it->move = b->move;
-  it->speed = b->speed;
-  it->zone = b->zone;
-  it->nhab = b->nhab;
-  it->nbub = b->nbub;
-  it->made = JB_MADE;
-  for (i = 0; i < 3; i++) {
-    it->hab[i].event = b->hab[i][0];
-    it->hab[i].earg = b->hab[i][1];
-    it->hab[i].action = b->hab[i][2];
-    it->hab[i].aarg = b->hab[i][3];
-  }
-  for (i = 0; i < 8; i++) it->pal[i] = b->pal[i];
-  fld[0] = it->name; fld[1] = it->line; fld[2] = it->tags; fld[3] = it->maker;
-  for (i = 0; i < 4 + b->nbub; i++) {
-    char *d = i < 4 ? fld[i] : it->bub[i - 4];
-    int n = i < 4 ? LIM[i] : JI_BUB;
-    for (k = 0; s[k] && k < n; k++) d[k] = s[k];
-    d[k] = 0;
-    s += slen(s) + 1;
-  }
-  for (i = 0; i < b->nframes; i++) ji_copy(it->frames[i], b->frames + i * JI_FRAME_BYTES, JI_FRAME_BYTES);
-}
-
-static int item_write(const JItem *it) {
-  SafeFile f;
+/* Scripts' memory, back into the items' records on the card. Only the 16
+ * bytes at 136 are touched -- the rest stays byte for byte as the server
+ * signed it, and the signature does not cover memory, so a gift of this
+ * item still verifies. */
+static void save_memory(void) {
+  int i, k, n;
   char p[48];
-  int n = jitem_encode(it, SCR.io.raw, JI_MAX);
-  if (n < 0) return -1;
-  item_path(it->id, p, sizeof p);
-  if (safe_begin(&f, api, p)) return -1;
-  safe_write(&f, (const char *)SCR.io.raw, (size_t)n);
-  return safe_commit(&f);
-}
-
-/* Item `id` from the card into SCR.io.it. 0, or -1. */
-static int item_read(uint32_t id) {
-  char p[48];
-  int fd, n;
-  item_path(id, p, sizeof p);
-  fd = safe_open_read(api, p);
-  if (fd < 0) return -1;
-  n = api->read(fd, SCR.io.raw, JI_MAX);
-  api->close(fd);
-  if (n <= 0) return -1;
-  return jitem_decode(&SCR.io.it, SCR.io.raw, n);
-}
-
-static void tile_from(Tile *t, const JItem *it) {
-  int i;
-  t->id = it->id;
-  t->kind = it->kind;
-  t->move = it->move;
-  t->flags = it->flags;
-  for (i = 0; i < 8; i++) t->pal[i] = it->pal[i];
-  ji_copy(t->frame, it->frames[0], JI_FRAME_BYTES);
-  t->placed = (uint8_t)(js_find(&J, it->id) >= 0);
-  t->ok = 1;
-}
-
-static void words_from(const JItem *it) {
-  ji_copy(G.w.name, it->name, sizeof G.w.name);
-  ji_copy(G.w.line, it->line, sizeof G.w.line);
-  ji_copy(G.w.maker, it->maker, sizeof G.w.maker);
-  ji_copy(G.w.tags, it->tags, sizeof G.w.tags);
-  ji_copy(G.w.gifted, it->gifted, sizeof G.w.gifted);
-  G.w.made = it->made;
+  for (i = 0; i < J.nplaced; i++) {
+    if (!J.placed[i].mem_dirty) continue;
+    n = jst_item_read(api, J.placed[i].id, &SCR.io);
+    if (n < 0 || !js_mem_sync(&J, i, &SCR.io.it)) { J.placed[i].mem_dirty = 0; continue; }
+    for (k = 0; k < 8; k++) {
+      SCR.io.raw[136 + 2 * k] = (uint8_t)SCR.io.it.mem[k];
+      SCR.io.raw[137 + 2 * k] = (uint8_t)((uint16_t)SCR.io.it.mem[k] >> 8);
+    }
+    jst_item_path(api, J.placed[i].id, p, sizeof p);
+    jst_put(api, p, SCR.io.raw, n);
+  }
 }
 
 static void save(void) {
-  SafeFile f;
-  int n;
-  uint32_t now = api->epoch();
-  if (now) J.seen = now;
-  n = js_save(&J, SCR.text, sizeof SCR.text);
-  if (safe_begin(&f, api, SAVE_PATH) == 0) {
-    safe_write(&f, SCR.text, (size_t)n);
-    safe_commit(&f);
-  }
+  save_memory();
+  jst_save(api, &J, SCR.text, sizeof SCR.text);
   G.last_save = api->ticks_ms();
 }
 
-/* ---- the shop's pages ------------------------------------------------------ */
-
-static int stock_n(void) {
-  int i, n = 0;
-  for (i = 0; i < JB_COUNT; i++) if (BUILTINS[i].price) n++;
-  return n;
-}
-
-static const JBuiltin *stock_at(int k) {
-  int i;
-  for (i = 0; i < JB_COUNT; i++) if (BUILTINS[i].price && k-- == 0) return &BUILTINS[i];
-  return 0;
-}
-
-/* Load what the grid shows, and the selected one's words. Card I/O: from
- * key handlers, never from paint. */
-static void load_page(void) {
-  int i, n;
-  for (i = 0; i < 8; i++) G.tile[i].ok = 0;
-  if (!G.tab && !G.pick) {
-    n = stock_n();
-    for (i = 0; i < n && i < 8; i++) {
-      const JBuiltin *b = stock_at(i);
-      from_builtin(b, &SCR.io.it);
-      tile_from(&G.tile[i], &SCR.io.it);
-      G.tile[i].price = b->price;
-      G.tile[i].ok = !(J.sold & (1u << b->id));
-    }
-    G.ntile = n;
-  } else {
-    G.ntile = 0;
-    for (i = 0; i < 8 && G.top * 4 + i < J.nowned; i++) {
-      if (item_read(J.owned[G.top * 4 + i]) == 0) tile_from(&G.tile[i], &SCR.io.it);
-      G.ntile = i + 1;
-    }
+/* Save, and open a companion at one of its screens. Quitting it comes back
+ * to a fresh jar, loaded from this save. */
+static void open_app(const char *app, const char *screen) {
+  save();
+  if (api->run(app, screen) != 0) {
+    api->fmt(G.msg, sizeof G.msg, "%s is not on the card", app);
+    G.msg_until = api->ticks_ms() + 4000;
   }
-  G.card.ok = 0;
-  i = G.sel - G.top * 4;
-  if (i >= 0 && i < G.ntile && G.tile[i].ok) {
-    ji_copy(&G.card, &G.tile[i], (int)sizeof G.card);
-    if (!G.tab && !G.pick) from_builtin(stock_at(G.sel), &SCR.io.it);
-    else item_read(G.tile[i].id);
-    words_from(&SCR.io.it);
-  }
-  G.menu_dirty = 1;
-}
-
-static void open_shop(int tab, int pick) {
-  G.view = V_SHOP;
-  G.tab = tab;
-  G.pick = pick;
-  G.sel = 0;
-  G.top = 0;
-  load_page();
-}
-
-/* The item card for `id`, which is owned. */
-static void open_card(uint32_t id, int from) {
-  if (item_read(id) != 0) { say("That item is missing"); return; }
-  tile_from(&G.card, &SCR.io.it);
-  words_from(&SCR.io.it);
-  G.card_from = from;
-  G.view = V_CARD;
-  G.menu_dirty = 1;
 }
 
 /* ---- decorate ------------------------------------------------------------- */
@@ -976,7 +744,7 @@ static int key_decor(int k) {
     case CAPP_KEY_DOWN:  if (p->kind == JK_HANGING) js_move_to(&J, G.dsel, x, y + 2); return 1;
     case CAPP_KEY_ENTER: G.dmove = 0; G.dnew = 0; save(); return 1;
     case CAPP_KEY_ESC:
-      if (G.dnew) { js_unplace(&J, G.dsel); G.dsel = 0; decor_select(0); }
+      if (G.dnew) { js_unplace(&J, G.dsel); G.dsel = 0; decor_select(0); save(); }
       else js_move_to(&J, G.dsel, G.dx0, G.dy0);
       G.dmove = 0;
       G.dnew = 0;
@@ -994,7 +762,7 @@ static int key_decor(int k) {
     G.dx0 = p->home_x;
     G.dy0 = p->home_y;
     return 1;
-  case 'n': case 'N': open_shop(1, 1); return 1;
+  case 'n': case 'N': open_app("Jar Shop", "decor"); return 1;
   case 'x': case 'X':
     if (!p) return 1;
     say("Put away in My Stuff");
@@ -1009,92 +777,6 @@ static int key_decor(int k) {
 
 /* ---- keys ------------------------------------------------------------------- */
 
-static void shop_move(int d) {
-  int n = (G.tab || G.pick) ? J.nowned : stock_n(), rows = 2;
-  int s = G.sel + d;
-  if (s < 0 || s >= n) return;
-  G.sel = s;
-  while (G.sel < G.top * 4) G.top--;
-  while (G.sel >= (G.top + rows) * 4) G.top++;
-  load_page();
-}
-
-static int key_shop(int k) {
-  switch (k) {
-  case CAPP_KEY_LEFT:  shop_move(-1); return 1;
-  case CAPP_KEY_RIGHT: shop_move(1); return 1;
-  case CAPP_KEY_UP:    shop_move(-4); return 1;
-  case CAPP_KEY_DOWN:  shop_move(4); return 1;
-  case 0x09:
-    if (!G.pick) open_shop(!G.tab, 0);
-    return 1;
-  case CAPP_KEY_ESC:
-    if (G.pick) { G.view = V_DECOR; G.pick = 0; } else G.view = V_JAR;
-    return 1;
-  case CAPP_KEY_ENTER:
-    if (!G.card.ok) return 1;
-    if (G.pick) {
-      G.pick = 0;
-      if (G.card.placed) { G.view = V_DECOR; decor_select(js_find(&J, G.card.id)); }
-      else place_new(G.card.id);
-      return 1;
-    }
-    if (G.tab) { open_card(G.card.id, V_SHOP); return 1; }
-    {
-      const JBuiltin *b = stock_at(G.sel);
-      if (!b || (J.sold & (1u << b->id))) return 1;
-      if (J.coins < b->price) return 1;              /* the price is in red already */
-      if (js_own(&J, b->id)) { say("My Stuff is full"); return 1; }
-      from_builtin(b, &SCR.io.it);
-      if (item_write(&SCR.io.it)) { J.nowned--; say("Could not write to the card"); return 1; }
-      js_spend(&J, b->price);
-      J.sold |= 1u << b->id;
-      save();
-      load_page();
-      open_card(b->id, V_SHOP);
-    }
-    return 1;
-  }
-  return 1;
-}
-
-static int key_card(int k) {
-  switch (k) {
-  case CAPP_KEY_ENTER:
-    if (G.card.placed) { G.view = V_DECOR; G.dmove = 0; decor_select(js_find(&J, G.card.id)); }
-    else place_new(G.card.id);
-    return 1;
-  case 'x': case 'X':
-    if (G.card.placed) {
-      js_unplace(&J, js_find(&J, G.card.id));
-      save();
-      G.card.placed = 0;
-      say("Put away in My Stuff");
-    }
-    return 1;
-  case CAPP_KEY_ESC:
-    G.view = G.card_from;
-    if (G.view == V_SHOP) load_page();
-    return 1;
-  }
-  return 1;
-}
-
-static int key_up(int k) {
-  switch (k) {
-  case CAPP_KEY_UP:   if (G.up_sel > 0) G.up_sel--; return 1;
-  case CAPP_KEY_DOWN: if (G.up_sel < JU_KINDS - 1) G.up_sel++; return 1;
-  case CAPP_KEY_ENTER: {
-    int r = js_buy(&J, G.up_sel);
-    if (r == 0) { save(); say("Bought: look in the jar"); }
-    else if (r == -2) say("Not enough coins yet");
-    return 1;
-  }
-  case CAPP_KEY_ESC: G.view = V_JAR; return 1;
-  }
-  return 1;
-}
-
 static int app_key(void *st, unsigned char k) {
   uint32_t now = api->ticks_ms();
   (void)st;
@@ -1102,18 +784,142 @@ static int app_key(void *st, unsigned char k) {
   /* Bars hidden: a key brings them back and does nothing else. */
   if (G.view == V_JAR && G.bars > 0) { G.last_key = now; return 1; }
   G.last_key = now;
-  switch (G.view) {
-  case V_DECOR: return key_decor(k);
-  case V_UP:    return key_up(k);
-  case V_SHOP:  return key_shop(k);
-  case V_CARD:  return key_card(k);
-  }
+  if (G.view == V_DECOR) return key_decor(k);
   switch (k) {
-  case 's': case 'S': open_shop(0, 0); return 1;
+  case 's': case 'S': open_app("Jar Shop", "shop"); return 1;
   case 'd': case 'D': G.view = V_DECOR; G.dmove = 0; decor_select(G.dsel); return 1;
-  case 'u': case 'U': G.view = V_UP; return 1;
+  case 'p': case 'P': open_app("Jar Shop", "garden"); return 1;
+  case 'h': case 'H': open_app("Jar Shop", "shelf"); return 1;
+  case 'u': case 'U': open_app("Jar Shop", "up"); return 1;
+  case 'f': case 'F': open_app("Jar Post", "friends"); return 1;
+  case 'm': case 'M': open_app("Jar Post", "mail"); return 1;
+  case CAPP_KEY_ENTER:
+    if (parcels()) open_app("Jar Post", "mail");     /* the parcel on the dock */
+    return 1;
   }
   return 0;
+}
+
+/* ---- the post ------------------------------------------------------------------ */
+
+static void q_start(int what, const char *method, const char *path) {
+  char u[160];
+  api->fmt(u, sizeof u, "%s%s", api->proxy(), path);
+  if (api->http_start(method, u, 0, 0, 0, 15000) == 0) G.q = what;
+}
+
+/* A parcel from `from` floats down to the dock; the critters look up. */
+static void parcel_arrives(const char *from) {
+  int k;
+  G.para_x = PARCEL_X;
+  G.para_y = 16 * 16;
+  for (k = 0; k < J.nmoss; k++) if (k % 2 == 0) js_say(&J, k, 3);     /* "ooh" */
+  if (J.snail.st != S_AWAY) js_say(&J, JW_SNAIL, 3);
+  js_event(&J, JE_GIFT, 0);
+  api->fmt(G.msg, sizeof G.msg, "Parcel from %s! Enter opens it", from[0] ? from : "a friend");
+  G.msg_until = api->ticks_ms() + 7000;
+}
+
+/* Thank-you messages, "ID\tFROM\tAT\tSIZE\n" + "FROM\tID" + "\n" each: hearts
+ * for each, and the last id to acknowledge. */
+static uint32_t thanks(int n) {
+  const char *p = SCR.text, *end = SCR.text + n;
+  uint32_t last = 0;
+  char from[JI_WHO + 1], sz[12];
+  int count = 0;
+  from[0] = 0;
+  while (p < end && *p >= '0' && *p <= '9') {
+    const char *h = p, *body, *q = sz;
+    uint32_t id = str_uint(&p), size;
+    tsv_field(h, 3, sz, sizeof sz);
+    size = str_uint(&q);
+    body = tsv_next_line(h);
+    if (body + size > end) break;                      /* cut short: the rest next time */
+    tsv_field(body, 0, from, sizeof from);
+    last = id;
+    count++;
+    p = body + size;
+    if (*p == '\n') p++;
+  }
+  if (count) {
+    G.hearts += 3 * count;
+    /* A parcel's banner stays up: the hearts are enough on their own. */
+    if (G.msg[0] && (int32_t)(api->ticks_ms() - G.msg_until) < 0) return last;
+    if (count == 1) api->fmt(G.msg, sizeof G.msg, "%s sends a heart", from);
+    else api->fmt(G.msg, sizeof G.msg, "%d hearts from friends", count);
+    G.msg_until = api->ticks_ms() + 6000;
+  }
+  return last;
+}
+
+static void post_reply(int n) {
+  int was = G.q;
+  char path[64];
+  G.q = Q_IDLE;
+  if (n < 0) { G.failed = 1; return; }
+  SCR.text[n] = 0;
+  G.failed = 0;
+  switch (was) {
+  case Q_LEN: {
+    const char *p = SCR.text;
+    G.waiting = (int)str_uint(&p);
+    if (G.waiting > 0) {
+      api->fmt(path, sizeof path, "/q/peek?q=jar.gifts&after=%u&max=1", (unsigned)J.gseen);
+      q_start(Q_PEEK, "GET", path);
+    } else q_start(Q_THANKS, "GET", "/q/peek?q=jar.thanks&max=8");
+    return;
+  }
+  case Q_PEEK:
+    if (SCR.text[0] >= '0' && SCR.text[0] <= '9') {
+      const char *p = SCR.text;
+      uint32_t id = str_uint(&p);
+      char from[JI_WHO + 1];
+      tsv_field(tsv_next_line(SCR.text), 0, from, sizeof from);
+      if (id > J.gseen) {
+        J.gseen = id;
+        parcel_arrives(from);
+        save();
+      }
+    }
+    q_start(Q_THANKS, "GET", "/q/peek?q=jar.thanks&max=8");
+    return;
+  case Q_THANKS: {
+    uint32_t last = thanks(n);
+    if (last) {
+      api->fmt(path, sizeof path, "/q/ack?q=jar.thanks&upto=%u", (unsigned)last);
+      q_start(Q_ACK, "POST", path);
+    }
+    return;
+  }
+  }
+}
+
+/* Asking after the post: at the start, then every few minutes while the
+ * network is up (never waking it), and less often after a failure. */
+static void post_tick(uint32_t now) {
+  if (G.q) {
+    int n = api->http_poll(SCR.text, sizeof SCR.text);
+    if (n != CAPP_HTTP_PENDING) post_reply(n);
+    return;
+  }
+  if ((int32_t)(now - G.next_q) < 0) return;
+  G.next_q = now + (G.failed ? 5 * NET_EVERY_MS : NET_EVERY_MS);
+  /* The first ask may bring the network up; after that, only while it is. */
+  if (G.asked_post && !api->net_ready()) return;
+  G.asked_post = 1;
+  q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
+}
+
+/* The parcel on its parachute, and hearts rising, a jar step at a time. */
+static void post_step(void) {
+  if (G.para_y) {
+    G.para_y += 8;
+    if (G.para_y >= PARCEL_Y * 16) G.para_y = 0;   /* landed: on the crates with the rest */
+  }
+  if (G.hearts > 0 && J.steps % 12 == 0) {
+    js_particle(&J, JP_HEART, 200 + (int)(J.steps % 24u), JS_SOIL - 18);
+    G.hearts--;
+  }
 }
 
 /* ---- time -------------------------------------------------------------------- */
@@ -1123,6 +929,7 @@ static void clock_minute(void) {
   api->now(&t);
   J.epoch = api->epoch();
   js_set_minute(&J, t.synced ? t.hour * 60 + t.min : -1);
+  js_settle_beds(&J, J.epoch);              /* a plant comes of age while you watch */
   set_sky(J.minute);
 }
 
@@ -1135,18 +942,18 @@ static int app_tick(void *st, uint32_t now) {
   G.last_ms = now;
   if (dt > 250) dt = 250;
   G.acc += dt;
-  while (G.acc >= JS_STEP_MS && steps < 10) { js_step(&J); G.acc -= JS_STEP_MS; steps++; }
+  while (G.acc >= JS_STEP_MS && steps < 10) { js_step(&J); post_step(); G.acc -= JS_STEP_MS; steps++; }
   if (now - G.last_min > 1000) {
     G.last_min = now;
     clock_minute();
     if (!J.seen && J.epoch) J.seen = J.epoch;     /* the clock arrived: count from now */
   }
+  post_tick(now);
   /* The bars slide away on the jar after a while without a key. */
   want = G.view == V_JAR && now - G.last_key > BARS_IDLE_MS ? BAR : 0;
   if (G.bars != want && now - G.bar_ms >= 20) { G.bar_ms = now; G.bars += G.bars < want ? 1 : -1; }
   if (now - G.last_save > SAVE_MS) save();
   if (G.msg[0] && (int32_t)(now - G.msg_until) > 0) { G.msg[0] = 0; G.menu_dirty = 1; }
-  if (!G.menu_dirty && (G.view != V_JAR && G.view != V_DECOR)) return 0;
   if (!G.menu_dirty && now - G.last_paint < FRAME_MS) return 0;
   G.last_paint = now;
   G.menu_dirty = 0;
@@ -1160,11 +967,10 @@ static int app_tick(void *st, uint32_t now) {
 static void first_run(void) {
   static const int16_t AT[4][2] = { { 58, 0 }, { 150, 18 }, { 40, 0 }, { 0, 0 } };
   int i, k = 0;
-  for (i = 0; i < JB_COUNT; i++) {
-    if (BUILTINS[i].price) continue;
-    from_builtin(&BUILTINS[i], &SCR.io.it);
-    if (item_write(&SCR.io.it) == 0) {
-      js_own(&J, BUILTINS[i].id);
+  for (i = 0; i < JB_NSTART; i++) {
+    jst_from_builtin(&JB_STARTERS[i], &SCR.io.it);
+    if (jst_item_write(api, &SCR.io) == 0) {
+      js_own(&J, JB_STARTERS[i].id);
       if (k < 3) js_place(&J, &SCR.io.it, AT[k][0], AT[k][1]);
     }
     k++;
@@ -1174,26 +980,29 @@ static void first_run(void) {
 }
 
 static void load(void) {
-  int fd, n = 0, i;
-  api->mkdir(CAPP_VAR);
-  api->mkdir(DIR_JAR);
-  api->mkdir(DIR_ITEMS);
-  fd = safe_open_read(api, SAVE_PATH);
-  if (fd >= 0) {
-    n = api->read(fd, SCR.text, sizeof SCR.text - 1);
-    api->close(fd);
-  }
-  if (n <= 0 || (SCR.text[n] = 0, js_load(&J, SCR.text)) != 0) { first_run(); return; }
+  int i;
+  uint32_t now = api->epoch(), gone, jars;
+  jst_dirs(api);
+  if (jst_load(api, &J, SCR.text, sizeof SCR.text) != 0) { first_run(); return; }
+  js_settle_beds(&J, now);
   for (i = 0; i < J.nwant; i++) {
     int x = J.want[i].x, y = J.want[i].y;
     if (item_read(J.want[i].id) == 0) js_place(&J, &SCR.io.it, x, y);
   }
-  {
-    uint32_t jars = js_away(&J, api->epoch());
-    if (jars) {
-      api->fmt(G.msg, sizeof G.msg, "While you were away: %u jars", (unsigned)jars);
-      G.msg_until = api->ticks_ms() + 7000;
-    }
+  J.nwant = 0;                                     /* placed, or gone from the card */
+  gone = now && J.seen && now > J.seen ? now - J.seen : 0;
+  jars = js_away(&J, now);
+  if (jars && gone >= 600) {                       /* not for a trip to the shop */
+    api->fmt(G.msg, sizeof G.msg, "While you were away: %u jars", (unsigned)jars);
+    G.msg_until = api->ticks_ms() + 7000;
+  }
+  /* Jar Shop or Jar Post asked for an item to be put in the jar. */
+  if (J.decor) {
+    uint32_t id = J.decor;
+    J.decor = 0;
+    if (js_find(&J, id) >= 0) { G.view = V_DECOR; decor_select(js_find(&J, id)); }
+    else if (js_owns(&J, id)) place_new(id);
+    save();
   }
 }
 
@@ -1208,6 +1017,10 @@ const CappInfo capp_info = {
     0x7F, 0xFE, 0x40, 0x02, 0x40, 0x02, 0x3F, 0xFC },
   "S\tthe shop (Tab: My Stuff)\n"
   "D\tdecorate: move, add, take out\n"
+  "P\tthe garden: plant the beds\n"
+  "H\tthe shelf: what steers the shop\n"
+  "F\tfriends\n"
+  "M\tmail; Enter opens a parcel on the dock\n"
   "U\tupgrades\n"
   "any key\tbrings the bars back\n",
 };
@@ -1221,7 +1034,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api->mem_set(&G, 0, sizeof G);
   js_init(&J, api->ticks_ms() ^ api->epoch());
   G.last_key = G.last_save = api->ticks_ms();
-  G.up_sel = 0;
+  G.next_q = api->ticks_ms() + NET_FIRST_MS;
   load();
   clock_minute();
   UI.paint = app_paint;

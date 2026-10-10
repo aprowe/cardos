@@ -66,6 +66,20 @@
 #define JS_MAX_OWNED   64
 #define JS_SPOOL       768             /* placed items' scripts, packed */
 
+/* An app that keeps the jar but never runs it (the companion apps: they load
+ * the save, change coins and items, save it again) defines JS_KEEP_ONLY and
+ * goes without room for placed items and their pictures -- 6.6 KB of data
+ * it would never touch. js_place refuses everything there. */
+#ifdef JS_KEEP_ONLY
+#define JS_PLACED_ROOM 1
+#define JS_POOL_ROOM   1
+#define JS_SPOOL_ROOM  1
+#else
+#define JS_PLACED_ROOM JS_MAX_PLACED
+#define JS_POOL_ROOM   JS_POOL
+#define JS_SPOOL_ROOM  JS_SPOOL
+#endif
+
 #define JS_GROW_MS     32000           /* a mature plant's berry, every so often */
 #define JS_WORK_MS     30000           /* a jar's machine time, shared out */
 #define JS_JAR_VALUE   1
@@ -120,7 +134,20 @@ static const char *const JS_SAYINGS[] = {
 
 /* ---- the state --------------------------------------------------------- */
 
-typedef struct { int32_t grow; uint8_t ready, claimed, type; } JBed;
+/* A bed. `type` is what grows in it (JPL_*); `at` is when it was planted, in
+ * UTC seconds -- 0 for a plant that is grown (the starting beds, and every
+ * bed before the garden existed), 1 for one planted with no clock, which
+ * starts counting when a clock arrives. A young plant grows no berries. */
+typedef struct { int32_t grow; uint32_t at; uint8_t ready, claimed, type, young; } JBed;
+
+/* The garden (spec step 4): what can be planted, in the order the scene's
+ * plant pictures are in. Each steers the daily stock its own way (the
+ * companion app says how). */
+enum { JPL_BERRY = 0, JPL_FERN, JPL_SHROOM, JPL_FLOWER, JPL_CACTUS, JPL_KINDS };
+#define JS_MATURE_S    (3u * 86400u)   /* three real days to grow */
+#define JS_SHELF       4
+static JS_OPT const char *const JS_PLANT_NAME[JPL_KINDS] = { "berry", "fern", "mushroom", "flower", "cactus" };
+static JS_OPT const uint16_t JS_PLANT_COST[JPL_KINDS] = { 20, 20, 35, 35, 40 };
 
 typedef struct {
   int32_t x, tx;                       /* middle, sub-pixels */
@@ -176,6 +203,10 @@ typedef struct {
   uint8_t  nbeds, nmoss, nmach, belt;
   uint16_t nowned;
   uint32_t owned[JS_MAX_OWNED];
+  uint32_t shelf[JS_SHELF];            /* item ids, 0 empty */
+  uint16_t parcels;                    /* gifts collected, not yet opened */
+  uint32_t decor;                      /* an item the companion asked to place */
+  uint32_t gseen;                      /* the last gift the jar announced */
 
   /* the factory */
   JBed   bed[JS_MAX_BEDS];
@@ -192,13 +223,13 @@ typedef struct {
   int32_t nap_clock;
 
   /* the items */
-  JPlaced placed[JS_MAX_PLACED];
+  JPlaced placed[JS_PLACED_ROOM];
   uint8_t nplaced;
-  uint8_t pool[JS_POOL][JI_FRAME_BYTES];
-  uint8_t pool_used[JS_POOL];
+  uint8_t pool[JS_POOL_ROOM][JI_FRAME_BYTES];
+  uint8_t pool_used[JS_POOL_ROOM];
   JWant   want[JS_MAX_PLACED];         /* what the save said was placed */
   uint8_t nwant;
-  uint8_t spool[JS_SPOOL];             /* the placed items' scripts, end to end */
+  uint8_t spool[JS_SPOOL_ROOM];        /* the placed items' scripts, end to end */
   uint16_t sused;
 
   /* the air */
@@ -283,8 +314,64 @@ static JS_OPT int32_t js_rate_for(int nbeds, int nmoss, int nmach, int belt) {
   return best * 80 / 100;
 }
 
+/* Only grown plants count: a bed replanted yesterday grows nothing yet. */
 static JS_OPT int32_t js_rate_ph(const Jar *j) {
-  return js_rate_for(j->nbeds, j->nmoss, j->nmach, j->belt);
+  int i, n = 0;
+  for (i = 0; i < j->nbeds; i++) if (!j->bed[i].young) n++;
+  return n ? js_rate_for(n, j->nmoss, j->nmach, j->belt) : 0;
+}
+
+/* ---- the garden ---------------------------------------------------------- */
+
+/* Is the plant in `b` grown, at `now` (UTC seconds, 0 without a clock)? With
+ * no clock nothing grows: a young plant stays young. */
+static JS_OPT int js_bed_grown(const JBed *b, uint32_t now) {
+  if (b->at == 0) return 1;
+  if (b->at == 1 || !now || now < b->at) return 0;
+  return now - b->at >= JS_MATURE_S;
+}
+
+/* Whole days until it is grown, rounded up; 0 when it is. -1 without a
+ * clock. */
+static JS_OPT int js_bed_days(const JBed *b, uint32_t now) {
+  uint32_t left;
+  if (js_bed_grown(b, now)) return 0;
+  if (b->at == 1 || !now) return -1;
+  left = now < b->at ? JS_MATURE_S : JS_MATURE_S - (now - b->at);
+  return (int)((left + 86399u) / 86400u);
+}
+
+/* Bring the beds up to `now`: a plant set with no clock starts counting, a
+ * grown one is grown for good (at 0), and `young` says which grow nothing. */
+static JS_OPT void js_settle_beds(Jar *j, uint32_t now) {
+  int i;
+  for (i = 0; i < JS_MAX_BEDS; i++) {
+    JBed *b = &j->bed[i];
+    if (b->at == 1 && now) b->at = now;
+    if (js_bed_grown(b, now)) b->at = 0;
+    b->young = (uint8_t)(b->at != 0);
+    if (b->young) { b->ready = 0; b->grow = 0; }
+  }
+}
+
+/* Plant `type` in bed i (paid for by the caller). It starts young. */
+static JS_OPT void js_plant(Jar *j, int i, int type, uint32_t now) {
+  JBed *b = &j->bed[i];
+  b->type = (uint8_t)(type % JPL_KINDS);
+  b->at = now ? now : 1;
+  b->young = 1;
+  b->ready = 0;
+  b->claimed = 0;
+  b->grow = 0;
+}
+
+/* Grown beds of each kind, into n[JPL_KINDS]; the total. */
+static JS_OPT int js_garden_mix(const Jar *j, int *n) {
+  int i, t = 0;
+  for (i = 0; i < JPL_KINDS; i++) n[i] = 0;
+  for (i = 0; i < j->nbeds; i++)
+    if (!j->bed[i].young) { n[j->bed[i].type % JPL_KINDS]++; t++; }
+  return t;
 }
 
 /* ---- particles, floats, bubbles ------------------------------------------ */
@@ -376,6 +463,7 @@ static JS_OPT int js_find(const Jar *j, uint32_t id) {
 static JS_OPT int js_place(Jar *j, const JItem *it, int x, int y) {
   JPlaced *p;
   int i, f;
+  if (JS_PLACED_ROOM < JS_MAX_PLACED) return -1;          /* JS_KEEP_ONLY */
   if (j->nplaced >= JS_MAX_PLACED || js_find(j, it->id) >= 0) return -1;
   p = &j->placed[j->nplaced];
   ji_zero(p, (int)sizeof *p);
@@ -397,8 +485,8 @@ static JS_OPT int js_place(Jar *j, const JItem *it, int x, int y) {
   for (i = 0; i < JI_MAX_FRAMES; i++) p->slot[i] = 255;
   p->nframes = 0;
   for (i = 0; i < it->nframes; i++) {
-    for (f = 0; f < JS_POOL && j->pool_used[f]; f++) {}
-    if (f == JS_POOL) break;
+    for (f = 0; f < JS_POOL_ROOM && j->pool_used[f]; f++) {}
+    if (f == JS_POOL_ROOM) break;
     j->pool_used[f] = 1;
     ji_copy(j->pool[f], it->frames[i], JI_FRAME_BYTES);
     p->slot[i] = (uint8_t)f;
@@ -408,7 +496,7 @@ static JS_OPT int js_place(Jar *j, const JItem *it, int x, int y) {
   /* Its script, if this machine can run it and there is room: else the
    * recipe does everything, as in phase 1. */
   if (it->script_len && jv_check(it->script, it->script_len) == 0 &&
-      j->sused + it->script_len <= JS_SPOOL) {
+      j->sused + it->script_len <= JS_SPOOL_ROOM) {
     p->soff = j->sused;
     p->slen = it->script_len;
     ji_copy(j->spool + p->soff, it->script, p->slen);
@@ -433,7 +521,7 @@ static JS_OPT void js_unplace(Jar *j, int i) {
   int k;
   if (i < 0 || i >= j->nplaced) return;
   for (k = 0; k < JI_MAX_FRAMES; k++)
-    if (j->placed[i].slot[k] < JS_POOL) j->pool_used[j->placed[i].slot[k]] = 0;
+    if (j->placed[i].slot[k] < JS_POOL_ROOM) j->pool_used[j->placed[i].slot[k]] = 0;
   if (j->placed[i].slen) {                    /* close the gap its script leaves */
     int at = j->placed[i].soff, n = j->placed[i].slen;
     ji_copy(j->spool + at, j->spool + at + n, j->sused - at - n);
@@ -662,6 +750,41 @@ static JS_OPT int js_own(Jar *j, uint32_t id) {
   return 0;
 }
 
+/* In the jar: placed, or (in the companion, which places nothing) saved as
+ * placed. */
+static JS_OPT int js_in_jar(const Jar *j, uint32_t id) {
+  int i;
+  if (js_find(j, id) >= 0) return 1;
+  for (i = 0; i < j->nwant; i++) if (j->want[i].id == id) return 1;
+  return 0;
+}
+
+static JS_OPT int js_on_shelf(const Jar *j, uint32_t id) {
+  int i;
+  for (i = 0; i < JS_SHELF; i++) if (id && j->shelf[i] == id) return i;
+  return -1;
+}
+
+/* An item gone for good (gifted): out of My Stuff, the shelf and the jar. */
+static JS_OPT void js_disown(Jar *j, uint32_t id) {
+  int i, k;
+  for (i = 0; i < j->nowned; i++)
+    if (j->owned[i] == id) {
+      for (k = i; k + 1 < j->nowned; k++) j->owned[k] = j->owned[k + 1];
+      j->nowned--;
+      break;
+    }
+  for (i = 0; i < JS_SHELF; i++) if (j->shelf[i] == id) j->shelf[i] = 0;
+  for (i = 0; i < j->nwant; i++)
+    if (j->want[i].id == id) {
+      for (k = i; k + 1 < j->nwant; k++) ji_copy(&j->want[k], &j->want[k + 1], (int)sizeof j->want[k]);
+      j->nwant--;
+      break;
+    }
+  if (js_find(j, id) >= 0) js_unplace(j, js_find(j, id));
+  if (j->decor == id) j->decor = 0;
+}
+
 static JS_OPT int js_spend(Jar *j, uint32_t n) {
   if (j->coins < n) return -1;
   j->coins -= n;
@@ -782,6 +905,7 @@ static JS_OPT uint32_t js_away(Jar *j, uint32_t now) {
   if (j->dock > 6) j->pile0 = j->dock;
   for (i = 0; i < j->nbeds; i++) {
     int32_t g = j->bed[i].grow + (int32_t)(secs > 3600 ? 3600 : secs) * 1000;
+    if (j->bed[i].young) continue;
     j->bed[i].grow = g > JS_GROW_MS ? JS_GROW_MS : g;
     if (j->bed[i].grow >= JS_GROW_MS) j->bed[i].ready = 1;
   }
@@ -825,7 +949,7 @@ static JS_OPT void js_step_beds(Jar *j) {
   int i;
   for (i = 0; i < j->nbeds; i++) {
     JBed *b = &j->bed[i];
-    if (b->ready) continue;
+    if (b->ready || b->young) continue;
     b->grow += JS_STEP_MS;
     if (b->grow >= JS_GROW_MS) { b->grow = JS_GROW_MS; b->ready = 1; }
   }
@@ -1307,14 +1431,32 @@ static JS_OPT int js_save(const Jar *j, char *buf, int cap) {
   n = js_put_u(buf, n, cap, j->nmach);  n = js_put(buf, n, cap, " ");
   n = js_put_u(buf, n, cap, j->belt);   n = js_put(buf, n, cap, "\ngrow");
   for (i = 0; i < j->nbeds; i++) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, (uint32_t)j->bed[i].grow); }
-  n = js_put(buf, n, cap, "\nown");
+  n = js_put(buf, n, cap, "\nplant");
+  for (i = 0; i < j->nbeds; i++) {
+    n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, j->bed[i].type);
+    n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, j->bed[i].at);
+  }
+  n = js_put(buf, n, cap, "\nshelf");
+  for (i = 0; i < JS_SHELF; i++) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, j->shelf[i]); }
+  n = js_put(buf, n, cap, "\n");
+  JS_KV("parcels", j->parcels);
+  JS_KV("gseen", j->gseen);
+  if (j->decor) JS_KV("decor", j->decor);
+  n = js_put(buf, n, cap, "own");
   for (i = 0; i < j->nowned; i++) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, j->owned[i]); }
   n = js_put(buf, n, cap, "\n");
-  for (i = 0; i < j->nplaced; i++) {
+  /* What is in the jar, and what a save said was in it and has not been put
+   * back (the companion app, which loads the jar without placing anything,
+   * must not lose it). */
+  for (i = 0; i < j->nplaced + j->nwant; i++) {
+    uint32_t id = i < j->nplaced ? j->placed[i].id : j->want[i - j->nplaced].id;
+    int x = i < j->nplaced ? j->placed[i].home_x : j->want[i - j->nplaced].x;
+    int y = i < j->nplaced ? j->placed[i].home_y : j->want[i - j->nplaced].y;
+    if (i >= j->nplaced && js_find(j, id) >= 0) continue;
     n = js_put(buf, n, cap, "place ");
-    n = js_put_u(buf, n, cap, j->placed[i].id);       n = js_put(buf, n, cap, " ");
-    n = js_put_u(buf, n, cap, (uint32_t)j->placed[i].home_x); n = js_put(buf, n, cap, " ");
-    n = js_put_u(buf, n, cap, (uint32_t)j->placed[i].home_y); n = js_put(buf, n, cap, "\n");
+    n = js_put_u(buf, n, cap, id);           n = js_put(buf, n, cap, " ");
+    n = js_put_u(buf, n, cap, (uint32_t)x);  n = js_put(buf, n, cap, " ");
+    n = js_put_u(buf, n, cap, (uint32_t)y);  n = js_put(buf, n, cap, "\n");
   }
 #undef JS_KV
   return n;
@@ -1368,7 +1510,25 @@ static JS_OPT int js_load(Jar *j, const char *t) {
           i++;
         }
       }
-    } else if (js_word_is(w, "own")) {
+    } else if (js_word_is(w, "plant")) {
+      int i = 0;
+      while (js_more(p)) {
+        uint32_t ty = js_num(&p), at = js_num(&p);
+        if (i < JS_MAX_BEDS) {
+          j->bed[i].type = (uint8_t)(ty % JPL_KINDS);
+          j->bed[i].at = at;
+          j->bed[i].young = (uint8_t)(at != 0);   /* js_settle_beds decides */
+          if (at) { j->bed[i].ready = 0; j->bed[i].grow = 0; }
+          i++;
+        }
+      }
+    } else if (js_word_is(w, "shelf")) {
+      int i = 0;
+      while (js_more(p)) { uint32_t id = js_num(&p); if (i < JS_SHELF) j->shelf[i++] = id; }
+    } else if (js_word_is(w, "parcels")) j->parcels = (uint16_t)js_num(&p);
+    else if (js_word_is(w, "gseen")) j->gseen = js_num(&p);
+    else if (js_word_is(w, "decor")) j->decor = js_num(&p);
+    else if (js_word_is(w, "own")) {
       while (js_more(p)) js_own(j, js_num(&p));
     } else if (js_word_is(w, "place")) {
       uint32_t id = js_num(&p);

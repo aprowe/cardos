@@ -1,5 +1,6 @@
 /* Jar Factory's item record on the host: apps/jaritem.h. The round trip, the
  * size limits, and how forgiving the reader is (and is not). */
+#include <stdio.h>
 #include <string.h>
 
 #include "tinytest.h"
@@ -195,4 +196,63 @@ void test_jaritem_number(void) {
   CHECK(strcmp(s, "No. 0042") == 0);
   jitem_number(123456, s);
   CHECK(strcmp(s, "No. 123456") == 0);
+}
+
+/* The signed message is the record as if it had no signature and empty
+ * memory: the same as one encoded afresh with neither. Memory a script
+ * wrote, or a different signature, does not change it. */
+void test_jaritem_signed_message_is_the_record_without_its_signature(void) {
+  static JItem a;
+  uint8_t with[JI_MAX], without[JI_MAX], msg[JI_MAX];
+  int n1, n0, m, i;
+  fill_item(&a, 2);
+  a.script_len = 3;
+  memcpy(a.script, "\x01\x02\x03", 3);
+  memset(a.mem, 0, sizeof a.mem);
+  n0 = jitem_encode(&a, without, sizeof without);
+  for (i = 0; i < JI_MEM; i++) a.mem[i] = (int16_t)(i * 77 - 100);   /* a script was here */
+  a.sig_len = 64;
+  for (i = 0; i < 64; i++) a.sig[i] = (uint8_t)(0xA0 + i);
+  n1 = jitem_encode(&a, with, sizeof with);
+  CHECK_EQ(n1, n0 + 64);
+  CHECK(memcmp(with + 136, without + 136, 16) != 0);
+  m = ji_signed_message(with, n1, msg, sizeof msg);
+  CHECK_EQ(m, n0);
+  CHECK(memcmp(msg, without, (size_t)n0) == 0);
+  CHECK_EQ(msg[204], 0);
+  CHECK_EQ((int)ji_get16(msg + 2), n0);
+  /* unsigned and memory-less: the message is the record */
+  CHECK_EQ(ji_signed_message(without, n0, msg, sizeof msg), n0);
+  CHECK(memcmp(msg, without, (size_t)n0) == 0);
+  /* lengths that disagree, or no room */
+  CHECK_EQ(ji_signed_message(with, n1 - 1, msg, sizeof msg), -1);
+  CHECK_EQ(ji_signed_message(with, n1, msg, n0 - 1), -1);
+}
+
+/* The server's own example, when server/jar.py's tests have written it:
+ * test/fixtures/jar_item_signed.bin and the message it signed. Skipped
+ * (with a line saying so) when the fixtures are not in this tree. */
+void test_jaritem_signed_message_matches_the_servers_fixture(void) {
+  static uint8_t rec[JI_MAX + 64], want[JI_MAX], got[JI_MAX];
+  FILE *f = fopen("test/fixtures/jar_item_signed.bin", "rb");
+  FILE *g = fopen("test/fixtures/jar_item_message.bin", "rb");
+  int n, w, m;
+  if (!f || !g) {
+    if (f) fclose(f);
+    if (g) fclose(g);
+    printf("  (skipped: test/fixtures/jar_item_*.bin not here)\n");
+    return;
+  }
+  n = (int)fread(rec, 1, sizeof rec, f);
+  w = (int)fread(want, 1, sizeof want, g);
+  fclose(f);
+  fclose(g);
+  m = ji_signed_message(rec, n, got, sizeof got);
+  CHECK_EQ(m, w);
+  CHECK(m == w && memcmp(got, want, (size_t)w) == 0);
+  {
+    static JItem it;
+    CHECK_EQ(jitem_decode(&it, rec, n), 0);
+    CHECK_EQ(it.sig_len, 64);
+  }
 }

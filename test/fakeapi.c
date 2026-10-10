@@ -144,6 +144,10 @@ static int d_run_command(const char *a, const char *l, char *o, size_t n) {
   return -1;
 }
 static int d_shell(const char *l, char *o, size_t n) { (void)l; if (n) o[0] = 0; return -1; }
+static int d_sig_verify(const uint8_t pub[65], const void *m, size_t n, const uint8_t sig[64]) {
+  (void)pub; (void)m; (void)n; (void)sig;
+  return -1;                                   /* could not check */
+}
 static int d_http_upload(const char *u, const char *p, const char *ct, char *o, size_t n, int ms) {
   (void)u; (void)p; (void)ct; (void)ms;
   if (n) o[0] = 0;
@@ -219,6 +223,7 @@ void fakeapi_init(CardApi *a) {
   a->notify = d_notify; a->notify_at = d_notify_at; a->notify_cancel = d_notify_cancel;
   a->update_apply_progress = d_update_progress; a->firmware_boot = d_firmware_boot;
   a->link = d_link;
+  a->sig_verify = d_sig_verify;
   a->key_repeat = d_key_repeat;
   a->key_pending = d_key_pending;
   fakeapi_out[0] = 0;

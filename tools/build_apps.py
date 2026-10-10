@@ -90,9 +90,15 @@ def run(cmd):
 # load address added; the rest are PC-relative or empty and survive a uniform
 # shift untouched. Anything else means the loader would have to grow, so the
 # build fails here rather than the device failing later.
+#
+# R_XTENSA_ASM_SIMPLIFY (first seen in Jar Factory, 2026-10-09) is the
+# linker's note that it relaxed a -mlongcalls call (L32R + CALLX8) into a
+# direct CALL8. CALL8 is PC-relative -- (PC & ~3) + offset -- so, like the
+# SLOT0_OP branches, it survives the shift as long as the code block is
+# word-aligned, which heap_caps_malloc always returns.
 ALLOWED_RELOCS = {
     "R_XTENSA_NONE", "R_XTENSA_32", "R_XTENSA_SLOT0_OP", "R_XTENSA_ASM_EXPAND",
-    "R_XTENSA_DIFF8", "R_XTENSA_DIFF16", "R_XTENSA_DIFF32",
+    "R_XTENSA_ASM_SIMPLIFY", "R_XTENSA_DIFF8", "R_XTENSA_DIFF16", "R_XTENSA_DIFF32",
 }
 
 
@@ -202,7 +208,6 @@ OVER_BUDGET = {
     # 1.8 KB of code and 1.3 KB of data (a 768-byte script pool). Its data
     # is well under 28 KB. Take it off when the app is split (a companion
     # app for the menus) and is back under.
-    "jar": "code+data only: the phase 2 script machine, until the app is split",
 }
 
 

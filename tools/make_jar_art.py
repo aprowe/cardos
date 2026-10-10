@@ -268,24 +268,29 @@ def main():
             out.append("  " + ", ".join("0x%02X" % b for b in data[i:i + 16]) + ",")
         out.append("};")
     out.append("")
-    out.append("#define JB_COUNT %d" % len(items))
-    out.append("static const JBuiltin BUILTINS[JB_COUNT] = {")
-    for it in items:
-        where = "item %d" % it["id"]
-        habs = [habit_bytes(e, a, where) for e, a in it["habits"]]
-        habs_c = ", ".join("{ %d, %d, %d, %d }" % h for h in habs + [(0, 0, 0, 0)] * (3 - len(habs)))
-        pal = [0] + [rgb565(c) for _, c in it["pal"]]
-        pal += [0] * (8 - len(pal))
-        text = "\\0".join([it["title"], it.get("text", ""), it.get("tags", ""), "Alex"] + it["bubbles"])
-        text = text.replace('"', '\\"')
-        out.append("  { %d, %d, %d, %d, %d, %d, %d, %d, %d, { %s }," % (
-            it["id"], it.get("price", 0), KINDS[it["kind"]], len(it["frames"]),
-            MOVES[it["move"]], SPEEDS[it["speed"]], ZONES[it["zone"]], len(habs),
-            len(it["bubbles"]), habs_c))
-        out.append("    { %s }," % ", ".join("0x%04X" % p for p in pal))
-        out.append('    "%s", JIF_%d },' % (text, it["id"]))
-    out.append("};")
-    out.append("")
+    # Every item, and the starters again on their own: the jar app needs only
+    # those four for a first run, and an array is all or nothing to the linker.
+    starters = [it for it in items if not it.get("price", 0)]
+    tables = [("JB_COUNT", "BUILTINS", items), ("JB_NSTART", "JB_STARTERS", starters)]
+    for count, name, rows in tables:
+        out.append("#define %s %d" % (count, len(rows)))
+        out.append("static const JBuiltin %s[%s] = {" % (name, count))
+        for it in rows:
+            where = "item %d" % it["id"]
+            habs = [habit_bytes(e, a, where) for e, a in it["habits"]]
+            habs_c = ", ".join("{ %d, %d, %d, %d }" % h for h in habs + [(0, 0, 0, 0)] * (3 - len(habs)))
+            pal = [0] + [rgb565(c) for _, c in it["pal"]]
+            pal += [0] * (8 - len(pal))
+            text = "\\0".join([it["title"], it.get("text", ""), it.get("tags", ""), "Alex"] + it["bubbles"])
+            text = text.replace('"', '\\"')
+            out.append("  { %d, %d, %d, %d, %d, %d, %d, %d, %d, { %s }," % (
+                it["id"], it.get("price", 0), KINDS[it["kind"]], len(it["frames"]),
+                MOVES[it["move"]], SPEEDS[it["speed"]], ZONES[it["zone"]], len(habs),
+                len(it["bubbles"]), habs_c))
+            out.append("    { %s }," % ", ".join("0x%04X" % p for p in pal))
+            out.append('    "%s", JIF_%d },' % (text, it["id"]))
+        out.append("};")
+        out.append("")
     out.append("#endif /* CARDOS_JAR_ART_H */")
     out.append("")
     with open(OUT, "w", encoding="utf-8", newline="\n") as f:

@@ -897,9 +897,21 @@ static int find_named(const char *name) {
  * app that asked goes first, then this one loads into the room it left. */
 static void run_next(void) {
   char name[20], args[128];
+  int i, back = -1;
   s_has_next = 0;
   snprintf(name, sizeof name, "%s", s_next);
   snprintf(args, sizeof args, "%s", s_next_args);
+  /* An app opening one it was itself opened from is going back to it (Jar
+   * Shop's "back to the jar"): what was stacked above it is done with, and
+   * stacking the caller again would make fn-` go round in a circle. */
+  for (i = s_nback - 1; i >= 0 && s_app; i--)
+    if (same_name(s_back[i], name)) { back = i; break; }
+  if (back >= 0) {
+    s_nback = back;
+    leave_app_ex(0);
+    if (run_now(name, args[0] ? args : NULL) != 0 || !s_app) flush();
+    return;
+  }
   if (s_app) {
     if (s_nback == BACK_MAX) {
       memmove(s_back[0], s_back[1], sizeof s_back - sizeof s_back[0]);
