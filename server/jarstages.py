@@ -1,5 +1,5 @@
 """Jar items made in stages (docs/superpowers/specs/2026-10-11-jar-item-
-pipeline-design.md), behind CARDOS_JAR_STAGES=1 (jar.STAGES).
+pipeline-design.md): the only way items are made (jar.generate).
 
 One call used to do everything -- name, behaviour, palette, frames, script
 -- and the art was the bulk of the answer; nearly every item came out a
@@ -197,12 +197,16 @@ ART_FORM = {
 }
 
 
-def artist_prompt(sheet, kind, form, tier):
+def artist_prompt(sheet, kind, form, tier, base=None):
     lines = [
         "Draw a tiny pixel-art sprite for a cosy game set inside a glass jar.",
         "It is %s, called %s: %s." % (jar.KIND_WORDS[kind], sheet["name"], sheet["line"]),
         "How it looks: %s" % sheet["look"],
     ]
+    if base:                                            # a remake: the picture it had
+        lines.append("It is a new version of an existing sprite; keep it recognisably the "
+                     "same. The old one: palette %s; frame 1 rows: %s." % (
+                         " ".join(base["palette"]), " ".join(base["frames"][0])))
     if form in ART_FORM:
         lines.append(ART_FORM[form] % sheet.get("surface", 4) if "%s" in ART_FORM[form]
                      else ART_FORM[form])
@@ -330,15 +334,18 @@ def _script_error(raw, form):
         return "the script does not work: %s" % e
 
 
-def make_find(chat, person, kind, tier, form, activity, search, earlier, taken, st, log=None):
+def make_find(chat, person, kind, tier, form, activity, search, earlier, taken, st, log=None,
+              concept=None, base=None):
     """One find through the stages: (raw, concept, sheet). Drop if it comes
-    to nothing."""
+    to nothing. With a `concept` the DM is skipped (a remake: the old idea
+    and what was asked for), and `base` is the old picture for the artist."""
     say = log or (lambda s: None)
-    try:
-        concept = _ask(chat, dm_prompt(search, activity, tier[0], earlier), dm_schema(), person,
-                       tier[2], st)["concept"].strip()
-    except Exception as e:                              # noqa: BLE001 - the find is dropped
-        raise Drop("DM: %s" % e)
+    if concept is None:
+        try:
+            concept = _ask(chat, dm_prompt(search, activity, tier[0], earlier), dm_schema(),
+                           person, tier[2], st)["concept"].strip()
+        except Exception as e:                          # noqa: BLE001 - the find is dropped
+            raise Drop("DM: %s" % e)
     try:
         sheet = _ask(chat, fitter_prompt(concept, kind, form, activity, tier),
                      fitter_schema(kind, form, activity), person, "medium", st)
@@ -348,7 +355,7 @@ def make_find(chat, person, kind, tier, form, activity, search, earlier, taken, 
         say("fitter's note on %r: %s" % (sheet["name"], sheet["note"]))
 
     def draw(extra=""):
-        p = artist_prompt(sheet, kind, form, tier) + extra
+        p = artist_prompt(sheet, kind, form, tier, base) + extra
         return _ask(chat, p, artist_schema(sheet["frames"], form), person, tier[2], st)
 
     def behave(extra=""):
@@ -487,6 +494,55 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
     if not records:
         raise ValueError("no find came through the stages: %s" % (last or "none asked"))
     return records
+
+
+# ---- a remake: Pip's alterations, Bramble's evolutions (server/town.py) -----------
+
+def _activity_of(it):
+    """An item's activity, read back from its record (for an item made
+    before the stages kept one)."""
+    if it.get("travel"):
+        return "ambles"
+    if it.get("habits") or it.get("script"):
+        return "reacts"
+    return "still"
+
+
+def remake(chat, person, item_id, how, verb, store=None, log=None):
+    """The item made again through the fitter, the artist and the behaviour
+    writer: its concept (or its name and line) and what was asked for, its
+    kind, form, activity and price kept, the artist shown the old picture.
+    (name, sealed record), not stored -- server/town.py hands it over at
+    its time."""
+    st = store or kv.store()
+    old = jar.decode(st.get(jar.NS, "rec/%d" % item_id))
+    kind = {v: k for k, v in jar.enums()["kinds"].items()}[old["kind"]]
+    form = ("furniture" if old["role"] == 1 else "scenery" if old["role"] == 2 else
+            "part" if old["part"] else "big" if old["scale"] == 2 else None)
+    was = concept_of(item_id, st) or {}
+    activity = was.get("activity") or _activity_of(old)
+    if verb == "evolve" and activity == "still":
+        activity = "reacts"                             # what it grows into does something
+    idea = was.get("concept") or "%s: %s" % (old["name"], old["line"])
+    asked = ("Someone asked for it to be altered: \"%s\". It is the SAME thing, changed as "
+             "asked -- keep its name or a small variation." % how) if verb == "modify" else (
+        "It is evolving into its next form%s: the same creature, grown -- a new name that "
+        "echoes %s, bolder, able to do something it could not before." % (
+            (": " + how) if how else "", old["name"]))
+    concept = "%s\n\n%s" % (idea, asked)
+    pal = ["#%02x%02x%02x" % (((c >> 11) & 31) * 255 // 31, ((c >> 5) & 63) * 255 // 63,
+                              (c & 31) * 255 // 31) for c in old["pal"]]
+    rows = ["".join(str(v) for v in jar.unpack_frame(old["frames"][0])[r * 16:(r + 1) * 16])
+            for r in range(16)]
+    tier = ("rare", old["price"] or 200, "high", jar.TIERS[2][4])
+    raw, concept, sheet = make_find(chat, person, kind, tier, form, activity, "", [], set(), st,
+                                    log, concept=concept, base={"palette": pal, "frames": [rows]})
+    it = jar.to_item(raw, item_id, time.time(), old.get("tags") or "", log, old["price"], form)
+    st.put(jar.NS, "concept/%d" % item_id, json.dumps(dict(was, concept=concept,
+                                                           activity=activity,
+                                                           intent=sheet.get("intent", ""),
+                                                           look=sheet.get("look", ""))).encode())
+    return raw["name"], jar.seal(jar.encode(it))
 
 
 def concept_of(item_id, store=None):

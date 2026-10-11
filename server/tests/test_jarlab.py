@@ -79,7 +79,7 @@ class Core(unittest.TestCase):
         d = jarlab.defaults()
         self.assertEqual([t["name"] for t in d["tiers"]], [t[0] for t in jar.TIERS])
         self.assertIn("furniture", [f["name"] for f in d["forms"]])
-        self.assertTrue(d["sparks"]["things"])
+        self.assertEqual(d["sparks"]["things"], [])               # no sparks since the stages
         self.assertIn("JAR SCRIPT", d["guide_v1"])
         self.assertIn("schema", d)
 

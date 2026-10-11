@@ -204,54 +204,6 @@ def _rows(frame):
     return ["".join(str(v) for v in px[r * 16:(r + 1) * 16]) for r in range(16)]
 
 
-def _form_of(it):
-    if it.get("role") == 1:
-        return "furniture"
-    if it.get("role") == 2:
-        return "scenery"
-    if it.get("part"):
-        return "part"
-    if it.get("scale", 1) == 2:
-        return "big"
-    return None
-
-
-def remake_prompt(old, how, verb, kind_name):
-    e = jar.enums()
-    moves = {v: k for k, v in e["moves"].items()}
-    speeds = {v: k for k, v in e["speeds"].items()}
-    zones = {v: k for k, v in e["zones"].items()}
-    pal = ["#%02x%02x%02x" % (((c >> 11) & 31) * 255 // 31, ((c >> 5) & 63) * 255 // 63,
-                              (c & 31) * 255 // 31) for c in old["pal"]]
-    lines = [
-        jar.GAME,
-        "",
-        ("A tinkerer is altering one of a player's things." if verb == "modify" else
-         "A grower is helping one of a player's critters grow into its next form."),
-        "The thing as it is now:",
-        "  name: %s; line: %s; kind: %s; movement: %s; speed: %s; zone: %s; traits: %s" % (
-            old["name"], old["line"], kind_name, moves.get(old["move"], "sits"),
-            speeds.get(old["speed"], "medium"), zones.get(old["zone"], "anywhere"),
-            old.get("tags") or "none"),
-        "  bubbles: %s" % ", ".join('"%s"' % b for b in old["bubbles"]),
-        "  palette: %s" % " ".join(pal),
-    ]
-    for k, f in enumerate(old["frames"]):
-        lines.append("  frame %d: %s" % (k, " ".join(_rows(f))))
-    lines += [
-        "",
-        ("What the player asked for: \"%s\"." % how) if how else "Nothing in particular was asked.",
-        ("Make the altered thing: the SAME thing, recognisably, changed as asked -- keep its "
-         "name (or a small variation), keep most of its picture and colours, and change what "
-         "the request says. Give it a better script if that suits." if verb == "modify" else
-         "Make its evolved form: the same creature, grown -- a new name that echoes the old one, "
-         "a bolder picture that is clearly the same lineage, a richer behaviour script, and "
-         "something it can do now that it could not before."),
-        "Keep its kind (%s)." % kind_name,
-    ]
-    return "\n".join(lines)
-
-
 def _job(chat, who, person, kind, arg, how, verb, st, spent=0):
     """A job, made: held until its time (release_due hands it over); on
     failure the resources come back at once (use<res> undone with a gain)."""
@@ -273,35 +225,10 @@ def _job(chat, who, person, kind, arg, how, verb, st, spent=0):
 
 
 def remake(chat, person, item_id, how, verb, store=None):
-    """The item made again from the old one and the request: same id, new
-    signed record, its memory reset. Its new name."""
-    st = store or kv.store()
-    old = jar.decode(st.get(jar.NS, "rec/%d" % item_id))
-    kinds = {v: k for k, v in jar.enums()["kinds"].items()}
-    kind_name = kinds[old["kind"]]
-    form = _form_of(old)
-    tier = ("rare", old["price"] or 200, "high",
-            "Take care over it: a detailed sprite, two or three frames, distinctive habits and a "
-            "script with personality.")
-    last = None
-    full = jar.prompt_for("the thing above", kind=kind_name, tier=tier, form=form)
-    fields = full[full.index("Fields:"):]               # the fields and the language guide
-    for _ in range(3):
-        got = ask.ask_shape(chat, remake_prompt(old, how, verb, kind_name) + "\n\n" + fields,
-                            jar.batch_schema(1, kind_name, form), user=person, store=st,
-                            effort="high", model=shopkeep.MODEL, cwd=shopkeep.home(
-                                "pip" if verb == "modify" else "bramble"))
-        raw = (got.get("items") or [None])[0]
-        why = jar.check_item(raw, (), form) if isinstance(raw, dict) else ["no item"]
-        if not why:
-            break
-        last = why
-    else:
-        raise ValueError("; ".join((last or ["no item"])[:2]))
-    it = jar.to_item(raw, item_id, time.time(), old.get("tags") or "", None, old["price"], form)
-    if not jarvm.V2 or not it.get("tags"):
-        it["tags"] = old.get("tags") or it.get("tags", "")
-    return raw["name"], jar.seal(jar.encode(it))      # written when it is handed over
+    """The item made again (server/jarstages.py remake): same id, a new
+    signed record, its memory reset. (name, record), not stored."""
+    from . import jarstages
+    return jarstages.remake(chat, person, item_id, how, verb, store)
 
 
 # ---- held: made, not yet handed over ---------------------------------------------
@@ -406,7 +333,7 @@ def build(chat, person, what, store=None):
     """Furniture to the description: a new item of theirs. (id, name)."""
     st = store or kv.store()
     recs = jar.generate(chat, person, {"owned": []}, None, store=st, want=1, kind_at=1,
-                        briefs=["made to order by Wren the carpenter: " + what],
+                        search="made to order by Wren the carpenter: " + what,
                         rng=random.Random(), force_form="furniture")
     if not recs:
         raise ValueError("nothing came of it")

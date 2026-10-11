@@ -63,9 +63,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HEADER = os.path.join(ROOT, "apps", "jaritem.h")
 
 NS = "srv/jar"
-# Items made in stages (server/jarstages.py): a DM, a fitter, an artist and a
-# behaviour writer, from Tibbs's search. Off, generate is the one call as before.
-STAGES = os.environ.get("CARDOS_JAR_STAGES") == "1"
 MAKER = "Jar Works"
 ID_BASE = 100                 # built-ins are 1..12; the server's start past them
 ITEMS = 8                     # a day's stock
@@ -1166,82 +1163,17 @@ def to_item(raw, item_id, made, tags, log=None, price=0, form=None):
 
 
 def generate(chat, person, req, date, store=None, signer=None, now=None, log=None,
-             on_item=None, want=None, kind_at=0, briefs=None, limit=ask.DAILY, rng=None,
-             force_form=None, search=None):
-    """New items for `person` (None: for the pool): [signed records]. One
-    Claude call an item, each from a brief (the shopkeeper's, or loose sparks
-    when there is none), its kind from KIND_PLAN starting at kind_at and its
-    price chosen first (pick_tier), which also says how much care it gets.
-    Each record is sealed as it passes and handed to on_item(k, record); a
-    call that comes to nothing is tried again, MAX_FAILS of them in all.
-    Fewer than asked for is fewer, not a failure. Every record is kept
-    (rec/ID), to go to the pool later. Raises if Claude cannot be asked at
-    all (the day's limit, no Claude, ...) and nothing came of it.
-    With STAGES, server/jarstages.py makes them instead, from `search` (or,
-    for a made-to-order job, the first brief)."""
-    if STAGES:
-        from . import jarstages
-        return jarstages.generate(
-            chat, person, req, date, store=store, signer=signer, now=now, log=log,
-            on_item=on_item, want=want, kind_at=kind_at, rng=rng, force_form=force_form,
-            search=search if search is not None else (briefs[0] if briefs else ""))
-    st = store or kv.store()
-    now = time.time() if now is None else now
-    rng = rng or random.Random()
-    want = ITEMS if want is None else want
-    briefs = list(briefs or [])
-    while len(briefs) < want:
-        briefs.append(shopkeep.loose_brief(rng))
-    owned = [n.lower() for n in req.get("owned", [])]
-    names, records, last_error, fails = [], [], None, 0
-    tier = form = None
-    while len(records) < want and fails < MAX_FAILS:
-        k = len(records)
-        kind = KIND_PLAN[(kind_at + k) % len(KIND_PLAN)]
-        taken = set(owned) | {n.strip().lower() for n in names}
-        if tier is None:                               # chosen first; kept through a retry
-            tier = pick_tier(rng, req.get("bribe", 0) if req.get("finds") else 0)
-            form = force_form or (roll_form(kind, rng) if jarvm.V2 else None)
-        try:
-            got = ask.ask_shape(chat, prompt_for(briefs[k], req.get("owned", []), names, kind,
-                                                 tier, form),
-                                batch_schema(1, kind, form), user=person or "pool", limit=limit,
-                                timeout=GEN_TIMEOUT, store=st, effort=tier[2],
-                                model=shopkeep.MODEL, cwd=shopkeep.home())
-        except ask.RateLimited:
-            if records:                                # the day's asks ran out: what came
-                break
-            raise
-        except Exception as e:                         # one item lost, not the day
-            last_error = e
-            fails += 1
-            if log:
-                log("item %d: %s" % (k + 1, e))
-            continue
-        raw = (got.get("items") or [None])[0]
-        why = check_item(raw, taken, form) if isinstance(raw, dict) else ["no item"]
-        if why:
-            fails += 1
-            if log:
-                log("refused %r: %s" % (raw.get("name") if isinstance(raw, dict) else raw,
-                                        "; ".join(why[:3])))
-            continue
-        names.append(raw["name"])
-        item_id = ID_BASE + st.incr(NS, "next_id")
-        rec = seal(encode(to_item(raw, item_id, now, record_tags([tier[0], kind]), log,
-                                  tier[1], form)), signer)
-        st.put(NS, "rec/%d" % item_id, rec)
-        if person:
-            st.put(NS, "own/%d" % item_id, person.encode())
-        records.append(rec)
-        if log:
-            log("%s: %s %s, %d coins (%s)" % (raw["name"], tier[0], kind, tier[1], briefs[k]))
-        tier = form = None
-        if on_item:
-            on_item(k, rec)
-    if not records:
-        raise last_error or ValueError("no item passed the checks")
-    return records
+             on_item=None, want=None, kind_at=0, search="", rng=None, force_form=None):
+    """New items for `person` (None: for the pool): [signed records], made in
+    stages from `search` -- where Tibbs went looking, or a job's description
+    (server/jarstages.py: a DM, a fitter, an artist and a behaviour writer).
+    Each record is sealed, kept (rec/ID) and handed to on_item(k, record) as
+    it passes. Fewer than asked for is fewer, not a failure; raises when
+    nothing came of it."""
+    from . import jarstages
+    return jarstages.generate(chat, person, req, date, store=store, signer=signer, now=now,
+                              log=log, on_item=on_item, want=want, kind_at=kind_at,
+                              search=search, rng=rng, force_form=force_form)
 
 
 # ---- the pool ------------------------------------------------------------------------------
@@ -1346,8 +1278,8 @@ def take_from_pool(person, ids, store=None):
 
 
 def seed_pool(chat, n, store=None, signer=None, log=None, date=None):
-    """n new items straight into the pool, from loose sparks, four at a
-    time, counted against nobody's day."""
+    """n new items straight into the pool, four at a time, counted against
+    nobody's day; the DM works from the rolls alone."""
     st = store or kv.store()
     date = date or _today()
     rng = random.Random()
@@ -1358,7 +1290,7 @@ def seed_pool(chat, n, store=None, signer=None, log=None, date=None):
                         if st.get(NS, "rec/%d" % i)]
         try:
             recs = generate(chat, None, req, date, store=st, signer=signer, log=log,
-                            want=min(4, n - made), kind_at=made, limit=None, rng=rng)
+                            want=min(4, n - made), kind_at=made, rng=rng)
         except Exception as e:                          # noqa: BLE001 - try another set
             if log:
                 log("seed: %s" % e)
@@ -1417,8 +1349,8 @@ def _item_note(rec):
 def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, passed=(),
               skey=None):
     """The rest of a stock, after the `base` (held and random) items already
-    on show: Tibbs's turn -- his greeting, his picks from the pool, briefs for
-    the new finds -- then his picks, then a new item for each brief."""
+    on show: Tibbs's turn -- his greeting, his picks from the pool, where he
+    went searching -- then his picks, then the new finds, made from that."""
     key = (person, skey or _stock_key())
     told = {"say": ""}
     at = [base]
@@ -1447,14 +1379,10 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
         pool = [(i, ) + _pool_view(store, i) for i in pool_ids(store) if i not in passed]
         rng = random.Random()
         rng.shuffle(pool)
-        told["say"], mine, briefs = shopkeep.stock_turn(
+        told["say"], mine, search = shopkeep.stock_turn(
             chat, person, pool[:POOL_SHOWN], n_pick, n_new, friends_of(person, store),
             store=store, log=say_log, commission=req.get("ask") if req.get("finds") else None,
-            bribe=req.get("bribe", 0) if req.get("finds") else 0,
-            kinds=[KIND_PLAN[(batch + k) % len(KIND_PLAN)] for k in range(n_new)],
-            staged=STAGES)
-        search = briefs if STAGES else None             # staged: where he went, one string
-        briefs = None if STAGES else briefs
+            bribe=req.get("bribe", 0) if req.get("finds") else 0)
         with _day_lock:                                 # his picks, if still free
             got = take_from_pool(person, [i for i in mine if i in dict(
                 (p[0], 1) for p in pool[:POOL_SHOWN])][:n_pick], store)
@@ -1466,7 +1394,7 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
             if rec is not None:
                 show(rec)
         records = generate(chat, person, req, date, store=store, on_item=on_item, want=n_new,
-                           kind_at=batch, briefs=briefs, log=say_log, search=search)
+                           kind_at=batch, log=say_log, search=search)
         state("ok", at[0])
         sys.stderr.write("jar: %s: %d items for %s (%d his, %d new)\n" % (
             person, at[0], key[1], len(got), len(records)))

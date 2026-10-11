@@ -150,7 +150,7 @@ def roll(seed=None, kind=None, v2=None):
     tier = jar.pick_tier(rng)
     form = jar.roll_form(kind, rng) if v2 else None
     return {"seed": seed, "kind": kind, "tier": tier[0], "price": tier[1], "effort": tier[2],
-            "form": form or "", "brief": shopkeep.loose_brief(rng), "spark": shopkeep.spark(rng)}
+            "form": form or "", "activity": jar.roll_activity(rng), "brief": "", "spark": ""}
 
 
 def _form(spec):

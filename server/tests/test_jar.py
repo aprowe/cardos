@@ -96,6 +96,42 @@ def raw_item(name="Glowcap", **kw):
     return it
 
 
+def stage_of(schema):
+    req = schema.get("required", [])
+    if "concept" in req:
+        return "dm"
+    if "look" in req:
+        return "fitter"
+    if "palette" in req and "name" not in req:
+        return "artist"
+    if "habits" in req and "script" in req and "name" not in req:
+        return "behaviour"
+    return None
+
+
+def stage_answer(stage, schema, n):
+    """What a well-behaved stage of server/jarstages.py would say."""
+    p = schema["properties"]
+    if stage == "dm":
+        return {"concept": "A small odd thing found by the canal, dented and humming. (%d)" % n}
+    if stage == "fitter":
+        sheet = {"name": "Thing %d" % n, "line": "A small odd thing",
+                 "kind": p["kind"]["enum"][0], "zone": "garden", "travel": p["travel"]["enum"][-1],
+                 "idle": p["idle"]["enum"][-1], "liveliness": "normal",
+                 "speed": p["speed"]["enum"][0], "bubbles": ["hm?", "glowy!"],
+                 "frames": max(2, p["frames"]["minimum"]), "look": "a round pink blob",
+                 "intent": "says hm when poked", "note": ""}
+        if "traits" in p:
+            sheet.update(traits=["cosy"], voice="none")
+        if "surface" in p:
+            sheet["surface"] = 4
+        return sheet
+    if stage == "artist":
+        m = p["frames"]["minItems"]
+        return {"palette": raw_item()["palette"], "frames": [sprite(i) for i in range(m)]}
+    return {"habits": [{"when": "poke", "do": "say", "do_arg": 0}], "script": ""}
+
+
 class Stub:
     """ask.ask_shape, standing in: each call answers with the next batch
     given, or (when it runs out) as many good items as the schema asks for."""
@@ -106,18 +142,29 @@ class Stub:
         self.lock = threading.Lock()
         self.serial = 0
         self.beats, self.talks = [], []
+        self.stages = {"dm": [], "fitter": [], "artist": [], "behaviour": []}
 
     def __call__(self, chat, prompt, schema, **kw):
         with self.lock:
             props = schema["properties"]
-            if "briefs" in props:                       # Tibbs's beat
+            if "search" in props:                       # Tibbs's beat
                 self.beats.append(prompt)
-                n = props["briefs"]["maxItems"]
-                return {"line": "A crate came in.",
-                        "briefs": ["find %d of the day" % (i + 1) for i in range(n)]}
+                return {"line": "A crate came in.", "picks": [],
+                        "search": "Down by the canal locks, after whatever the barges dropped."}
             if "reply" in props:                        # Tibbs talking
                 self.talks.append(prompt)
                 return {"reply": "Hm, I know a fellow."}
+            stage = stage_of(schema)
+            if stage:                                   # the item pipeline (jarstages.py)
+                self.stages[stage].append(prompt)
+                if stage == "fitter":                   # one a find: what the old tests count
+                    self.calls.append((1, prompt, kw))
+                    if self.batches:
+                        b = self.batches.pop(0)
+                        if isinstance(b, Exception):
+                            raise b
+                    self.serial += 1
+                return stage_answer(stage, schema, self.serial)
             n = props["items"]["maxItems"]
             self.calls.append((n, prompt, kw))
             if self.batches:
@@ -166,10 +213,9 @@ class FakeTibbs:
                 m = re.search(r"Pick (\d+) of those", prompt)
                 n = int(m.group(1)) if m else 0
                 ids = [int(x) for x in re.findall(r"^  (\d+): ", prompt, re.M)][:n]
-                briefs = ["find %d of the day" % (i + 1)
-                          for i in range(len(re.findall(r"find \d+[^\n]*? sparks", prompt)))]
                 return json.dumps({"line": "A crate came in.", "picks": ids,
-                                   "briefs": briefs}), "s1"
+                                   "search": "Down by the canal locks, after whatever the "
+                                             "barges dropped."}), "s1"
             return "Hm, I know a fellow.", "s1"
 
 
@@ -500,7 +546,7 @@ class Checks(unittest.TestCase):
         self.assertIsNone(facts["weather"])                    # unreachable: quietly none
 
 
-class Generate(unittest.TestCase):
+class Seeding(unittest.TestCase):
 
     def setUp(self):
         self.dir = tempfile.mkdtemp()
@@ -518,98 +564,6 @@ class Generate(unittest.TestCase):
         sign.forget_cached()
         os.environ.pop("CARDOS_STATE", None)
         shutil.rmtree(self.dir, ignore_errors=True)
-
-    def run_with(self, stub):
-        p = mock.patch("server.ask.ask_shape", stub)
-        p.start()
-        self.addCleanup(p.stop)
-        return jar.generate(None, "alex", self.req, self.date, now=1791590400)
-
-    def test_a_good_batch(self):
-        stub = Stub()
-        got = []
-        p = mock.patch("server.ask.ask_shape", stub)
-        p.start()
-        self.addCleanup(p.stop)
-        briefs = ["a brass beetle that ticks", "a felt cloud"]
-        recs = jar.generate(None, "alex", self.req, self.date, now=1791590400,
-                            on_item=lambda k, rec: got.append((k, rec)), want=4, briefs=briefs)
-        self.assertEqual(len(recs), 4)
-        self.assertEqual(got, list(enumerate(recs)))           # each as it was made
-        self.assertEqual([c[0] for c in stub.calls], [1] * 4)   # one item a call
-        n, prompt, kw = stub.calls[0]
-        self.assertIn('"a brass beetle that ticks"', prompt)    # Tibbs's brief
-        self.assertIn('"a felt cloud"', stub.calls[1][1])
-        self.assertIn("a find suggested by", stub.calls[2][1])  # no brief: loose sparks
-        self.assertIn("Make it a critter", prompt)              # its kind, given
-        self.assertIn("Thing 1", stub.calls[1][1])              # what is already made
-        self.assertIn("Moth", prompt)                          # owned: not again
-        steer = prompt.split("The script language:")[0]    # the guide names every weather
-        for word in ("tags", "autumn", "rainy", "fern", "shelf"):
-            self.assertNotIn(word, steer)                       # nothing steers it but the brief
-        self.assertEqual(kw["user"], "alex")
-        self.assertIn("It will sell for", prompt)              # a price, chosen first
-        ids = set()
-        st = kv.store()
-        for rec in recs:
-            it = jar.decode(rec)
-            self.assertTrue(jar.verified(rec))
-            self.assertEqual(it["maker"], "Jar Works")
-            self.assertEqual(it["made"], 1791590400)
-            self.assertGreater(it["id"], jar.ID_BASE)
-            self.assertEqual(st.get(jar.NS, "own/%d" % it["id"]), b"alex")
-            ids.add(it["id"])
-        self.assertEqual(len(ids), 4)
-        e = jar.enums()["kinds"]
-        self.assertEqual([jar.decode(r)["kind"] for r in recs], [e[k] for k in jar.KIND_PLAN[:4]])
-
-    def test_failures_are_asked_for_again(self):
-        flat = [r.replace("3", "2").replace("7", "2").replace("1", "2") for r in sprite()]
-        stub = Stub([raw_item("Good 0")], [raw_item("Flat", frames=[flat])],
-                    [raw_item("Damn Shit")])
-        recs = self.run_with(stub)
-        self.assertEqual(len(recs), 8)
-        self.assertEqual(len(stub.calls), 10)                    # the two again
-        names = [jar.decode(r)["name"] for r in recs]
-        self.assertNotIn("Flat", names)
-        self.assertNotIn("Damn Shit", names)
-        self.assertIn("Good 0", stub.calls[3][1])                # not those names again
-
-    def test_bounded_and_fewer_is_fine(self):
-        bad = [raw_item("Bad", frames=[["0" * 16] * 16])]
-        stub = Stub([raw_item("One")], bad, bad, ask.Invalid("did not fit"), bad)
-        recs = self.run_with(stub)
-        self.assertEqual(len(recs), 1)
-        self.assertEqual(len(stub.calls), 1 + jar.MAX_FAILS)
-
-    def test_out_of_asks_keeps_what_came(self):
-        stub = Stub([raw_item("One")], [raw_item("Two")], ask.RateLimited("the day's limit"))
-        recs = self.run_with(stub)
-        self.assertEqual(len(recs), 2)
-
-    def test_nothing_at_all_is_an_error(self):
-        stub = Stub(*[ask.Invalid("x")] * jar.MAX_FAILS)
-        with self.assertRaises(ask.Invalid):
-            self.run_with(stub)
-
-    def test_prices_are_chosen_first_and_dear_ones_get_more_care(self):
-        rng = random.Random(3)
-        seen = {}
-        for _ in range(2000):
-            name, price, effort, words = jar.pick_tier(rng)
-            seen.setdefault(name, []).append(price)
-            self.assertEqual(price % 5, 0)
-        self.assertEqual(set(seen), {t[0] for t in jar.TIERS})
-        self.assertGreater(len(seen["common"]), len(seen["rare"]) * 2)
-        self.assertGreater(min(seen["treasure"]), max(seen["common"]))
-        stub = Stub()
-        recs = self.run_with(stub)
-        for (n, prompt, kw), rec in zip(stub.calls, recs):
-            price = jar.decode(rec)["price"]
-            tier = [t for t in jar.TIERS if t[2][0] <= price <= t[2][1]][0]
-            self.assertIn("sell for %d coins" % price, prompt)
-            self.assertEqual(kw["effort"], tier[3])
-            self.assertTrue(jar.verified(rec))                  # the price is signed too
 
     def test_seed_fills_the_pool_for_nobody(self):
         stub = Stub()
@@ -768,7 +722,7 @@ class Town(unittest.TestCase):
         self.assertEqual(jar.decode(after)["id"], 501)          # the same thing, made again
         self.assertTrue(jar.verified(after, test_pub()))
         self.assertIn("make it glow", self.stub.calls[-1][1])
-        self.assertIn("frame 0:", self.stub.calls[-1][1])       # it was shown the old one
+        self.assertIn("The old one:", self.stub.stages["artist"][-1])   # shown the old picture
         ops = [(t["op"], t["arg"]) for t in shopkeep.txs("alex", st)]
         self.assertEqual(ops, [("usespores", 12), ("remake", 501)])
         self.assertEqual(town.jobs_text("alex", st), "")
@@ -811,7 +765,7 @@ class Town(unittest.TestCase):
         town.release_due("alex", st, now=time.time() + 9 * 3600)
         ops = [(t["op"], t["arg"]) for t in shopkeep.txs("alex", st)]
         self.assertEqual(ops, [("usenectar", 15), ("bedup", 1), ("usenectar", 25), ("remake", 503)])
-        self.assertIn("evolved form", self.stub.calls[-1][1])
+        self.assertIn("next form", self.stub.calls[-1][1])
 
     def test_wren_builds_to_order(self):
         from server import town
@@ -827,7 +781,7 @@ class Town(unittest.TestCase):
         it = jar.decode(st.get(jar.NS, "rec/%d" % ops[1][1]))
         self.assertEqual(it["role"], 1)                         # furniture
         self.assertEqual(st.get(jar.NS, "own/%d" % ops[1][1]), b"alex")
-        self.assertIn("two-tier shelf", self.stub.calls[-1][1])
+        self.assertIn("two-tier shelf", self.stub.stages["dm"][-1])   # the DM's material
 
     def test_a_job_that_fails_gives_the_resources_back(self):
         from server import town
@@ -1069,10 +1023,9 @@ class Shopkeeper(unittest.TestCase):
         self.assertEqual({jar.pick_tier(rng, 500)[0] for _ in range(400)}, {"rare", "treasure"})
         self.assertEqual(jar.parse_request("finds 8\nbribe 99999\nask owls\n")["bribe"],
                          jar.BRIBE_MAX)
-        p = shopkeep.stock_prompt("alex", [], 0, 2, random.Random(1), False,
-                                  commission="owls", bribe=300)
+        p = shopkeep.stock_prompt("alex", [], 0, 2, False, commission="owls", bribe=300)
         self.assertIn("slipped you 300 coins", p)
-        self.assertIn("every find answers it", p)
+        self.assertIn('asked for: "owls". That is what you were after today', p)
 
     def test_a_turn_that_fails_keeps_the_news(self):
         shopkeep.note("sam and alex are friends now.")
@@ -1085,40 +1038,36 @@ class Shopkeeper(unittest.TestCase):
     def test_a_stock_turn(self):
         pool = [(101, "Cork Owl", "critter", 80, "hoots"), (102, "Tin Kite", "hanging", 45, "flaps"),
                 (103, "Wax Frog", "critter", 60, "melts a bit")]
-        line, picks, briefs = shopkeep.stock_turn(None, "alex", pool, 2, 2)
+        line, picks, search = shopkeep.stock_turn(None, "alex", pool, 2, 2)
         self.assertEqual(line, "A crate came in.")
         self.assertEqual(picks, [101, 102])
-        self.assertEqual(briefs, ["find 1 of the day", "find 2 of the day"])
+        self.assertIn("canal locks", search)
         p = self.tibbs.prompts[0]
         self.assertIn("101: Cork Owl, critter, 80 coins -- hoots", p)
-        self.assertIn("Today, by chance:", p)                # the dice are the code's
-        self.assertIn("find 2 sparks:", p)
-        k = shopkeep.stock_prompt("alex", pool, 2, 2, random.Random(1), False,
-                                  kinds=["critter", "hanging"])
-        self.assertIn("find 1, a critter that roams the jar, sparks:", k)   # the kind it will be
-        self.assertIn("find 2, decor that hangs from the lid, sparks:", k)
+        self.assertIn("Where did you go searching today", p)
+        self.assertNotIn("by chance", p)                     # no random words
         self.assertIn("Do not just match what they bought", p)
         self.assertIn("A crate came in.", shopkeep.talk_text("alex"))   # his greeting, kept
-        a = shopkeep.stock_prompt("alex", pool, 2, 2, random.Random(1), True)
-        b = shopkeep.stock_prompt("alex", pool, 2, 2, random.Random(2), False)
-        self.assertIn("find 1 is what your contacts turned up", a)   # the coin
-        self.assertIn("None of today's finds is for anything", b)
+        a = shopkeep.stock_prompt("alex", pool, 2, 2, True)
+        b = shopkeep.stock_prompt("alex", pool, 2, 2, False)
+        self.assertIn("you had it in mind", a)                       # the coin
+        self.assertNotIn("you had it in mind", b)
 
     def test_a_stock_turn_asks_again_for_the_json_then_gives_up(self):
         self.tibbs.answers.append("Ah, hello! Lovely day.")      # words, not JSON
-        line, picks, briefs = shopkeep.stock_turn(None, "alex", [], 0, 2)
+        line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 2)
         self.assertIn("not the JSON", self.tibbs.prompts[1])
         self.assertEqual(line, "A crate came in.")
         self.tibbs.answers += ["nope", "still nope"]
-        line, picks, briefs = shopkeep.stock_turn(None, "alex", [], 0, 2)
+        line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 2)
         self.assertIn("note on the door", line)
-        self.assertEqual((picks, len(briefs)), ([], 2))
+        self.assertEqual((picks, search), ([], ""))
 
-    def test_a_brief_a_little_long_is_trimmed_not_refused(self):
-        long = "x" * (shopkeep.BRIEF_LEN + 20)
-        self.tibbs.answers.append(json.dumps({"line": "Hm.", "picks": [], "briefs": [long]}))
-        line, picks, briefs = shopkeep.stock_turn(None, "alex", [], 0, 1)
-        self.assertEqual(len(briefs[0]), shopkeep.BRIEF_LEN)
+    def test_a_search_a_little_long_is_trimmed_not_refused(self):
+        long = "x" * (shopkeep.SEARCH_LEN + 20)
+        self.tibbs.answers.append(json.dumps({"line": "Hm.", "picks": [], "search": long}))
+        line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 1)
+        self.assertEqual(len(search), shopkeep.SEARCH_LEN)
 
     def test_talking(self):
         self.assertTrue(shopkeep.say(None, "alex", "got any red things?", ["sam"]))
@@ -1268,7 +1217,8 @@ class Routes(unittest.TestCase):
         seeded = len(jar.pool_ids())
 
         def slow(chat, prompt, schema, **kw):
-            if len(inner.calls) > 0 and seeded:
+            # the second find's first stage waits: the first find is whole by then
+            if stage_of(schema) == "dm" and len(inner.stages["dm"]) > 0 and seeded:
                 first.set()
                 gate.wait(10)
             return inner(chat, prompt, schema, **kw)
@@ -1372,7 +1322,7 @@ class Routes(unittest.TestCase):
         p = self.tibbs.prompts[made]
         self.assertIn("paid you to go out looking, and asked for: \"brass birds\"", p)
         self.assertIn("Pick 2 of those", p)                    # 8 - 5 new: 2 his, 1 random
-        self.assertEqual(len(re.findall(r"find \d+[^\n]*? sparks", p)), 5)
+        self.assertIn("5 new finds came in today", p)
         self.assertIn("paid you to go out and find new things", p)   # the news
         # too many asked for is the most allowed; a word that fails the filter is dropped
         req = jar.parse_request("finds 99\nask shit birds\n")
@@ -1508,7 +1458,8 @@ class Routes(unittest.TestCase):
         jar._set_pool(kv.store(), [])                       # nothing to fall back on
         with mock.patch("server.ask.ask_shape", Stub(*[ask.Invalid("did not fit")] * jar.MAX_FAILS)):
             s, body = self.make_day(self.alex)
-        self.assertEqual(body, "error did not fit\n")
+        self.assertIn("did not fit", body)
+        self.assertTrue(body.startswith("error "))
         s, body = self.make_day(self.alex)
         self.assertTrue(body.startswith("ok "), body)
 

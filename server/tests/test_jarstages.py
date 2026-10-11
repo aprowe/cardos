@@ -245,7 +245,7 @@ class Search(unittest.TestCase):
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def test_he_is_asked_where_he_searched(self):
-        line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 4, staged=True)
+        line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 4)
         self.assertEqual(line, "Back from the canal.")
         self.assertIn("old canal locks", search)
         asked = self.said[-1]
@@ -254,28 +254,21 @@ class Search(unittest.TestCase):
         self.assertNotIn("by chance", asked)
         self.assertNotIn("brief", asked.lower())
         # next time he is told where he has been, and asked for somewhere else
-        shopkeep.stock_turn(None, "alex", [], 0, 4, staged=True)
+        shopkeep.stock_turn(None, "alex", [], 0, 4)
         self.assertIn("old canal locks", self.said[-1])
         self.assertIn("somewhere you have not been lately", self.said[-1])
 
     def test_a_commission_is_in_the_question(self):
-        shopkeep.stock_turn(None, "alex", [], 0, 8, staged=True, commission="brass birds")
+        shopkeep.stock_turn(None, "alex", [], 0, 8, commission="brass birds")
         self.assertIn("brass birds", self.said[-1])
 
     def test_no_answer_is_no_search(self):
         self.answers = [RuntimeError("no Claude")]
         logs = []
-        line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 4, staged=True,
+        line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 4,
                                                   log=logs.append)
         self.assertEqual(search, "")
         self.assertTrue(any("no search" in s for s in logs), logs)
-
-    def test_unstaged_is_as_it_was(self):
-        self.answers = [json.dumps({"line": "Hi.", "picks": [], "briefs": ["a", "b"]})]
-        line, picks, briefs = shopkeep.stock_turn(None, "alex", [], 0, 2)
-        self.assertEqual(briefs, ["a", "b"])
-        self.assertIn("sparks", self.said[-1])
-
 
 # ---- 5-7. the stages --------------------------------------------------------------------
 
@@ -352,8 +345,7 @@ class Stages(unittest.TestCase):
         sign.forget_cached()
         self.stub = StageStub()
         for target, value in (("server.ask.ask_shape", self.stub),
-                              ("server.sign.sign", test_signer),
-                              ("server.jar.STAGES", True)):
+                              ("server.sign.sign", test_signer)):
             p = mock.patch(target, value)
             p.start()
             self.addCleanup(p.stop)
@@ -492,17 +484,6 @@ class Stages(unittest.TestCase):
         self.assertEqual(d["state"], "ok")
         self.assertIn("barges dropped", self.stub.prompts["dm"][0])
         self.assertEqual(self.stub.prompts["items"], [])
-
-    def test_off_it_is_the_one_call(self):
-        from server.tests.test_jar import Stub
-        one = Stub()
-        with mock.patch("server.jar.STAGES", False), mock.patch("server.ask.ask_shape", one):
-            recs = jar.generate(None, "alex", {}, None, want=1, briefs=["a lamp"])
-        self.assertEqual(len(recs), 1)
-        self.assertEqual(len(one.calls), 1)
-        self.assertEqual(self.stub.prompts["dm"], [])
-        self.assertEqual(jar.decode(recs[0])["hdr"], 208)
-
 
 if __name__ == "__main__":
     if "--fixture" in sys.argv:

@@ -1,0 +1,182 @@
+[
+ {
+  "name": "Pebble Beetle",
+  "kind": "critter",
+  "bubbles": 3,
+  "frames": 2,
+  "script": "on tick every 8:\n  if mem[0] > 0 then mem[0] -= 1; return end\n  if rand(10) < 3 then walk to anywhere; frame 1 + rand(2) end\nend\non near:\n  if has(neartraits, food) then seek food; eat; say 1\n  elif has(neartraits, shiny) then face; say 2; mem[1] += 1\n  end\n  if mem[1] > 4 then burst sparkle; mem[1] = 0 end\nend\non poke: stop; say 3; mem[0] = 20; emit zzz; end\non bumped: hop 10; sound boing; flip; end\non time night: stop; mem[0] = 120; end",
+  "bytes": 140,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Clockwork Mouse",
+  "kind": "critter",
+  "bubbles": 3,
+  "frames": 3,
+  "script": "on poke: mem[0] = 40; frame 2; sound clock; say 1; end\non tick every 4:\n  if mem[0] <= 0 then frame 1; return end\n  mem[0] -= 1\n  if rand(4) == 0 then walk to anywhere end\n  if mem[0] == 1 then stop; frame 3; say 2; emit puff end\nend\non near:\n  if mem[0] > 0 and has(neartraits, clockwork) then face; say 3; signal 7 end\n  if near == snail and sulking then nudge end\nend\non signal 7:\n  if mem[0] <= 0 then mem[0] = 10; hop 4 end\nend\non jam jammed: mem[0] = 30; seek clockwork; end\non bumped: flip; sound clock; end",
+  "bytes": 149,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Puddle Frog",
+  "kind": "critter",
+  "bubbles": 3,
+  "frames": 2,
+  "script": "on weather rainy: mem[0] = 1; say 1; walk to water; end\non weather sunny: mem[0] = 0; end\non tick every 12:\n  if mem[0] == 1 and rand(4) == 0 then hop 14; sound splash; frame 2\n  elif rand(8) == 0 then hop; frame 1 end\nend\non near:\n  if has(neartraits, wet) then seek wet; say 2\n  elif has(neartraits, food) then eat; mem[1] += 1 end\n  if mem[1] >= 3 then sound chirp; emit heart; mem[1] = 0 end\nend\non world leak: walk to water; burst heart; end\non poke: hop 20; say 3; sound plop; end\non time night: emit note; end",
+  "bytes": 150,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Moth Lantern",
+  "kind": "hanging",
+  "bubbles": 2,
+  "frames": 2,
+  "script": "on time dusk: glow on; frame 2; fly; end\non time dawn: glow off; frame 1; home; end\non tick every 20:\n  if time == night and rand(5) == 0 then emit sparkle end\n  mem[0] += 1\n  if mem[0] > 30 then home; mem[0] = 0 end\nend\non poke: glow toggle; say 1; fly; end\non world dark: glow on; fly; say 2; end\non near:\n  if has(neartraits, light) then fly; mem[0] = 0 end\nend\non weather stormy: home; glow on; end",
+  "bytes": 124,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Tin Wind Chime",
+  "kind": "hanging",
+  "bubbles": 2,
+  "frames": 3,
+  "script": "on world breeze: mem[0] = 12; say 1; end\non weather stormy: mem[0] = 20; end\non tick every 2:\n  if mem[0] > 0 then\n    mem[0] -= 1; frame 1 + mem[0] % 3\n    if rand(3) == 0 then sound ding; emit note end\n  end\nend\non poke: mem[0] = 6; sound ding; end\non bumped: mem[0] = 10; say 2; end\non near:\n  if has(neartraits, music) then mem[0] = 4 end\nend\non hour 12: mem[0] = 8; sound tune; end",
+  "bytes": 114,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Teapot Planter",
+  "kind": "hanging",
+  "bubbles": 3,
+  "frames": 2,
+  "script": "on tick every 40:\n  mem[0] += 1\n  if mem[0] > 6 then emit puff; drop; frame 2; mem[0] = 0\n  else frame 1 end\nend\non weather rainy: say 1; drop; sound plop; end\non time dawn: emit puff; say 2; end\non poke: say 3; sound fizz; burst puff; end\non berry:\n  if berries > 3 then emit heart end\nend\non world bloom: burst heart; frame 2; end\non new:\n  if has(newtraits, plant) then say 2; emit sparkle end\nend",
+  "bytes": 115,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Dandelion Wisp",
+  "kind": "floating",
+  "bubbles": 2,
+  "frames": 2,
+  "script": "on world breeze: float 20; burst puff; say 1; end\non tick every 16:\n  mem[0] += 1\n  if mem[0] % 6 == 0 then float rand(8); frame 1 + mem[0] / 6 % 2 end\nend\non poke: float 24; emit puff; end\non near:\n  if has(neartraits, wild) then float 12; say 2 end\nend\non weather sunny: emit sparkle; end\non bumped: burst puff; float 18; end\non time night: emit zzz; end",
+  "bytes": 108,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Soap Bubble Jelly",
+  "kind": "floating",
+  "bubbles": 3,
+  "frames": 3,
+  "script": "on tick every 6:\n  if rand(12) == 0 then frame 1 + rand(3); emit sparkle end\nend\non poke:\n  mem[0] += 1; sound fizz\n  if mem[0] >= 3 then burst sparkle; sound pop; say 3; mem[0] = 0; float 0\n  else say mem[0]; float 10 end\nend\non near:\n  if has(neartraits, fragile) then say 2; flip end\nend\non weather rainy: glow on; float 16; end\non weather sunny: glow off; end\non signal 9: float 8; emit note; end\non bumped: sound pop; burst sparkle; float 0; end",
+  "bytes": 134,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Paper Cloud",
+  "kind": "floating",
+  "bubbles": 3,
+  "frames": 3,
+  "script": "on weather rainy: frame 2; mem[0] = 1; say 1; end\non weather snowy: frame 3; mem[0] = 2; say 2; end\non weather sunny: frame 1; mem[0] = 0; end\non tick every 10:\n  if mem[0] == 1 and rand(3) == 0 then emit puff; drop end\n  if mem[0] == 2 and rand(3) == 0 then emit sparkle end\nend\non poke:\n  float 12; say 3\n  mem[0] = (mem[0] + 1) % 3; frame mem[0] + 1\nend\non world dark: frame 2; sound bang; end\non time night: emit zzz; end",
+  "bytes": 129,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Mushroom Stool",
+  "kind": "furniture",
+  "bubbles": 2,
+  "frames": 2,
+  "script": "on bumped:\n  hop 6; sound boing; frame 2; mem[0] += 1\n  if mem[0] >= 5 then burst puff; say 2; mem[0] = 0 end\nend\non poke: frame 2; hop 4; say 1; sound boing; end\non tick every 24: frame 1; end\non weather rainy: emit puff; drop; end\non world bloom: burst puff; glow on; end\non time dawn: glow off; end\non near:\n  if has(neartraits, sleepy) then emit zzz end\nend",
+  "bytes": 103,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Knitted Armchair",
+  "kind": "furniture",
+  "bubbles": 3,
+  "frames": 2,
+  "script": "on near:\n  if has(neartraits, sleepy) or has(neartraits, cosy) then mem[0] += 1; emit zzz end\n  if mem[0] > 6 then say 1; emit heart; mem[0] = 0 end\nend\non time night: frame 2; say 2; glow on; end\non time dawn: frame 1; glow off; end\non poke: say 3; sound plop; emit heart; end\non weather snowy: glow on; emit heart; end\non world visitor: say 1; burst heart; end\non tick every 60:\n  if time == night and rand(3) == 0 then emit zzz end\nend",
+  "bytes": 123,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Music Box Dresser",
+  "kind": "furniture",
+  "bubbles": 3,
+  "frames": 3,
+  "script": "on poke:\n  if mem[0] == 0 then mem[0] = 24; sound tune; say 1; signal 9\n  else mem[0] = 0; frame 1; say 2 end\nend\non tick every 4:\n  if mem[0] > 0 then\n    mem[0] -= 1; frame 2 + mem[0] % 2\n    if rand(3) == 0 then emit note end\n    if mem[0] == 0 then frame 1 end\n  end\nend\non hour 20: mem[0] = 16; sound tune; end\non near:\n  if has(neartraits, music) then mem[1] += 1 end\n  if mem[1] > 3 then say 3; mem[1] = 0; mem[0] = 8 end\nend\non jam fixed: sound tune; burst note; end",
+  "bytes": 147,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Marble Cairn",
+  "kind": "decor",
+  "bubbles": 2,
+  "frames": 3,
+  "script": "on bumped: mem[0] += 1; frame 1 + mem[0] % 3; sound crunch; say 1; end\non tick every 30:\n  if time == day and rand(4) == 0 then emit sparkle end\nend\non weather sunny: burst sparkle; glow on; end\non weather cloudy: glow off; end\non poke: frame 1 + rand(3); sound coin; emit sparkle; end\non near:\n  if has(neartraits, wild) then say 2; mem[1] += 1 end\n  if mem[1] > 2 then throw; mem[1] = 0 end\nend\non world ants: say 2; hop 3; end",
+  "bytes": 136,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Little Snow Globe",
+  "kind": "decor",
+  "bubbles": 3,
+  "frames": 3,
+  "script": "on poke: mem[0] = 16; frame 2; sound fizz; say 1; end\non bumped: mem[0] = 24; frame 3; say 2; end\non tick every 3:\n  if mem[0] > 0 then\n    mem[0] -= 1\n    if rand(2) == 0 then emit sparkle end\n    if mem[0] == 0 then frame 1 end\n  end\nend\non weather snowy: mem[0] = 40; glow on; say 3; end\non weather sunny: glow off; end\non time night: glow on; end\non time dawn: glow off; end",
+  "bytes": 107,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Whispering Fossil",
+  "kind": "decor",
+  "bubbles": 3,
+  "frames": 2,
+  "script": "on poke:\n  if days > 3 then say 3 elif rand(2) == 0 then say 1 else say 2 end\n  sound whoosh\nend\non time night: frame 2; glow on; emit zzz; end\non time dawn: frame 1; glow off; end\non world leak: burst puff; sound splash; say 2; end\non hour 3:\n  if rand(2) == 0 then sound whoosh; emit puff; frame 2 end\nend\non near:\n  if has(neartraits, spooky) then glow toggle; mem[0] += 1 end\n  if mem[0] > 5 then burst zzz; mem[0] = 0 end\nend",
+  "bytes": 129,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Copper Rain Gauge",
+  "kind": "decor",
+  "bubbles": 3,
+  "frames": 3,
+  "script": "on weather rainy: mem[0] += 1; say 1; end\non weather stormy: mem[0] += 2; sound bang; end\non tick every 80:\n  if mem[0] > 0 and weather != rainy and rand(4) == 0 then mem[0] -= 1; emit puff end\n  if mem[0] >= 4 then frame 3 elif mem[0] >= 1 then frame 2 else frame 1 end\nend\non poke:\n  if mem[0] >= 4 then say 3; drop; mem[0] = 2; sound splash\n  else say 2 end\nend\non world leak: mem[0] = 5; sound plop; end",
+  "bytes": 131,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Sleepy Sunflower",
+  "kind": "plant",
+  "bubbles": 3,
+  "frames": 3,
+  "script": "on time dawn: frame 2; say 1; emit sparkle; end\non time day: frame 3; end\non time dusk: frame 2; end\non time night: frame 1; emit zzz; end\non weather sunny: burst heart; end\non weather cloudy: say 2; end\non berry:\n  mem[0] += 1\n  if mem[0] >= 3 then burst sparkle; drop; mem[0] = 0 end\nend\non poke:\n  if time == night then say 3; emit zzz\n  else hop 3; sound chirp; say 1 end\nend\non world bloom: frame 3; burst heart; end",
+  "bytes": 119,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Bell Moss",
+  "kind": "plant",
+  "bubbles": 2,
+  "frames": 2,
+  "script": "on poke:\n  mem[0] += 1; sound ding; frame 2; signal 4\n  if mem[0] >= 4 then say 2; burst note; mem[0] = 0 else say 1 end\nend\non signal 4: emit note; end\non tick every 20:\n  frame 1\n  if playing and rand(3) == 0 then frame 2; emit note end\nend\non world breeze: sound ding; emit note; frame 2; end\non hour 7: sound ding; say 1; end\non near:\n  if has(neartraits, music) then sound ding end\nend",
+  "bytes": 112,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Ghost Orchid",
+  "kind": "plant",
+  "bubbles": 3,
+  "frames": 3,
+  "script": "on time night: glow on; frame 3; say 1; end\non time dawn: glow off; frame 1; end\non tick every 24:\n  if time == night and rand(6) == 0 then emit sparkle; mem[0] += 1 end\n  if mem[0] >= 5 then frame 2; say 2; mem[0] = 0 end\nend\non weather foggy: glow on; burst puff; say 3; end\non world dark: glow on; burst sparkle; end\non poke: glow toggle; sound whoosh; end\non new:\n  if has(newtraits, spooky) then burst heart; say 2 end\nend",
+  "bytes": 120,
+  "origin": "claude-rich"
+ },
+ {
+  "name": "Straw Bee Skep",
+  "kind": "decor",
+  "bubbles": 3,
+  "frames": 2,
+  "script": "on time day: fly; frame 2; end\non time dusk: home; frame 1; end\non tick every 40:\n  mem[0] += 1\n  if mem[0] > 8 then home; drop; emit heart; mem[0] = 0\n  elif mem[0] == 4 and time == day then fly end\nend\non world bloom: fly; burst heart; say 1; end\non weather rainy: home; say 2; end\non bumped: fly; sound fizz; say 3; burst puff; end\non poke: sound fizz; emit note; say 1; end",
+  "bytes": 123,
+  "origin": "claude-rich"
+ }
+]
