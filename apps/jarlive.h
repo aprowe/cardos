@@ -287,28 +287,127 @@ static int lv_at(int i, int *x, int *y) {
   return p->scale == 2 ? 2 : 1;
 }
 
+/* ---- the idle: what a thing does in place (the item pipeline spec, §2) ----
+ *
+ * Drawn, not simulated: sway, bob, wobble, spin and pulse are a lean, an
+ * offset or a size applied while the picture is drawn, so they need no
+ * frames; flicker and blink pick among the item's own frames (with one
+ * frame, flicker is its glow coming and going and blink is it gone for a
+ * moment). Liveliness is the pace and the size. An item with no parts of its
+ * own (given 0: every item made before them) has no idle here and is drawn
+ * exactly as it always was -- its swaying and floating are the sim's. */
+
+typedef struct {
+  int dx, dy;          /* px, added to where it stands */
+  int w, h;            /* its size, of 16 */
+  int shear;           /* px the top leans (the bottom, for a hanging thing) */
+  int flip, frame;     /* facing, and which of its frames */
+  int hide, glow;      /* not drawn this time; its glow on */
+} LvPose;
+
+/* Steps a cycle, and px at the most: calm, normal, jittery. */
+static const uint8_t LV_PERIOD[JLV_KINDS] = { 160, 80, 28 };
+static const uint8_t LV_SIZE[JLV_KINDS] = { 1, 2, 3 };
+static const uint8_t LV_FLICK[JLV_KINDS] = { 8, 4, 2 };      /* steps a flicker holds */
+static const uint8_t LV_BLINK[JLV_KINDS] = { 240, 120, 40 }; /* steps between blinks */
+
+/* A triangle wave, -a..a over `period` steps at time t. */
+static int lv_tri(uint32_t t, int period, int a) {
+  int u = (int)(t % (uint32_t)period), half = period / 2;
+  return (u < half ? u : period - u) * 4 * a / period - a;
+}
+
+static void lv_pose(int i, LvPose *o) {
+  const JPlaced *p = &J.placed[i];
+  int lv = p->lively < JLV_KINDS ? p->lively : JLV_NORMAL, per = LV_PERIOD[lv], a = LV_SIZE[lv], v;
+  uint32_t t = J.steps + p->id * 37u;          /* each thing at its own point */
+  o->dx = o->dy = o->shear = o->hide = o->glow = 0;
+  o->w = o->h = 16;
+  o->flip = p->flip;
+  o->frame = p->cur % (p->nframes ? p->nframes : 1);
+  if (!p->given) return;
+  v = lv_tri(t, per, a);
+  switch (p->idle) {
+  case JID_SWAY: o->shear = v; break;
+  case JID_BOB: o->dy = v; break;
+  case JID_WOBBLE: o->h = 16 + v; o->w = 16 - v; break;
+  case JID_PULSE: o->w = o->h = 16 + v; break;
+  case JID_SPIN: {
+    int c = lv_tri(t, per * 2, 16);           /* the width it shows, edge on at 0 */
+    o->w = c < 0 ? -c : c;
+    if (o->w < 2) o->w = 2;
+    if (c < 0) o->flip = !o->flip;
+    break;
+  }
+  case JID_FLICKER: {
+    uint32_t r = hash2((int)(t / LV_FLICK[lv]), (int)p->id);
+    if (p->nframes > 1) o->frame = (int)(r % p->nframes);
+    else o->glow = (int)(r & 1);
+    break;
+  }
+  case JID_BLINK:
+    if (t % LV_BLINK[lv] < 6) {               /* a blink is 150 ms, whatever the pace */
+      if (p->nframes > 1) o->frame = p->nframes - 1;
+      else o->hide = 1;
+    }
+    break;
+  }
+}
+
+/* A 16x16 picture at w x h (times s), standing where a plain one would --
+ * on its base, or hanging from its top -- and leaning `shear` px. Nearest
+ * pixel: the art stays the art. */
+static void lv_pic(const uint8_t *data, const uint16_t *pal, int x, int y, const LvPose *o,
+                   int s, int hanging) {
+  int W = o->w * s, H = o->h * s, r, c;
+  x += (16 * s - W) / 2 + o->dx * s;
+  y += (hanging ? 0 : 16 * s - H) + o->dy * s;
+  if (y + H <= SY0 || y >= SY1) return;
+  for (r = 0; r < H; r++) {
+    int sr = r * 16 / H, lean = H > 1 ? o->shear * s * (hanging ? r : H - 1 - r) / (H - 1) : 0;
+    if (y + r < SY0 || y + r >= SY1) continue;
+    for (c = 0; c < W; c++) {
+      int sc = c * 16 / W, v = ji_px(data, sr * 16 + (o->flip ? 15 - sc : sc));
+      if (v) px(x + c + lean, y + r, swap16(pal[v]));
+    }
+  }
+}
+
+/* Its picture in this pose: the plain draw when there is nothing to do. */
+static void lv_draw(int i, int x, int y, int s) {
+  const JPlaced *p = &J.placed[i];
+  LvPose o;
+  int f;
+  lv_pose(i, &o);
+  if (o.hide) return;
+  f = p->slot[o.frame];
+  if (f >= JS_POOL) return;
+  if (o.glow && !p->glow) glow(x + 8 * s, y + 8 * s, 14 * s, 255, 220, 140, 110);
+  if (o.w == 16 && o.h == 16 && !o.shear && !o.dx && !o.dy)
+    pic(J.pool[f], p->pal, 1, 16, 16, x, y, o.flip, s);
+  else
+    lv_pic(J.pool[f], p->pal, x, y, &o, s, p->kind == JK_HANGING);
+}
+
 /* Scenery: behind the ledges, at its size. */
 static void lv_scenery(void) {
   int i, x, y, s;
   for (i = 0; i < J.nplaced; i++) {
-    const JPlaced *p = &J.placed[i];
-    int f;
-    if (p->role != JR_BACKGROUND) continue;
-    f = p->slot[p->cur % (p->nframes ? p->nframes : 1)];
+    if (J.placed[i].role != JR_BACKGROUND) continue;
     s = lv_at(i, &x, &y);
-    if (f < JS_POOL) pic(J.pool[f], p->pal, 1, 16, 16, x, y, p->flip, s);
+    lv_draw(i, x, y, s);
   }
 }
 
 /* One item in front: its glow, its string, its picture, at its size. */
 static void lv_item(int i) {
   const JPlaced *p = &J.placed[i];
-  int x, y, s, f = p->slot[p->cur % (p->nframes ? p->nframes : 1)];
+  int x, y, s;
   if (p->role == JR_BACKGROUND) return;
   s = lv_at(i, &x, &y);
   if (p->kind == JK_HANGING) fill(x + 7 * s, 9, 1, y - 8, rgb(0xc8, 0xc0, 0xb0));
   if (p->glow) glow(x + 8 * s, y + 8 * s, 14 * s, 255, 220, 140, 110);
-  if (f < JS_POOL) pic(J.pool[f], p->pal, 1, 16, 16, x, y, p->flip, s);
+  lv_draw(i, x, y, s);
 }
 
 /* Parts out and about (and at home), over the items. */

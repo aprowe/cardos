@@ -1980,8 +1980,8 @@ static JS_OPT void js_step_item(Jar *j, int i) {
       p->cur = (uint8_t)((p->cur + 1) % p->nframes);   /* wings, tentacles */
     }
     break;
-  case JM_SWAYS:
-    if (p->kind != JK_HANGING && p->nframes > 1) p->cur = (uint8_t)((p->phase >> 7) & 1);
+  case JM_SWAYS:                              /* given parts: the scene sways it */
+    if (!p->given && p->kind != JK_HANGING && p->nframes > 1) p->cur = (uint8_t)((p->phase >> 7) & 1);
     break;
   }
 }
