@@ -1139,6 +1139,16 @@ answers `search` (his last six in tibbs/searches); sparks, briefs and the
 chance event are gone. `tools/jar_stages_trial.py` runs real finds in a
 scratch state. Jar Lab still previews the old one-call prompt.
 
+**More jars** (2026-10-11, v0.21.0). `JU_JAR` in Upgrades buys up to
+`JS_MAX_JARS` (3) extra jars: empty glass, no factory. `J.jar_at` is the
+jar on screen (0 the factory), saved as `jars N AT`. One wallet: coins,
+things, resources and deals stay in the main save; an extra jar's file
+(/var/jar/jarN.txt, `js_save_extra` / `js_extra_parse`) holds only its
+place lines. Away from the factory its places stay as want lines (the main
+save writes only those while away), `js_step` skips the factory and
+`js_step_away` pays by `js_rate_ph` (zero under a chore). `jar_go` in
+jar.c switches; `jar_of` keeps a thing in one jar at a time.
+
 **Jar Lab: the bench for prompts and behaviour** (2026-10-11,
 `server/jarlab.py`, `server/jarlab.html`). At `/dash/jarlab` (under /dash
 because the cookie's Path is /dash; `/jarlab` redirects), the dashboard's

@@ -1056,3 +1056,61 @@ void test_jarsim_travel_kinds_move_as_described(void) {
   printf("    float travelled %d px, fly %d px in 2 min\n", (int)(df / JS_FX), (int)(dy / JS_FX));
   CHECK(dy > df);
 }
+
+/* More jars (2026-10-11): an extra jar is empty glass for your things. While
+ * one is on screen the factory stands still and pays by its rate; a chore
+ * stops the pay as it stops the factory. The main save keeps the main jar's
+ * places; an extra jar's file keeps only its own. */
+void test_jarsim_extra_jars(void) {
+  static char buf[2048];
+  static JWant w[JS_MAX_PLACED];
+  int32_t r;
+  uint32_t c0, grow0;
+  int n;
+  fresh(11);
+  J.coins = 10000;
+  CHECK_EQ(js_up_cost(&J, JU_JAR), 400);
+  CHECK_EQ(js_buy(&J, JU_JAR), 0);                 /* no clock: at once */
+  CHECK_EQ(J.njars, 1);
+  CHECK_EQ(J.coins, 9600);
+  r = js_rate_ph(&J);
+  CHECK(r > 0);
+  J.jar_at = 1;
+  c0 = J.coins;
+  grow0 = (uint32_t)J.bed[0].grow;
+  run_s(3600);
+  CHECK((int32_t)(J.coins - c0) >= r * JS_JAR_VALUE - 1 && (int32_t)(J.coins - c0) <= r * JS_JAR_VALUE + 1);
+  CHECK_EQ((uint32_t)J.bed[0].grow, grow0);       /* the factory stood still */
+  /* a chore stops the pay as it stops the factory */
+  J.puddle = 30;
+  c0 = J.coins;
+  run_s(600);
+  CHECK_EQ(J.coins, c0);
+  J.puddle = 0;
+  /* the save: the main jar's places stay its own */
+  J.nwant = 1;
+  J.want[0].id = 77; J.want[0].x = 40; J.want[0].y = 0; J.want[0].lv = 0; J.want[0].on = 0;
+  n = js_save(&J, buf, sizeof buf);
+  buf[n] = 0;
+  CHECK(strstr(buf, "jars 1 1\n") != 0);
+  CHECK(strstr(buf, "place 77 40 0\n") != 0);
+  {
+    Jar *k = (Jar *)calloc(1, sizeof *k);
+    js_init(k, 1);
+    CHECK_EQ(js_load(k, buf), 0);
+    CHECK_EQ((int)k->njars, 1);
+    CHECK_EQ((int)k->jar_at, 1);
+    free(k);
+  }
+  /* an extra jar's own file */
+  n = js_extra_parse("jarx 1\nplace 5 30 0\nplace 6 40 2 1\nnoise\n", w, JS_MAX_PLACED);
+  CHECK_EQ(n, 2);
+  CHECK_EQ((int)w[1].id, 6);
+  CHECK_EQ((int)w[1].lv, 1);
+  CHECK_EQ(js_extra_parse("jar 1\ncoins 5\n", w, JS_MAX_PLACED), -1);   /* not an extra jar */
+  /* three at most */
+  J.coins = 100000;
+  while (js_buy(&J, JU_JAR) == 0) {}
+  CHECK_EQ((int)J.njars, JS_MAX_JARS);
+  CHECK_EQ(js_up_cost(&J, JU_JAR), -1);
+}

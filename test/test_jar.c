@@ -1195,3 +1195,55 @@ void test_jar_idles_draw(void) {
   dump("51_idles_b");
   CHECK(J.nplaced >= JID_KINDS - 1);
 }
+
+
+/* More jars (2026-10-11): the factory's things stay in the factory, an extra
+ * jar keeps its own, the factory pays by its rate meanwhile, a thing is in
+ * one jar at a time, and the jar on screen survives a reopen and a screen. */
+void test_jar_more_jars(void) {
+  uint32_t spare = 0, c0;
+  int placed, i;
+  start(T0);
+  STAY = 0;
+  placed = J.nplaced;
+  CHECK(placed >= 3);
+  key('j');                                          /* none bought yet */
+  CHECK_EQ((int)J.jar_at, 0);
+  CHECK(strstr(G.msg, "Upgrades") != 0);
+  J.njars = 1;
+  for (i = 0; i < J.nowned; i++)                     /* an owned thing not in the jar */
+    if (js_find(&J, J.owned[i]) < 0) spare = J.owned[i];
+  CHECK(spare != 0);
+  key('j');
+  CHECK_EQ((int)J.jar_at, 1);
+  CHECK_EQ(J.nplaced, 0);                            /* empty glass */
+  CHECK_EQ(J.nwant, placed);                         /* the factory's places, kept */
+  c0 = J.coins;
+  ticks(5 * 60 * 1000);                              /* five minutes away */
+  CHECK(J.coins > c0);                               /* the factory paid by its rate */
+  place_new(spare);
+  CHECK_EQ(J.nplaced, 1);
+  key(CAPP_KEY_ENTER);                               /* put it down */
+  G.view = V_JAR;
+  place_new(J.want[0].id);                           /* one of the factory's: refused */
+  CHECK_EQ(J.nplaced, 1);
+  CHECK(strstr(G.msg, "factory") != 0);
+  dump("41_extra_jar");
+  save();
+  CHECK(strstr(fakefs_get("/var/jar/jar2.txt"), "place ") != 0);
+  reopen();                                          /* the jar on screen comes back */
+  CHECK_EQ((int)J.jar_at, 1);
+  CHECK_EQ(J.nplaced, 1);
+  CHECK_EQ(J.placed[0].id, spare);
+  CHECK_EQ(J.nwant, placed);
+  key('s');                                          /* a screen and back */
+  key(CAPP_KEY_ESC);
+  CHECK_EQ(SCREEN, SC_JAR);
+  CHECK_EQ((int)J.jar_at, 1);
+  CHECK_EQ(J.nplaced, 1);
+  key('j');                                          /* round to the factory */
+  CHECK_EQ((int)J.jar_at, 0);
+  CHECK_EQ(J.nplaced, placed);
+  CHECK(js_find(&J, spare) < 0);                     /* it stayed in jar 2 */
+  STAY = 1;
+}
