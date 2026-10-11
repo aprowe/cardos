@@ -839,3 +839,41 @@ void test_jarsim_chores_are_saved(void) {
   CHECK_EQ(K.bed[1].mould, 1);
   CHECK_EQ(js_chores(&K), JC_SULK | JC_PUDDLE | JC_MOULD);
 }
+
+
+/* A patch: what an item learned about a newcomer, run for the events its own
+ * script leaves; dropped with the item, and the spool closes round it. */
+void test_jarsim_a_patch_runs_where_the_script_does_not(void) {
+  /* on poke: say 1 (the item's own) / on bumped: glow on (the patch) */
+  static const uint8_t own[] = { 1, 1, JE_POKE, 0, 5, JVO_ACTK, JA_SAY, 0, JVO_END };
+  static const uint8_t patch[] = { 1, 2, JE_BUMPED, 0, 8, JE_POKE, 0, 12,
+                                   JVO_ACTK, JA_GLOW, 1, JVO_END, JVO_ACTK, JA_HOP, 9, JVO_END };
+  static JItem it;
+  int a, b;
+  fresh(30);
+  mk_item(&it, 1, JK_FLOOR, JM_SITS);
+  it.nbub = 1;
+  strcpy(it.bub[0], "hi");
+  memcpy(it.script, own, sizeof own);
+  it.script_len = sizeof own;
+  a = js_place(&J, &it, 60, 0);
+  mk_item(&it, 2, JK_FLOOR, JM_SITS);
+  memcpy(it.script, own, sizeof own);
+  it.script_len = sizeof own;
+  b = js_place(&J, &it, 160, 0);
+  CHECK_EQ(J.sused, 2 * sizeof own);
+  CHECK_EQ(js_set_patch(&J, a, patch, sizeof patch), 0);
+  CHECK_EQ(js_item_event(&J, a, JE_BUMPED, 0), 1);
+  CHECK_EQ(J.placed[a].glow, 1);                       /* the patch: its script has no bumped */
+  CHECK_EQ(js_item_event(&J, a, JE_POKE, 0), 1);
+  CHECK_EQ(J.placed[a].vy, 0);                         /* the script's poke wins: no hop */
+  CHECK(J.placed[a].say_t > 0);
+  CHECK_EQ(js_set_patch(&J, a, patch, sizeof patch), 0);   /* a newer one replaces it */
+  CHECK_EQ(J.sused, 2 * sizeof own + sizeof patch);
+  js_unplace(&J, a);
+  b = js_find(&J, 2);
+  CHECK_EQ(J.sused, sizeof own);                       /* both its blocks gone */
+  CHECK_EQ(J.placed[b].soff, 0);
+  CHECK_EQ(js_item_event(&J, b, JE_POKE, 0), 1);       /* and the other still runs */
+  CHECK_EQ(js_set_patch(&J, b, (const uint8_t *)"\x09\x00", 2), -1);   /* not one this machine runs */
+}

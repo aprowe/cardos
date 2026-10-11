@@ -203,6 +203,12 @@ static int day_body(void) {
       k = put(NET, k, sizeof NET, IO.it.name);
       first = 0;
     }
+  k = put(NET, k, sizeof NET, "\ninjar ");          /* by id: what may learn of a newcomer */
+  for (i = 0; i < J.nwant && i < 16 && k < (int)sizeof NET - 200; i++) {
+    char num[12];
+    api->fmt(num, sizeof num, i ? ",%u" : "%u", (unsigned)J.want[i].id);
+    k = put(NET, k, sizeof NET, num);
+  }
   k = put(NET, k, sizeof NET, "\nowned ");
   for (i = 0, first = 1; i < J.nowned && i < 40 && k < (int)sizeof NET - 80; i++)
     if (jst_item_read(api, J.owned[i], &IO) >= 0) {

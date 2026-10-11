@@ -70,7 +70,7 @@
 #define C_PINK   CAPP_RGB(0xff, 0x8f, 0xab)
 
 enum { V_JAR = 0, V_DECOR };
-enum { Q_IDLE = 0, Q_LEN, Q_PEEK, Q_THANKS, Q_ACK, Q_SKY };   /* asking after the post, and the sky */
+enum { Q_IDLE = 0, Q_LEN, Q_PEEK, Q_THANKS, Q_ACK, Q_SKY, Q_PATCH };   /* the post, the sky, patches */
 #define SKY_EVERY_MS (30u * 60u * 1000u) /* how often to ask after the real sky */
 
 static const CardApi *api;
@@ -1232,6 +1232,10 @@ static void post_reply(int n) {
   int was = G.q;
   char path[64];
   G.q = Q_IDLE;
+  if (n < 0 && was == Q_PATCH) {                       /* patches too: the post goes on */
+    q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
+    return;
+  }
   if (n < 0 && was == Q_SKY) {                         /* the sky is extra: the post goes on */
     SKYQ.next = api->ticks_ms() + NET_EVERY_MS;
     q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
@@ -1243,7 +1247,14 @@ static void post_reply(int n) {
   switch (was) {
   case Q_SKY:
     sky_reply();
-    q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
+    api->fmt(path, sizeof path, "/jar/patches?after=%u", (unsigned)J.patchseen);
+    q_start(Q_PATCH, "GET", path);
+    return;
+  case Q_PATCH:
+    if (lv_patches(SCR.text)) {                     /* more waiting: from the last one got */
+      api->fmt(path, sizeof path, "/jar/patches?after=%u", (unsigned)J.patchseen);
+      q_start(Q_PATCH, "GET", path);
+    } else q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
     return;
   case Q_LEN: {
     const char *p = SCR.text;
@@ -1381,6 +1392,7 @@ static void load(void) {
     if (item_read(J.want[i].id) != 0) continue;
     k = js_place(&J, &SCR.io.it, x, y);
     if (k >= 0 && J.want[i].lv) js_set_level(&J, k, J.want[i].lv);
+    lv_patch_load(k);                               /* what it learned, if anything */
   }
   J.nwant = 0;                                     /* placed, or gone from the card */
   js_away(&J, now);                                /* nothing is made off screen */
