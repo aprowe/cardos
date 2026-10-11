@@ -624,6 +624,83 @@ class Generate(unittest.TestCase):
         self.assertEqual(st.get(jar.NS, "own/%d" % got[0]), b"kit")
 
 
+# ---- language v2: items that do things (CARDOS_JAR_V2) -------------------------------------
+
+class VersionTwo(unittest.TestCase):
+
+    def setUp(self):
+        p = mock.patch("server.jarvm.V2", True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_off_by_default_nothing_newer_is_asked_for(self):
+        with mock.patch("server.jarvm.V2", False):
+            s = jar.item_schema()
+            self.assertNotIn("traits", s["properties"])
+            whens = s["properties"]["habits"]["items"]["properties"]["when"]["enum"]
+            self.assertNotIn("hour", whens)
+            self.assertNotIn("burst", s["properties"]["habits"]["items"]["properties"]["do"]["enum"])
+            p = jar.prompt_for("a brass beetle", kind="critter", form="furniture")
+            self.assertNotIn("burst", p)
+            self.assertNotIn("furniture", p)
+
+    def test_the_prompt_and_the_schema(self):
+        p = jar.prompt_for("a bird table", kind="floor", form="furniture")
+        self.assertIn("MAKE IT DO SOMETHING", p)
+        self.assertIn("It is furniture", p)
+        self.assertIn("traits: 1 to 4 words", p)
+        self.assertIn("burst", p)
+        s = jar.item_schema("furniture")
+        self.assertIn("surface", s["required"])
+        self.assertIn("traits", s["required"])
+        self.assertIn("hour", s["properties"]["habits"]["items"]["properties"]["when"]["enum"])
+        self.assertEqual(jar.item_schema("part")["properties"]["frames"]["minItems"], 2)
+
+    def test_forms_by_the_dice_and_only_where_they_suit(self):
+        rng = random.Random(5)
+        got = {}
+        for _ in range(2000):
+            f = jar.roll_form("floor", rng)
+            got[f] = got.get(f, 0) + 1
+        self.assertTrue(all(got.get(f, 0) > 80 for f in ("furniture", "scenery", "part", "big")))
+        self.assertGreater(got[None], 1000)                       # most things are things
+        self.assertNotIn("furniture", {jar.roll_form("critter", rng) for _ in range(500)})
+
+    def test_a_furniture_item_with_traits_and_a_script(self):
+        raw = raw_item("Bird Table", kind="floor", movement="sits",
+                       traits=["food", "plant", "purple"], voice="chirp", surface=3,
+                       script="on poke: burst sparkle; sound chirp; end\n"
+                              "on near: if has(neartraits, food) then say 1 end; end")
+        self.assertTrue(jar.check_item(raw, form="furniture"))    # "purple" is no trait
+        raw["traits"] = ["food", "plant"]
+        self.assertEqual(jar.check_item(raw, form="furniture"), [])
+        raw["traits"] = ["food", "plant", "purple"]               # to_item drops it all the same
+        it = jar.to_item(raw, 9001, 1791504000, "rare,floor", form="furniture", price=200)
+        self.assertEqual(it["tags"], "food,plant")               # traits, and only real ones
+        self.assertEqual((it["role"], it["surface"], it["voice"]), (1, 3, 2))
+        self.assertTrue(it["script"])                            # v2 words compiled
+        rec = jar.encode(it)
+        self.assertEqual(rec[1], jar.HDR_EXT)
+        back = jar.decode(rec)
+        self.assertEqual(back["role"], 1)
+        self.assertEqual(back["tags"], "food,plant")
+
+    def test_a_part_leaves_its_last_frame_out_of_the_poses(self):
+        raw = raw_item("Birdhouse", kind="floor", movement="sits", traits=["cosy"],
+                       frames=[sprite(0), sprite(1), sprite(0)],
+                       script="on poke: frame 3; end")
+        it = jar.to_item(raw, 9002, 1791504000, "", form="part")
+        self.assertEqual(it["part"], 1)
+        self.assertEqual(it["script"], b"")                      # frame 3 is the bird, not a pose
+        raw["script"] = "on poke: fly; frame 2; end"
+        self.assertTrue(jar.to_item(raw, 9002, 1791504000, "", form="part")["script"])
+
+    def test_traits_fit_the_field(self):
+        self.assertEqual(jar.traits_tags(["clockwork", "fragile", "spooky", "music"]),
+                         "clockwork,fragile,spooky")             # 24 bytes at most
+        self.assertEqual(jar.traits_tags(["Food", "food"]), "food")
+
+
 # ---- the shopkeeper ------------------------------------------------------------------------
 
 class Shopkeeper(unittest.TestCase):
