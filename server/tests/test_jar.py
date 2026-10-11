@@ -193,7 +193,7 @@ class Record(unittest.TestCase):
 
     def test_layout_is_the_headers(self):
         table = header_table()
-        self.assertEqual(len(table), 25)
+        self.assertEqual(len(table), 32)
         ours = sorted(jar.OFF.values())
         self.assertEqual([(o, s) for o, s, _ in table], ours)
         with open(jar.HEADER, encoding="utf-8") as f:
@@ -345,6 +345,35 @@ class Signing(unittest.TestCase):
         renamed[12] ^= 1
         self.assertFalse(jar.verified(bytes(renamed), test_pub()))
 
+    def test_the_longer_header(self):
+        raw = raw_item("Cupboard")
+        item = jar.to_item(raw, 90, 1791504000, "big")
+        plain = jar.encode(item)
+        self.assertEqual(plain[1], 208)                       # a thing: as before, byte for byte
+        item.update(role=1, scale=2, surface=3, voice=5, pdx=-5, pdy=3)
+        rec = jar.encode(item)
+        self.assertEqual(rec[1], 224)
+        self.assertEqual(len(rec), len(plain) + 16)
+        self.assertEqual(rec[208:215], bytes([1, 2, 3, 0, 0xFB, 3, 5]))
+        self.assertEqual(rec[224:], plain[208:])               # what follows is the same
+        it = jar.decode(rec)
+        self.assertEqual((it["role"], it["scale"], it["surface"], it["voice"], it["pdx"], it["pdy"]),
+                         (1, 2, 3, 5, -5, 3))
+        self.assertEqual(jar.encode(it), rec)
+        self.assertEqual(jar.decode(plain)["role"], 0)
+        sealed = jar.seal(rec, test_signer)
+        self.assertTrue(jar.verified(sealed, test_pub()))
+        self.assertEqual(sealed[224:288], sealed[224:224 + sealed[204]])
+        bad = bytearray(sealed)
+        bad[209] = 1                                           # the header is signed, all of it
+        self.assertFalse(jar.verified(bytes(bad), test_pub()))
+        with self.assertRaises(ValueError):
+            jar.encode(dict(item, role=7))
+        with open(os.path.join(FIXTURES, "jar_item_ext.bin"), "rb") as f:
+            fx = f.read()
+        self.assertTrue(jar.verified(fx, test_pub()))
+        self.assertEqual(jar.decode(fx)["part"], 1)
+
     def test_fixtures(self):
         with open(os.path.join(FIXTURES, "jar_item_signed.bin"), "rb") as f:
             rec = f.read()
@@ -377,8 +406,15 @@ def write_fixtures():
     unsigned[136:152] = (1).to_bytes(2, "little") * 3 + (0xFFFF).to_bytes(2, "little") + bytes(8)
     rec = jar.seal(bytes(unsigned), test_signer)
     os.makedirs(FIXTURES, exist_ok=True)
+    # a birdhouse: furniture, twice the size, its last frame the bird
+    raw2 = raw_item("Birdhouse", line="A house for a small bird")
+    raw2["frames"] = [raw2["frames"][0], raw2["frames"][0]]
+    ext = jar.to_item(raw2, 4343, 1791504000, "cosy,music")
+    ext.update(role=1, scale=2, surface=4, part=1, pdx=-6, pdy=-9, voice=2)
+    rec2 = jar.seal(jar.encode(ext), test_signer)
     for name, data in (("jar_item_signed.bin", rec), ("jar_item_message.bin", jar.message(rec)),
-                       ("jar_pubkey.bin", test_pub())):
+                       ("jar_pubkey.bin", test_pub()), ("jar_item_ext.bin", rec2),
+                       ("jar_item_ext_message.bin", jar.message(rec2))):
         with open(os.path.join(FIXTURES, name), "wb") as f:
             f.write(data)
         print("%s: %d bytes" % (name, len(data)))

@@ -245,10 +245,16 @@ typedef struct {
    * back (a bird from its birdhouse). part is the frame + 1, 0 none. */
   uint8_t  fed, part, pst;             /* pst: 0 home, 1 out, 2 coming back */
   int16_t  vx;
+  /* what it is (the record's longer header): JR_*, 1 or 2 times the size,
+   * furniture's top row; and the furniture it stands on, by id (0 none) */
+  uint8_t  role, scale, surface, voice;
+  int8_t   pdx, pdy;
+  uint32_t on_id;
+  int16_t  on_lo, on_hi;               /* that furniture's top, px */
   int16_t  px, py, ptx, pty, pt;       /* the part, 1/16 px; its target; a timer */
 } JPlaced;
 
-typedef struct { uint32_t id; int16_t x; int8_t y; uint8_t lv; } JWant;
+typedef struct { uint32_t id, on; int16_t x; int8_t y; uint8_t lv; } JWant;
 
 typedef struct {
   /* kept on the card */
@@ -517,6 +523,15 @@ static JS_OPT uint16_t js_tags(const char *s) {
  * critter in its favourite zone -- or, up on a ledge, along the ledge. */
 static JS_OPT void js_range(const JPlaced *p, int *lo, int *hi) {
   int lv = p->level;
+  if (p->on_id) {                              /* on furniture: its top, and no further */
+    *lo = p->on_lo;
+    *hi = p->on_hi;
+    if (p->kind != JK_CRITTER) {
+      if (*lo < p->home_x - 12) *lo = p->home_x - 12;
+      if (*hi > p->home_x + 12) *hi = p->home_x + 12;
+    }
+    return;
+  }
   if (lv) {
     *lo = JS_LEDGE_LO[lv]; *hi = JS_LEDGE_HI[lv];
     if (p->kind != JK_CRITTER) {
@@ -580,6 +595,20 @@ static JS_OPT int js_place(Jar *j, const JItem *it, int x, int y) {
     p->nframes++;
   }
   if (!p->nframes) return -1;
+  p->role = it->role < JR_KINDS ? it->role : JR_THING;
+  p->scale = it->scale == 2 ? 2 : 1;
+  p->surface = it->surface;
+  p->voice = it->voice;
+  p->pdx = it->pdx;
+  p->pdy = it->pdy;
+  if (p->role == JR_BACKGROUND) { p->kind = JK_FLOOR; p->move = JM_SITS; }   /* scenery */
+  if (p->role == JR_FURNITURE && p->kind == JK_CRITTER) p->kind = JK_FLOOR;
+  if (p->scale == 2) p->tags |= JT_BIT(JT_BIG);
+  if (it->part && p->nframes >= 2) {           /* the last frame is the part, not a pose */
+    p->part = 1;
+    p->nframes--;
+    p->pt = (int16_t)js_rr(j, 10 * JS_HZ, 40 * JS_HZ);
+  }
   /* Its script, if this machine can run it and there is room: else the
    * recipe does everything, as in phase 1. */
   if (it->script_len && jv_check(it->script, it->script_len) == 0 &&
@@ -604,9 +633,13 @@ static JS_OPT int js_place(Jar *j, const JItem *it, int x, int y) {
 }
 
 /* Take item i out of the jar (back to My Stuff), freeing its frames. */
+static JS_OPT void js_get_off(Jar *j, int i);
+
 static JS_OPT void js_unplace(Jar *j, int i) {
   int k;
   if (i < 0 || i >= j->nplaced) return;
+  for (k = 0; k < j->nplaced; k++)             /* what stood on it comes down */
+    if (k != i && j->placed[k].on_id && j->placed[k].on_id == j->placed[i].id) js_get_off(j, k);
   for (k = 0; k < JI_MAX_FRAMES; k++)
     if (j->placed[i].slot[k] < JS_POOL_ROOM) j->pool_used[j->placed[i].slot[k]] = 0;
   if (j->placed[i].slen) {                    /* close the gap its script leaves */
@@ -620,6 +653,71 @@ static JS_OPT void js_unplace(Jar *j, int i) {
   j->nplaced--;
 }
 
+/* Furniture f's top: the span things stand on (px) and its height above
+ * the soil. */
+static JS_OPT void js_top(const Jar *j, int f, int *lo, int *hi, int *h) {
+  const JPlaced *q = &j->placed[f];
+  int half = 8 * q->scale;
+  *lo = q->home_x - half + 3;
+  *hi = q->home_x + half - 3;
+  *h = q->lift + (16 - q->surface) * q->scale;
+}
+
+/* Stand item i on furniture f (an index): 0, or -1 if f is not furniture or
+ * i cannot stand there (it hangs, flies, is furniture or scenery itself). */
+static JS_OPT int js_put_on(Jar *j, int i, int f) {
+  JPlaced *p;
+  int lo, hi, h;
+  if (i < 0 || i >= j->nplaced) return -1;
+  p = &j->placed[i];
+  if (f < 0 || f >= j->nplaced || f == i || j->placed[f].role != JR_FURNITURE) return -1;
+  if (p->kind == JK_HANGING || p->role != JR_THING || (p->kind == JK_CRITTER && p->move == JM_FLOATS))
+    return -1;
+  js_top(j, f, &lo, &hi, &h);
+  p->on_id = j->placed[f].id;
+  p->on_lo = (int16_t)lo;
+  p->on_hi = (int16_t)hi;
+  p->home_x = (int16_t)js_clamp(p->home_x, lo, hi);
+  p->x = p->tx = (int32_t)p->home_x * JS_FX;
+  p->lift = (int8_t)h;
+  p->level = j->placed[f].level;
+  p->yoff = 0;
+  p->vy = 0;
+  p->vx = 0;
+  p->moving = 0;
+  p->climb = p->goal = 0;
+  return 0;
+}
+
+/* After the app has placed what the save wanted: each back on its
+ * furniture, if that is in the jar too. */
+static JS_OPT void js_stand_wanted(Jar *j) {
+  int w;
+  for (w = 0; w < j->nwant; w++)
+    if (j->want[w].on) js_put_on(j, js_find(j, j->want[w].id), js_find(j, j->want[w].on));
+}
+
+/* Item i steps off whatever furniture it is on, onto its level. */
+static JS_OPT void js_get_off(Jar *j, int i) {
+  JPlaced *p = &j->placed[i];
+  if (!p->on_id) return;
+  p->on_id = 0;
+  p->lift = (int8_t)JS_LEDGE_H[p->level];
+}
+
+/* Furniture f moved by dx: what stands on it goes with it. */
+static JS_OPT void js_carry(Jar *j, int f, int dx) {
+  int k;
+  for (k = 0; k < j->nplaced; k++)
+    if (j->placed[k].on_id && j->placed[k].on_id == j->placed[f].id) {
+      j->placed[k].home_x = (int16_t)(j->placed[k].home_x + dx);
+      j->placed[k].on_lo = (int16_t)(j->placed[k].on_lo + dx);
+      j->placed[k].on_hi = (int16_t)(j->placed[k].on_hi + dx);
+      j->placed[k].x += (int32_t)dx * JS_FX;
+      j->placed[k].tx = j->placed[k].x;
+    }
+}
+
 /* Does it stand on something -- the soil or a ledge? Floor decor and the
  * critters that walk, hop or sit; not hanging things, not fliers. */
 static JS_OPT int js_has_levels(const JPlaced *p) {
@@ -630,7 +728,18 @@ static JS_OPT int js_has_levels(const JPlaced *p) {
  * under way is called off: it is back on the level it set off from. */
 static JS_OPT void js_move_to(Jar *j, int i, int x, int y) {
   JPlaced *p = &j->placed[i];
-  int lv = p->level;
+  int lv = p->level, was = p->home_x;
+  if (p->on_id) {                              /* along its furniture's top */
+    int f = js_find(j, p->on_id), lo, hi, h;
+    if (f >= 0) {
+      js_top(j, f, &lo, &hi, &h);
+      p->home_x = (int16_t)js_clamp(x, lo, hi);
+      p->x = p->tx = (int32_t)p->home_x * JS_FX;
+      p->lift = (int8_t)h;
+      return;
+    }
+    p->on_id = 0;
+  }
   x = p->kind == JK_HANGING ? js_clamp(x, JS_HANG_LO, JS_HANG_HI) : js_clamp(x, JS_LEDGE_LO[lv], JS_LEDGE_HI[lv]);
   p->home_x = (int16_t)x;
   if (p->kind == JK_HANGING) p->home_y = (int16_t)js_clamp(y, 0, 60);
@@ -640,6 +749,7 @@ static JS_OPT void js_move_to(Jar *j, int i, int x, int y) {
   p->moving = 0;
   p->lift = (int8_t)JS_LEDGE_H[lv];
   p->climb = p->goal = 0;
+  if (p->role == JR_FURNITURE && p->home_x != was) js_carry(j, i, p->home_x - was);
 }
 
 /* Put item i on level lv: 0 the soil, 1.. a ledge (only what stands, see
@@ -655,7 +765,7 @@ static JS_OPT int js_set_level(Jar *j, int i, int lv) {
 
 /* Can it climb by itself? The critters that walk or hop. */
 static JS_OPT int js_can_climb(const JPlaced *p) {
-  return p->kind == JK_CRITTER && (p->move == JM_HOPS || p->move == JM_WANDERS);
+  return p->kind == JK_CRITTER && (p->move == JM_HOPS || p->move == JM_WANDERS) && !p->on_id;
 }
 
 /* Item i sets off for level `to`: up a ledge from the soil, or down to the
@@ -702,7 +812,7 @@ static JS_OPT int js_nearest(const Jar *j, int i, int *dist) {
     if (d < best) { best = d; kind = JN_SNAIL; }
   }
   for (k = 0; k < j->nplaced; k++) {
-    if (k == i) continue;
+    if (k == i || j->placed[k].role == JR_BACKGROUND) continue;
     d = js_abs(j->placed[k].x / JS_FX - x) + js_abs(js_item_y(j, k) - y) / 2;
     if (d < best) { best = d; kind = j->placed[k].kind == JK_CRITTER ? JN_CRITTER : JN_DECOR; }
   }
@@ -714,7 +824,7 @@ static JS_OPT int js_nearest(const Jar *j, int i, int *dist) {
 static JS_OPT int js_nearest_item(const Jar *j, int i, int *dist) {
   int x = j->placed[i].x / JS_FX, y = js_item_y(j, i), best = 9999, at = -1, k, d;
   for (k = 0; k < j->nplaced; k++) {
-    if (k == i) continue;
+    if (k == i || j->placed[k].role == JR_BACKGROUND) continue;
     d = js_abs(j->placed[k].x / JS_FX - x) + js_abs(js_item_y(j, k) - y) / 2;
     if (d < best) { best = d; at = k; }
   }
@@ -788,7 +898,7 @@ static JS_OPT int js_throw(Jar *j, int i) {
     const JPlaced *q = &j->placed[k];
     int d;
     if (k == i || q->kind == JK_HANGING || (q->tags & JT_BIT(JT_BIG)) || q->level != p->level ||
-        q->yoff || q->vy)
+        q->yoff || q->vy || q->role != JR_THING)
       continue;
     d = js_abs(q->x / JS_FX - x);
     if (d < bd) { bd = d; best = k; }
@@ -797,6 +907,7 @@ static JS_OPT int js_throw(Jar *j, int i) {
   {
     JPlaced *q = &j->placed[best];
     int dir = q->x >= p->x ? 1 : -1;
+    js_get_off(j, best);
     q->vy = (int16_t)js_isqrt(2 * 6 * 22 * 16);       /* about 22 px up */
     q->vx = (int16_t)(dir * js_rr(j, 60, 110));       /* and 1 to 2 px a step along */
     q->moving = 0;
@@ -843,6 +954,12 @@ static JS_OPT int js_act(Jar *j, int i, int action, int arg) {
       return 0;
     }
     if (p->climb) return 0;
+    if (p->on_id) {                              /* up on furniture: along its top */
+      js_range(p, &lo, &hi);
+      p->tx = (int32_t)js_rr(j, lo, hi) * JS_FX;
+      p->moving = 1;
+      return 0;
+    }
     {
       JPlaced tmp;
       tmp.kind = JK_CRITTER;
@@ -2042,13 +2159,23 @@ static JS_OPT int js_save(const Jar *j, char *buf, int cap) {
     int x = i < j->nplaced ? j->placed[i].home_x : j->want[i - j->nplaced].x;
     int y = i < j->nplaced ? j->placed[i].home_y : j->want[i - j->nplaced].y;
     int lv = i < j->nplaced ? j->placed[i].level : j->want[i - j->nplaced].lv;
+    uint32_t on = i < j->nplaced ? j->placed[i].on_id : j->want[i - j->nplaced].on;
     if (i >= j->nplaced && js_find(j, id) >= 0) continue;
     n = js_put(buf, n, cap, "place ");
     n = js_put_u(buf, n, cap, id);           n = js_put(buf, n, cap, " ");
     n = js_put_u(buf, n, cap, (uint32_t)x);  n = js_put(buf, n, cap, " ");
     n = js_put_u(buf, n, cap, (uint32_t)y);
-    if (lv) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, (uint32_t)lv); }
+    if (lv || on) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, (uint32_t)lv); }
+    if (on) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, on); }   /* on furniture */
     n = js_put(buf, n, cap, "\n");
+  }
+  /* the chores, so closing the jar does not do them */
+  if (j->sulk || j->puddle || js_chores(j) & JC_MOULD) {
+    uint32_t m = 0;
+    for (i = 0; i < j->nbeds; i++) if (j->bed[i].mould) m |= 1u << i;
+    n = js_put3(buf, n, cap, "chores ", j->sulk, " ");
+    n = js_put3(buf, n, cap, "", j->puddle, " ");
+    n = js_put3(buf, n, cap, "", m, "\n");
   }
 #undef JS_KV
   return n;
@@ -2120,14 +2247,24 @@ static JS_OPT int js_load(Jar *j, const char *t) {
     } else if (js_word_is(w, "parcels")) j->parcels = (uint16_t)js_num(&p);
     else if (js_word_is(w, "gseen")) j->gseen = js_num(&p);
     else if (js_word_is(w, "decor")) j->decor = js_num(&p);
+    else if (js_word_is(w, "chores")) {
+      uint32_t m;
+      int b;
+      j->sulk = (uint8_t)(js_num(&p) != 0);
+      j->puddle = (uint8_t)js_clamp((int)js_num(&p), 0, 60);
+      m = js_num(&p);
+      for (b = 0; b < JS_MAX_BEDS; b++) j->bed[b].mould = (uint8_t)((m >> b) & 1);
+    }
     else if (js_word_is(w, "own")) {
       while (js_more(p)) js_own(j, js_num(&p));
     } else if (js_word_is(w, "place")) {
       uint32_t id = js_num(&p);
       int x = (int)js_num(&p), y = (int)js_num(&p);
       uint32_t lv = js_more(p) ? js_num(&p) : 0;   /* none: on the soil */
+      uint32_t on = js_more(p) ? js_num(&p) : 0;   /* the furniture it stands on */
       if (j->nwant < JS_MAX_PLACED && id) {
         j->want[j->nwant].id = id;
+        j->want[j->nwant].on = on;
         j->want[j->nwant].x = (int16_t)x;
         j->want[j->nwant].y = (int8_t)js_clamp(y, 0, 60);   /* a string's length */
         j->want[j->nwant].lv = (uint8_t)(lv < JS_LEVELS ? lv : JS_LEVELS - 1);

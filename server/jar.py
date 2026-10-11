@@ -134,6 +134,13 @@ THANKS_Q = "jar.thanks"
 
 VERSION = 1
 HDR = 208
+HDR_EXT = 224                  # the longer header: role, scale, surface, part, voice (jaritem.h)
+ROLES = ("thing", "furniture", "background")
+
+
+def _ext(it):
+    return bool(it.get("role") or it.get("scale", 1) > 1 or it.get("surface") or it.get("part")
+                or it.get("voice") or it.get("pdx") or it.get("pdy"))
 REC_MAX = 1024
 FRAME_BYTES = 96
 MAX_FRAMES = 4
@@ -149,6 +156,9 @@ OFF = {
     "habits": (76, 12), "bubbles": (88, 48), "memory": (136, 16), "maker": (152, 12),
     "made": (164, 4), "tags": (168, 24), "gifted": (192, 12), "sig_len": (204, 1),
     "script_len": (205, 2), "price5": (207, 1),
+    # the longer header (HDR_EXT)
+    "role": (208, 1), "scale": (209, 1), "surface": (210, 1), "part": (211, 1),
+    "home": (212, 2), "voice": (214, 1), "spare": (215, 9),
 }
 
 _ENUM_PREFIX = {"JK": "kinds", "JM": "moves", "JSP": "speeds", "JZ": "zones", "JE": "events",
@@ -239,12 +249,16 @@ def encode(it):
         raise ValueError("too many bubbles or habits")
     if len(sig) > SIG_MAX or len(script) > SCRIPT_MAX:
         raise ValueError("signature or script too long")
-    n = HDR + len(sig) + len(script) + len(frames) * FRAME_BYTES
+    hdr = HDR_EXT if _ext(it) else HDR
+    if not 0 <= it.get("role", 0) < len(ROLES) or it.get("scale", 1) not in (1, 2) or \
+            (it.get("part") and len(frames) < 2):
+        raise ValueError("a bad role, scale or part")
+    n = hdr + len(sig) + len(script) + len(frames) * FRAME_BYTES
     if n > REC_MAX:
         raise ValueError("%d bytes is more than %d" % (n, REC_MAX))
-    out = bytearray(HDR)
+    out = bytearray(hdr)
     out[0] = VERSION
-    out[1] = HDR
+    out[1] = hdr
     out[2:4] = n.to_bytes(2, "little")
     out[4:8] = int(it.get("id", 0)).to_bytes(4, "little")
     out[8] = it["kind"]
@@ -272,6 +286,14 @@ def encode(it):
     out[204] = len(sig)
     out[205:207] = len(script).to_bytes(2, "little")
     out[207] = max(0, min(255, int(it.get("price", 0)) // 5))   # 0: the device works one out
+    if hdr == HDR_EXT:
+        out[208] = it.get("role", 0)
+        out[209] = it.get("scale", 1)
+        out[210] = it.get("surface", 0)
+        out[211] = 1 if it.get("part") else 0
+        out[212] = it.get("pdx", 0) & 0xFF
+        out[213] = it.get("pdy", 0) & 0xFF
+        out[214] = it.get("voice", 0)
     out += sig + script
     for f in frames:
         f = bytes(f)
@@ -308,7 +330,14 @@ def decode(data):
             habits.append(tuple(h))
     o = hdr + sig_len
     newer = data[0] > VERSION
-    return {
+    ext = {"role": 0, "scale": 1, "surface": 0, "part": 0, "pdx": 0, "pdy": 0, "voice": 0}
+    if hdr >= HDR_EXT:
+        ext = {"role": data[208] if data[208] < len(ROLES) else 0,
+               "scale": 2 if data[209] == 2 else 1, "surface": data[210] if data[210] < 16 else 0,
+               "part": 1 if data[211] and nframes >= 2 else 0,
+               "pdx": int.from_bytes(data[212:213], "little", signed=True),
+               "pdy": int.from_bytes(data[213:214], "little", signed=True), "voice": data[214]}
+    return dict(ext, **{
         "version": data[0], "hdr": hdr, "total": total, "price": data[207] * 5,
         "id": int.from_bytes(data[4:8], "little"), "kind": kind,
         "flags": data[10] & (F_GIFT | F_BUILTIN), "newer": newer,
@@ -329,7 +358,7 @@ def decode(data):
         "script": b"" if newer else data[o:o + script_len],
         "frames": [data[o + script_len + FRAME_BYTES * i:o + script_len + FRAME_BYTES * (i + 1)]
                    for i in range(nframes)],
-    }
+    })
 
 
 MEM_AT, MEM_LEN = 136, 16      # the 8 int16 memory slots: scripts write them

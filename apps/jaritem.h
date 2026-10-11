@@ -35,6 +35,20 @@
  *   207     1  price / 5, chosen by the server (0: worked out on the device)
  *   208        signature bytes, then script bytes, then frames x 96
  *
+ * THE LONGER HEADER (2026-10-11). An item that is more than a thing --
+ * furniture, a background fixture, a big one, one with a part -- has a
+ * header of 224 bytes (byte 1 says so; a reader that knows only 208 skips
+ * the rest, and the item is a plain one there). Still version 1, so its
+ * script runs everywhere. Every other item is written exactly as before.
+ *   208     1  role: 0 a thing, 1 furniture (others stand on it), 2 background
+ *   209     1  scale: 1, or 2 (drawn at twice the size: a big plant, a cupboard)
+ *   210     1  surface: furniture's top, the picture's row others stand on
+ *   211     1  part: 1 if the last frame is a part that leaves and comes back
+ *              (a birdhouse's bird); 0 none
+ *   212     2  the part's home: x, y from the item's middle, px, signed
+ *   214     1  voice: its sound (1..14, apps/jarvm.def's sound names), 0 none
+ *   215     9  zero
+ *
  * A frame is 16x16 at 3 bits a pixel, 96 bytes: pixel i (row-major) is bits
  * 3i..3i+2 of the frame read as one little-endian bit string. Frame 0 is the
  * shop picture.
@@ -63,6 +77,8 @@
 
 #define JI_VERSION      1
 #define JI_HDR          208
+#define JI_HDR_EXT      224
+enum { JR_THING = 0, JR_FURNITURE, JR_BACKGROUND, JR_KINDS };
 #define JI_MAX          1024
 #define JI_FRAME_BYTES  96
 #define JI_MAX_FRAMES   4
@@ -129,6 +145,8 @@ typedef struct {
   uint8_t  sig[JI_SIG_MAX];
   uint16_t script_len;
   uint8_t  price5;                       /* the price in fives; 0 none given */
+  uint8_t  role, scale, surface, part, voice;   /* the longer header; 0 / 1 for a thing */
+  int8_t   pdx, pdy;
   uint8_t  script[JI_SCRIPT_MAX];
   uint8_t  frames[JI_MAX_FRAMES][JI_FRAME_BYTES];
 } JItem;
@@ -191,8 +209,14 @@ static JI_OPT void ji_get_str(char *out, const uint8_t *p, int n) {
 }
 
 /* The size an item would encode to. */
+/* Does it need the longer header? */
+static JI_OPT int ji_ext(const JItem *it) {
+  return it->role || it->scale > 1 || it->surface || it->part || it->voice || it->pdx || it->pdy;
+}
+
 static JI_OPT int jitem_size(const JItem *it) {
-  return JI_HDR + it->sig_len + it->script_len + it->nframes * JI_FRAME_BYTES;
+  return (ji_ext(it) ? JI_HDR_EXT : JI_HDR) + it->sig_len + it->script_len +
+         it->nframes * JI_FRAME_BYTES;
 }
 
 /* The record for `it` into `out`. Its length, or -1 if `it` breaks a limit
@@ -204,9 +228,10 @@ static JI_OPT int jitem_encode(const JItem *it, uint8_t *out, int cap) {
   if (it->sig_len > JI_SIG_MAX || it->script_len > JI_SCRIPT_MAX) return -1;
   n = jitem_size(it);
   if (n > JI_MAX || n > cap) return -1;
-  ji_zero(out, JI_HDR);
+  if (it->role >= JR_KINDS || it->scale > 2 || (it->part && it->nframes < 2)) return -1;
+  ji_zero(out, ji_ext(it) ? JI_HDR_EXT : JI_HDR);
   out[0] = JI_VERSION;
-  out[1] = JI_HDR;
+  out[1] = (uint8_t)(ji_ext(it) ? JI_HDR_EXT : JI_HDR);
   ji_put16(out + 2, (unsigned)n);
   ji_put32(out + 4, it->id);
   out[8] = it->kind;
@@ -235,7 +260,16 @@ static JI_OPT int jitem_encode(const JItem *it, uint8_t *out, int cap) {
   out[204] = it->sig_len;
   ji_put16(out + 205, it->script_len);
   out[207] = it->price5;
-  o = JI_HDR;
+  if (ji_ext(it)) {
+    out[208] = it->role;
+    out[209] = it->scale ? it->scale : 1;
+    out[210] = it->surface;
+    out[211] = it->part;
+    out[212] = (uint8_t)it->pdx;
+    out[213] = (uint8_t)it->pdy;
+    out[214] = it->voice;
+  }
+  o = out[1];
   ji_copy(out + o, it->sig, it->sig_len);       o += it->sig_len;
   ji_copy(out + o, it->script, it->script_len); o += it->script_len;
   for (i = 0; i < it->nframes; i++, o += JI_FRAME_BYTES)
@@ -289,6 +323,16 @@ static JI_OPT int jitem_decode(JItem *it, const uint8_t *in, int n) {
   it->made = ji_get32(in + 164);
   ji_get_str(it->tags, in + 168, JI_TAGS);
   ji_get_str(it->gifted, in + 192, JI_WHO);
+  it->scale = 1;
+  if (hdr >= JI_HDR_EXT) {                 /* what this reader knows of a longer one */
+    it->role = in[208] < JR_KINDS ? in[208] : JR_THING;
+    it->scale = in[209] == 2 ? 2 : 1;
+    it->surface = in[210] < 16 ? in[210] : 0;
+    it->part = in[211] && it->nframes >= 2 ? 1 : 0;
+    it->pdx = (int8_t)in[212];
+    it->pdy = (int8_t)in[213];
+    it->voice = in[214];
+  }
 
   o = hdr;
   ji_copy(it->sig, in + o, it->sig_len);
