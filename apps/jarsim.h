@@ -127,16 +127,34 @@ enum { JC_NONE = 0, JC_TO_UP, JC_UP, JC_TO_DOWN, JC_DOWN };
 static const int16_t JS_MACH_X[JS_MAX_MACH] = { 108, 132, 154, 170 };
 
 /* What the critters like (an item's tags, as bits). */
-enum { JT_COSY = 1, JT_SOFT = 2, JT_SWEET = 4, JT_GLOWING = 8, JT_SLEEPY = 16,
-       JT_FOOD = 32, JT_ROUND = 64, JT_SPOOKY = 128, JT_FANCY = 256, JT_SPIKY = 512 };
-#define JS_MOSS_LIKES  (JT_COSY | JT_SOFT | JT_SWEET | JT_GLOWING)
-#define JS_SNAIL_LIKES (JT_SLEEPY | JT_ROUND | JT_SPOOKY | JT_FOOD)
+/* Traits: what an item is, from its record's tag field ("shiny,noisy"), as
+ * bits -- the same numbers as apps/jarvm.def's trait names, which scripts
+ * read with has(). Older items' words map onto them (js_tags). */
+enum { JT_FOOD = 0, JT_SHINY, JT_FRAGILE, JT_NOISY, JT_COSY, JT_LIGHT, JT_WET, JT_MUSIC,
+       JT_WILD, JT_SWEET, JT_SPOOKY, JT_SOFT, JT_BIG, JT_CLOCKWORK, JT_PLANT, JT_SLEEPY,
+       JT_KINDS };
+#define JT_BIT(t)      ((uint16_t)(1u << (t)))
+#define JS_MOSS_LIKES  (JT_BIT(JT_COSY) | JT_BIT(JT_SOFT) | JT_BIT(JT_SWEET) | JT_BIT(JT_LIGHT))
+#define JS_SNAIL_LIKES (JT_BIT(JT_SLEEPY) | JT_BIT(JT_SPOOKY) | JT_BIT(JT_FOOD) | JT_BIT(JT_PLANT))
+
+/* World events (apps/jarvm.def's world names), chores, sounds. */
+enum { JWD_NONE = 0, JWD_ANTS, JWD_LEAK, JWD_BREEZE, JWD_VISITOR, JWD_DARK, JWD_BLOOM,
+       JWD_KINDS };
+#define JC_SULK    1                   /* the snail will not go out */
+#define JC_MOULD   2                   /* a bush has mould: it does not grow */
+#define JC_PUDDLE  4                   /* the leak's puddle: no bush grows, the belt crawls */
+enum { JSD_NONE = 0, JSD_POP, JSD_CHIRP, JSD_BOING, JSD_DING, JSD_HORN, JSD_WHOOSH, JSD_CRUNCH,
+       JSD_PLOP, JSD_COIN, JSD_FIZZ, JSD_CLOCK, JSD_SPLASH, JSD_BANG, JSD_TUNE };
+#define JSD_KINDS  JSD_TUNE            /* sounds 1..JSD_KINDS (jarvm.def's sound names) */
+#define JS_ANTS    5
+#define JS_PELLETS 4
 
 enum { JU_MOSS = 0, JU_MACH, JU_BELT, JU_BED, JU_KINDS };
 enum { PH_NONE = 0, PH_DAWN, PH_DAY, PH_DUSK, PH_NIGHT };
 enum { JWX_NONE = 0, JWX_SUNNY, JWX_CLOUDY, JWX_FOGGY, JWX_RAINY, JWX_SNOWY, JWX_STORMY };
 enum { JSN_X = 0, JSN_ZONE, JSN_NEAR_KIND, JSN_NEAR_DIST, JSN_TIME, JSN_WEATHER,
-       JSN_DAYS, JSN_GIFT, JSN_RANDOM, JSN_KINDS };
+       JSN_DAYS, JSN_GIFT, JSN_RANDOM, JSN_HOUR, JSN_BERRIES, JSN_FED, JSN_WORLD, JSN_TRAITS,
+       JSN_NEAR_TRAITS, JSN_NEW_TRAITS, JSN_MUSIC, JSN_JAMMED, JSN_SULKING, JSN_KINDS };
 
 enum { M_IDLE = 0, M_TO_BED, M_PICK, M_TO_VAT, M_TO_NAP, M_NAP, M_TO_FIX, M_FIX };
 enum { S_HOME = 0, S_OUT, S_AWAY, S_BACK, S_TO_FIX, S_FIX };
@@ -147,11 +165,14 @@ enum { S_HOME = 0, S_OUT, S_AWAY, S_BACK, S_TO_FIX, S_FIX };
 
 static const char *const JS_SAYINGS[] = {
   "hi!", "busy busy", "nice jam", "ooh", "hello", "jam time", "sticky!",
-  "yum", "phew", "heave ho", "uh oh", "fixed!",
+  "yum", "phew", "heave ho", "uh oh", "fixed!", "sigh...", "yay!", "ants!",
 };
 #define JS_NSAY 10                     /* the first ten are small talk */
 #define JS_SAY_UHOH 10
 #define JS_SAY_FIXED 11
+#define JS_SAY_SIGH  12
+#define JS_SAY_YAY   13
+#define JS_SAY_ANTS  14
 
 /* ---- the state --------------------------------------------------------- */
 
@@ -159,7 +180,7 @@ static const char *const JS_SAYINGS[] = {
  * UTC seconds -- 0 for a plant that is grown (the starting beds, and every
  * bed before the garden existed), 1 for one planted with no clock, which
  * starts counting when a clock arrives. A young plant grows no berries. */
-typedef struct { int32_t grow; uint32_t at; uint8_t ready, claimed, type, young; } JBed;
+typedef struct { int32_t grow; uint32_t at; uint8_t ready, claimed, type, young, mould; } JBed;
 
 /* The garden (spec step 4): what can be planted, in the order the scene's
  * plant pictures are in. Each steers the daily stock its own way (the
@@ -219,6 +240,12 @@ typedef struct {
    * what was padding: 24 of these is a lot of an app's 28 KB. */
   uint8_t  level, climb, goal;
   int8_t   lift;
+  /* the living jar: berries eaten; flung (vx, sub-pixels a step, while in
+   * the air); and its part -- a frame of its own that leaves home and comes
+   * back (a bird from its birdhouse). part is the frame + 1, 0 none. */
+  uint8_t  fed, part, pst;             /* pst: 0 home, 1 out, 2 coming back */
+  int16_t  vx;
+  int16_t  px, py, ptx, pty, pt;       /* the part, 1/16 px; its target; a timer */
 } JPlaced;
 
 typedef struct { uint32_t id; int16_t x; int8_t y; uint8_t lv; } JWant;
@@ -268,6 +295,21 @@ typedef struct {
 
   int16_t  minute;                     /* of the day, -1 unknown */
   uint8_t  phase;                      /* PH_* */
+  /* the living jar */
+  uint8_t  world;                      /* JWD_* going on now */
+  uint8_t  sulk, puddle;               /* chores: the snail sulking, the leak's puddle 0..60 */
+  uint8_t  snd;                        /* a sound an item asked for, 1..: the app plays and clears it */
+  uint8_t  music;                      /* the app's soundtrack is on */
+  uint8_t  hour1;                      /* the hour + 1 last told, 0 unknown */
+  uint8_t  shake_t, sig_n;
+  int8_t   sig_from;
+  uint16_t newtraits;
+  int16_t  belt_boost, boost_cd;
+  int32_t  world_t, world_clock, sulk_clock, mould_clock;
+  int16_t  ant_x[JS_ANTS];             /* 1/16 px */
+  uint8_t  ant_st[JS_ANTS], ant_bed[JS_ANTS];   /* 0 none, 1 marching in, 2 carrying off, 3 fleeing */
+  int16_t  pel_x[JS_PELLETS];
+  uint16_t pel_t[JS_PELLETS];          /* steps left; 0 none */
   uint8_t  weather;                    /* JWX_* (apps/jarvm.def), 0 unknown */
   uint32_t steps, seed, epoch;         /* epoch: now, for senses; 0 unknown */
 } Jar;
@@ -403,7 +445,7 @@ static JS_OPT int js_garden_mix(const Jar *j, int *n) {
 
 /* ---- particles, floats, bubbles ------------------------------------------ */
 
-static JS_OPT void js_particle(Jar *j, int type, int x, int y) {
+static JS_OPT int js_particle(Jar *j, int type, int x, int y) {
   int i, best = 0;
   for (i = 0; i < JS_PARTS; i++) {
     if (!j->part[i].life) { best = i; break; }
@@ -415,6 +457,7 @@ static JS_OPT void js_particle(Jar *j, int type, int x, int y) {
   j->part[best].vx = (int8_t)(type == JP_PUFF ? js_rr(j, -3, 3) : type == JP_ZZZ ? 3 : js_rr(j, -2, 2));
   j->part[best].vy = (int8_t)(type == JP_PUFF ? -6 : -5);
   j->part[best].life = (uint8_t)(type == JP_PUFF ? 50 : 60);
+  return best;
 }
 
 static JS_OPT void js_float(Jar *j, int x, int y, uint32_t amount) {
@@ -447,17 +490,25 @@ static JS_OPT int js_tag_word(const char *s, int n, const char *w) {
   return i == n && !w[i];
 }
 
-/* "cosy,soft" -> JT_COSY | JT_SOFT */
+/* "shiny,noisy" -> JT_BIT(JT_SHINY) | JT_BIT(JT_NOISY): the trait words in
+ * order, then the older tag words and what they mean now. */
 static JS_OPT uint16_t js_tags(const char *s) {
-  static const char *const W[] = { "cosy", "soft", "sweet", "glowing", "sleepy",
-                                   "food", "round", "spooky", "fancy", "spiky" };
+  static const char *const W[] = { "food", "shiny", "fragile", "noisy", "cosy", "light",
+                                   "wet", "music", "wild", "sweet", "spooky", "soft", "big",
+                                   "clockwork", "plant", "sleepy",
+                                   "glowing", "fancy", "round", "spiky", "odd" };
+  static const uint8_t OLD[] = { JT_LIGHT, JT_SHINY, JT_SOFT, JT_WILD, JT_WILD };
   uint16_t m = 0;
   while (*s) {
     int n = 0, k;
     while (s[n] && s[n] != ',') n++;
-    for (k = 0; k < 10; k++) if (js_tag_word(s, n, W[k])) m |= (uint16_t)(1u << k);
+    while (n && s[n - 1] == ' ') n--;
+    for (k = 0; k < (int)(sizeof W / sizeof W[0]); k++)
+      if (js_tag_word(s, n, W[k])) m |= JT_BIT(k < JT_KINDS ? k : OLD[k - JT_KINDS]);
+    while (s[n] && s[n] != ',') n++;
     s += n;
     if (*s == ',') s++;
+    while (*s == ' ') s++;
   }
   return m;
 }
@@ -659,6 +710,18 @@ static JS_OPT int js_nearest(const Jar *j, int i, int *dist) {
   return kind;
 }
 
+/* The placed item nearest item i, or -1; its distance in *dist. */
+static JS_OPT int js_nearest_item(const Jar *j, int i, int *dist) {
+  int x = j->placed[i].x / JS_FX, y = js_item_y(j, i), best = 9999, at = -1, k, d;
+  for (k = 0; k < j->nplaced; k++) {
+    if (k == i) continue;
+    d = js_abs(j->placed[k].x / JS_FX - x) + js_abs(js_item_y(j, k) - y) / 2;
+    if (d < best) { best = d; at = k; }
+  }
+  if (dist) *dist = best;
+  return at;
+}
+
 /* What item i can read (spec, "Senses"). Phase 2's scripts read these. */
 static JS_OPT int js_sense(Jar *j, int i, int sense) {
   const JPlaced *p = &j->placed[i];
@@ -674,12 +737,83 @@ static JS_OPT int js_sense(Jar *j, int i, int sense) {
                              ? (int)((j->epoch - p->made) / 86400u) : 0;
   case JSN_GIFT:      return (p->flags & JIF_GIFT) ? 1 : 0;
   case JSN_RANDOM:    return (int)(js_rnd(j) & 255);
+  case JSN_HOUR:      return j->hour1 ? j->hour1 - 1 : -1;
+  case JSN_BERRIES: {
+    int k, n = 0;
+    for (k = 0; k < j->nbeds; k++) n += j->bed[k].ready;
+    return n;
+  }
+  case JSN_FED:       return p->fed;
+  case JSN_WORLD:     return j->world;
+  case JSN_TRAITS:    return (int16_t)p->tags;        /* bit 15 too: has() reads it */
+  case JSN_NEAR_TRAITS: {
+    int k = js_nearest_item(j, i, 0);
+    return k >= 0 ? (int16_t)j->placed[k].tags : 0;
+  }
+  case JSN_NEW_TRAITS: return (int16_t)j->newtraits;
+  case JSN_MUSIC:     return j->music;
+  case JSN_JAMMED:    return j->jammed;
+  case JSN_SULKING:   return j->sulk;
   default:            return 0;
   }
 }
 
 static JS_OPT int js_speed(const JPlaced *p) {
   return p->speed == JSP_SLOW ? 5 : p->speed == JSP_FAST ? 19 : 10;
+}
+
+/* Ants scatter: those not already gone run off, dropping what they carry. */
+static JS_OPT void js_scatter_ants(Jar *j, int x, int reach) {
+  int k;
+  for (k = 0; k < JS_ANTS; k++)
+    if (j->ant_st[k] && j->ant_st[k] != 3 && (reach < 0 || js_abs(j->ant_x[k] / 16 - x) <= reach)) {
+      if (j->ant_st[k] == 2 && j->ant_bed[k] < j->nbeds) j->bed[j->ant_bed[k]].ready = 1;  /* dropped */
+      j->ant_st[k] = 3;
+    }
+}
+
+/* Item i flings the nearest small thing it can reach: an ant, else a placed
+ * critter or floor thing (not a big one) -- up and away, to land and bump. */
+static JS_OPT int js_throw(Jar *j, int i) {
+  JPlaced *p = &j->placed[i];
+  int x = p->x / JS_FX, k, best = -1, bd = 33;
+  if (j->world == JWD_ANTS) {
+    for (k = 0; k < JS_ANTS; k++)
+      if (j->ant_st[k] && j->ant_st[k] != 3 && js_abs(j->ant_x[k] / 16 - x) <= 32) {
+        js_scatter_ants(j, x, 32);
+        return 0;
+      }
+  }
+  for (k = 0; k < j->nplaced; k++) {
+    const JPlaced *q = &j->placed[k];
+    int d;
+    if (k == i || q->kind == JK_HANGING || (q->tags & JT_BIT(JT_BIG)) || q->level != p->level ||
+        q->yoff || q->vy)
+      continue;
+    d = js_abs(q->x / JS_FX - x);
+    if (d < bd) { bd = d; best = k; }
+  }
+  if (best < 0) return -1;
+  {
+    JPlaced *q = &j->placed[best];
+    int dir = q->x >= p->x ? 1 : -1;
+    q->vy = (int16_t)js_isqrt(2 * 6 * 22 * 16);       /* about 22 px up */
+    q->vx = (int16_t)(dir * js_rr(j, 60, 110));       /* and 1 to 2 px a step along */
+    q->moving = 0;
+    js_particle(j, JP_PUFF, q->x / JS_FX, js_item_y(j, best) + 6);
+  }
+  return 0;
+}
+
+/* The jar shakes: everything on the ground hops, ants scatter. */
+static JS_OPT void js_shake(Jar *j) {
+  int k;
+  j->shake_t = 12;
+  for (k = 0; k < j->nplaced; k++) {
+    JPlaced *q = &j->placed[k];
+    if (q->kind != JK_HANGING && !q->yoff && !q->vy) q->vy = (int16_t)js_isqrt(2 * 6 * 4 * 16);
+  }
+  js_scatter_ants(j, 0, -1);
 }
 
 /* Do something, as item i (spec, "Actions"). The one way a habit, and later
@@ -741,6 +875,97 @@ static JS_OPT int js_act(Jar *j, int i, int action, int arg) {
     js_say(j, JW_ITEM + i, arg);
     return 0;
   case JA_WAIT: p->wait = (int16_t)(js_clamp(arg, 0, 400) * JS_ITEM_TICK); return 0;
+  case JA_SOUND:
+    if (arg < 1 || arg > JSD_KINDS) return -1;
+    j->snd = (uint8_t)arg;
+    return 0;
+  case JA_BURST: {
+    int k, t = arg >= 0 && arg < JP_KINDS ? arg : JP_SPARKLE;
+    for (k = 0; k < 10; k++) {
+      int s = js_particle(j, t, x, y - 8);
+      j->part[s].vx = (int8_t)js_rr(j, -14, 14);
+      j->part[s].vy = (int8_t)js_rr(j, -20, 0);
+      j->part[s].life = (uint8_t)js_rr(j, 20, 36);
+    }
+    return 0;
+  }
+  case JA_THROW: return js_throw(j, i);
+  case JA_EAT: {
+    int k, best = -1, bd = 25;
+    for (k = 0; k < j->nbeds; k++) {
+      int d = js_abs(JS_BED_X(k) - x);
+      if (j->bed[k].ready && !j->bed[k].mould && d < bd && p->kind != JK_HANGING) { bd = d; best = k; }
+    }
+    if (best < 0) return -1;
+    j->bed[best].ready = 0;
+    j->bed[best].claimed = 0;
+    j->bed[best].grow = 0;
+    if (p->fed < 255) p->fed++;
+    js_particle(j, JP_HEART, x, y - 10);
+    return 0;
+  }
+  case JA_DROP: {
+    int k, s = -1, best = -1, bd = 41;
+    if (p->kind == JK_HANGING) return -1;
+    for (k = 0; k < JS_PELLETS; k++) if (!j->pel_t[k]) { s = k; break; }
+    if (s < 0) return -1;
+    j->pel_x[s] = (int16_t)x;
+    j->pel_t[s] = (uint16_t)(90 * JS_HZ);
+    for (k = 0; k < j->nbeds; k++) {
+      int d = js_abs(JS_BED_X(k) - x);
+      if (d < bd) { bd = d; best = k; }
+    }
+    if (best >= 0 && !j->bed[best].ready && !j->bed[best].young)
+      j->bed[best].grow += JS_GROW_MS / 3;          /* fed: it ripens sooner */
+    return 0;
+  }
+  case JA_SIGNAL:
+    if (arg < 1 || arg > 255) return -1;
+    j->sig_n = (uint8_t)arg;                         /* heard next step: no recursion */
+    j->sig_from = (int8_t)i;
+    return 0;
+  case JA_SEEK: {
+    int k, best = -1, bd = 9999;
+    if (p->kind != JK_CRITTER || arg < 0 || arg >= JT_KINDS) return -1;
+    for (k = 0; k < j->nplaced; k++) {
+      int d;
+      if (k == i || !(j->placed[k].tags & JT_BIT(arg)) || j->placed[k].level != p->level) continue;
+      d = js_abs(j->placed[k].x / JS_FX - x);
+      if (d < bd) { bd = d; best = k; }
+    }
+    if (best < 0) return -1;
+    js_range(p, &lo, &hi);
+    p->tx = (int32_t)js_clamp(j->placed[best].x / JS_FX + (j->placed[best].x / JS_FX > x ? -10 : 10),
+                              lo, hi) * JS_FX;
+    p->moving = 1;
+    return 0;
+  }
+  case JA_FLY:
+    if (!p->part) return -1;
+    if (p->pst == 0) { p->px = (int16_t)(x * 16); p->py = (int16_t)((y - 6) * 16); }
+    p->pst = 1;
+    p->pt = (int16_t)js_rr(j, 8 * JS_HZ, 20 * JS_HZ);
+    p->ptx = (int16_t)(js_rr(j, 20, 220) * 16);
+    p->pty = (int16_t)(js_rr(j, 20, 90) * 16);
+    return 0;
+  case JA_HOME:
+    if (!p->part || p->pst == 0) return -1;
+    p->pst = 2;
+    return 0;
+  case JA_BOOST:
+    if (j->boost_cd > 0) return -1;
+    j->belt_boost = (int16_t)(js_clamp(arg > 0 ? arg : 10, 1, 30) * JS_HZ);
+    j->boost_cd = (int16_t)(60 * JS_HZ);
+    return 0;
+  case JA_NUDGE:
+    if (!j->sulk) return -1;
+    j->sulk = 0;
+    j->snail.boost = JS_BOOST_STEPS;
+    js_say(j, JW_SNAIL, JS_SAY_YAY);
+    return 0;
+  case JA_SHAKE:
+    js_shake(j);
+    return 0;
   default: return -1;
   }
 }
@@ -806,7 +1031,8 @@ static JS_OPT int js_item_event(Jar *j, int i, int ev, int arg) {
       int per = hb->earg ? hb->earg : 1;
       if ((arg + p->phase) % per) continue;
     } else if (hb->earg && hb->earg != arg && (ev == JE_NEAR || ev == JE_JAM || ev == JE_TIME ||
-                                                ev == JE_WEATHER)) {
+                                                ev == JE_WEATHER || ev == JE_HOUR ||
+                                                ev == JE_SIGNAL || ev == JE_WORLD)) {
       continue;
     }
     js_act(j, i, hb->action, hb->aarg);
@@ -969,6 +1195,10 @@ static JS_OPT void js_init(Jar *j, uint32_t seed) {
   j->fixer[0] = j->fixer[1] = -1;
   j->jam_clock = js_rr(j, 120, 240) * JS_HZ;
   j->nap_clock = js_rr(j, 60, 150) * JS_HZ;
+  j->world_clock = js_rr(j, 20, 60) * 60 * JS_HZ;
+  j->sulk_clock = js_rr(j, 40, 80) * 60 * JS_HZ;
+  j->mould_clock = js_rr(j, 60, 120) * 60 * JS_HZ;
+  j->sig_from = -1;
   j->chat_cd = (int16_t)(15 * JS_HZ);
   j->reply_who = -1;
   for (i = 0; i < JS_FLIES; i++) {
@@ -1014,6 +1244,50 @@ static JS_OPT void js_set_weather(Jar *j, int w) {
   if (w) js_event(j, JE_WEATHER, w);
 }
 
+/* The real hour, 0..23 or -1 (the app hands it in; js_set_minute's minute is
+ * moved to the real sunrise). On the hour is an event: `on hour 18:`. */
+static JS_OPT void js_set_hour(Jar *j, int hour) {
+  int h1 = hour >= 0 && hour < 24 ? hour + 1 : 0;
+  if (h1 == j->hour1) return;
+  j->hour1 = (uint8_t)h1;
+  if (h1) js_event(j, JE_HOUR, h1);
+}
+
+/* The player put item i in the jar just now: the others hear `on new`. */
+static JS_OPT void js_announce(Jar *j, int i) {
+  int k;
+  if (i < 0 || i >= j->nplaced) return;
+  j->newtraits = j->placed[i].tags;
+  for (k = 0; k < j->nplaced; k++) if (k != i) js_item_event(j, k, JE_NEW, 0);
+}
+
+/* What needs the player now: JC_* bits. Production waits on them -- nothing
+ * is lost, it only stops making -- so a jar left open all night stops. */
+static JS_OPT int js_chores(const Jar *j) {
+  int k, m = 0;
+  if (j->sulk) m |= JC_SULK;
+  if (j->puddle >= 20) m |= JC_PUDDLE;
+  for (k = 0; k < j->nbeds; k++) if (j->bed[k].mould) m |= JC_MOULD;
+  return m;
+}
+
+/* The player sees to a chore. 0, or -1 if there was nothing to do. */
+static JS_OPT int js_fix(Jar *j, int chore) {
+  int k, did = 0;
+  if ((chore & JC_SULK) && j->sulk) {
+    j->sulk = 0;
+    j->snail.boost = JS_BOOST_STEPS;
+    js_say(j, JW_SNAIL, JS_SAY_YAY);
+    did = 1;
+  }
+  if ((chore & JC_PUDDLE) && j->puddle) { j->puddle = 0; did = 1; }
+  if (chore & JC_MOULD)
+    for (k = 0; k < j->nbeds; k++)
+      if (j->bed[k].mould) { j->bed[k].mould = 0; did = 1; }
+  if (did) js_say(j, 0, JS_SAY_FIXED);
+  return did ? 0 : -1;
+}
+
 /* ---- one step ------------------------------------------------------------ */
 
 /* The snail leaves the screen: the only place coins are made. */
@@ -1031,9 +1305,9 @@ static JS_OPT void js_step_beds(Jar *j) {
   int i;
   for (i = 0; i < j->nbeds; i++) {
     JBed *b = &j->bed[i];
-    if (b->ready || b->young) continue;
+    if (b->ready || b->young || b->mould || j->puddle >= 20) continue;
     b->grow += JS_STEP_MS;
-    if (b->grow >= JS_GROW_MS) { b->grow = JS_GROW_MS; b->ready = 1; }
+    if (b->grow >= JS_GROW_MS) { b->grow = JS_GROW_MS; b->ready = 1; js_event(j, JE_BERRY, 0); }
   }
 }
 
@@ -1096,9 +1370,11 @@ static JS_OPT void js_step_moss(Jar *j, int k) {
   }
   case M_TO_BED:
     moving = 1;
+    if (!j->bed[m->bed].ready) { m->st = M_IDLE; m->bed = -1; m->t = 0; break; }  /* eaten, or ants */
     if (js_walk(&m->x, m->tx, spd, &m->face)) { m->st = M_PICK; m->t = JS_PICK_STEPS; }
     break;
   case M_PICK:
+    if (!j->bed[m->bed].ready) { m->st = M_IDLE; m->bed = -1; m->t = 0; break; }
     if (--m->t <= 0) {
       JBed *b = &j->bed[m->bed];
       b->ready = 0;
@@ -1159,8 +1435,11 @@ static JS_OPT void js_step_moss(Jar *j, int k) {
 
 static JS_OPT void js_step_works(Jar *j) {
   int i, k, stage = js_stage_steps(j->nmach, j->belt);
+  int spd = JS_BELT_SPD[j->belt];
+  if (j->belt_boost > 0 || j->world == JWD_BREEZE) spd *= 2;
+  if (j->puddle >= 40) spd /= 2;
   /* The belt: units ride to their machine and go in when it is free. */
-  if (!j->jammed) j->belt_pos += JS_BELT_SPD[j->belt];
+  if (!j->jammed) j->belt_pos += spd;
   for (i = 0; i < JS_UNITS; i++) {
     JUnit *u = &j->unit[i];
     int32_t stop;
@@ -1180,7 +1459,7 @@ static JS_OPT void js_step_works(Jar *j) {
       if (k != i && j->unit[k].to == u->to && j->unit[k].x > u->x &&
           j->unit[k].x - u->x < 8 * JS_FX) blocked = 1;
     if (!blocked) {
-      u->x += JS_BELT_SPD[j->belt];
+      u->x += spd;
       if (u->x > stop) u->x = stop;
     }
   }
@@ -1235,6 +1514,10 @@ static JS_OPT void js_step_snail(Jar *j) {
       break;
     }
     if (j->dock == 0) { s->t = 0; j->pile0 = 0; break; }
+    if (j->sulk) {                                 /* a chore: it will not go out */
+      if ((j->steps % (20 * JS_HZ)) == 0) js_say(j, JW_SNAIL, JS_SAY_SIGH);
+      break;
+    }
     if (j->dock >= 3 || ++s->t >= 6 * JS_HZ) {
       uint32_t cap = 3;
       if (j->dock > 6) {
@@ -1362,6 +1645,45 @@ static JS_OPT int js_maybe_climb(Jar *j, int i) {
   return 1;
 }
 
+/* An item's part (the bird of a birdhouse): out, it wanders the jar and
+ * comes home when its time is up; home, now and then it goes out on its own
+ * (a script's `fly`/`home` steer it too). */
+static JS_OPT void js_step_part(Jar *j, JPlaced *p) {
+  int hx = (p->x / JS_FX) * 16, hy = (JS_SOIL - 20 - p->lift) * 16;
+  if (p->kind == JK_HANGING) hy = (JS_LID + p->home_y + 4) * 16;
+  if (p->pst == 0) {
+    p->px = (int16_t)hx;
+    p->py = (int16_t)hy;
+    if (--p->pt <= 0) {
+      p->pt = (int16_t)js_rr(j, 20 * JS_HZ, 60 * JS_HZ);
+      if (js_rr(j, 0, 2)) {                          /* off it goes */
+        p->pst = 1;
+        p->pt = (int16_t)js_rr(j, 8 * JS_HZ, 20 * JS_HZ);
+        p->ptx = (int16_t)(js_rr(j, 20, 220) * 16);
+        p->pty = (int16_t)(js_rr(j, 20, 90) * 16);
+      }
+    }
+    return;
+  }
+  if (p->pst == 1) {
+    if (--p->pt <= 0) p->pst = 2;
+    if (js_abs(p->px - p->ptx) < 32 && js_abs(p->py - p->pty) < 32) {
+      p->ptx = (int16_t)(js_rr(j, 20, 220) * 16);
+      p->pty = (int16_t)(js_rr(j, 20, 90) * 16);
+    }
+  } else {
+    p->ptx = (int16_t)hx;
+    p->pty = (int16_t)hy;
+    if (js_abs(p->px - hx) < 24 && js_abs(p->py - hy) < 24) {
+      p->pst = 0;
+      p->pt = (int16_t)js_rr(j, 20 * JS_HZ, 60 * JS_HZ);
+      return;
+    }
+  }
+  p->px = (int16_t)(p->px + js_clamp(p->ptx - p->px, -20, 20));
+  p->py = (int16_t)(p->py + js_clamp(p->pty - p->py, -14, 14) + (int)((j->steps >> 2) & 1) * 4 - 2);
+}
+
 static JS_OPT void js_step_item(Jar *j, int i) {
   JPlaced *p = &j->placed[i];
   int lo, hi, spd = js_speed(p);
@@ -1370,8 +1692,26 @@ static JS_OPT void js_step_item(Jar *j, int i) {
   if (p->vy || p->yoff) {
     p->yoff = (int16_t)(p->yoff + p->vy);
     p->vy = (int16_t)(p->vy - 6);
-    if (p->yoff <= 0) { p->yoff = 0; p->vy = 0; }
+    if (p->vx) p->x = js_clamp(p->x + p->vx, 10 * JS_FX, 230 * JS_FX);
+    if (p->yoff <= 0) {
+      p->yoff = 0;
+      p->vy = 0;
+      if (p->vx) {                                 /* a thrown thing lands: a bump */
+        int k, d;
+        p->vx = 0;
+        p->tx = p->x;
+        js_particle(j, JP_PUFF, p->x / JS_FX, js_item_y(j, i) + 6);
+        js_item_event(j, i, JE_BUMPED, 0);
+        k = js_nearest_item(j, i, &d);
+        if (k >= 0 && d <= 16) js_item_event(j, k, JE_BUMPED, 0);
+      }
+    }
+  } else if (p->kind != JK_CRITTER && p->x != (int32_t)p->home_x * JS_FX) {
+    /* decor knocked from its place drifts back to it */
+    int32_t h = (int32_t)p->home_x * JS_FX;
+    p->x += p->x < h ? (h - p->x < 32 ? h - p->x : 32) : -(p->x - h < 32 ? p->x - h : 32);
   }
+  if (p->part) js_step_part(j, p);
   p->phase = (int16_t)((p->phase + (p->speed + 1)) & 1023);
   if (p->wait > 0) { p->wait--; p->moving = 0; return; }
   if (js_step_climb(j, i)) return;
@@ -1516,11 +1856,117 @@ static JS_OPT void js_step_air(Jar *j) {
     }
 }
 
+/* A world event begins (JWD_*): set up, then every item hears `on world`. */
+static JS_OPT void js_world_begin(Jar *j, int w) {
+  int k;
+  j->world = (uint8_t)w;
+  switch (w) {
+  case JWD_ANTS:
+    j->world_t = 3 * 60 * JS_HZ;
+    for (k = 0; k < JS_ANTS; k++) {
+      j->ant_x[k] = (int16_t)((4 - 9 * k) * 16);     /* in single file, from the left */
+      j->ant_st[k] = 1;
+      j->ant_bed[k] = (uint8_t)(j->nbeds ? js_rr(j, 0, j->nbeds - 1) : 0);
+    }
+    js_say(j, 0, JS_SAY_ANTS);
+    break;
+  case JWD_LEAK:    j->world_t = 90 * JS_HZ; break;
+  case JWD_BREEZE:  j->world_t = 60 * JS_HZ; break;
+  case JWD_VISITOR:                                  /* leaves jars on the dock: coins are */
+    j->world_t = 30 * JS_HZ;                         /* still only jars that left (js_ship) */
+    j->dock += (uint32_t)(js_rr(j, 3, 8) + j->nplaced / 3);
+    js_particle(j, JP_HEART, JS_PILE_X, JS_SOIL - 30);
+    break;
+  case JWD_DARK:    j->world_t = 60 * JS_HZ; break;
+  case JWD_BLOOM:
+    j->world_t = 10 * JS_HZ;
+    for (k = 0; k < j->nbeds; k++)
+      if (!j->bed[k].young && !j->bed[k].mould) { j->bed[k].ready = 1; j->bed[k].grow = JS_GROW_MS; }
+    break;
+  }
+  js_event(j, JE_WORLD, w);
+}
+
+/* The world's clock: the event going on, the next one, the chores coming
+ * due, signals, pellets. The weather outside makes a leak likelier. */
+static JS_OPT void js_step_world(Jar *j) {
+  int k;
+  if (j->belt_boost > 0) j->belt_boost--;
+  if (j->boost_cd > 0) j->boost_cd--;
+  if (j->shake_t > 0) j->shake_t--;
+  for (k = 0; k < JS_PELLETS; k++) if (j->pel_t[k]) j->pel_t[k]--;
+  if (j->sig_n) {
+    int n = j->sig_n, from = j->sig_from;
+    j->sig_n = 0;
+    for (k = 0; k < j->nplaced; k++) if (k != from) js_item_event(j, k, JE_SIGNAL, n);
+  }
+  if (j->world) {
+    if (j->world == JWD_LEAK && j->puddle < 60 && (j->steps % (2 * JS_HZ)) == 0) j->puddle++;
+    if (j->world == JWD_ANTS) {
+      int left = 0;
+      for (k = 0; k < JS_ANTS; k++) {
+        int bx = JS_BED_X(j->ant_bed[k] < j->nbeds ? j->ant_bed[k] : 0) * 16;
+        switch (j->ant_st[k]) {
+        case 1:                                        /* marching in */
+          left = 1;
+          if (j->ant_x[k] < bx) { j->ant_x[k] += 5; break; }
+          if (j->ant_bed[k] < j->nbeds && j->bed[j->ant_bed[k]].ready) {
+            j->bed[j->ant_bed[k]].ready = 0;           /* a berry, carried off */
+            j->bed[j->ant_bed[k]].claimed = 0;
+            j->bed[j->ant_bed[k]].grow = 0;
+            j->ant_st[k] = 2;
+          } else {                                     /* gone: another ripe one, or home */
+            int b, to = -1;
+            for (b = 0; b < j->nbeds; b++) if (j->bed[b].ready) { to = b; break; }
+            if (to >= 0) j->ant_bed[k] = (uint8_t)to;
+            else j->ant_st[k] = 3;
+          }
+          break;
+        case 2:                                        /* carrying off */
+        case 3:                                        /* fleeing */
+          left = 1;
+          j->ant_x[k] -= j->ant_st[k] == 3 ? 14 : 4;
+          if (j->ant_x[k] < -8 * 16) j->ant_st[k] = 0;
+          break;
+        }
+      }
+      if (!left) j->world_t = 0;
+    }
+    if (--j->world_t <= 0) {
+      js_scatter_ants(j, 0, -1);
+      for (k = 0; k < JS_ANTS; k++) j->ant_st[k] = 0;
+      j->world = 0;
+    }
+  } else if (--j->world_clock <= 0) {
+    static const uint8_t WEIGHT[JWD_KINDS] = { 0, 3, 2, 3, 3, 2, 2 };
+    int total = 0, r, w = JWD_BREEZE;
+    for (k = 1; k < JWD_KINDS; k++)
+      total += WEIGHT[k] + (k == JWD_LEAK && j->weather >= 4 ? 4 : 0);   /* rainy, snowy, stormy */
+    r = js_rr(j, 0, total - 1);
+    for (k = 1; k < JWD_KINDS; k++) {
+      r -= WEIGHT[k] + (k == JWD_LEAK && j->weather >= 4 ? 4 : 0);
+      if (r < 0) { w = k; break; }
+    }
+    j->world_clock = js_rr(j, 20, 60) * 60 * JS_HZ;
+    js_world_begin(j, w);
+  }
+  if (!j->sulk && --j->sulk_clock <= 0) {
+    j->sulk = 1;
+    j->sulk_clock = js_rr(j, 40, 80) * 60 * JS_HZ;
+    js_say(j, JW_SNAIL, JS_SAY_SIGH);
+  }
+  if (--j->mould_clock <= 0) {
+    j->mould_clock = js_rr(j, 60, 120) * 60 * JS_HZ;
+    if (j->nbeds) j->bed[js_rr(j, 0, j->nbeds - 1)].mould = 1;
+  }
+}
+
 /* One step of jar time. */
 static JS_OPT void js_step(Jar *j) {
   int k;
   j->steps++;
   if (j->nap_clock > 0) j->nap_clock--;
+  js_step_world(j);
   js_step_beds(j);
   for (k = 0; k < j->nmoss; k++) js_step_moss(j, k);
   js_step_works(j);

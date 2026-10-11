@@ -89,7 +89,7 @@ enum { JZ_GARDEN = 0, JZ_WORKS, JZ_DOCK, JZ_WATER, JZ_HIGH, JZ_ANYWHERE, JZ_KIND
  *   time     0 any change, then 1 dawn, 2 day, 3 dusk, 4 night
  * and is ignored by the rest. */
 enum { JE_TICK = 0, JE_POKE, JE_NEAR, JE_SHIPPED, JE_JAM, JE_GIFT, JE_TIME,
-       JE_WEATHER, JE_KINDS };
+       JE_WEATHER, JE_HOUR, JE_SIGNAL, JE_WORLD, JE_NEW, JE_BERRY, JE_BUMPED, JE_KINDS };
 enum { JN_ANY = 0, JN_MOSS, JN_SNAIL, JN_CRITTER, JN_DECOR };
 
 /* The actions (spec, "Actions"), with what the argument means:
@@ -100,7 +100,9 @@ enum { JN_ANY = 0, JN_MOSS, JN_SNAIL, JN_CRITTER, JN_DECOR };
  *   particle JP_* below                     say      bubble N for 2 s
  *   wait     N ticks */
 enum { JA_NONE = 0, JA_HOP, JA_WALK, JA_FLOAT, JA_FACE, JA_STOP, JA_FRAME,
-       JA_FLIP, JA_GLOW, JA_PARTICLE, JA_SAY, JA_WAIT, JA_KINDS };
+       JA_FLIP, JA_GLOW, JA_PARTICLE, JA_SAY, JA_WAIT,
+       JA_SOUND, JA_BURST, JA_THROW, JA_EAT, JA_DROP, JA_SIGNAL, JA_SEEK, JA_FLY, JA_HOME,
+       JA_BOOST, JA_NUDGE, JA_SHAKE, JA_KINDS };
 enum { JP_SPARKLE = 0, JP_HEART, JP_NOTE, JP_ZZZ, JP_PUFF, JP_KINDS };
 
 #define JIF_GIFT     0x01

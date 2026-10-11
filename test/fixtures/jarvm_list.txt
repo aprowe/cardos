@@ -2,7 +2,9 @@ statements
 arith
 branches
 limit
+v2
 clamp
+bit_range
 loop
 underflow
 overflow
