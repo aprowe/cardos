@@ -239,6 +239,18 @@ largest overlay <= 28 KB. Apps are linked `ld -n`. Design:
 `docs/superpowers/specs/2026-10-10-app-constants-in-flash-design.md`,
 `docs/superpowers/specs/2026-10-10-app-data-overlays-design.md`.
 
+**Big-app mode** (2026-10-11, API 47, `kernel/app/bigmode.c`,
+host-tested). An app with `CAPP_BIG` in its flags, while it is the app on
+screen, may take up to 8 blocks of the general heap for its lifetime
+(`api->big_alloc`, zeroed; `api->big_room` says how much, keeping 24 KB
+back for WiFi and requests); entering lets go of the code block Today
+keeps and the Bluetooth radio unless something holds it
+(`capprun_big_let_go`, logged as "big"); the app's release frees its
+blocks. Its data stays in the arena -- a big block is reached through a
+pointer, so XIP's fixed data address is untouched. The kernel's static
+tables (icon cache, app table) are not given back yet. Jar Factory is
+the first big app and logs "big room N" at launch.
+
 **Redundant redrawing is an OS problem, not an app problem.** The shell used
 to hand every app its whole rectangle as the clip on every event, so a
 keypress redrew a screen — and three apps grew their own `expect_paint`
@@ -743,7 +755,7 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36), `motion` (37), `midi` (38), `notify` (39), `notify_at`/`notify_cancel` (40), `update_apply_progress` (41), `firmware_boot` (42), `link` (43), `sig_verify` (44), `paint_direct` (45), and `overlay`/`overlay_live` (46), which came with constants moving to their own link origin. A new capp_info flag bit (`CAPP_PAINT_DIRECT`) is not an API change; neither is clamping what `http_poll` returns.
+`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36), `motion` (37), `midi` (38), `notify` (39), `notify_at`/`notify_cancel` (40), `update_apply_progress` (41), `firmware_boot` (42), `link` (43), `sig_verify` (44), `paint_direct` (45), `overlay`/`overlay_live` (46), which came with constants moving to their own link origin, and `big_alloc`/`big_room` (47, big-app mode). A new capp_info flag bit (`CAPP_PAINT_DIRECT`) is not an API change; neither is clamping what `http_poll` returns.
 
 **Fonts are files an app asks for** (2026-09-23). The 6x8 console font is
 still compiled in and still the default; anything nicer is a `.cfnt` in

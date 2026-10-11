@@ -148,6 +148,13 @@ int fakeapi_paint_direct = -1;
 static void d_paint_direct(int on) { fakeapi_paint_direct = on; }
 static int d_overlay(int n, int flags) { (void)n; (void)flags; return -1; }   /* no overlays */
 static int d_overlay_live(void) { return -1; }
+/* Big-app mode on the host: plain malloc, no reserve -- the tests of an app
+ * that asks see what it does with the memory, not the device's heap. */
+int fakeapi_big_room = 64 * 1024;
+static void *d_big_alloc(size_t n) {
+  return (int)n <= fakeapi_big_room ? calloc(1, n) : NULL;
+}
+static size_t d_big_room(void) { return (size_t)fakeapi_big_room; }
 static int d_sig_verify(const uint8_t pub[65], const void *m, size_t n, const uint8_t sig[64]) {
   (void)pub; (void)m; (void)n; (void)sig;
   return -1;                                   /* could not check */
@@ -231,6 +238,9 @@ void fakeapi_init(CardApi *a) {
   a->paint_direct = d_paint_direct;
   a->overlay = d_overlay;
   a->overlay_live = d_overlay_live;
+  a->big_alloc = d_big_alloc;
+  a->big_room = d_big_room;
+  fakeapi_big_room = 64 * 1024;
   fakeapi_paint_direct = -1;
   a->key_repeat = d_key_repeat;
   a->key_pending = d_key_pending;

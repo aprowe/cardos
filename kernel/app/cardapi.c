@@ -26,6 +26,7 @@
 #include "kernel/sys/audio.h"
 #include "kernel/drv/speaker.h"
 #include "kernel/sys/sio.h"
+#include "kernel/app/bigmode.h"
 #include "kernel/app/capprun.h"
 #include "kernel/sys/applog.h"
 #include "kernel/ui/launchui.h"
@@ -351,6 +352,14 @@ static void upd_say_progress(void *ctx, const char *line) {
 
 /* ECDSA P-256 over SHA-256 through PSA, which the firmware carries for TLS
  * anyway. The key is imported for this one check and destroyed. */
+static void *api_big_alloc(size_t n) {
+  void *p = bigmode_alloc(capprun_executing(), n);
+  if (p) memset(p, 0, n);
+  return p;
+}
+
+static size_t api_big_room(void) { return bigmode_room(capprun_executing()); }
+
 static int api_sig_verify(const uint8_t pub[65], const void *msg, size_t n, const uint8_t sig[64]) {
   psa_key_attributes_t at = PSA_KEY_ATTRIBUTES_INIT;
   psa_key_id_t key = 0;
@@ -628,6 +637,8 @@ static const CardApi API = {
   capprun_set_paint_direct,
   capprun_overlay,
   capprun_overlay_live,
+  api_big_alloc,
+  api_big_room,
 };
 
 const CardApi *cardos_api(void) { return &API; }

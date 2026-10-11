@@ -1522,7 +1522,7 @@ static void load(void) {
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
-  CAPP_FULLSCREEN | CAPP_PAINT_DIRECT,   /* composes its own strips */
+  CAPP_FULLSCREEN | CAPP_PAINT_DIRECT | CAPP_BIG,   /* composes its own strips; a big app */
   "Jar Factory",
   /* 16x16: a jar with a lid, a sprout and a berry bush inside. */
   { 0x3F, 0xFC, 0x20, 0x04, 0x3F, 0xFC, 0x10, 0x08,
@@ -1715,6 +1715,13 @@ static CappUi UI;
 int capp_main(const CardApi *a, int argc, char **argv) {
   const char *s = argc > 1 && argv[1] ? argv[1] : "";
   api = a;
+  {
+    /* Big-app mode (CAPP_BIG): what the heap would give us, logged once a
+     * launch -- the measure before the world grows into it. */
+    char m[48];
+    api->fmt(m, sizeof m, "big room %u bytes", (unsigned)api->big_room());
+    api->log(m);
+  }
   /* Jar Shop and Jar Post were apps until they became screens here: the
    * card's old copies would only be refused (an older API), so they go. */
   api->remove("/apps/Games/jarshop.capp");

@@ -121,6 +121,9 @@ static inline const void *capprun_caller(void) { return capprun_executing(); }
  * capprun_executing() gave out, before the app's code is unloaded. Register
  * at boot, before any app runs; there is room for CAPPRUN_ON_RELEASE. */
 #define CAPPRUN_ON_RELEASE 12
+
+/* Big-app mode's let-go (bigmode_on_enter registers it at boot). */
+void           capprun_big_let_go(void);
 int            capprun_on_release(void (*fn)(const void *owner));
 
 /* Its name, for a log line. "app" when no app code is running. */

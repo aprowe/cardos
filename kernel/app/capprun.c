@@ -21,6 +21,7 @@
 #include "kernel/sys/applog.h"
 #include "kernel/app/xipflash.h"
 #include "kernel/app/ovl.h"
+#include "kernel/app/bigmode.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -784,6 +785,19 @@ static void make_room(void) {
           (unsigned)after, (unsigned)before8, (unsigned)after8);
 }
 
+/* A big app came on screen (bigmode.h): let go of what can come back --
+ * the code block Today keeps (unless a run holds it), the Bluetooth radio
+ * (unless a print, a mouse or a keyboard holds it). WiFi stays: the big app
+ * on screen is usually the one that wants it. */
+void capprun_big_let_go(void) {
+  size_t before = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  if (s_hold_owner == NULL) capp_hold_code(0);
+  if (!printq_busy()) bt_radio_down();
+  applogf("big", "let go: largest %u -> %u, free %u", (unsigned)before,
+          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+          (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+}
+
 static int ensure_loaded(Run *s, int foreground) {
   CappResult r;
   if (s->loaded) return 0;
@@ -809,6 +823,8 @@ static int ensure_loaded(Run *s, int foreground) {
     return -1;
   }
   run_loaded(s);
+  if (foreground == 1 && s->la.info && (s->la.info->flags & CAPP_BIG))
+    bigmode_enter(s);                  /* on screen, and big: it may take the heap */
   return 0;
 }
 

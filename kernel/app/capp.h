@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 46
+#define CAPP_API_VERSION 47
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -94,6 +94,13 @@ typedef struct {
  * paint (Photo and Web read the card), sets this and is called once, as
  * before. A flag, not an API change: older apps simply do not have it. */
 #define CAPP_PAINT_DIRECT 0x0020
+/* A big app (2026-10-11): while it is the app on screen it may take blocks
+ * of the general heap for its lifetime -- api->big_alloc, api->big_room --
+ * and the OS lets go of what it can rebuild (the code block Today keeps,
+ * the Bluetooth radio unless something holds it). Its data still lives in
+ * the arena; a big block is reached through a pointer. Jar Factory is one.
+ * kernel/app/bigmode.h. */
+#define CAPP_BIG 0x0080
 
 /* Data overlays (API 46): docs/superpowers/specs/2026-10-10-app-data-overlays-design.md.
  *
@@ -1005,6 +1012,16 @@ typedef struct {
    * change, never a frame. */
   int (*overlay)(int n, int flags);
   int (*overlay_live)(void);
+
+  /* ---- big-app mode (API 47) ----
+   *
+   * For an app with CAPP_BIG in its flags, while it is the app on screen:
+   * big_alloc(n) a block of n bytes, zeroed, that stays until the app
+   * closes (at most 8; NULL when it would leave the OS less than 24 KB, or
+   * the caller is not the big app on screen); big_room() how much one block
+   * could be now, 0 if none. There is no free: the app's blocks go with it. */
+  void  *(*big_alloc)(size_t n);
+  size_t (*big_room)(void);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

@@ -42,6 +42,7 @@ extern int      fakeapi_repeat;       /* what key_repeat() returns */
 extern int      fakeapi_headless;     /* what headless() returns */
 extern int      fakeapi_key_pending;  /* what key_pending() returns */
 extern int      fakeapi_paint_direct; /* the last paint_direct(on); -1 never called */
+extern int      fakeapi_big_room;     /* what big_room says and big_alloc gives up to */
 extern char     fakeapi_out[4096];    /* what out() and out_line() wrote */
 extern CRect    fakeapi_screen;       /* what paint_area() returns: 240x135 */
 

@@ -74,6 +74,7 @@
 #include "nvs_flash.h"
 #include "kernel/drv/bthid.h"
 #include "kernel/drv/speaker.h"
+#include "kernel/app/bigmode.h"
 
 /* Long enough for the lines a tool sends rather than the ones a person types.
  * At 63 a Google client ID -- 72 characters on its own, 81 with the command in
@@ -1397,6 +1398,11 @@ static int rest_ms(void) {
   return a && a->tick ? 5 : 25;
 }
 
+/* Big-app mode's heap: the 8-bit internal heap the arena and apps share. */
+static void *big_heap_alloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_8BIT); }
+static void big_heap_free(void *p) { heap_caps_free(p); }
+static size_t big_heap_largest(void) { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); }
+
 void app_main(void) {
   size_t heap_at_boot;
   const char *nvs_erased = NULL;    /* why, if this boot wiped the settings */
@@ -1608,6 +1614,14 @@ void app_main(void) {
   capprun_on_release(link_release_owner);    /* the ESP-NOW link, its partner told */
   capprun_on_release(power_release_owner);   /* the screen, if it held it on */
   capprun_on_release(share_app_closed);      /* the share, if it started it */
+  {
+    /* Big-app mode (kernel/app/bigmode.h): the heap it takes from, what it
+     * lets go of on entering, and its blocks freed with the app. */
+    static const BigHeap heap = { big_heap_alloc, big_heap_free, big_heap_largest };
+    bigmode_set_heap(&heap);
+    bigmode_on_enter(capprun_big_let_go);
+    capprun_on_release(bigmode_release);
+  }
   {
     static const SerlinkHooks hooks = { shell_remote, ser_open, ser_state, repaint_all };
     serlink_init(&hooks);
