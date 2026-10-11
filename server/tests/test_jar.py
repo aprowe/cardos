@@ -618,12 +618,92 @@ class Shopkeeper(unittest.TestCase):
         self.assertNotIn("Since you last spoke", self.tibbs.prompts[2])   # told once
         self.assertTrue(os.path.isdir(shopkeep.home()))      # not the repository
 
-    def test_a_lost_session_starts_again(self):
-        shopkeep.turn(None, "hello", "alex")
+    def test_a_lost_session_starts_again_from_his_notebook(self):
+        shopkeep.turn(None, "my name is Alex and I collect spoons", "alex")
         self.tibbs.answers.append(chatmod.ClaudeError("No conversation found"))
         self.assertEqual(shopkeep.turn(None, "still there?", "alex"), "Hm, I know a fellow.")
         self.assertEqual(self.tibbs.sessions[-1], None)
-        self.assertIn("gone hazy", self.tibbs.prompts[-1])
+        self.assertIn("picking up where you left off", self.tibbs.prompts[-1])
+        self.assertIn("I collect spoons", self.tibbs.prompts[-1])     # what was said, kept
+        self.assertTrue(self.tibbs.prompts[-1].endswith("still there?"))
+
+    def test_every_exchange_is_kept(self):
+        shopkeep.turn(None, "hello", "alex")
+        shopkeep.turn(None, "hi Tibbs", "sam")
+        rows = shopkeep.history(10)
+        self.assertEqual([(r["person"], r["said"], r["reply"]) for r in rows],
+                         [("alex", "hello", "Hm, I know a fellow."),
+                          ("sam", "hi Tibbs", "Hm, I know a fellow.")])
+        self.assertEqual(shopkeep.history(1)[0]["person"], "sam")
+        files = os.listdir(os.path.join(shopkeep.home(), "history"))
+        self.assertEqual(len(files), 1)
+        self.assertTrue(files[0].endswith(".jsonl"))
+        # a month later: a new file, and history reads across both
+        shopkeep.history_add("talk", "kit", "hullo", "Ah, Kit.", now=time.time() + 40 * 86400)
+        self.assertEqual([r["person"] for r in shopkeep.history(3)], ["alex", "sam", "kit"])
+
+    def test_a_long_session_is_replaced_by_a_seeded_one(self):
+        with mock.patch("server.shopkeep.ROTATE_AT", 3):
+            for i in range(3):
+                shopkeep.turn(None, "turn %d" % i, "alex")
+            self.assertEqual(self.tibbs.sessions, [None, "s1", "s1"])
+            shopkeep.turn(None, "turn 3", "alex")
+            self.assertEqual(self.tibbs.sessions[-1], None)          # fresh ...
+            self.assertIn("picking up where you left off", self.tibbs.prompts[-1])
+            self.assertIn("turn 2", self.tibbs.prompts[-1])          # ... and seeded
+            shopkeep.turn(None, "turn 4", "alex")
+            self.assertEqual(self.tibbs.sessions[-1], "s1")          # and resumed after
+
+    def test_his_notebook_is_brought_up_to_date(self):
+        shopkeep.turn(None, "I am Alex, I like spoons", "alex")
+        shopkeep.turn(None, "I am Sam, Alex's sister", "sam")
+        asked = []
+
+        def note(chat, prompt):
+            asked.append(prompt)
+            return json.dumps({"shop": "Two regulars.", "players": {
+                "alex": "Likes spoons.", "sam": "Alex's sister."}})
+
+        with mock.patch("server.shopkeep._note_ask", note):
+            self.assertTrue(shopkeep.update_notebook(None))
+            self.assertFalse(shopkeep.update_notebook(None))         # nothing new since
+        self.assertIn("I like spoons", asked[0])
+        nb = shopkeep.notebook()
+        self.assertEqual(nb["players"]["alex"], "Likes spoons.")
+        self.assertEqual(nb["shop"], "Two regulars.")
+        # a bad answer keeps the old notebook
+        shopkeep.turn(None, "anything new?", "alex")
+        with mock.patch("server.shopkeep._note_ask", lambda c, p: "not json"):
+            self.assertFalse(shopkeep.update_notebook(None))
+        self.assertEqual(shopkeep.notebook()["players"]["sam"], "Alex's sister.")
+        # and a fresh session opens with it
+        self.assertIn("Likes spoons.", shopkeep.seed())
+
+    def test_the_notebook_is_kept_every_so_many_turns(self):
+        ran = []
+        with mock.patch("server.shopkeep.NOTE_EVERY", 2), \
+                mock.patch("server.shopkeep.update_notebook", lambda c, s: ran.append(1)):
+            shopkeep.turn(object(), "a", "alex")
+            self.assertEqual(ran, [])
+            shopkeep.turn(object(), "b", "alex")
+            for _ in range(100):
+                if ran:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(ran, [1])
+
+    def test_a_bribe(self):
+        rng = random.Random(3)
+        self.assertEqual({jar.pick_tier(rng)[0] for _ in range(400)},
+                         {"common", "everyday", "rare", "treasure"})
+        self.assertNotIn("common", {jar.pick_tier(rng, 150)[0] for _ in range(400)})
+        self.assertEqual({jar.pick_tier(rng, 500)[0] for _ in range(400)}, {"rare", "treasure"})
+        self.assertEqual(jar.parse_request("finds 8\nbribe 99999\nask owls\n")["bribe"],
+                         jar.BRIBE_MAX)
+        p = shopkeep.stock_prompt("alex", [], 0, 2, random.Random(1), False,
+                                  commission="owls", bribe=300)
+        self.assertIn("slipped you 300 coins", p)
+        self.assertIn("every find answers it", p)
 
     def test_a_turn_that_fails_keeps_the_news(self):
         shopkeep.note("sam and alex are friends now.")
@@ -928,6 +1008,65 @@ class Routes(unittest.TestCase):
         # too many asked for is the most allowed; a word that fails the filter is dropped
         req = jar.parse_request("finds 99\nask shit birds\n")
         self.assertEqual((req["finds"], req.get("ask")), (jar.MAX_FINDS, None))
+
+    def test_a_deal_struck_in_conversation(self):
+        st = kv.store()
+        self.make_day(self.alex)
+        first = self.ids(self.alex, 8)
+        self.req("POST", "/jar/day?fresh=1", self.alex, "bought %d\n" % first[0])
+        self.wait_day(self.alex)
+        owl = first[0]                                   # alex owns it now
+        # He takes 300 coins and the owl, gives 50, and goes looking for brass birds.
+        deal = {"take": 300, "give": 50, "trade_in": [owl],
+                "commission": {"ask": "brass birds", "finds": 6}}
+        self.tibbs.answers.append("Done, and done.\nDEAL: " + json.dumps(deal))
+        s, body = self.req("POST", "/jar/talk", self.alex, "coins 500\nhere, 300 for brass birds")
+        self.assertEqual(body, "pending\n")
+        for _ in range(200):
+            body = self.req("GET", "/jar/talk?tx=0", self.alex)[1]
+            if body.startswith("ok"):
+                break
+            time.sleep(0.02)
+        self.assertIn("him\tDone, and done.", body)
+        self.assertNotIn("DEAL", body)                           # the tag never reaches them
+        self.assertIn("They have 500 coins, and own: %d:" % owl, self.tibbs.prompts[-1])
+        self.assertIn("tx 1 lose %d" % owl, body)
+        self.assertIn("tx 2 pay 300", body)
+        self.assertIn("tx 3 get 50", body)
+        self.assertNotIn("tx 1 ", self.req("GET", "/jar/talk?tx=1", self.alex)[1])
+        self.assertNotIn("tx ", self.req("GET", "/jar/talk", self.alex)[1])   # an old device
+        self.assertIn(owl, jar.pool_ids(st))                    # the owl is his to sell again
+        # the shop is told to ask for a fresh stock, and it is the commission
+        self.assertTrue(self.req("GET", "/jar/day", self.alex)[1].endswith("deal\n"))
+        self.req("POST", "/jar/day?fresh=1", self.alex, "")
+        body = self.wait_day(self.alex)
+        self.assertNotIn("deal\n", body)
+        self.assertIn("brass birds", self.tibbs.stock)
+        self.assertIn("slipped you 300 coins", self.tibbs.stock)
+
+    def test_a_deal_they_cannot_keep_falls_through(self):
+        deal = {"take": 900, "commission": {"ask": "gold", "finds": 8}}
+        self.tibbs.answers.append("Deal!\nDEAL: " + json.dumps(deal))
+        self.req("POST", "/jar/talk", self.alex, "coins 100\nI'll give you 900")
+        for _ in range(200):
+            body = self.req("GET", "/jar/talk?tx=0", self.alex)[1]
+            if body.startswith("ok"):
+                break
+            time.sleep(0.02)
+        self.assertNotIn("tx ", body)
+        self.assertIsNone(jar.pending_deal("alex"))
+        # an item that is not theirs cannot be traded either
+        self.assertIn("do not own", jar.make_deal("alex", {"trade_in": [123456]}))
+        # and a device that does not say its coins gets no deals at all
+        self.tibbs.answers.append("Sure.\nDEAL: {\"give\": 40}")
+        self.req("POST", "/jar/talk", self.alex, "hello")
+        for _ in range(200):
+            body = self.req("GET", "/jar/talk?tx=0", self.alex)[1]
+            if body.startswith("ok") and "Sure" in body:
+                break
+            time.sleep(0.02)
+        self.assertNotIn("tx ", body)
+        self.assertNotIn("strike a deal", self.tibbs.prompts[-1])
 
     def test_talking_to_tibbs_over_http(self):
         self.befriend(self.alex, self.sam)

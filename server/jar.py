@@ -95,10 +95,22 @@ TIERS = (
 )
 
 
-def pick_tier(rng):
-    """(name, price, effort, words) for an item about to be made."""
-    roll = rng.randrange(sum(t[1] for t in TIERS))
-    for name, chance, (lo, hi), effort, words in TIERS:
+BRIBE_MAX = 2000              # coins a commission may carry on the side
+
+
+def pick_tier(rng, bribe=0):
+    """(name, price, effort, words) for an item about to be made. A bribe
+    leaves out the cheaper tiers: 100 coins and up, no common finds; 400 and
+    up, only rare and treasure; 1000 and up, treasure is as likely as rare."""
+    tiers = list(TIERS)
+    if bribe >= 100:
+        tiers = tiers[1:]
+    if bribe >= 400:
+        tiers = tiers[1:]
+    if bribe >= 1000:
+        tiers = [(n, max(c, 15), r, e, w) for n, c, r, e, w in tiers]
+    roll = rng.randrange(sum(t[1] for t in tiers))
+    for name, chance, (lo, hi), effort, words in tiers:
         if roll < chance:
             return name, rng.randrange(lo // 5, hi // 5 + 1) * 5, effort, words
         roll -= chance
@@ -669,6 +681,11 @@ def parse_request(body):
                 out["finds"] = max(0, min(MAX_FINDS, int(rest)))
             except ValueError:
                 pass
+        elif head == "bribe":                           # ... and coins on the side
+            try:
+                out["bribe"] = max(0, min(BRIBE_MAX, int(rest)))
+            except ValueError:
+                pass
         elif head == "ask":                             # ... and what to look for
             a = wire.flat(rest, ASK_LEN, ascii=True).replace('"', "'")
             if clean(a):
@@ -923,7 +940,7 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
         kind = KIND_PLAN[(kind_at + k) % len(KIND_PLAN)]
         taken = set(owned) | {n.strip().lower() for n in names}
         if tier is None:                               # chosen first; kept through a retry
-            tier = pick_tier(rng)
+            tier = pick_tier(rng, req.get("bribe", 0) if req.get("finds") else 0)
         try:
             got = ask.ask_shape(chat, prompt_for(briefs[k], req.get("owned", []), names, kind,
                                                  tier),
@@ -1172,6 +1189,7 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
         told["say"], mine, briefs = shopkeep.stock_turn(
             chat, person, pool[:POOL_SHOWN], n_pick, n_new, friends_of(person, store),
             store=store, log=say_log, commission=req.get("ask") if req.get("finds") else None,
+            bribe=req.get("bribe", 0) if req.get("finds") else 0,
             kinds=[KIND_PLAN[(batch + k) % len(KIND_PLAN)] for k in range(n_new)])
         with _day_lock:                                 # his picks, if still free
             got = take_from_pool(person, [i for i in mine if i in dict(
@@ -1231,6 +1249,11 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
         if key in _running:
             return "pending", key[1]
         _running.add(key)
+        deal = pending_deal(person, st) if fresh else None
+        if deal:                                        # struck at the counter: this is it
+            st.delete(NS, "deal/" + person)
+            req = dict(req, finds=deal["finds"], ask=deal.get("ask") or req.get("ask"),
+                       bribe=deal.get("bribe", 0))
         # A batch number tells the shop one stock from the next on the same
         # day (r makes another), so it can tell "the rest of this one" from
         # "a new one" when it is opened again.
@@ -1250,8 +1273,10 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
         # finds, fewer from the pool; coins are the device's, taken there.
         n_new = max(NEW_ITEMS, min(req.get("finds", 0), MAX_FINDS, STOCK_SIZE - len(held)))
         if req.get("finds"):
-            shopkeep.note("%s paid you to go out and find new things%s." % (
-                who, (" -- they asked for: \"%s\"" % req["ask"]) if req.get("ask") else ""), st)
+            shopkeep.note("%s paid you to go out and find new things%s%s." % (
+                who, (" -- they asked for: \"%s\"" % req["ask"]) if req.get("ask") else "",
+                (", and slipped you %d coins on the side" % req["bribe"]) if req.get("bribe") else ""),
+                st)
         rest = STOCK_SIZE - len(held) - n_new
         n_pick = (rest + 1) // 2                        # Tibbs's choice ...
         picks = pick_from_pool(person, req, rest - n_pick, st, skip=passed)   # ... and chance's
@@ -1399,9 +1424,107 @@ def post_unfriend(h, args):
     h.text("ok\n")
 
 
+# ---- deals, struck in conversation with Tibbs ------------------------------------------
+#
+# There is no bribe button and no trade screen (the owner: "bribing and
+# trading can happen just via conversation"). A device that says what it has
+# ("coins N" before the words) lets Tibbs deal; his deal is checked here and
+# becomes effects the device carries out once (shopkeep.tx_add): coins paid
+# or got, a thing handed over. A commission is kept for the shop's next
+# fresh stock, which /jar/day asks for with a "deal" line -- not started
+# here, since the device may have bought things offline it has not told the
+# server about yet, and a new stock before that report would put them back
+# in the pool.
+
+DEAL_GIVE_MAX = 1000
+
+
+def owned_by(person, store=None):
+    """[(id, name, price)] of the things `person` owns, not counting their shop."""
+    st = store or kv.store()
+    on_show = set(shown(person, st))
+    out = []
+    for key, _size, _exp in st.list(NS, "own/", limit=20000):
+        i = int(key[4:]) if key[4:].isdigit() else None
+        if i is None or i in on_show or st.get(NS, key) != person.encode():
+            continue
+        rec = st.get(NS, "rec/%d" % i)
+        if rec is not None:
+            it = decode(rec)
+            out.append((i, it["name"], it["price"] or 0))
+    return out
+
+
+def deal_context(person, coins, store=None):
+    things = owned_by(person, store)[:30]
+    have = ", ".join("%d: %s (%d coins)" % t for t in things) or "nothing yet"
+    return "They have %s coins, and own: %s." % (
+        "%d" % coins if coins is not None else "some", have)
+
+
+def make_deal(person, deal, coins=None, store=None):
+    """Carry out a deal Tibbs struck: None, or why it cannot be (he is told)."""
+    st = store or kv.store()
+
+    def n(key, hi):
+        try:
+            v = int(deal.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, min(hi, v))
+
+    take = n("take", BRIBE_MAX)
+    give = n("give", DEAL_GIVE_MAX)
+    if coins is not None and take > coins:
+        return "they have only %d coins" % coins
+    mine = {i: (name, price) for i, name, price in owned_by(person, st)}
+    trade = []
+    for i in deal.get("trade_in") or []:
+        try:
+            i = int(i)
+        except (TypeError, ValueError):
+            continue
+        if i not in mine:
+            return "they do not own item %s" % i
+        if i not in trade:
+            trade.append(i)
+    if give and not trade:
+        give = min(give, 50)                            # a tip, not a fortune for nothing
+    if trade and give > 2 * sum(mine[i][1] for i in trade) + 50:
+        give = 2 * sum(mine[i][1] for i in trade) + 50
+    com = deal.get("commission") if isinstance(deal.get("commission"), dict) else None
+    if not (take or give or trade or com):
+        return None
+    for i in trade:
+        to_pool([i], person, st)
+        tx = shopkeep.tx_add(person, "lose", i, st)
+        sys.stderr.write("jar: %s: deal: item %d to Tibbs (tx %d)\n" % (person, i, tx))
+    if take:
+        shopkeep.tx_add(person, "pay", take, st)
+    if give:
+        shopkeep.tx_add(person, "get", give, st)
+    if com:
+        ask_ = wire.flat(str(com.get("ask") or ""), ASK_LEN, ascii=True).replace('"', "'")
+        try:
+            finds = int(com.get("finds") or STOCK_SIZE)
+        except (TypeError, ValueError):
+            finds = STOCK_SIZE
+        st.put(NS, "deal/" + person, json.dumps({
+            "finds": max(NEW_ITEMS, min(MAX_FINDS, finds)),
+            "ask": ask_ if clean(ask_) else "", "bribe": take}).encode(), ttl=7 * 86400)
+    sys.stderr.write("jar: %s: deal: take %d give %d trade %s commission %s\n" % (
+        person, take, give, trade, bool(com)))
+    return None
+
+
+def pending_deal(person, store=None):
+    return _json(store or kv.store(), "deal/" + person, None)
+
+
 @kv_route
 def post_talk(h, args):
-    """say something to Tibbs, the shopkeeper; his reply comes later (GET)"""
+    """say something to Tibbs, the shopkeeper; his reply comes later (GET).
+    A first line "coins N" says what you have, and lets him deal."""
     try:
         body = h.body(1024).decode("utf-8", "replace")
     except ValueError as e:
@@ -1409,10 +1532,16 @@ def post_talk(h, args):
     if not _chat_ok(h):
         h.text("error this server runs without Claude\n", 503)
         return
+    coins = None
+    head, _, rest = body.partition("\n")
+    if head.startswith("coins ") and head[6:].strip().isdigit():
+        coins, body = int(head[6:].strip()), rest
     try:
         me = kv.me()
+        context = deal_context(me, coins) if coins is not None else ""
         started = shopkeep.say(h.chat, me, body,
-                               [f for f in friends_of(me) if mutual(me, f)])
+                               [f for f in friends_of(me) if mutual(me, f)], context=context,
+                               on_deal=(lambda p, d: make_deal(p, d, coins)) if context else None)
     except ValueError as e:
         raise KVError(str(e))
     h.text("pending\n" if started else "busy he is still answering\n")
@@ -1420,8 +1549,10 @@ def post_talk(h, args):
 
 @kv_route
 def get_talk(h, args):
-    """Tibbs: "pending", "ok" or "error WHY", then his line of the day and the talk"""
-    h.text(shopkeep.talk_text(kv.me()))
+    """Tibbs: "pending", "ok" or "error WHY", then his line of the day and the
+    talk; with tx=LAST, the deals' effects after LAST ("tx ID pay|get|lose N")"""
+    raw = arg(args, "tx")
+    h.text(shopkeep.talk_text(kv.me(), tx_after=int(raw) if raw.isdigit() else None))
 
 
 @kv_route
@@ -1438,7 +1569,12 @@ def post_day(h, args):
                             fresh=(args.get("fresh") or ["0"])[0] == "1")
     # The whole answer, as GET gives it: "ok DATE" alone was read by the shop
     # as a stock of no items, and replaced the one it had with nothing.
-    h.text(_day_text(day_state(kv.me())) or "pending\n")
+    h.text((_day_text(day_state(kv.me())) or "pending\n") + _deal_line(kv.me()))
+
+
+def _deal_line(person):
+    """"deal" when Tibbs has a commission waiting: the shop asks for a fresh stock."""
+    return "deal\n" if pending_deal(person) else ""
 
 
 def _day_text(cur):
@@ -1465,9 +1601,10 @@ def get_day(h, args):
         sys.stderr.write("jar: %s: a stock left half-made, started again\n" % kv.me())
         cur = day_state(kv.me())
     if cur["state"] == "ok" and not cur.get("n"):
-        h.text("ok %s\ntags %s\nitems 0\n" % (cur["date"], ", ".join(cur["tags"])))
+        h.text("ok %s\ntags %s\nitems 0\n" % (cur["date"], ", ".join(cur["tags"]))
+               + _deal_line(kv.me()))
     elif cur["state"] in ("ok", "pending"):
-        h.text(_day_text(cur) or "pending\n")
+        h.text((_day_text(cur) or "pending\n") + _deal_line(kv.me()))
     else:
         h.text("error %s\n" % cur.get("why", "it failed"))
 
