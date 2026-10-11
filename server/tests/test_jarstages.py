@@ -111,11 +111,16 @@ class Record(unittest.TestCase):
         it = jar.decode(bytes(out_of_range))
         self.assertEqual((it["travel"], it["idle"], it["lively"]), (0, 0, 0))
 
-    def test_still_with_no_parts_keeps_the_short_header(self):
+    def test_a_still_thing_is_never_all_zero(self):
+        # all zero means "an old item: go by byte 72" on the device, which would
+        # animate a sitter; so none/none is written with liveliness normal
         raw = motion_raw("still")                           # none / none / calm
         rec = jar.encode(jar.to_item(raw, 4447, 1791504000, "odd"))
-        self.assertEqual(rec[1], 208)
+        self.assertEqual(rec[1], 224)
+        self.assertEqual(rec[215:218], bytes([0, 0, 1]))
         self.assertEqual(rec[72], jar.enums()["moves"]["sits"])
+        flick = jar.encode(jar.to_item(motion_raw("still", idle="flicker"), 4448, 1791504000, "x"))
+        self.assertEqual(flick[215:218], bytes([0, 6, 0]))      # calm, as the sheet said
 
     def test_the_shared_fixture(self):
         path = os.path.join(FIXTURES, "jar_item_motion.bin")
@@ -254,6 +259,233 @@ class Search(unittest.TestCase):
         line, picks, briefs = shopkeep.stock_turn(None, "alex", [], 0, 2)
         self.assertEqual(briefs, ["a", "b"])
         self.assertIn("sparks", self.said[-1])
+
+
+# ---- 5-7. the stages --------------------------------------------------------------------
+
+class StageStub:
+    """ask.ask_shape for the stages, answering each by its schema: the DM
+    ("concept"), the fitter ("look"), the artist ("frames"), the behaviour
+    writer ("habits"). Queues per stage override the defaults; an Exception
+    in a queue is raised."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.prompts = {"dm": [], "fitter": [], "artist": [], "behaviour": [], "items": []}
+        self.kw = []
+        self.queue = {"dm": [], "fitter": [], "artist": [], "behaviour": []}
+        self.n = 0
+        self.travel = None
+
+    def stage(self, schema):
+        req = schema.get("required", [])
+        if "concept" in req:
+            return "dm"
+        if "look" in req:
+            return "fitter"
+        if "frames" in req and "palette" in req and "name" not in req:
+            return "artist"
+        if "habits" in req and "script" in req and "name" not in req:
+            return "behaviour"
+        return "items"
+
+    def __call__(self, chat, prompt, schema, **kw):
+        with self.lock:
+            s = self.stage(schema)
+            self.prompts[s].append(prompt)
+            self.kw.append((s, kw))
+            q = self.queue.get(s)
+            if q:
+                a = q.pop(0)
+                if isinstance(a, Exception):
+                    raise a
+                return a
+            self.n += 1
+            n = self.n
+        if s == "dm":
+            return {"concept": "A brass thimble that rings faintly when rain is coming, found "
+                               "wedged in a canal lock gate. Its dents spell a name. (%d)" % n}
+        if s == "fitter":
+            p = schema["properties"]
+            sheet = {"name": "Thing %d" % n, "line": "A small odd thing",
+                     "kind": p["kind"]["enum"][0], "zone": "garden",
+                     "travel": self.travel or p["travel"]["enum"][-1],
+                     "idle": p["idle"]["enum"][-1],
+                     "liveliness": "normal", "speed": p["speed"]["enum"][0],
+                     "bubbles": ["ting"], "frames": p["frames"]["minimum"],
+                     "look": "a dented brass thimble, gold with dark outline",
+                     "intent": "rings when poked", "note": ""}
+            if "traits" in p:
+                sheet.update(traits=["shiny"], voice="none")
+            if "surface" in p:
+                sheet["surface"] = 4
+            return sheet
+        if s == "artist":
+            m = schema["properties"]["frames"]["minItems"]
+            return {"palette": raw_item()["palette"], "frames": [sprite(i) for i in range(m)]}
+        if s == "behaviour":
+            return {"habits": [{"when": "poke", "do": "say", "do_arg": 0}], "script": ""}
+        raise AssertionError("the one-call path ran: %s" % prompt[:60])
+
+
+class Stages(unittest.TestCase):
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        os.environ["CARDOS_STATE"] = self.dir
+        sign.forget_cached()
+        self.stub = StageStub()
+        for target, value in (("server.ask.ask_shape", self.stub),
+                              ("server.sign.sign", test_signer),
+                              ("server.jar.STAGES", True)):
+            p = mock.patch(target, value)
+            p.start()
+            self.addCleanup(p.stop)
+        self.logs = []
+
+    def tearDown(self):
+        kv.close_all()
+        sign.forget_cached()
+        os.environ.pop("CARDOS_STATE", None)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def gen(self, want=1, search="I went down to the old canal locks.", rng=None, **kw):
+        return jar.generate(None, "alex", {"owned": ["Moth Lamp"]}, None, want=want,
+                            search=search, rng=rng or random.Random(3), log=self.logs.append,
+                            **kw)
+
+    def test_a_find_through_every_stage(self):
+        st = kv.store()
+        recs = self.gen()
+        self.assertEqual(len(recs), 1)
+        it = jar.decode(recs[0])
+        self.assertTrue(it["name"].startswith("Thing"))
+        self.assertEqual(it["hdr"], 224)
+        self.assertTrue(it["travel"] or it["idle"] or it["lively"])     # never all zero
+        for s in ("dm", "fitter", "artist", "behaviour"):
+            self.assertEqual(len(self.stub.prompts[s]), 1, s)
+        self.assertEqual(self.stub.prompts["items"], [])
+        self.assertTrue(all(kw.get("limit", "x") is None for _, kw in self.stub.kw))
+        c = json.loads(st.get(jar.NS, "concept/%d" % it["id"]))
+        self.assertIn("thimble", c["concept"])
+        self.assertIn("canal locks", c["search"])
+        self.assertEqual(st.get(jar.NS, "own/%d" % it["id"]), b"alex")
+        self.assertTrue(jar.verified(recs[0], test_pub()))
+
+    def test_each_stage_is_told_what_it_should_and_not_what_it_must_not(self):
+        self.gen()
+        dm = self.stub.prompts["dm"][0]
+        self.assertIn("old canal locks", dm)
+        for word in ("Moth Lamp", "palette", "frames", "16x16", "script", "habits", "zone",
+                     "critter", "hanging", "alex"):
+            self.assertNotIn(word, dm)
+        fit = self.stub.prompts["fitter"][0]
+        self.assertIn("thimble", fit)                       # the concept
+        self.assertNotIn("palette", fit)
+        self.assertNotIn(jarvm.LANGUAGE_GUIDE_V1[:60], fit)
+        art = self.stub.prompts["artist"][0]
+        self.assertIn("dented brass thimble", art)          # the look
+        self.assertNotIn(jarvm.LANGUAGE_GUIDE_V1[:60], art)
+        self.assertNotIn("rings when poked", art)           # not the intent
+        beh = self.stub.prompts["behaviour"][0]
+        self.assertIn("rings when poked", beh)
+        self.assertNotIn("dented brass thimble", beh)       # never the look
+        self.assertIn(jarvm.LANGUAGE_GUIDE_V1[:60], beh)
+
+    def test_the_fitter_is_held_to_the_activity_row(self):
+        for activity in jar.MOTION_RULES:
+            from server import jarstages
+            s = jarstages.fitter_schema("critter", None, activity)
+            self.assertEqual(s["properties"]["travel"]["enum"],
+                             list(jar.MOTION_RULES[activity]["travel"]))
+            self.assertEqual(s["properties"]["idle"]["enum"],
+                             list(jar.MOTION_RULES[activity]["idle"]))
+
+    def test_the_concepts_of_a_stock_are_not_repeated(self):
+        self.gen(want=3)
+        self.assertIn("brass thimble", self.stub.prompts["dm"][2])     # told the earlier ones
+
+    def test_a_still_thing_may_do_nothing(self):
+        from server import jarstages
+        st = kv.store()
+        self.stub.queue["behaviour"] = [{"habits": [], "script": ""}]
+        raw, concept, sheet = jarstages.make_find(None, "alex", "floor", jar.TIERS[0][:1] +
+                                                  (40, "low", jar.TIERS[0][4]), None, "still",
+                                                  "", [], set(), st)
+        self.assertEqual(raw["habits"], [])
+        self.assertEqual((raw["travel"], raw["movement"]), ("none", "sits"))
+
+    def test_a_reacting_thing_that_does_nothing_is_sent_back_then_dropped(self):
+        from server import jarstages
+        st = kv.store()
+        nothing = {"habits": [], "script": ""}
+        self.stub.queue["behaviour"] = [nothing, nothing]
+        tier = ("common", 40, "low", jar.TIERS[0][4])
+        with self.assertRaises(jarstages.Drop):
+            jarstages.make_find(None, "alex", "floor", tier, None, "reacts", "", [], set(), st)
+        self.assertEqual(len(self.stub.prompts["behaviour"]), 2)
+        self.assertIn("must react", self.stub.prompts["behaviour"][1])
+        self.assertEqual(len(self.stub.prompts["artist"]), 1)          # the art was fine
+
+    def test_a_refusal_goes_back_to_the_stage_at_fault(self):
+        from server import jarstages
+        st = kv.store()
+        blank = ["0" * 16] * 16
+        self.stub.queue["artist"] = [{"palette": raw_item()["palette"], "frames": [blank]}]
+        tier = ("common", 40, "low", jar.TIERS[0][4])
+        raw, _, _ = jarstages.make_find(None, "alex", "floor", tier, None, "still", "", [],
+                                        set(), st)
+        self.assertEqual(len(self.stub.prompts["artist"]), 2)
+        self.assertIn("blank", self.stub.prompts["artist"][1])
+        self.assertEqual(len(self.stub.prompts["behaviour"]), 1)
+        self.assertEqual(len(self.stub.prompts["fitter"]), 1)
+        # a script that does not compile goes back to the behaviour writer
+        self.stub.queue["behaviour"] = [{"habits": [], "script": "on poke:\n  fly to the moon\n"}]
+        raw, _, _ = jarstages.make_find(None, "alex", "floor", tier, None, "reacts", "", [],
+                                        set(), st)
+        self.assertIn("script does not work", self.stub.prompts["behaviour"][-1])
+        self.assertTrue(raw["habits"])
+
+    def test_a_dm_that_fails_drops_the_find_not_the_stock(self):
+        self.stub.queue["dm"] = [RuntimeError("no Claude")]
+        recs = self.gen(want=2)
+        self.assertEqual(len(recs), 1)
+        self.assertTrue(any("find 1 dropped: DM" in s for s in self.logs), self.logs)
+
+    def test_an_artist_that_fails_once_is_asked_again(self):
+        self.stub.queue["artist"] = [RuntimeError("timeout")]
+        self.assertEqual(len(self.gen()), 1)
+        self.assertEqual(len(self.stub.prompts["artist"]), 2)
+
+    def test_no_search_says_so_and_goes_on(self):
+        self.gen(search="")
+        self.assertIn("has not said where he went", self.stub.prompts["dm"][0])
+        self.assertTrue(any("no search" in s for s in self.logs), self.logs)
+
+    def test_a_stock_is_made_from_his_search(self):
+        from server.tests.test_jar import Stub
+        tibbs = {"line": "Back from the canal.", "picks": [],
+                 "search": "Down the canal locks today, after anything the barges dropped."}
+        with mock.patch.object(shopkeep, "turn", lambda *a, **k: json.dumps(tibbs)):
+            jar.start_day(None, "alex", {"owned": []})
+            for _ in range(300):
+                d = jar.day_state("alex")
+                if d and d.get("state") != "pending":
+                    break
+                time.sleep(0.02)
+        self.assertEqual(d["state"], "ok")
+        self.assertIn("barges dropped", self.stub.prompts["dm"][0])
+        self.assertEqual(self.stub.prompts["items"], [])
+
+    def test_off_it_is_the_one_call(self):
+        from server.tests.test_jar import Stub
+        one = Stub()
+        with mock.patch("server.jar.STAGES", False), mock.patch("server.ask.ask_shape", one):
+            recs = jar.generate(None, "alex", {}, None, want=1, briefs=["a lamp"])
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(len(one.calls), 1)
+        self.assertEqual(self.stub.prompts["dm"], [])
+        self.assertEqual(jar.decode(recs[0])["hdr"], 208)
 
 
 if __name__ == "__main__":

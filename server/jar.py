@@ -63,6 +63,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HEADER = os.path.join(ROOT, "apps", "jaritem.h")
 
 NS = "srv/jar"
+# Items made in stages (server/jarstages.py): a DM, a fitter, an artist and a
+# behaviour writer, from Tibbs's search. Off, generate is the one call as before.
+STAGES = os.environ.get("CARDOS_JAR_STAGES") == "1"
 MAKER = "Jar Works"
 ID_BASE = 100                 # built-ins are 1..12; the server's start past them
 ITEMS = 8                     # a day's stock
@@ -1131,6 +1134,11 @@ def to_item(raw, item_id, made, tags, log=None, price=0, form=None):
     if "travel" in raw:                                 # a staged item's motion parts
         ext.update(travel=TRAVELS.index(raw["travel"]), idle=IDLES.index(raw["idle"]),
                    lively=LIVELY.index(raw.get("liveliness", "calm")))
+        if not ext["travel"] and not ext["idle"]:
+            # A still thing must not read as "no parts" (all zero), which the
+            # device takes for an old item and animates by byte 72 (agreed
+            # with the device side); liveliness means nothing without an idle.
+            ext["lively"] = 1
     return dict(ext, **{
         "price": int(price),
         "id": item_id, "kind": e["kinds"][raw["kind"]], "flags": 0,
@@ -1149,7 +1157,7 @@ def to_item(raw, item_id, made, tags, log=None, price=0, form=None):
 
 def generate(chat, person, req, date, store=None, signer=None, now=None, log=None,
              on_item=None, want=None, kind_at=0, briefs=None, limit=ask.DAILY, rng=None,
-             force_form=None):
+             force_form=None, search=None):
     """New items for `person` (None: for the pool): [signed records]. One
     Claude call an item, each from a brief (the shopkeeper's, or loose sparks
     when there is none), its kind from KIND_PLAN starting at kind_at and its
@@ -1158,7 +1166,15 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
     call that comes to nothing is tried again, MAX_FAILS of them in all.
     Fewer than asked for is fewer, not a failure. Every record is kept
     (rec/ID), to go to the pool later. Raises if Claude cannot be asked at
-    all (the day's limit, no Claude, ...) and nothing came of it."""
+    all (the day's limit, no Claude, ...) and nothing came of it.
+    With STAGES, server/jarstages.py makes them instead, from `search` (or,
+    for a made-to-order job, the first brief)."""
+    if STAGES:
+        from . import jarstages
+        return jarstages.generate(
+            chat, person, req, date, store=store, signer=signer, now=now, log=log,
+            on_item=on_item, want=want, kind_at=kind_at, rng=rng, force_form=force_form,
+            search=search if search is not None else (briefs[0] if briefs else ""))
     st = store or kv.store()
     now = time.time() if now is None else now
     rng = rng or random.Random()
@@ -1425,7 +1441,10 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
             chat, person, pool[:POOL_SHOWN], n_pick, n_new, friends_of(person, store),
             store=store, log=say_log, commission=req.get("ask") if req.get("finds") else None,
             bribe=req.get("bribe", 0) if req.get("finds") else 0,
-            kinds=[KIND_PLAN[(batch + k) % len(KIND_PLAN)] for k in range(n_new)])
+            kinds=[KIND_PLAN[(batch + k) % len(KIND_PLAN)] for k in range(n_new)],
+            staged=STAGES)
+        search = briefs if STAGES else None             # staged: where he went, one string
+        briefs = None if STAGES else briefs
         with _day_lock:                                 # his picks, if still free
             got = take_from_pool(person, [i for i in mine if i in dict(
                 (p[0], 1) for p in pool[:POOL_SHOWN])][:n_pick], store)
@@ -1437,7 +1456,7 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
             if rec is not None:
                 show(rec)
         records = generate(chat, person, req, date, store=store, on_item=on_item, want=n_new,
-                           kind_at=batch, briefs=briefs, log=say_log)
+                           kind_at=batch, briefs=briefs, log=say_log, search=search)
         state("ok", at[0])
         sys.stderr.write("jar: %s: %d items for %s (%d his, %d new)\n" % (
             person, at[0], key[1], len(got), len(records)))
