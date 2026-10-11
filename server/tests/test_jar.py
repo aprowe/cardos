@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 from http.server import ThreadingHTTPServer
-from server import accounts, app, ask, jar, kv, people, shopkeep, sign
+from server import accounts, app, ask, jar, jarvm, kv, people, shopkeep, sign
 from server import chat as chatmod
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -699,6 +699,75 @@ class VersionTwo(unittest.TestCase):
         self.assertEqual(jar.traits_tags(["clockwork", "fragile", "spooky", "music"]),
                          "clockwork,fragile,spooky")             # 24 bytes at most
         self.assertEqual(jar.traits_tags(["Food", "food"]), "food")
+
+
+class Patches(unittest.TestCase):
+    """Items in a jar learning about a newcomer (server/jarpatch.py)."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        os.environ["CARDOS_STATE"] = self.dir
+        p = mock.patch("server.jarvm.V2", True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def tearDown(self):
+        kv.close_all()
+        os.environ.pop("CARDOS_STATE", None)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def put(self, st, item_id, name, tags, owner="alex"):
+        it = jar.to_item(raw_item(name), item_id, 1791504000, tags)
+        st.put(jar.NS, "rec/%d" % item_id, jar.encode(it))
+        st.put(jar.NS, "own/%d" % item_id, owner.encode())
+
+    def test_a_newcomer_is_noticed_and_the_patch_is_signed(self):
+        from server import jarpatch
+        st = kv.store()
+        self.put(st, 501, "Owl", "shiny")
+        self.put(st, 502, "Frog", "wet")
+        self.put(st, 503, "Kit's Hat", "soft", owner="kit")   # not alex's: never patched
+        self.put(st, 600, "Cake", "food,sweet")               # the newcomer
+        asked = []
+
+        def fake(chat, prompt, schema, **kw):
+            asked.append(prompt)
+            return {"script": "on near: if has(neartraits, sweet) then hop 8; say 1 end; end",
+                    "note": "the owl has a sweet tooth now"}
+
+        rng = random.Random(1)
+        rng.randrange = lambda n: 0                        # the coin: noticed
+        with mock.patch("server.ask.ask_shape", fake):
+            n = jarpatch.make(None, "alex", [600], [501, 502, 503, 600], st, rng=rng,
+                              signer=test_signer)
+        self.assertEqual(n, 2)
+        self.assertIn("Cake", asked[0])
+        self.assertIn("food,sweet", asked[0])
+        self.assertNotIn("Kit", " ".join(asked))
+        lines = jarpatch.text("alex", 0, st).splitlines()
+        self.assertEqual(len(lines), 2)
+        f = lines[0].split()
+        self.assertEqual(f[0], "patch")
+        code, sig = base64.b64decode(f[4]), base64.b64decode(f[5])
+        self.assertTrue(sign.verify(jarpatch.message(int(f[2]), int(f[3]), code), sig, test_pub()))
+        self.assertEqual(jarvm.check(code), 0)
+        self.assertEqual(jarpatch.text("alex", 2, st), "")    # after the last: nothing
+        self.assertIn("sweet tooth", shopkeep._get(st, "tibbs/events", [])[-1])
+
+    def test_the_coin_and_v1(self):
+        from server import jarpatch
+        st = kv.store()
+        self.put(st, 501, "Owl", "shiny")
+        self.put(st, 600, "Cake", "food")
+        rng = random.Random(1)
+        rng.randrange = lambda n: n - 1                    # the coin: not noticed
+        with mock.patch("server.ask.ask_shape", lambda *a, **k: self.fail("asked")):
+            self.assertEqual(jarpatch.make(None, "alex", [600], [501, 600], st, rng=rng), 0)
+        with mock.patch("server.jarvm.V2", False):
+            self.assertFalse(jarpatch.start(object(), "alex", [600], [501], st))
+
+    def test_injar_is_read(self):
+        self.assertEqual(jar.parse_request("injar 5,7,x,9\n")["injar"], [5, 7, 9])
 
 
 # ---- the shopkeeper ------------------------------------------------------------------------

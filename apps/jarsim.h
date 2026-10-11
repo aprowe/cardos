@@ -251,6 +251,7 @@ typedef struct {
   int8_t   pdx, pdy;
   uint32_t on_id;
   int16_t  on_lo, on_hi;               /* that furniture's top, px */
+  uint16_t poff, plen;                 /* its patch in j->spool: what it learned of a newcomer */
   int16_t  px, py, ptx, pty, pt;       /* the part, 1/16 px; its target; a timer */
 } JPlaced;
 
@@ -267,6 +268,7 @@ typedef struct {
   uint32_t decor;                      /* an item the companion asked to place */
   uint32_t gseen;                      /* the last gift the jar announced */
   uint32_t txseen;                     /* the last of Tibbs's deals carried out (tx) */
+  uint32_t patchseen;                  /* the last patch fetched (server/jarpatch.py) */
 
   /* the factory */
   JBed   bed[JS_MAX_BEDS];
@@ -636,6 +638,34 @@ static JS_OPT int js_place(Jar *j, const JItem *it, int x, int y) {
 /* Take item i out of the jar (back to My Stuff), freeing its frames. */
 static JS_OPT void js_get_off(Jar *j, int i);
 
+/* Close the gap a block of the spool leaves: every script and patch above
+ * it moves down. */
+static JS_OPT void js_spool_cut(Jar *j, int at, int n) {
+  int k;
+  if (n <= 0) return;
+  ji_copy(j->spool + at, j->spool + at + n, j->sused - at - n);
+  j->sused = (uint16_t)(j->sused - n);
+  for (k = 0; k < j->nplaced; k++) {
+    if (j->placed[k].slen && j->placed[k].soff > at) j->placed[k].soff = (uint16_t)(j->placed[k].soff - n);
+    if (j->placed[k].plen && j->placed[k].poff > at) j->placed[k].poff = (uint16_t)(j->placed[k].poff - n);
+  }
+}
+
+/* Item i's patch (what it learned about a newcomer), replacing any before:
+ * 0, or -1 if this machine would not run it or there is no room. */
+static JS_OPT int js_set_patch(Jar *j, int i, const uint8_t *code, int n) {
+  JPlaced *p;
+  if (i < 0 || i >= j->nplaced || n <= 0 || n > JI_SCRIPT_MAX || jv_check(code, n) != 0) return -1;
+  p = &j->placed[i];
+  if (p->plen) { js_spool_cut(j, p->poff, p->plen); p->plen = 0; }
+  if (j->sused + n > JS_SPOOL_ROOM) return -1;
+  p->poff = j->sused;
+  p->plen = (uint16_t)n;
+  ji_copy(j->spool + p->poff, code, n);
+  j->sused = (uint16_t)(j->sused + n);
+  return 0;
+}
+
 static JS_OPT void js_unplace(Jar *j, int i) {
   int k;
   if (i < 0 || i >= j->nplaced) return;
@@ -643,13 +673,8 @@ static JS_OPT void js_unplace(Jar *j, int i) {
     if (k != i && j->placed[k].on_id && j->placed[k].on_id == j->placed[i].id) js_get_off(j, k);
   for (k = 0; k < JI_MAX_FRAMES; k++)
     if (j->placed[i].slot[k] < JS_POOL_ROOM) j->pool_used[j->placed[i].slot[k]] = 0;
-  if (j->placed[i].slen) {                    /* close the gap its script leaves */
-    int at = j->placed[i].soff, n = j->placed[i].slen;
-    ji_copy(j->spool + at, j->spool + at + n, j->sused - at - n);
-    j->sused = (uint16_t)(j->sused - n);
-    for (k = 0; k < j->nplaced; k++)
-      if (j->placed[k].slen && j->placed[k].soff > at) j->placed[k].soff = (uint16_t)(j->placed[k].soff - n);
-  }
+  if (j->placed[i].plen) js_spool_cut(j, j->placed[i].poff, j->placed[i].plen);   /* its patch */
+  if (j->placed[i].slen) js_spool_cut(j, j->placed[i].soff, j->placed[i].slen);   /* its script */
   for (k = i; k + 1 < j->nplaced; k++) ji_copy(&j->placed[k], &j->placed[k + 1], (int)sizeof j->placed[k]);
   j->nplaced--;
 }
@@ -1096,8 +1121,15 @@ static JS_OPT int js_vm_sense(void *c, int s) { return js_sense(((JsVm *)c)->j, 
 static JS_OPT int js_vm_act(void *c, int a, int arg) { return js_act(((JsVm *)c)->j, ((JsVm *)c)->i, a, arg); }
 static JS_OPT uint32_t js_vm_rnd(void *c) { return js_rnd(((JsVm *)c)->j); }
 
+/* Run code at spool[off], len bytes, as item i, for an event. */
+static JS_OPT int js_run_code(Jar *j, int i, int off, int len, int ev, int arg);
+
 /* Run item i's script for an event: a JV_* result (apps/jarvm.h). */
 static JS_OPT int js_script(Jar *j, int i, int ev, int arg) {
+  return js_run_code(j, i, j->placed[i].soff, j->placed[i].slen, ev, arg);
+}
+
+static JS_OPT int js_run_code(Jar *j, int i, int off, int len, int ev, int arg) {
   JPlaced *p = &j->placed[i];
   JsVm c;
   JvIo io;
@@ -1110,7 +1142,7 @@ static JS_OPT int js_script(Jar *j, int i, int ev, int arg) {
   io.act = js_vm_act;
   io.rnd = js_vm_rnd;
   ji_copy(was, p->mem, (int)sizeof was);
-  r = jv_run(j->spool + p->soff, p->slen, ev, arg, p->mem, &io, 0);
+  r = jv_run(j->spool + off, len, ev, arg, p->mem, &io, 0);
   for (k = 0; k < JI_MEM; k++) if (was[k] != p->mem[k]) p->mem_dirty = 1;
   return r;
 }
@@ -1141,6 +1173,10 @@ static JS_OPT int js_item_event(Jar *j, int i, int ev, int arg) {
     int r = js_script(j, i, ev, arg);
     if (r == JV_DONE) return 1;
     if (r == JV_LIMIT || r == JV_FAULT) { p->say = JI_MAX_BUB; p->say_t = JS_SAY_STEPS; }
+  }
+  if (p->plen) {                               /* what it learned: the events its script leaves */
+    int r = js_run_code(j, i, p->poff, p->plen, ev, arg);
+    if (r == JV_DONE) return 1;
   }
   /* ---- end of the hook ---------------------------------------------------- */
   for (h = 0; h < p->nhab; h++) {
@@ -2148,6 +2184,7 @@ static JS_OPT int js_save(const Jar *j, char *buf, int cap) {
   JS_KV("parcels", j->parcels);
   JS_KV("gseen", j->gseen);
   if (j->txseen) JS_KV("txseen", j->txseen);
+  if (j->patchseen) JS_KV("patchseen", j->patchseen);
   if (j->decor) JS_KV("decor", j->decor);
   n = js_put(buf, n, cap, "own");
   for (i = 0; i < j->nowned; i++) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, j->owned[i]); }
@@ -2250,6 +2287,7 @@ static JS_OPT int js_load(Jar *j, const char *t) {
     } else if (js_word_is(w, "parcels")) j->parcels = (uint16_t)js_num(&p);
     else if (js_word_is(w, "gseen")) j->gseen = js_num(&p);
     else if (js_word_is(w, "txseen")) j->txseen = js_num(&p);
+    else if (js_word_is(w, "patchseen")) j->patchseen = js_num(&p);
     else if (js_word_is(w, "decor")) j->decor = js_num(&p);
     else if (js_word_is(w, "chores")) {
       uint32_t m;

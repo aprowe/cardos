@@ -23,6 +23,74 @@
  * silence; kept in /var/jar/sound.txt. */
 
 #include "apps/synth.h"
+#include "apps/b64.h"
+
+/* ---- patches: what items learned about a newcomer (server/jarpatch.py) ---------- */
+
+#define LV_PATCH_DIR CAPP_VAR "/jar/patches"
+static const char LV_MAGIC[9] = { 'J', 'A', 'R', 'P', 'A', 'T', 'C', 'H', '1' };
+
+static void lv_patch_path(char *out, int n, uint32_t item) {
+  api->fmt(out, (size_t)n, LV_PATCH_DIR "/%u.pat", (unsigned)item);
+}
+
+/* Item i (just placed) gets its patch from the card, if it has one. */
+static void lv_patch_load(int i) {
+  uint8_t code[JI_SCRIPT_MAX];
+  char path[48];
+  int fd, n;
+  if (i < 0 || i >= J.nplaced) return;
+  lv_patch_path(path, sizeof path, J.placed[i].id);
+  fd = api->open(path, CAPP_O_READ);
+  if (fd < 0) return;
+  n = api->read(fd, code, sizeof code);
+  api->close(fd);
+  if (n > 0) js_set_patch(&J, i, code, n);
+}
+
+/* One "patch N ITEM NEW CODE64 SIG64" line: checked against the server's
+ * key, kept on the card, put to work if the item is in the jar. */
+static void lv_patch_line(const char *p, const uint8_t *pub) {
+  static uint8_t msg[9 + 8 + JI_SCRIPT_MAX];
+  uint8_t sig[64];
+  char word[360], path[48];
+  const char *q = p + 6;
+  uint32_t n, item, nw;
+  int len, k, fd;
+  n = str_uint(&q); while (*q == ' ') q++;
+  item = str_uint(&q); while (*q == ' ') q++;
+  nw = str_uint(&q); while (*q == ' ') q++;
+  for (k = 0; *q && *q != ' ' && *q != '\n' && k < (int)sizeof word - 1; k++) word[k] = *q++;
+  word[k] = 0;
+  len = b64_decode(word, msg + 17, JI_SCRIPT_MAX);
+  while (*q == ' ') q++;
+  for (k = 0; *q && *q != ' ' && *q != '\n' && k < (int)sizeof word - 1; k++) word[k] = *q++;
+  word[k] = 0;
+  if (n > J.patchseen) J.patchseen = n;
+  if (len <= 0 || b64_decode(word, sig, sizeof sig) != 64 || !api->sig_verify) return;
+  for (k = 0; k < 9; k++) msg[k] = (uint8_t)LV_MAGIC[k];
+  for (k = 0; k < 4; k++) { msg[9 + k] = (uint8_t)(item >> (8 * k)); msg[13 + k] = (uint8_t)(nw >> (8 * k)); }
+  if (api->sig_verify(pub, msg, (size_t)(17 + len), sig) != 1) return;   /* not the server's */
+  api->mkdir(LV_PATCH_DIR);
+  lv_patch_path(path, sizeof path, item);
+  fd = api->open(path, CAPP_O_WRITE | CAPP_O_CREATE | CAPP_O_TRUNC);
+  if (fd >= 0) { api->write(fd, msg + 17, (size_t)len); api->close(fd); }
+  k = js_find(&J, item);
+  if (k >= 0) js_set_patch(&J, k, msg + 17, len);
+}
+
+/* GET /jar/patches answered (in `t`): each line; 1 if there may be more. */
+static int lv_patches(char *t) {
+  uint8_t pub[65];
+  char hex[140];
+  const char *p;
+  int got = 0;
+  if (jst_get(api, JST_PUB, hex, sizeof hex) <= 0 || jst_pub_parse(hex, pub) != 0) return 0;
+  for (p = t; *p; p = tsv_next_line(p))
+    if (str_starts(p, "patch ")) { lv_patch_line(p, pub); got++; }
+  if (got) save();
+  return got >= 3;
+}
 
 /* ---- sounds ------------------------------------------------------------------- */
 

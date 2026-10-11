@@ -869,3 +869,57 @@ void test_jar_the_living_jar_draws(void) {
   key('b');
   CHECK_EQ(LV.mode, LV_ALL);
 }
+
+
+/* Patches come with the jar's polling: checked against the server's key,
+ * kept on the card, put to work; a forged one is dropped; after a restart
+ * the item still knows. */
+static char PATCH_LINES[1024];
+static int patch_server(const char *m, const char *path, const char *body, char *out, int cap) {
+  if (!strncmp(path, "/jar/patches?after=", 19)) {
+    if (atoi(path + 19) >= 2) return 0;
+    return snprintf(out, (size_t)cap, "%s", PATCH_LINES);
+  }
+  if (!strncmp(path, "/jar/sky", 8)) return snprintf(out, (size_t)cap, "sky sunny 1\n");
+  return jar_server(m, path, body, out, cap);
+}
+
+static void patch_line(char *out, int cap, int n, uint32_t item, const uint8_t *code, int len, int good) {
+  uint8_t msg[300], sig[64];
+  char c64[400], s64[100];
+  int k;
+  memcpy(msg, "JARPATCH1", 9);
+  for (k = 0; k < 4; k++) { msg[9 + k] = (uint8_t)(item >> (8 * k)); msg[13 + k] = (uint8_t)(999 >> (8 * k)); }
+  memcpy(msg + 17, code, (size_t)len);
+  jf_sig_of(msg, (size_t)(17 + len), sig);
+  if (!good) sig[3] ^= 1;
+  b64_encode(code, len, c64, sizeof c64);
+  b64_encode(sig, 64, s64, sizeof s64);
+  snprintf(out, (size_t)cap, "patch %d %u 999 %s %s\n", n, (unsigned)item, c64, s64);
+}
+
+void test_jar_patches_arrive_signed_and_stay(void) {
+  static const uint8_t patch[] = { 1, 1, JE_BUMPED, 0, 5, JVO_ACTK, JA_GLOW, 1, JVO_END };
+  int k;
+  uint32_t id;
+  start(T0);
+  jst_put(&A, JST_PUB, JF_PUBHEX, (int)strlen(JF_PUBHEX));
+  id = J.placed[0].id;
+  patch_line(PATCH_LINES, sizeof PATCH_LINES, 1, id, patch, sizeof patch, 1);
+  k = (int)strlen(PATCH_LINES);
+  patch_line(PATCH_LINES + k, (int)sizeof PATCH_LINES - k, 2, J.placed[1].id, patch, sizeof patch, 0);
+  jf_handler = patch_server;
+  GIFTS = 0;
+  THANKS = 0;
+  ticks(4000);
+  CHECK_EQ(J.patchseen, 2);
+  CHECK(J.placed[0].plen == sizeof patch);
+  CHECK_EQ(J.placed[1].plen, 0);                       /* the forged one: dropped */
+  CHECK(fakefs_exists("/var/jar/patches/1.pat") || J.placed[0].id != 1);
+  js_item_event(&J, 0, JE_BUMPED, 0);
+  CHECK_EQ(J.placed[0].glow, 1);
+  reopen();
+  k = js_find(&J, id);
+  CHECK(k >= 0 && J.placed[k].plen == sizeof patch);   /* it still knows */
+  CHECK_EQ(J.patchseen, 2);
+}

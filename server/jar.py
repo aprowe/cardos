@@ -55,7 +55,7 @@ import time
 import urllib.request
 
 from . import shopkeep
-from . import accounts, ask, kv, people, sign, wire, jarvm
+from . import accounts, ask, kv, people, sign, wire, jarvm, jarpatch
 from .kv import kv_route, KVError, NotAllowed, NotFound
 from .routes import arg
 
@@ -666,7 +666,7 @@ def parse_request(body):
     "owned": [names], "tz": str, "hint": str}. Unknown lines and junk are
     dropped; so is a hint that does not pass the filter."""
     out = {"garden": {}, "shelf": [], "owned": [], "tz": "", "hint": "", "bought": [],
-           "held": [], "jar": []}
+           "held": [], "jar": [], "injar": []}
     for line in body.splitlines():
         head, _, rest = line.strip().partition(" ")
         rest = rest.strip()
@@ -696,7 +696,7 @@ def parse_request(body):
                 n = wire.flat(n, NAME_LEN, ascii=True)
                 if n and len(out["jar"]) < 16:
                     out["jar"].append(n)
-        elif head in ("bought", "held"):
+        elif head in ("bought", "held", "injar"):
             for part in rest.split(","):
                 part = part.strip()
                 if part.isdigit() and len(out[head]) < 16:
@@ -1400,6 +1400,8 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
                 shopkeep.note("%s bought %s." % (who, _item_note(st.get(NS, "rec/%d" % i))), st)
         if req.get("jar"):
             shopkeep.note("In %s's jar now: %s." % (who, ", ".join(req["jar"])), st)
+        # What is in the jar may learn about what was just bought (server/jarpatch.py).
+        jarpatch.start(chat, person, sorted(bought), req.get("injar", []), st)
         held = [i for i in req.get("held", []) if i in prev and i not in bought][:MAX_HELD]
         passed = [i for i in prev if i not in bought and i not in held]
         to_pool(passed, person, st)
@@ -1682,6 +1684,14 @@ def post_talk(h, args):
 
 
 @kv_route
+def get_patches(h, args):
+    """the patches waiting: what items in your jar learned about newcomers,
+    after=N: "patch N ITEM NEW CODE64 SIG64" lines"""
+    raw = arg(args, "after")
+    h.text(jarpatch.text(kv.me(), int(raw) if raw.isdigit() else 0))
+
+
+@kv_route
 def get_talk(h, args):
     """Tibbs: "pending", "ok" or "error WHY", then his line of the day and the
     talk; with tx=LAST, the deals' effects after LAST ("tx ID pay|get|lose N")"""
@@ -1840,6 +1850,7 @@ ROUTES = [
     ("GET", "/jar/item", get_item, "device_or_dash"),
     ("GET", "/jar/pubkey", get_pubkey, "device_or_dash"),
     ("GET", "/jar/sky", get_sky, "device_or_dash"),
+    ("GET", "/jar/patches", get_patches, "device_or_dash"),
     ("POST", "/jar/gift", post_gift, "device_or_dash"),
     ("POST", "/jar/thanks", post_thanks, "device_or_dash"),
 ]
