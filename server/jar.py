@@ -136,7 +136,8 @@ ROLES = ("thing", "furniture", "background")
 
 def _ext(it):
     return bool(it.get("role") or it.get("scale", 1) > 1 or it.get("surface") or it.get("part")
-                or it.get("voice") or it.get("pdx") or it.get("pdy"))
+                or it.get("voice") or it.get("pdx") or it.get("pdy")
+                or it.get("travel") or it.get("idle") or it.get("lively"))
 REC_MAX = 1024
 FRAME_BYTES = 96
 MAX_FRAMES = 4
@@ -154,7 +155,10 @@ OFF = {
     "script_len": (205, 2), "price5": (207, 1),
     # the longer header (HDR_EXT)
     "role": (208, 1), "scale": (209, 1), "surface": (210, 1), "part": (211, 1),
-    "home": (212, 2), "voice": (214, 1), "spare": (215, 9),
+    "home": (212, 2), "voice": (214, 1),
+    # motion as parts (2026-10-11, agreed with the device side): 0 is none /
+    # none / calm, so an older record reads as it did
+    "travel": (215, 1), "idle": (216, 1), "lively": (217, 1), "spare": (218, 6),
 }
 
 _ENUM_PREFIX = {"JK": "kinds", "JM": "moves", "JSP": "speeds", "JZ": "zones", "JE": "events",
@@ -290,6 +294,9 @@ def encode(it):
         out[212] = it.get("pdx", 0) & 0xFF
         out[213] = it.get("pdy", 0) & 0xFF
         out[214] = it.get("voice", 0)
+        out[215] = it.get("travel", 0)
+        out[216] = it.get("idle", 0)
+        out[217] = it.get("lively", 0)
     out += sig + script
     for f in frames:
         f = bytes(f)
@@ -326,13 +333,17 @@ def decode(data):
             habits.append(tuple(h))
     o = hdr + sig_len
     newer = data[0] > VERSION
-    ext = {"role": 0, "scale": 1, "surface": 0, "part": 0, "pdx": 0, "pdy": 0, "voice": 0}
+    ext = {"role": 0, "scale": 1, "surface": 0, "part": 0, "pdx": 0, "pdy": 0, "voice": 0,
+           "travel": 0, "idle": 0, "lively": 0}
     if hdr >= HDR_EXT:
         ext = {"role": data[208] if data[208] < len(ROLES) else 0,
                "scale": 2 if data[209] == 2 else 1, "surface": data[210] if data[210] < 16 else 0,
                "part": 1 if data[211] and nframes >= 2 else 0,
                "pdx": int.from_bytes(data[212:213], "little", signed=True),
-               "pdy": int.from_bytes(data[213:214], "little", signed=True), "voice": data[214]}
+               "pdy": int.from_bytes(data[213:214], "little", signed=True), "voice": data[214],
+               "travel": data[215] if data[215] < len(TRAVELS) else 0,
+               "idle": data[216] if data[216] < len(IDLES) else 0,
+               "lively": data[217] if data[217] < len(LIVELY) else 0}
     return dict(ext, **{
         "version": data[0], "hdr": hdr, "total": total, "price": data[207] * 5,
         "id": int.from_bytes(data[4:8], "little"), "kind": kind,
@@ -739,7 +750,7 @@ def _habit_words(e):
     return ev, ac
 
 
-def item_schema(form=None):
+def item_schema(form=None, motion=False):
     e = enums()
     printable = "^[ -~]+$"
     events, actions = _habit_words(e)
@@ -785,6 +796,12 @@ def item_schema(form=None):
     if form == "furniture":                             # Wren's, v2 or not
         s["properties"]["surface"] = {"type": "integer", "minimum": 0, "maximum": 13}
         s["required"] = s["required"] + ["surface"]
+    if motion:                                          # a staged item: motion as parts
+        p = s["properties"]
+        p["travel"] = {"enum": list(TRAVELS)}
+        p["idle"] = {"enum": list(IDLES)}
+        p["liveliness"] = {"enum": list(LIVELY)}
+        s["required"] = s["required"] + ["travel", "idle", "liveliness"]
     return s
 
 
@@ -850,6 +867,47 @@ def roll_form(kind, rng):
             return name if kind in kinds else None
         r -= chance
     return None
+
+
+# ---- how much a thing moves, and how (the staged pipeline: server/jarstages.py) ------
+#
+# Nearly every item came out a critter walking its zone: one call did
+# everything and movement was required. Now the code rolls how much a thing
+# moves (most keep still or wait to be poked), and the fitter picks how from
+# three parts, inside the activity's row of MOTION_RULES. The record keeps
+# the parts in bytes 215-217 (apps/jaritem.h), and byte 72 the nearest old
+# movement for a Jar that knows only 208 bytes.
+ACTIVITIES = (("still", 35), ("reacts", 30), ("ambles", 25), ("restless", 10))
+TRAVELS = ("none", "crawl", "hop", "slide", "float", "fly")        # byte 215
+IDLES = ("none", "sway", "bob", "wobble", "spin", "pulse", "flicker", "blink")   # 216
+LIVELY = ("calm", "normal", "jittery")                             # byte 217
+MOTION_RULES = {
+    "still": {"travel": ("none",), "idle": ("none", "pulse", "flicker", "blink"),
+              "speed": ("slow",)},
+    "reacts": {"travel": ("none",), "idle": ("none",), "speed": ("slow",)},
+    "ambles": {"travel": TRAVELS, "idle": IDLES, "speed": ("slow",)},
+    "restless": {"travel": TRAVELS[1:], "idle": IDLES[1:], "speed": ("medium", "fast")},
+}
+
+
+def roll_activity(rng):
+    r = rng.randrange(sum(p for _, p in ACTIVITIES))
+    for name, pct in ACTIVITIES:
+        if r < pct:
+            return name
+        r -= pct
+    raise AssertionError("unreachable")
+
+
+def move_fallback(travel, idle):
+    """Byte 72 for a build that knows only the old movements."""
+    if travel in ("crawl", "slide"):
+        return "wanders"
+    if travel == "hop":
+        return "hops"
+    if travel in ("float", "fly"):
+        return "floats"
+    return "sways" if idle == "sway" else "sits"
 
 
 def prompt_for(brief, owned=(), avoid=(), kind=None, tier=None, form=None):
@@ -926,21 +984,54 @@ def prompt_for(brief, owned=(), avoid=(), kind=None, tier=None, form=None):
     return "\n".join(lines)
 
 
-def check_item(raw, nameset=(), form=None):
+def check_item(raw, nameset=(), form=None, activity=None):
     """What is wrong with one item Claude gave (a dict as the schema shapes
     it): a list of reasons, empty if nothing. Covers what the schema cannot:
-    sprites, the text filter, the recipe's arguments, names already used."""
-    e = enums()
-    why = []
-    errs = ask.validate(raw, item_schema(form))
+    sprites, the text filter, the recipe's arguments, names already used.
+    With an `activity` it is a staged item: its motion parts are checked
+    against MOTION_RULES, and one that reacts must react to something."""
+    errs = ask.validate(raw, item_schema(form, motion=activity is not None))
     if errs:
         return errs
+    parts = check_parts(raw, nameset, activity)
+    return parts["sheet"] + parts["art"] + parts["behaviour"]
+
+
+def check_parts(raw, nameset=(), activity=None):
+    """check_item's reasons by the stage that made the part at fault (the
+    staged pipeline sends each back where it came from): "sheet" (names,
+    words, motion), "art" (frames), "behaviour" (habits, the script's
+    presence). Assumes the schema already passed."""
+    out = {"sheet": [], "art": [], "behaviour": []}
+    why = out["sheet"]
     texts = [raw["name"], raw["line"]] + list(raw["bubbles"])
     if not all(clean(t) for t in texts):
         why.append("a word the filter refuses")
     if raw["name"].strip().lower() in nameset:
         why.append("the name %r is taken" % raw["name"])
-    nframes, nbub = len(raw["frames"]), len(raw["bubbles"])
+    if activity is not None:
+        rules = MOTION_RULES[activity]
+        for part, key in (("travel", "travel"), ("idle", "idle"), ("speed", "speed")):
+            if raw.get(key) not in rules[part]:
+                why.append("%s %r does not suit a thing that %s (allowed: %s)" % (
+                    part, raw.get(key), ACTIVITY_SAID[activity], ", ".join(rules[part])))
+        if raw.get("movement") != move_fallback(raw.get("travel"), raw.get("idle")):
+            why.append("movement must be the fallback for its travel and idle")
+    out["art"] = _check_frames(raw)
+    out["behaviour"] = _check_habits(raw)
+    if activity == "reacts" and not raw["habits"] and \
+            not re.search(r"^\s*on\s", raw.get("script") or "", re.M):
+        out["behaviour"].append("a thing that reacts must react to something: give it a "
+                                "habit or a script handler")
+    return out
+
+
+ACTIVITY_SAID = {"still": "keeps still", "reacts": "only reacts",
+                 "ambles": "ambles about", "restless": "is restless"}
+
+
+def _check_frames(raw):
+    why = []
     for i, frame in enumerate(raw["frames"]):
         px = "".join(frame)
         if len(frame) != 16 or any(len(r) != 16 for r in frame) or set(px) - set("01234567"):
@@ -954,6 +1045,13 @@ def check_item(raw, nameset=(), form=None):
         if top > 0.85 * len(solid):
             why.append("frame %d is too flat: one colour is %d%% of it"
                        % (i, 100 * top // len(solid)))
+    return why
+
+
+def _check_habits(raw):
+    e = enums()
+    why = []
+    nframes, nbub = len(raw["frames"]), len(raw["bubbles"])
     hanging = raw["kind"] == "hanging"
     for k, h in enumerate(raw["habits"]):
         ev, ea = h["when"], h.get("when_arg", 0)
@@ -1030,6 +1128,9 @@ def to_item(raw, item_id, made, tags, log=None, price=0, form=None):
             ext["scale"] = 2
         elif form == "part" and len(raw.get("frames") or []) >= 2:
             ext.update(part=1, pdx=0, pdy=-6)
+    if "travel" in raw:                                 # a staged item's motion parts
+        ext.update(travel=TRAVELS.index(raw["travel"]), idle=IDLES.index(raw["idle"]),
+                   lively=LIVELY.index(raw.get("liveliness", "calm")))
     return dict(ext, **{
         "price": int(price),
         "id": item_id, "kind": e["kinds"][raw["kind"]], "flags": 0,
