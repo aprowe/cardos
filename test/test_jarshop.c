@@ -528,7 +528,7 @@ static int tibbs_server(const char *m, const char *path, const char *body, char 
 }
 
 /* Paying Tibbs, so as not to wait for the next stock: r a new stock now,
- * f he goes out looking (what for is typed, or nothing) for five new finds.
+ * f he goes out looking (what for is typed, or nothing) for eight new finds.
  * The coins come back if the server cannot be asked. */
 void test_jarshop_paying_tibbs(void) {
   const JfReq *r;
@@ -562,7 +562,7 @@ void test_jarshop_paying_tibbs(void) {
   key('y');
   CHECK_EQ((int)J.coins, 500 - RESTOCK_COST - FIND_COST);
   r = jf_last("/jar/day?fresh=1");
-  CHECK(r && strstr(r->body, "\nfinds 5\nask brass birds\n") != 0);
+  CHECK(r && strstr(r->body, "\nfinds 8\nask brass birds\n") != 0);
   tick(3500);
   /* the server refuses: the coins come back */
   jf_handler = 0;

@@ -83,8 +83,8 @@ static ShopMem SHOP_MEM;
 #define G     SHOP_MEM.g
 
 #define RESTOCK_COST 40        /* r: a new stock now */
-#define FIND_COST    150       /* f: Tibbs goes out looking -- 5 new finds */
-#define FIND_N       5
+#define FIND_COST    150       /* f: Tibbs goes out looking -- a whole stock of new finds */
+#define FIND_N       8
 
 static const char *const UP_NAME[JU_KINDS] = { "Another mossling", "Another machine", "Faster belt", "Another bed" };
 static const int PLANT_SPR[JPL_KINDS] = { SPR_BUSH, SPR_FERN, SPR_SHROOM, SPR_FLOWER, SPR_CACTUS };
@@ -894,7 +894,7 @@ static int shop_key(void *st, uint8_t k) {
     return 1;
   }
   /* Paying Tibbs: r a new stock now, f he goes out looking (what for is
-   * up to the player; five new finds). $ is 1000 coins, for trying things. */
+   * up to the player; eight new finds). $ is 1000 coins, for trying things. */
   if ((k == 'r' || k == 'f') && (G.view == V_STOCK || G.view == V_STUFF)) {
     int cost = k == 'r' ? RESTOCK_COST : FIND_COST;
     if (U.net) { say("Already asking the server"); return 1; }

@@ -1379,7 +1379,7 @@ const CappInfo capp_info = {
   "D\tdecorate; ^v moves onto a ledge\n"
   "Z\tzoom 2x; Tab follows a critter\n"
   "Shop\tEnter buys, Space holds, G gifts\n"
-  "R F\tpay Tibbs: restock now, or 5 new finds\n"
+  "R F\tpay Tibbs: restock now, or 8 new finds\n"
   "Esc\tback to the jar\n",
 };
 
