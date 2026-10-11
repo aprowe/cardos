@@ -55,7 +55,7 @@ import time
 import urllib.request
 
 from . import shopkeep
-from . import accounts, ask, kv, people, sign, wire, jarvm, jarpatch
+from . import accounts, ask, kv, people, sign, wire, jarvm, jarpatch, jarevents
 from .kv import kv_route, KVError, NotAllowed, NotFound
 from .routes import arg
 
@@ -1684,6 +1684,26 @@ def post_talk(h, args):
 
 
 @kv_route
+def get_events(h, args):
+    """the jar's day, written: day=YYYYMMDD&tz=TZ -> "event HH:MM KIND TITLE"
+    lines, or "pending" while they are written"""
+    day = arg(args, "day")
+    if not (len(day) == 8 and day.isdigit()):
+        raise KVError("day=YYYYMMDD")
+    me = kv.me()
+    names = []
+    try:
+        d = datetime.date(int(day[:4]), int(day[4:6]), int(day[6:]))
+        facts = day_facts(d, arg(args, "tz")[:64])
+    except ValueError:
+        raise KVError("day=YYYYMMDD")
+    cur = day_state(me) or {}
+    names = list((cur.get("req") or {}).get("jar") or [])
+    h.text(jarevents.answer(h.chat if _chat_ok(h) else None, me, day, names, facts.get("weather"),
+                            facts.get("season")))
+
+
+@kv_route
 def get_patches(h, args):
     """the patches waiting: what items in your jar learned about newcomers,
     after=N: "patch N ITEM NEW CODE64 SIG64" lines"""
@@ -1851,6 +1871,7 @@ ROUTES = [
     ("GET", "/jar/pubkey", get_pubkey, "device_or_dash"),
     ("GET", "/jar/sky", get_sky, "device_or_dash"),
     ("GET", "/jar/patches", get_patches, "device_or_dash"),
+    ("GET", "/jar/events", get_events, "device_or_dash"),
     ("POST", "/jar/gift", post_gift, "device_or_dash"),
     ("POST", "/jar/thanks", post_thanks, "device_or_dash"),
 ]

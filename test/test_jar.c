@@ -923,3 +923,39 @@ void test_jar_patches_arrive_signed_and_stay(void) {
   CHECK(k >= 0 && J.placed[k].plen == sizeof patch);   /* it still knows */
   CHECK_EQ(J.patchseen, 2);
 }
+
+
+/* The day's events: asked once, begun at their minute with their title. */
+static int EV_ASKS;
+static int events_server(const char *m, const char *path, const char *body, char *out, int cap) {
+  if (!strncmp(path, "/jar/events?day=", 16)) {
+    if (EV_ASKS++ == 0) return snprintf(out, (size_t)cap, "pending\n");
+    return snprintf(out, (size_t)cap, "event 12:05 ants The Great Ant Parade\nevent 23:59 bloom Late Bloom\n");
+  }
+  if (!strncmp(path, "/jar/patches", 12)) return 0;
+  return patch_server(m, path, body, out, cap);
+}
+
+void test_jar_the_days_events_come_at_their_time(void) {
+  start(T0);
+  memset(&LVE, 0, sizeof LVE);
+  EV_ASKS = 0;
+  fakeapi_now.synced = 2;
+  fakeapi_now.year = 2026; fakeapi_now.month = 10; fakeapi_now.day = 11;
+  fakeapi_now.hour = 12; fakeapi_now.min = 0;
+  jf_handler = events_server;
+  GIFTS = 0; THANKS = 0; NET_UP = 1;
+  J.world_clock = 1 << 30;
+  ticks(4000);
+  CHECK_EQ(EV_ASKS, 1);                                /* pending: asked again later */
+  ticks(200000);
+  CHECK(EV_ASKS >= 2);
+  CHECK_EQ(LVE.n, 2);
+  CHECK(strcmp(LVE.day, "20261011") == 0);
+  CHECK_EQ(J.world, 0);
+  fakeapi_now.min = 5;
+  ticks(1200);
+  CHECK_EQ(J.world, JWD_ANTS);
+  CHECK(strstr(G.msg, "Ant Parade") != 0);
+  CHECK(LVE.ev[0].done);
+}

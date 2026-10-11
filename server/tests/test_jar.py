@@ -701,6 +701,53 @@ class VersionTwo(unittest.TestCase):
         self.assertEqual(jar.traits_tags(["Food", "food"]), "food")
 
 
+class Events(unittest.TestCase):
+    """The jar's day, written (server/jarevents.py)."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        os.environ["CARDOS_STATE"] = self.dir
+        p = mock.patch("server.jarvm.V2", True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def tearDown(self):
+        kv.close_all()
+        os.environ.pop("CARDOS_STATE", None)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_the_dice_are_the_codes_and_the_words_are_claudes(self):
+        from server import jarevents
+        plan = jarevents.roll("20261011", "alex")
+        self.assertEqual(plan, jarevents.roll("20261011", "alex"))   # the same all day
+        self.assertTrue(1 <= len(plan) <= 3)
+        self.assertTrue(all(8 * 60 <= m < 22 * 60 and k in jarevents.KINDS for m, k in plan))
+        asked = []
+
+        def fake(chat, prompt, schema, **kw):
+            asked.append(prompt)
+            return {"events": [{"title": "Parade of %d" % i, "tell": "they marched %d" % i}
+                               for i in range(len(plan))]}
+
+        with mock.patch("server.ask.ask_shape", fake):
+            evs = jarevents.make(object(), "alex", "20261011", ["Owl", "Cake"], "rainy", "autumn")
+        self.assertIn("Owl, Cake", asked[0])
+        self.assertIn("rainy", asked[0])
+        self.assertEqual([e["title"] for e in evs], ["Parade of %d" % i for i in range(len(plan))])
+        lines = jarevents.text(evs).splitlines()
+        self.assertTrue(lines[0].startswith("event %02d:" % (plan[0][0] // 60)))
+        self.assertIn(" %s Parade of 0" % plan[0][1], lines[0])
+        self.assertEqual(jarevents.answer(None, "alex", "20261011"), jarevents.text(evs))
+        self.assertIn("they marched", shopkeep._get(kv.store(), "tibbs/events", [])[-1])
+
+    def test_without_claude_the_titles_are_plain(self):
+        from server import jarevents
+        evs = jarevents.make(None, "sam", "20261011")
+        self.assertTrue(all(e["title"] == jarevents.PLAIN[e["kind"]] for e in evs))
+        with mock.patch("server.jarvm.V2", False):
+            self.assertEqual(jarevents.answer(None, "kit", "20261012"), "")
+
+
 class Patches(unittest.TestCase):
     """Items in a jar learning about a newcomer (server/jarpatch.py)."""
 

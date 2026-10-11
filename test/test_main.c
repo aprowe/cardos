@@ -443,6 +443,7 @@ void test_jar_decorate_puts_things_on_the_ledges(void);
 void test_jar_ledges_in_the_scene(void);
 void test_jar_the_living_jar_draws(void);
 void test_jar_patches_arrive_signed_and_stay(void);
+void test_jar_the_days_events_come_at_their_time(void);
 void test_jaritem_pixels_pack_three_bits(void);
 void test_jaritem_round_trip(void);
 void test_jaritem_size_limits(void);
@@ -1491,6 +1492,7 @@ int main(void) {
   RUN(test_jar_ledges_in_the_scene);
   RUN(test_jar_the_living_jar_draws);
   RUN(test_jar_patches_arrive_signed_and_stay);
+  RUN(test_jar_the_days_events_come_at_their_time);
   printf("-- jaritem --\n");
   RUN(test_jaritem_pixels_pack_three_bits);
   RUN(test_jaritem_round_trip);

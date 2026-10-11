@@ -70,7 +70,7 @@
 #define C_PINK   CAPP_RGB(0xff, 0x8f, 0xab)
 
 enum { V_JAR = 0, V_DECOR };
-enum { Q_IDLE = 0, Q_LEN, Q_PEEK, Q_THANKS, Q_ACK, Q_SKY, Q_PATCH };   /* the post, the sky, patches */
+enum { Q_IDLE = 0, Q_LEN, Q_PEEK, Q_THANKS, Q_ACK, Q_SKY, Q_PATCH, Q_EVENTS };   /* the post, the sky, ... */
 #define SKY_EVERY_MS (30u * 60u * 1000u) /* how often to ask after the real sky */
 
 static const CardApi *api;
@@ -1232,7 +1232,7 @@ static void post_reply(int n) {
   int was = G.q;
   char path[64];
   G.q = Q_IDLE;
-  if (n < 0 && was == Q_PATCH) {                       /* patches too: the post goes on */
+  if (n < 0 && (was == Q_PATCH || was == Q_EVENTS)) {  /* these too: the post goes on */
     q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
     return;
   }
@@ -1254,7 +1254,17 @@ static void post_reply(int n) {
     if (lv_patches(SCR.text)) {                     /* more waiting: from the last one got */
       api->fmt(path, sizeof path, "/jar/patches?after=%u", (unsigned)J.patchseen);
       q_start(Q_PATCH, "GET", path);
-    } else q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
+    } else {
+      char tz[48], enc[96], ep[140];
+      tz_of(tz, sizeof tz);
+      url_enc(enc, sizeof enc, tz);
+      if (lv_events_due(ep, sizeof ep, enc)) q_start(Q_EVENTS, "GET", ep);   /* the day's, once */
+      else q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
+    }
+    return;
+  case Q_EVENTS:
+    lv_events_reply(SCR.text);
+    q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
     return;
   case Q_LEN: {
     const char *p = SCR.text;
@@ -1305,8 +1315,12 @@ static void post_tick(uint32_t now) {
   G.asked_post = 1;
   if (!SKYQ.next || (int32_t)(now - SKYQ.next) >= 0) {
     SKYQ.next = now + SKY_EVERY_MS;
-    sky_ask();
-  } else q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
+    sky_ask();                                      /* then patches, the day's events, the post */
+  } else {
+    char path[48];
+    api->fmt(path, sizeof path, "/jar/patches?after=%u", (unsigned)J.patchseen);
+    q_start(Q_PATCH, "GET", path);                  /* then the day's events, the post */
+  }
 }
 
 /* The parcel on its parachute, and hearts rising, a jar step at a time. */
@@ -1329,6 +1343,7 @@ static void clock_minute(void) {
   J.epoch = api->epoch();
   js_set_minute(&J, sun_minute(t.synced ? t.hour * 60 + t.min : -1));
   js_set_hour(&J, t.synced ? t.hour : -1);       /* the real hour: on hour 18 */
+  lv_events_minute(t.synced ? t.hour * 60 + t.min : -1);   /* the day's written events */
   js_settle_beds(&J, J.epoch);              /* a plant comes of age while you watch */
   set_sky(J.minute);
 }
