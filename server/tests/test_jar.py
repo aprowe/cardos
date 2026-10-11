@@ -199,7 +199,7 @@ class Record(unittest.TestCase):
 
     def test_layout_is_the_headers(self):
         table = header_table()
-        self.assertEqual(len(table), 32)
+        self.assertEqual(len(table), 35)          # 215-217: travel, idle, lively (2026-10-11)
         ours = sorted(jar.OFF.values())
         self.assertEqual([(o, s) for o, s, _ in table], ours)
         with open(jar.HEADER, encoding="utf-8") as f:

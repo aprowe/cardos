@@ -193,6 +193,69 @@ class Checks(unittest.TestCase):
         self.assertTrue(jar.check_item(bad))
 
 
+
+# ---- 4. Tibbs's search ----------------------------------------------------------------
+
+class Search(unittest.TestCase):
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        os.environ["CARDOS_STATE"] = self.dir
+        self.said = []
+        self.answers = []
+
+        def fake_turn(chat, text, user, store=None, **kw):
+            self.said.append(text)
+            if self.answers:
+                a = self.answers.pop(0)
+                if isinstance(a, Exception):
+                    raise a
+                return a
+            return json.dumps({"line": "Back from the canal.", "picks": [],
+                               "search": "I went down to the old canal locks, after anything "
+                                         "the barges dropped."})
+        p = mock.patch.object(shopkeep, "turn", fake_turn)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def tearDown(self):
+        kv.close_all()
+        os.environ.pop("CARDOS_STATE", None)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_he_is_asked_where_he_searched(self):
+        line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 4, staged=True)
+        self.assertEqual(line, "Back from the canal.")
+        self.assertIn("old canal locks", search)
+        asked = self.said[-1]
+        self.assertIn("Where did you go searching", asked)
+        self.assertNotIn("sparks", asked)                   # no random words
+        self.assertNotIn("by chance", asked)
+        self.assertNotIn("brief", asked.lower())
+        # next time he is told where he has been, and asked for somewhere else
+        shopkeep.stock_turn(None, "alex", [], 0, 4, staged=True)
+        self.assertIn("old canal locks", self.said[-1])
+        self.assertIn("somewhere you have not been lately", self.said[-1])
+
+    def test_a_commission_is_in_the_question(self):
+        shopkeep.stock_turn(None, "alex", [], 0, 8, staged=True, commission="brass birds")
+        self.assertIn("brass birds", self.said[-1])
+
+    def test_no_answer_is_no_search(self):
+        self.answers = [RuntimeError("no Claude")]
+        logs = []
+        line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 4, staged=True,
+                                                  log=logs.append)
+        self.assertEqual(search, "")
+        self.assertTrue(any("no search" in s for s in logs), logs)
+
+    def test_unstaged_is_as_it_was(self):
+        self.answers = [json.dumps({"line": "Hi.", "picks": [], "briefs": ["a", "b"]})]
+        line, picks, briefs = shopkeep.stock_turn(None, "alex", [], 0, 2)
+        self.assertEqual(briefs, ["a", "b"])
+        self.assertIn("sparks", self.said[-1])
+
+
 if __name__ == "__main__":
     if "--fixture" in sys.argv:
         write_motion_fixture()

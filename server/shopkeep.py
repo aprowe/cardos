@@ -51,6 +51,8 @@ TALK_EFFORT = "medium"
 STOCK_EFFORT = "high"
 LINE_LEN = 200                # his greeting with a stock
 BRIEF_LEN = 160               # one find's brief
+SEARCH_LEN = 600              # where he went searching today (the staged pipeline)
+SEARCHES_KEPT = 6             # his last searches, so he goes somewhere new
 SLACK = 80                    # allowed over, then trimmed: a few characters too many is not a reason to fail
 SAY_LEN = 160                 # what a player may say at once
 REPLY_LEN = 600               # what he says back
@@ -706,7 +708,15 @@ def tx_add(person, op, arg, store=None):
 
 # ---- a stock ------------------------------------------------------------------------------------
 
-def stock_schema(n_pick, n_new):
+def stock_schema(n_pick, n_new, staged=False):
+    if staged:                                          # where he searched, not a brief a find
+        return {"type": "object", "required": ["line", "picks", "search"],
+                "additionalProperties": False, "properties": {
+                    "line": {"type": "string", "minLength": 1, "maxLength": LINE_LEN + SLACK,
+                             "pattern": "^[ -~]+$"},
+                    "picks": {"type": "array", "maxItems": n_pick, "items": {"type": "integer"}},
+                    "search": {"type": "string", "minLength": 1,
+                               "maxLength": SEARCH_LEN + SLACK, "pattern": "^[ -~\n]+$"}}}
     return {"type": "object", "required": ["line", "picks", "briefs"],
             "additionalProperties": False, "properties": {
                 "line": {"type": "string", "minLength": 1, "maxLength": LINE_LEN + SLACK,
@@ -722,9 +732,14 @@ KIND_SAID = {"critter": "a critter that roams the jar", "floor": "decor that sta
 
 
 def stock_prompt(person, pool, n_pick, n_new, rng, asked, friends=(), commission=None,
-                 kinds=None, bribe=0):
+                 kinds=None, bribe=0, staged=False, searches=()):
     """`pool`: [(id, name, kind, price, line)] he may pick from; `asked`:
-    whether a new find answers what the player asked him for (the code's coin)."""
+    whether a new find answers what the player asked him for (the code's coin).
+    staged: he is asked where he went searching (the staged pipeline's DM
+    makes the finds from that), not for a brief a find."""
+    if staged:
+        return _search_prompt(person, pool, n_pick, n_new, asked, friends, commission, bribe,
+                              searches)
     lines = ["[%s (account %s) has come in, and their shop shelf needs filling. %s]" % (
         display(person), person, _friends_line(person, friends)),
         "[Today, by chance: %s. Let it colour your day, or not.]" % rng.choice(EVENTS)]
@@ -783,17 +798,60 @@ def stock_prompt(person, pool, n_pick, n_new, rng, asked, friends=(), commission
     return "\n".join(lines)
 
 
+def _search_prompt(person, pool, n_pick, n_new, asked, friends, commission, bribe, searches):
+    """The staged stock turn: his picks and greeting as before, and where he
+    went searching today -- the one thing the DM is given to invent from.
+    No sparks and no chance events: the place is his, and he is shown his
+    last few so he goes somewhere new."""
+    lines = ["[%s (account %s) has come in, and their shop shelf needs filling. %s]" % (
+        display(person), person, _friends_line(person, friends))]
+    if n_pick:
+        lines.append("[In the back, free to sell (nobody has them): id, name, kind, price, "
+                     "description:]")
+        lines += ["  %d: %s, %s, %d coins -- %s" % p for p in pool]
+        lines.append("[Pick %d of those to put in front of %s today -- your eye, not "
+                     "theirs: something they would never ask for as often as something "
+                     "they might. Do not just match what they bought before.]" % (
+                         n_pick, display(person)))
+    lines.append("[%d new finds came in today. Where did you go searching today, and what were "
+                 "you after? Tell it in your own voice, a few sentences, up to %d characters: "
+                 "the place, what it was like, what you hoped to turn up. Do not describe the "
+                 "finds themselves.]" % (n_new, SEARCH_LEN))
+    if searches:
+        lines.append("[Lately you have searched: %s. Go somewhere you have not been lately.]"
+                     % " / ".join(wire.flat(s, 120, ascii=True) for s in searches))
+    if commission is not None:
+        if bribe:
+            lines.append("[%s also slipped you %d coins on the side to do better than usual: "
+                         "you went to your best contacts.]" % (display(person), bribe))
+        if commission:
+            lines.append("[%s paid you to go out looking, and asked for: \"%s\". That is what "
+                         "you were after today.]" % (display(person), commission))
+        else:
+            lines.append("[%s paid you to go out looking, for nothing in particular.]"
+                         % display(person))
+    elif asked:
+        lines.append("[If %s has asked you to look out for something, you had it in mind while "
+                     "you searched. If they have not, ignore this.]" % display(person))
+    lines.append("[Then greet %s as they come in: what you say over the counter, under %d "
+                 "characters. Answer with only JSON: {\"line\": your words, \"picks\": [ids], "
+                 "\"search\": where you went}]" % (display(person), LINE_LEN))
+    return "\n".join(lines)
+
+
 def stock_turn(chat, person, pool, n_pick, n_new, friends=(), store=None, rng=None, log=None,
-               commission=None, kinds=None, bribe=0):
+               commission=None, kinds=None, bribe=0, staged=False):
     """His turn for a stock: (line, picks, briefs). picks are ids from `pool`
     (he may get some wrong; the caller checks); if he cannot be asked, a
-    note on the door, no picks and loose briefs."""
+    note on the door, no picks and loose briefs. staged: (line, picks,
+    search) -- where he went searching, "" when he cannot be asked."""
     st = store or kv.store()
     rng = rng or random.Random()
     asked = rng.randrange(100) < ANSWER_CHANCE
-    schema = stock_schema(n_pick, n_new)
+    schema = stock_schema(n_pick, n_new, staged)
+    searches = _get(st, "tibbs/searches", []) if staged else ()
     prompt = stock_prompt(person, pool, n_pick, n_new, rng, asked, friends, commission, kinds,
-                          bribe)
+                          bribe, staged, searches[-SEARCHES_KEPT:])
     why = None
     for attempt in range(2):
         try:
@@ -808,6 +866,14 @@ def stock_turn(chat, person, pool, n_pick, n_new, friends=(), store=None, rng=No
             bad = ask.validate(value, schema)
         except ValueError as e:
             bad = [str(e)]
+        if not bad and staged:
+            line = wire.flat(value["line"], LINE_LEN, ascii=True)
+            search = wire.flat(value["search"], SEARCH_LEN, ascii=True)
+            with _meta:
+                _put(st, "tibbs/day/" + person, line)
+                _put(st, "tibbs/searches",
+                     (_get(st, "tibbs/searches", []) + [search])[-SEARCHES_KEPT:])
+            return line, [int(i) for i in value["picks"]], search
         if not bad:
             line = wire.flat(value["line"], LINE_LEN, ascii=True)
             briefs = [wire.flat(b, BRIEF_LEN, ascii=True) for b in value["briefs"]]
@@ -818,10 +884,14 @@ def stock_turn(chat, person, pool, n_pick, n_new, friends=(), store=None, rng=No
             return line, [int(i) for i in value["picks"]], briefs
         why = "; ".join(bad[:3])
         prompt = ("[That was not the JSON the shop needs (%s). Answer again with only the "
-                  "JSON: {\"line\": ..., \"picks\": [...], \"briefs\": [...]}]" % why)
+                  "JSON: {\"line\": ..., \"picks\": [...], \"%s\": %s}]" % (
+                      why, "search" if staged else "briefs", "\"...\"" if staged else "[...]"))
     if log:
-        log("stock turn: %s" % why)
+        log("stock turn: %s%s" % (why, "; no search: the DM works from the rolls alone"
+                                  if staged else ""))
     line = "A note on the door: 'Out on business. Help yourself, pay the jar.'"
     with _meta:
         _put(st, "tibbs/day/" + person, line)
+    if staged:
+        return line, [], ""                             # no random words in its place
     return line, [], [loose_brief(rng) for _ in range(n_new)]
