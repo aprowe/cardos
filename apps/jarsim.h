@@ -154,7 +154,11 @@ enum { JSD_NONE = 0, JSD_POP, JSD_CHIRP, JSD_BOING, JSD_DING, JSD_HORN, JSD_WHOO
 #define JS_ANTS    5
 #define JS_PELLETS 4
 
-enum { JU_MOSS = 0, JU_MACH, JU_BELT, JU_BED, JU_KINDS };
+enum { JU_MOSS = 0, JU_MACH, JU_BELT, JU_BED, JU_JAR, JU_KINDS };
+/* More jars (2026-10-11): extra jars are empty glass for your things; they
+ * make nothing. While one is on screen (jar_at) the factory jar stands still
+ * and pays by its rate. */
+#define JS_MAX_JARS 3
 enum { PH_NONE = 0, PH_DAWN, PH_DAY, PH_DUSK, PH_NIGHT };
 enum { JWX_NONE = 0, JWX_SUNNY, JWX_CLOUDY, JWX_FOGGY, JWX_RAINY, JWX_SNOWY, JWX_STORMY };
 enum { JSN_X = 0, JSN_ZONE, JSN_NEAR_KIND, JSN_NEAR_DIST, JSN_TIME, JSN_WEATHER,
@@ -295,6 +299,8 @@ typedef struct {
   uint32_t txseen;                     /* the last of Tibbs's deals carried out (tx) */
   uint32_t patchseen;                  /* the last patch fetched (server/jarpatch.py) */
   uint16_t res[JRS_KINDS];             /* the stores: spores, nectar, twigs */
+  uint8_t  njars, jar_at;              /* extra jars bought; the one on screen (0 the factory) */
+  uint32_t away_acc;                   /* jar-ms of pay owed while away, toward the next jar */
   uint8_t  build_k;                    /* an upgrade being built: JU_* + 1, 0 none */
   uint32_t build_at;                   /* ... done at this UTC second */
 
@@ -1299,12 +1305,16 @@ static JS_OPT const uint16_t JS_COST_MACH[JS_MAX_MACH] = { 0, 0, 120, 400 };
 static JS_OPT const uint16_t JS_COST_BELT[JS_MAX_BELT] = { 50, 150, 450 };
 static JS_OPT const uint16_t JS_COST_BED[JS_MAX_BEDS]  = { 0, 0, 25, 60, 140, 300 };
 
+static JS_OPT const uint16_t JS_COST_JAR[JS_MAX_JARS] = { 400, 1200, 3000 };
+
 static JS_OPT int js_up_level(const Jar *j, int k) {
-  return k == JU_MOSS ? j->nmoss : k == JU_MACH ? j->nmach : k == JU_BELT ? j->belt : j->nbeds;
+  return k == JU_MOSS ? j->nmoss : k == JU_MACH ? j->nmach : k == JU_BELT ? j->belt :
+         k == JU_JAR ? j->njars : j->nbeds;
 }
 
 static JS_OPT int js_up_max(int k) {
-  return k == JU_MOSS ? JS_MAX_MOSS : k == JU_MACH ? JS_MAX_MACH : k == JU_BELT ? JS_MAX_BELT : JS_MAX_BEDS;
+  return k == JU_MOSS ? JS_MAX_MOSS : k == JU_MACH ? JS_MAX_MACH : k == JU_BELT ? JS_MAX_BELT :
+         k == JU_JAR ? JS_MAX_JARS : JS_MAX_BEDS;
 }
 
 /* What the next one costs, or -1 at the top. */
@@ -1312,7 +1322,7 @@ static JS_OPT int js_up_cost(const Jar *j, int k) {
   int lv = js_up_level(j, k);
   if (lv >= js_up_max(k)) return -1;
   return k == JU_MOSS ? JS_COST_MOSS[lv] : k == JU_MACH ? JS_COST_MACH[lv] :
-         k == JU_BELT ? JS_COST_BELT[lv] : JS_COST_BED[lv];
+         k == JU_BELT ? JS_COST_BELT[lv] : k == JU_JAR ? JS_COST_JAR[lv] : JS_COST_BED[lv];
 }
 
 /* The rate an upgrade would give. */
@@ -1378,6 +1388,9 @@ static JS_OPT uint32_t js_build_s(const Jar *j, int k) {
 /* Upgrade k, now. */
 static JS_OPT void js_up_apply(Jar *j, int k) {
   switch (k) {
+  case JU_JAR:                         /* empty glass: the jar app makes its file */
+    if (j->njars < JS_MAX_JARS) j->njars++;
+    break;
   case JU_MOSS:
     js_new_moss(j, j->nmoss);
     js_particle(j, JP_SPARKLE, j->moss[j->nmoss].x / JS_FX, JS_SOIL - 12);
@@ -2240,16 +2253,33 @@ static JS_OPT void js_step_world(Jar *j) {
 }
 
 /* One step of jar time. */
+/* Away in another jar: the factory stands still and pays by its rate --
+ * nothing while a chore has stopped it, as it would be. */
+static JS_OPT void js_step_away(Jar *j) {
+  int32_t r = js_chores(j) ? 0 : js_rate_ph(j);
+  j->away_acc += (uint32_t)r * JS_STEP_MS;
+  while (j->away_acc >= 3600000u) {
+    j->away_acc -= 3600000u;
+    j->coins += JS_JAR_VALUE;
+    j->shipped++;
+    js_float(j, 220, 20, JS_JAR_VALUE);
+  }
+}
+
 static JS_OPT void js_step(Jar *j) {
   int k;
   j->steps++;
   if (j->nap_clock > 0) j->nap_clock--;
-  js_step_world(j);
-  js_step_beds(j);
-  for (k = 0; k < j->nmoss; k++) js_step_moss(j, k);
-  js_step_works(j);
-  js_step_snail(j);
-  js_step_jam(j);
+  if (j->jar_at) {
+    js_step_away(j);                   /* an extra jar: only its things move */
+  } else {
+    js_step_world(j);
+    js_step_beds(j);
+    for (k = 0; k < j->nmoss; k++) js_step_moss(j, k);
+    js_step_works(j);
+    js_step_snail(j);
+    js_step_jam(j);
+  }
   for (k = 0; k < j->nplaced; k++) js_step_item(j, k);
   if (j->steps % JS_ITEM_TICK == 0) js_item_tick(j);
   js_step_chat(j);
@@ -2312,6 +2342,10 @@ static JS_OPT int js_save(const Jar *j, char *buf, int cap) {
   JS_KV("gseen", j->gseen);
   if (j->txseen) JS_KV("txseen", j->txseen);
   if (j->patchseen) JS_KV("patchseen", j->patchseen);
+  if (j->njars) {
+    n = js_put3(buf, n, cap, "jars ", j->njars, " ");
+    n = js_put3(buf, n, cap, "", j->jar_at, "\n");
+  }
   if (j->build_k) {
     n = js_put3(buf, n, cap, "build ", j->build_k, " ");
     n = js_put3(buf, n, cap, "", j->build_at, "\n");
@@ -2325,7 +2359,9 @@ static JS_OPT int js_save(const Jar *j, char *buf, int cap) {
    * must not lose it). "place ID X Y", and the level after it when it is
    * up a ledge: a reader that does not know levels ignores the fourth
    * number, and a line without one is on the soil. */
-  for (i = 0; i < j->nplaced + j->nwant; i++) {
+  /* Away in an extra jar, the placed items are that jar's (its own file,
+   * js_save_extra): only the want lines -- the main jar's -- go here. */
+  for (i = j->jar_at ? j->nplaced : 0; i < j->nplaced + j->nwant; i++) {
     uint32_t id = i < j->nplaced ? j->placed[i].id : j->want[i - j->nplaced].id;
     int x = i < j->nplaced ? j->placed[i].home_x : j->want[i - j->nplaced].x;
     int y = i < j->nplaced ? j->placed[i].home_y : j->want[i - j->nplaced].y;
@@ -2430,6 +2466,10 @@ static JS_OPT int js_load(Jar *j, const char *t) {
     else if (js_word_is(w, "gseen")) j->gseen = js_num(&p);
     else if (js_word_is(w, "txseen")) j->txseen = js_num(&p);
     else if (js_word_is(w, "patchseen")) j->patchseen = js_num(&p);
+    else if (js_word_is(w, "jars")) {
+      j->njars = (uint8_t)js_clamp((int)js_num(&p), 0, JS_MAX_JARS);
+      j->jar_at = (uint8_t)js_clamp((int)js_num(&p), 0, j->njars);
+    }
     else if (js_word_is(w, "build")) {
       uint32_t k = js_num(&p);
       j->build_at = js_num(&p);
@@ -2473,6 +2513,51 @@ static JS_OPT int js_load(Jar *j, const char *t) {
     }
   }
   return 0;
+}
+
+/* An extra jar's own file: the things placed in it, "place ID X Y [LV [ON]]"
+ * as the main save writes them. Its length. */
+static JS_OPT int js_save_extra(const Jar *j, char *buf, int cap) {
+  int n = 0, i;
+  n = js_put(buf, n, cap, "jarx 1\n");
+  for (i = 0; i < j->nplaced; i++) {
+    const JPlaced *p = &j->placed[i];
+    n = js_put3(buf, n, cap, "place ", p->id, " ");
+    n = js_put3(buf, n, cap, "", (uint32_t)p->home_x, " ");
+    n = js_put_u(buf, n, cap, (uint32_t)p->home_y);
+    if (p->level || p->on_id) n = js_put3(buf, n, cap, " ", p->level, "");
+    if (p->on_id) n = js_put3(buf, n, cap, " ", p->on_id, "");
+    n = js_put(buf, n, cap, "\n");
+  }
+  return n;
+}
+
+/* An extra jar's file into `out` (max entries): its count, or -1 if it is
+ * not one. */
+static JS_OPT int js_extra_parse(const char *t, JWant *out, int max) {
+  const char *p = t;
+  int n = 0;
+  if (!js_word_is(p, "jarx")) return -1;
+  while (*p) {
+    const char *w = p;
+    while (*p && *p != ' ' && *p != '\n') p++;
+    if (js_word_is(w, "place") && n < max) {
+      uint32_t id = js_num(&p);
+      int x = (int)js_num(&p), y = (int)js_num(&p);
+      uint32_t lv = js_more(p) ? js_num(&p) : 0, on = js_more(p) ? js_num(&p) : 0;
+      if (id) {
+        out[n].id = id;
+        out[n].on = on;
+        out[n].x = (int16_t)x;
+        out[n].y = (int8_t)js_clamp(y, 0, 60);
+        out[n].lv = (uint8_t)(lv < JS_LEVELS ? lv : JS_LEVELS - 1);
+        n++;
+      }
+    }
+    while (*p && *p != '\n') p++;
+    if (*p) p++;
+  }
+  return n;
 }
 
 #endif /* CARDOS_JARSIM_H */

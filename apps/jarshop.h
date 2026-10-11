@@ -88,7 +88,8 @@ static ShopMem SHOP_MEM;
 #define FIND_COST    150       /* f: Tibbs goes out looking -- a whole stock of new finds */
 #define FIND_N       8
 
-static const char *const UP_NAME[JU_KINDS] = { "Another mossling", "Another machine", "Faster belt", "Another bed" };
+static const char *const UP_NAME[JU_KINDS] = { "Another mossling", "Another machine", "Faster belt", "Another bed",
+                                               "Another jar" };
 static const int PLANT_SPR[JPL_KINDS] = { SPR_BUSH, SPR_REED, SPR_SHROOM, SPR_FLOWER };
 #define SHORT JS_PLANT_SHORT
 
@@ -551,25 +552,32 @@ static void paint_up(void) {
   char b[40], r1[16], r2[16];
   box(0, BAR, SW, BODY, C_BG);
   for (k = 0; k < JU_KINDS; k++) {
-    int y = BAR + 3 + k * 26, cost = js_up_cost(&J, k), lv = js_up_level(&J, k);
-    box(4, y, SW - 8, 24, C_PANEL);
-    if (k == G.up_sel) outline(4, y, SW - 8, 24, C_GOLD);
+    int y = BAR + 2 + k * 21, cost = js_up_cost(&J, k), lv = js_up_level(&J, k);
+    box(4, y, SW - 8, 20, C_PANEL);
+    if (k == G.up_sel) outline(4, y, SW - 8, 20, C_GOLD);
     switch (k) {
-    case JU_MOSS: spr(SPR_MOSS, 9, y + 7, 1, C_PANEL); break;
-    case JU_MACH: spr(SPR_SPOOL, 8, y + 4, 1, C_PANEL); break;
-    case JU_BELT: box(7, y + 10, 6, 3, CAPP_RGB(0xc8, 0x42, 0x3a)); box(14, y + 10, 6, 3, CAPP_RGB(0x4a, 0x7a, 0xc8)); break;
-    default:      spr(SPR_BUSH, 8, y + 5, 1, C_PANEL); break;
+    case JU_MOSS: spr(SPR_MOSS, 9, y + 6, 1, C_PANEL); break;
+    case JU_MACH: spr(SPR_SPOOL, 8, y + 2, 1, C_PANEL); break;
+    case JU_BELT: box(7, y + 9, 6, 3, CAPP_RGB(0xc8, 0x42, 0x3a)); box(14, y + 9, 6, 3, CAPP_RGB(0x4a, 0x7a, 0xc8)); break;
+    case JU_JAR:  spr(SPR_JAR, 10, y + 6, 1, C_PANEL); break;
+    default:      spr(SPR_BUSH, 8, y + 3, 1, C_PANEL); break;
     }
-    text(26, y + 4, UP_NAME[k], C_TEXT, C_PANEL);
+    text(26, y + 2, UP_NAME[k], C_TEXT, C_PANEL);
     if (J.build_k == k + 1) {                       /* being built: how long */
       api->fmt(b, sizeof b, "building: %s left", jtx_dur(J.build_at > U.now ? J.build_at - U.now : 0));
-      text(26, y + 14, b, C_GOLD, C_PANEL);
+      text(26, y + 11, b, C_GOLD, C_PANEL);
       continue;
     }
     if (cost < 0) {
       api->fmt(b, sizeof b, "all %d", js_up_max(k) + (k == JU_BELT));
-      text(26, y + 14, b, C_DIM, C_PANEL);
-      text(SW - 34, y + 9, "max", C_DIM, C_PANEL);
+      text(26, y + 11, b, C_DIM, C_PANEL);
+      text(SW - 34, y + 6, "max", C_DIM, C_PANEL);
+      continue;
+    }
+    if (k == JU_JAR) {                              /* empty glass: no rate */
+      api->fmt(b, sizeof b, "%d of %d  empty, for your things", lv, js_up_max(k));
+      text(26, y + 11, b, C_DIM, C_PANEL);
+      price(SW - 46, y + 6, cost, (uint32_t)cost > J.coins, C_PANEL);
       continue;
     }
     {
@@ -579,8 +587,8 @@ static void paint_up(void) {
     }
     if (k == JU_MACH) api->fmt(b, sizeof b, "%s  %s->%s/min", lv == 2 ? "press" : "spool", r1, r2);
     else api->fmt(b, sizeof b, "%d of %d  %s->%s/min", lv + (k == JU_BELT), js_up_max(k) + (k == JU_BELT), r1, r2);
-    text(26, y + 14, b, C_DIM, C_PANEL);
-    price(SW - 46, y + 9, cost, (uint32_t)cost > J.coins, C_PANEL);
+    text(26, y + 11, b, C_DIM, C_PANEL);
+    price(SW - 46, y + 6, cost, (uint32_t)cost > J.coins, C_PANEL);
   }
 }
 

@@ -697,12 +697,14 @@ static void scene(void) {
   weather_back();
   lv_scenery();
   ledges();
-  garden();
-  works();
-  dock();
-  lv_world();
+  if (!J.jar_at) {                     /* the factory; an extra jar is empty glass */
+    garden();
+    works();
+    dock();
+    lv_world();
+  }
   items();
-  workers();
+  if (!J.jar_at) workers();
   lv_parts();
   parachute();
   light();
@@ -741,12 +743,12 @@ static void text2(int x, int y, const char *s, uint16_t c) {
 
 /* The jar's menu: Enter opens it, every command a big tile with its key in
  * the corner (the letters still work from the jar without it). */
-enum { M_SHOP, M_STUFF, M_DECOR, M_GARDEN, M_TOWN, M_UP, M_FRIENDS, M_MAIL, M_N };
+enum { M_SHOP, M_STUFF, M_DECOR, M_GARDEN, M_TOWN, M_UP, M_FRIENDS, M_MAIL, M_JARS, M_N };
 static const char *const MENU_NAME[M_N] = {
-  "Shop", "My Stuff", "Decorate", "Garden", "Town", "Upgrades", "Friends", "Mail" };
-static const char MENU_KEY[M_N] = { 'S', 'I', 'D', 'P', 'T', 'U', 'F', 'M' };
+  "Shop", "My Stuff", "Decorate", "Garden", "Town", "Upgrades", "Friends", "Mail", "Jars" };
+static const char MENU_KEY[M_N] = { 'S', 'I', 'D', 'P', 'T', 'U', 'F', 'M', 'J' };
 #define MENU_TOP   (BAR + 2)
-#define MENU_ROW   26
+#define MENU_ROW   21
 #define MENU_W     116
 
 static int parcels(void);
@@ -759,7 +761,7 @@ static void menu(void) {
     char k[2];
     fill(x, y, MENU_W, MENU_ROW - 2, sel ? mix(C_PANEL, 0x50, 0x48, 0x80, 90) : C_PANEL);
     if (sel) frame(x, y, MENU_W, MENU_ROW - 2, C_GOLD);
-    text2(x + 6, y + 4, MENU_NAME[i], sel ? C_TEXT : C_DIM);
+    text2(x + 6, y + 2, MENU_NAME[i], sel ? C_TEXT : C_DIM);
     k[0] = MENU_KEY[i];
     k[1] = 0;
     fill(x + MENU_W - 12, y + 3, 9, 9, C_TEXT);           /* its key, as a cap */
@@ -767,8 +769,8 @@ static void menu(void) {
     if (i == M_MAIL && parcels()) {                       /* parcels waiting */
       char n[6];
       api->fmt(n, sizeof n, "%d", parcels());
-      fill(x + MENU_W - 12 - (slen(n) * 6 + 4) - 2, y + 13, slen(n) * 6 + 4, 9, C_PINK);
-      text(x + MENU_W - 12 - (slen(n) * 6 + 4), y + 14, n, C_BG);
+      fill(x + MENU_W - 12 - (slen(n) * 6 + 4) - 2, y + 3, slen(n) * 6 + 4, 9, C_PINK);
+      text(x + MENU_W - 12 - (slen(n) * 6 + 4), y + 4, n, C_BG);
     }
   }
 }
@@ -787,7 +789,8 @@ static void bars(void) {
   static const char *const H_DMOVE[] = { "<>", "move", "^v", "string", "Ent", "put", "Esc", "cancel", 0 };
   static const char *const H_DMOVE2[] = { "<>", "move", "Ent", "put", "Esc", "cancel", 0 };
   static const char *const H_DMOVE3[] = { "<>", "move", "^v", "level", "Ent", "put", "Esc", "cancel", 0 };
-  const char *where = "The Jar";
+  const char *where = J.jar_at ? (J.jar_at == 1 ? "Jar 2" : J.jar_at == 2 ? "Jar 3" : "Jar 4")
+                                : "The Jar";
   char b[24];
   int ty = -G.bars, by = SHT - BAR + G.bars;
   if (ty + BAR > SY0 && ty < SY1) {
@@ -988,10 +991,100 @@ static void save_memory(void) {
   }
 }
 
+/* An extra jar's file. */
+static void jar_path(int k, char *p, int n) {
+  api->fmt(p, (size_t)n, CAPP_VAR "/jar/jar%d.txt", k + 1);
+}
+
 static void save(void) {
   save_memory();
   jst_save(api, &J, SCR.text, sizeof SCR.text);
+  if (J.jar_at) {                      /* away: the things here are this jar's own */
+    char p[40];
+    int n = js_save_extra(&J, SCR.text, sizeof SCR.text);
+    jar_path(J.jar_at, p, sizeof p);
+    jst_put(api, p, SCR.text, n);
+  }
   G.last_save = api->ticks_ms();
+}
+
+/* Put an extra jar's things in (its file; none if it has none yet). */
+static void place_extra(int k) {
+  static JWant w[JS_MAX_PLACED];
+  char p[40];
+  int n, i;
+  jar_path(k, p, sizeof p);
+  if (jst_get(api, p, SCR.text, sizeof SCR.text) <= 0) return;
+  n = js_extra_parse(SCR.text, w, JS_MAX_PLACED);
+  for (i = 0; i < n; i++) {
+    int at;
+    if (!js_owns(&J, w[i].id) || item_read(w[i].id) != 0) continue;
+    at = js_place(&J, &SCR.io.it, w[i].x, w[i].y);
+    if (at >= 0 && w[i].lv) js_set_level(&J, at, w[i].lv);
+    lv_patch_load(at);
+  }
+}
+
+/* Everything out of the jar on screen (their places already saved). */
+static void unplace_all(void) {
+  while (J.nplaced) js_unplace(&J, J.nplaced - 1);
+}
+
+/* Is `id` in a jar other than the one on screen? Its jar's number (1 the
+ * factory), or 0. */
+static int jar_of(uint32_t id) {
+  static JWant w[JS_MAX_PLACED];
+  char p[40];
+  int k, i, n;
+  if (J.jar_at)                         /* the factory's things are the want lines */
+    for (i = 0; i < J.nwant; i++) if (J.want[i].id == id) return 1;
+  for (k = 1; k <= J.njars; k++) {
+    if (k == J.jar_at) continue;
+    jar_path(k, p, sizeof p);
+    if (jst_get(api, p, SCR.text, sizeof SCR.text) <= 0) continue;
+    n = js_extra_parse(SCR.text, w, JS_MAX_PLACED);
+    for (i = 0; i < n; i++) if (w[i].id == id) return k + 1;
+  }
+  return 0;
+}
+
+/* To jar k: 0 the factory, 1..njars the extra ones. */
+static void jar_go(int k) {
+  int i;
+  if (k == J.jar_at || k < 0 || k > J.njars) return;
+  save();
+  if (!J.jar_at) {                      /* leaving the factory: its places become want lines */
+    J.nwant = 0;
+    for (i = 0; i < J.nplaced && J.nwant < JS_MAX_PLACED; i++) {
+      JWant *w = &J.want[J.nwant++];
+      w->id = J.placed[i].id;
+      w->x = J.placed[i].home_x;
+      w->y = (int8_t)J.placed[i].home_y;
+      w->lv = J.placed[i].level;
+      w->on = J.placed[i].on_id;
+    }
+  }
+  unplace_all();
+  J.jar_at = (uint8_t)k;
+  if (k) place_extra(k);
+  else {                                /* back to the factory, as the save had it */
+    for (i = 0; i < J.nwant; i++) {
+      int at;
+      if (item_read(J.want[i].id) != 0) continue;
+      at = js_place(&J, &SCR.io.it, J.want[i].x, J.want[i].y);
+      if (at >= 0 && J.want[i].lv) js_set_level(&J, at, J.want[i].lv);
+      lv_patch_load(at);
+    }
+    J.nwant = 0;
+  }
+  G.view = V_JAR;
+  save();
+  {
+    char m[40];
+    if (k) api->fmt(m, sizeof m, "Jar %d: the factory pays meanwhile", k + 1);
+    else api->fmt(m, sizeof m, "The factory jar");
+    say(m);
+  }
 }
 
 /* Save, and open a companion at one of its screens. Quitting it comes back
@@ -1019,9 +1112,18 @@ static void decor_select(int i) {
 }
 
 /* Put item `id` in the jar and start moving it. */
+static int jar_of(uint32_t id);
+
 static void place_new(uint32_t id) {
   int i;
   if (J.nplaced >= JS_MAX_PLACED) { say("The jar is full: 24 things"); return; }
+  if ((i = jar_of(id)) != 0) {
+    char m[40];
+    if (i == 1) api->fmt(m, sizeof m, "It is in the factory jar");
+    else api->fmt(m, sizeof m, "It is in jar %d", i);
+    say(m);
+    return;
+  }
   if (item_read(id) != 0) { say("That item is missing"); return; }
   i = js_place(&J, &SCR.io.it, 120, 24);
   if (i < 0) { say("No room for its pictures"); return; }
@@ -1157,6 +1259,10 @@ static int scene_key(void *st, unsigned char k) {
     return 1;
   case 'f': case 'F': open_app("Jar Post", "friends"); return 1;
   case 'm': case 'M': open_app("Jar Post", "mail"); return 1;
+  case 'j': case 'J':                               /* the next jar, round to the factory */
+    if (!J.njars) { say("More jars: Upgrades, Another jar"); return 1; }
+    jar_go((J.jar_at + 1) % (J.njars + 1));
+    return 1;
   case CAPP_KEY_ENTER:
     /* the menu; with parcels on the dock, on Mail */
     G.menu = 1;
@@ -1501,14 +1607,18 @@ static void load(void) {
   if (jst_load(api, &J, SCR.text, sizeof SCR.text) != 0) { first_run(); return; }
   js_settle_beds(&J, now);
   js_settle_build(&J, now);                        /* an upgrade finished while away */
-  for (i = 0; i < J.nwant; i++) {
-    int x = J.want[i].x, y = J.want[i].y, k;
-    if (item_read(J.want[i].id) != 0) continue;
-    k = js_place(&J, &SCR.io.it, x, y);
-    if (k >= 0 && J.want[i].lv) js_set_level(&J, k, J.want[i].lv);
-    lv_patch_load(k);                               /* what it learned, if anything */
+  if (J.jar_at) {
+    place_extra(J.jar_at);                         /* the factory's places stay want lines */
+  } else {
+    for (i = 0; i < J.nwant; i++) {
+      int x = J.want[i].x, y = J.want[i].y, k;
+      if (item_read(J.want[i].id) != 0) continue;
+      k = js_place(&J, &SCR.io.it, x, y);
+      if (k >= 0 && J.want[i].lv) js_set_level(&J, k, J.want[i].lv);
+      lv_patch_load(k);                             /* what it learned, if anything */
+    }
+    J.nwant = 0;                                   /* placed, or gone from the card */
   }
-  J.nwant = 0;                                     /* placed, or gone from the card */
   js_away(&J, now);                                /* nothing is made off screen */
   /* Jar Shop or Jar Post asked for an item to be put in the jar. */
   if (J.decor) {
@@ -1622,7 +1732,10 @@ static int POST_BACK;                   /* the post was opened from the shop */
 static void screen_bind(void) {
   int i;
   uintptr_t a;
-  if (SCREEN == SC_JAR) {
+  if (SCREEN == SC_JAR && J.jar_at) {
+    save();                            /* this jar's things to its file */
+    J.nplaced = 0;                     /* the factory's want lines stay as they are */
+  } else if (SCREEN == SC_JAR) {
     save();
     J.nwant = 0;
     for (i = 0; i < J.nplaced && J.nwant < JS_MAX_PLACED; i++) {

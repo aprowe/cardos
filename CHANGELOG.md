@@ -11,6 +11,17 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.21.0 -- 2026-10-11
+
+Jar Factory (`update apps`).
+
+- **More jars.** Upgrades sells "Another jar" (400, 1200, 3000 coins; three
+  at most; built over real time like any upgrade). An extra jar is empty
+  glass for your things: no beds, mosslings or dock, and it makes nothing.
+  While you are in one, the factory jar stands still and pays by its rate
+  (nothing while a chore has stopped it). `j` or the menu's Jars tile goes to
+  the next jar and round to the factory; a thing is in one jar at a time.
+
 ## v0.20.0 -- 2026-10-11
 
 Jar Factory (`update apps`) and the server. Devices should update: new items
