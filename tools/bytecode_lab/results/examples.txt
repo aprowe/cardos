@@ -1,5 +1,0 @@
-          today f1  today f2    ext f1    ext f2   table
-pillbug        100        49       115        64      32
-tree            73        37        61        32      22
-bird           105        56       104        68      30
-all            278       142       280       164      84

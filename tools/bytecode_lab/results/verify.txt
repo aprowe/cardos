@@ -1,1 +1,0 @@
-format 2 (dense): 243 of 243 scripts behave identically over 3 simulated days
