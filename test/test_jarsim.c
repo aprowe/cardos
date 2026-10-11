@@ -263,7 +263,7 @@ void test_jarsim_a_liked_item_speeds_a_mossling(void) {
   mk_item(&it, 4, JK_FLOOR, JM_SITS);
   strcpy(it.tags, "cosy,soft");
   CHECK_EQ(js_place(&J, &it, J.moss[0].x / JS_FX, 0), 0);
-  CHECK_EQ(J.placed[0].tags, JT_COSY | JT_SOFT);
+  CHECK_EQ(J.placed[0].tags, JT_BIT(JT_COSY) | JT_BIT(JT_SOFT));
   J.steps = JS_ITEM_TICK - 1;
   js_step(&J);
   CHECK(J.moss[0].boost > 0);
@@ -529,4 +529,231 @@ void test_jarsim_critters_climb_up_and_come_down(void) {
   js_move_to(&J, 0, 120, 0);
   CHECK_EQ(J.placed[0].climb, 0);
   CHECK_EQ(J.placed[0].level, 0);
+}
+
+
+/* ---- the living jar (language v2, world events, chores) -------------------- */
+
+static int place_at(uint32_t id, int kind, int move, int x, const char *tags) {
+  static JItem it;
+  mk_item(&it, id, kind, move);
+  strcpy(it.tags, tags);
+  return js_place(&J, &it, x, 0);
+}
+
+void test_jarsim_traits_old_words_and_new(void) {
+  fresh(3);
+  CHECK_EQ(js_tags("shiny,noisy"), JT_BIT(JT_SHINY) | JT_BIT(JT_NOISY));
+  CHECK_EQ(js_tags("glowing, fancy"), JT_BIT(JT_LIGHT) | JT_BIT(JT_SHINY));   /* older words */
+  CHECK_EQ(js_tags("sleepy"), 0x8000);
+  CHECK_EQ(js_tags("purple,,food"), JT_BIT(JT_FOOD));
+  CHECK_EQ(place_at(1, JK_FLOOR, JM_SITS, 100, "sleepy,food"), 0);
+  CHECK_EQ(js_sense(&J, 0, JSN_TRAITS), -32768 | JT_BIT(JT_FOOD));   /* bit 15 kept */
+}
+
+void test_jarsim_eat_drop_and_the_berry_event(void) {
+  int b;
+  fresh(4);
+  b = 0;
+  J.bed[b].ready = 1;
+  CHECK_EQ(place_at(1, JK_CRITTER, JM_SITS, JS_BED_X(b) + 4, "wild"), 0);
+  CHECK_EQ(js_sense(&J, 0, JSN_BERRIES), 1);
+  CHECK_EQ(js_act(&J, 0, JA_EAT, 0), 0);
+  CHECK_EQ(J.bed[b].ready, 0);
+  CHECK_EQ(J.placed[0].fed, 1);
+  CHECK_EQ(js_sense(&J, 0, JSN_FED), 1);
+  CHECK_EQ(js_act(&J, 0, JA_EAT, 0), -1);              /* nothing ripe in reach */
+  /* a pellet feeds the bush: it ripens sooner, and ripening is an event */
+  J.placed[0].hab[0].event = JE_BERRY;
+  J.placed[0].hab[0].action = JA_SAY;
+  J.placed[0].nhab = 1;
+  J.placed[0].nbub = 1;
+  J.bed[b].grow = 0;
+  CHECK_EQ(js_act(&J, 0, JA_DROP, 0), 0);
+  CHECK_EQ(J.bed[b].grow, JS_GROW_MS / 3);
+  CHECK(J.pel_t[0] > 0);
+  J.bed[b].grow = JS_GROW_MS - JS_STEP_MS;
+  J.placed[0].say_t = 0;
+  js_step(&J);
+  CHECK_EQ(J.bed[b].ready, 1);
+  CHECK(J.placed[0].say_t > 0);                        /* on berry: it said so */
+}
+
+void test_jarsim_throw_lands_and_bumps(void) {
+  int i, bumped = 0;
+  fresh(5);
+  CHECK_EQ(place_at(1, JK_CRITTER, JM_SITS, 100, ""), 0);
+  CHECK_EQ(place_at(2, JK_FLOOR, JM_SITS, 112, ""), 1);
+  CHECK_EQ(place_at(3, JK_FLOOR, JM_SITS, 200, "big"), 2);
+  J.placed[1].hab[0].event = JE_BUMPED;
+  J.placed[1].hab[0].action = JA_SAY;
+  J.placed[1].nhab = 1;
+  J.placed[1].nbub = 1;
+  CHECK_EQ(js_act(&J, 0, JA_THROW, 0), 0);
+  CHECK(J.placed[1].vy > 0 && J.placed[1].vx > 0);       /* away from the thrower */
+  for (i = 0; i < 200; i++) {
+    js_step_item(&J, 1);
+    if (J.placed[1].say_t > 0) bumped = 1;
+  }
+  CHECK(bumped);
+  CHECK_EQ(J.placed[1].yoff, 0);
+  CHECK_EQ(J.placed[1].x, (int32_t)J.placed[1].home_x * JS_FX);   /* decor drifts home */
+  /* a big thing is never thrown; nothing in reach, nothing thrown */
+  J.placed[1].x = 300 * JS_FX;
+  CHECK_EQ(js_act(&J, 0, JA_THROW, 0), -1);
+}
+
+void test_jarsim_signals_are_heard_next_step_by_the_others(void) {
+  fresh(6);
+  CHECK_EQ(place_at(1, JK_FLOOR, JM_SITS, 60, ""), 0);
+  CHECK_EQ(place_at(2, JK_FLOOR, JM_SITS, 160, ""), 1);
+  J.placed[0].hab[0].event = JE_SIGNAL; J.placed[0].hab[0].earg = 2; J.placed[0].hab[0].action = JA_GLOW;
+  J.placed[0].hab[0].aarg = 1;
+  J.placed[0].nhab = 1;
+  J.placed[1].hab[0].event = JE_SIGNAL; J.placed[1].hab[0].earg = 2; J.placed[1].hab[0].action = JA_GLOW;
+  J.placed[1].hab[0].aarg = 1;
+  J.placed[1].nhab = 1;
+  CHECK_EQ(js_act(&J, 0, JA_SIGNAL, 2), 0);
+  CHECK_EQ(J.placed[1].glow, 0);                       /* not yet: no recursion */
+  js_step(&J);
+  CHECK_EQ(J.placed[1].glow, 1);
+  CHECK_EQ(J.placed[0].glow, 0);                       /* not to itself */
+  CHECK_EQ(js_act(&J, 0, JA_SIGNAL, 0), -1);
+  CHECK_EQ(js_act(&J, 0, JA_SIGNAL, 3), 0);
+  js_step(&J);                                         /* 3 is not 2: nobody */
+}
+
+void test_jarsim_seek_sound_burst_boost_shake(void) {
+  int k, live = 0;
+  fresh(7);
+  CHECK_EQ(place_at(1, JK_CRITTER, JM_SITS, 40, ""), 0);
+  CHECK_EQ(place_at(2, JK_FLOOR, JM_SITS, 150, "food"), 1);
+  CHECK_EQ(js_act(&J, 0, JA_SEEK, JT_FOOD), 0);
+  CHECK(J.placed[0].moving && J.placed[0].tx > 120 * JS_FX);
+  CHECK_EQ(js_act(&J, 0, JA_SEEK, JT_MUSIC), -1);       /* nothing like that here */
+  CHECK_EQ(js_act(&J, 1, JA_SEEK, JT_FOOD), -1);        /* decor does not walk */
+  CHECK_EQ(js_act(&J, 0, JA_SOUND, JSD_HORN), 0);
+  CHECK_EQ(J.snd, JSD_HORN);
+  CHECK_EQ(js_act(&J, 0, JA_SOUND, 99), -1);
+  CHECK_EQ(js_act(&J, 0, JA_BURST, JP_SPARKLE), 0);
+  for (k = 0; k < JS_PARTS; k++) live += J.part[k].life > 0;
+  CHECK(live >= 10);
+  CHECK_EQ(js_act(&J, 0, JA_BOOST, 0), 0);
+  CHECK_EQ(J.belt_boost, 10 * JS_HZ);
+  CHECK_EQ(js_act(&J, 0, JA_BOOST, 30), -1);            /* once a minute */
+  CHECK_EQ(js_act(&J, 0, JA_SHAKE, 0), 0);
+  CHECK(J.placed[0].vy > 0 && J.placed[1].vy > 0);
+}
+
+void test_jarsim_the_hour_and_a_new_item(void) {
+  fresh(8);
+  CHECK_EQ(place_at(1, JK_FLOOR, JM_SITS, 60, ""), 0);
+  J.placed[0].hab[0].event = JE_HOUR; J.placed[0].hab[0].earg = 19;   /* 18:00 */
+  J.placed[0].hab[0].action = JA_GLOW; J.placed[0].hab[0].aarg = 2;
+  J.placed[0].hab[1].event = JE_NEW; J.placed[0].hab[1].action = JA_HOP;
+  J.placed[0].nhab = 2;
+  CHECK_EQ(js_sense(&J, 0, JSN_HOUR), -1);
+  js_set_hour(&J, 17);
+  CHECK_EQ(J.placed[0].glow, 0);
+  js_set_hour(&J, 18);
+  CHECK_EQ(J.placed[0].glow, 1);
+  js_set_hour(&J, 18);                                 /* the same hour: once */
+  CHECK_EQ(J.placed[0].glow, 1);
+  CHECK_EQ(js_sense(&J, 0, JSN_HOUR), 18);
+  CHECK_EQ(place_at(2, JK_FLOOR, JM_SITS, 160, "sweet"), 1);
+  js_announce(&J, 1);
+  CHECK(J.placed[0].vy > 0);
+  CHECK_EQ(js_sense(&J, 0, JSN_NEW_TRAITS), JT_BIT(JT_SWEET));
+}
+
+void test_jarsim_a_birdhouse_bird_flies_and_comes_home(void) {
+  int i, away = 0, back = 0;
+  fresh(9);
+  CHECK_EQ(place_at(1, JK_FLOOR, JM_SITS, 120, ""), 0);
+  J.placed[0].part = 2;                                /* its frame 1 is the bird */
+  CHECK_EQ(js_act(&J, 0, JA_FLY, 0), 0);
+  for (i = 0; i < 60 * JS_HZ; i++) {
+    js_step_item(&J, 0);
+    if (J.placed[0].pst == 1 && js_abs(J.placed[0].px / 16 - 120) > 30) away = 1;
+    if (away && J.placed[0].pst == 0) { back = 1; break; }
+  }
+  CHECK(away);
+  CHECK(back);
+  J.placed[0].part = 0;
+  CHECK_EQ(js_act(&J, 0, JA_FLY, 0), -1);              /* no part, no flight */
+}
+
+void test_jarsim_world_events_come_and_items_react(void) {
+  int i, seen[JWD_KINDS] = { 0 }, kinds = 0;
+  fresh(10);
+  CHECK_EQ(place_at(1, JK_FLOOR, JM_SITS, 60, ""), 0);
+  J.placed[0].hab[0].event = JE_WORLD; J.placed[0].hab[0].earg = JWD_DARK;
+  J.placed[0].hab[0].action = JA_GLOW; J.placed[0].hab[0].aarg = 1;
+  J.placed[0].nhab = 1;
+  J.sulk_clock = J.mould_clock = 1 << 30;              /* no chores in this one */
+  for (i = 0; i < 12 * 3600 * JS_HZ; i++) {
+    int was = J.world;
+    js_step(&J);
+    if (J.world && J.world != was) seen[J.world]++;
+  }
+  for (i = 1; i < JWD_KINDS; i++) kinds += seen[i] > 0;
+  CHECK(kinds >= 4);                                   /* twelve hours: most of them */
+  CHECK(seen[JWD_DARK] == 0 || J.placed[0].glow == 1);
+  CHECK_EQ(J.coins, J.shipped * JS_JAR_VALUE);         /* still: every coin a jar that left */
+}
+
+void test_jarsim_ants_take_berries_unless_scattered(void) {
+  int i, k;
+  fresh(11);
+  for (k = 0; k < J.nbeds; k++) { J.bed[k].ready = 1; J.bed[k].grow = JS_GROW_MS; }
+  J.nmoss = 0;
+  js_world_begin(&J, JWD_ANTS);
+  for (i = 0; i < 2 * 60 * JS_HZ && J.world; i++) js_step(&J);
+  for (k = 0; k < J.nbeds; k++) CHECK_EQ(J.bed[k].ready, 0);   /* they got them */
+  fresh(11);
+  for (k = 0; k < J.nbeds; k++) { J.bed[k].ready = 1; J.bed[k].grow = JS_GROW_MS; }
+  J.nmoss = 0;
+  CHECK_EQ(place_at(1, JK_CRITTER, JM_SITS, 20, ""), 0);
+  js_world_begin(&J, JWD_ANTS);
+  for (i = 0; i < 10; i++) js_step(&J);
+  js_act(&J, 0, JA_SHAKE, 0);                          /* routed, before the first one is there */
+  for (k = 0; k < JS_ANTS; k++) CHECK(J.ant_st[k] == 0 || J.ant_st[k] == 3);
+  for (i = 0; i < 60 * JS_HZ && J.world; i++) js_step(&J);
+  CHECK_EQ(J.world, 0);
+  for (k = 0; k < J.nbeds; k++) CHECK_EQ(J.bed[k].ready, 1);   /* none taken */
+}
+
+void test_jarsim_chores_stop_the_jar_until_the_player_comes(void) {
+  int i;
+  uint32_t shipped;
+  fresh(12);
+  J.world_clock = 1 << 30;
+  J.sulk_clock = 1;
+  js_step(&J);
+  CHECK(js_chores(&J) & JC_SULK);
+  J.dock = 10;
+  shipped = J.shipped;
+  for (i = 0; i < 5 * 60 * JS_HZ; i++) js_step(&J);
+  CHECK_EQ(J.shipped, shipped);                        /* a sulking snail ships nothing */
+  CHECK_EQ(js_fix(&J, JC_SULK), 0);
+  CHECK_EQ(js_chores(&J) & JC_SULK, 0);
+  for (i = 0; i < 5 * 60 * JS_HZ; i++) js_step(&J);
+  CHECK(J.shipped > shipped);
+  /* mould stops a bush; the puddle stops them all; the player clears both */
+  J.bed[0].mould = 1;
+  J.bed[0].ready = 0;
+  J.bed[0].grow = 0;
+  for (i = 0; i < 60 * JS_HZ; i++) js_step(&J);
+  CHECK_EQ(J.bed[0].grow, 0);
+  CHECK(js_chores(&J) & JC_MOULD);
+  J.puddle = 30;
+  CHECK(js_chores(&J) & JC_PUDDLE);
+  CHECK_EQ(js_fix(&J, JC_MOULD | JC_PUDDLE), 0);
+  CHECK_EQ(js_chores(&J), 0);
+  CHECK_EQ(js_fix(&J, JC_MOULD), -1);                  /* nothing left to do */
+  /* an item can cheer the snail, too */
+  J.sulk = 1;
+  CHECK_EQ(place_at(1, JK_FLOOR, JM_SITS, 60, ""), 0);
+  CHECK_EQ(js_act(&J, 0, JA_NUDGE, 0), 0);
+  CHECK_EQ(J.sulk, 0);
 }

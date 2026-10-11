@@ -1,0 +1,8 @@
+# bit_range: written by tools/make_jarvm_fixtures.py -- do not edit
+seed 1
+mem 9 9 9 9 9 9 9 9
+ev 1 0
+--
+check 0
+ret 0 17
+mem 0 1 0 1 9 9 9 9

@@ -101,7 +101,22 @@ for _g, _w, _v in _NAMES:
     GROUPS.setdefault(_g, {})[_w] = _v
 # Names usable in any expression. The glow words (on, off, toggle) are only
 # what follows `glow`: `on` also starts a handler.
-CONSTS = {w: v for g, words in GROUPS.items() if g != "glow" for w, v in words.items()}
+CONSTS = {}
+for _g, _words in GROUPS.items():
+    if _g == "glow":
+        continue
+    for _w, _v in _words.items():
+        if CONSTS.get(_w, _v) != _v:
+            raise ValueError("jarvm.def: %r means two numbers (%s)" % (_w, _g))
+        CONSTS[_w] = _v
+
+# Version 2 of the language (2026-10-11: sounds, bursts, throwing, berries,
+# signals, traits, world events) runs only on a jar.capp built with it. Until
+# devices have that, generation stays inside version 1: what v1 had is the
+# first V1_EVENTS events, V1_ACTIONS actions, V1_SENSES senses, and no BIT.
+# CARDOS_JAR_V2=1 lets v2 out.
+V2 = os.environ.get("CARDOS_JAR_V2") == "1"
+V1_EVENTS, V1_ACTIONS, V1_SENSES = 8, 12, 9
 
 FORMAT = 1
 STACK = 8
@@ -116,10 +131,10 @@ DONE, NONE, LIMIT, FAULT, IGNORE = 0, 1, -1, -2, -3
 RESULT_NAME = {DONE: "done", NONE: "none", LIMIT: "limit", FAULT: "fault", IGNORE: "ignore"}
 
 TICK = EVENTS["tick"]
-INVISIBLE = {ACTIONS["nothing"], ACTIONS["wait"], ACTIONS["stop"]}
+INVISIBLE = {ACTIONS["nothing"], ACTIONS["wait"], ACTIONS["stop"], ACTIONS["signal"]}
 
 _KEYWORDS = {"on", "end", "if", "then", "elif", "else", "and", "or", "not", "mem",
-             "rand", "return", "every", "to"}
+             "rand", "has", "return", "every", "to"}
 for _w in list(SENSES) + list(CONSTS) + list(ACTIONS):
     if _w in _KEYWORDS:
         raise ValueError("jarvm.def: %r is a keyword of the language" % _w)
@@ -296,6 +311,8 @@ def run(s, ev, arg, mem, io):
             x = int(bool(x) and bool(y))
         elif name == "OR":
             x = int(bool(x) or bool(y))
+        elif name == "BIT":
+            x = (x >> y) & 1 if 0 <= y <= 15 else 0
         elif name == "JMP":
             pc = a
         elif name == "JZ":
@@ -407,11 +424,13 @@ def _fold(op, a, b=None):
         "==": lambda: int(a == b), "!=": lambda: int(a != b), "<": lambda: int(a < b),
         "<=": lambda: int(a <= b), ">": lambda: int(a > b), ">=": lambda: int(a >= b),
         "and": lambda: int(bool(a) and bool(b)), "or": lambda: int(bool(a) or bool(b)),
+        "has": lambda: (a >> b) & 1 if 0 <= b <= 15 else 0,
     }[op]()
 
 
 _BINOP = {"+": "ADD", "-": "SUB", "*": "MUL", "/": "DIV", "%": "MOD", "==": "EQ",
-          "!=": "NE", "<": "LT", "<=": "LE", ">": "GT", ">=": "GE", "and": "AND", "or": "OR"}
+          "!=": "NE", "<": "LT", "<=": "LE", ">": "GT", ">=": "GE", "and": "AND", "or": "OR",
+          "has": "BIT"}
 
 _STMT_END = ("end", "else", "elif")
 
@@ -495,6 +514,18 @@ class _Parser:
             if n[0] != "num" or not 1 <= int(n[1]) <= 255:
                 raise ScriptError(n[2], "expected a number of ticks 1..255 after 'every', found %s" % _show(n))
             return int(n[1])
+        if kind == "hour":
+            self.next()
+            if tok[0] != "num" or not 0 <= int(tok[1]) <= 23:
+                raise ScriptError(tok[2], "expected an hour 0..23 or ':' after 'on hour', found %s"
+                                  % _show(tok))
+            return int(tok[1]) + 1                      # 0 is "any": the hour is kept + 1
+        if kind == "count":
+            self.next()
+            if tok[0] != "num" or not 1 <= int(tok[1]) <= 255:
+                raise ScriptError(tok[2], "expected a number 1..255 or ':' after 'on %s', found %s"
+                                  % (ev, _show(tok)))
+            return int(tok[1])
         if kind in GROUPS:
             self.next()
             if kind == "weather" and tok[0] == "num":       # the tag itself, as before it had names
@@ -671,6 +702,16 @@ class _Parser:
                 e = self.expr()
                 self.expect(")", "')' to close rand(...)")
                 return ("rand", e)
+            if text == "has":
+                self.expect("(", "'(' after 'has'")
+                e = self.expr()
+                self.expect(",", "',' between has(TRAITS, TRAIT)")
+                tok = self.next()
+                if tok[0] != "name" or tok[1] not in GROUPS["trait"]:
+                    raise ScriptError(tok[2], "expected a trait (%s) in has(..., TRAIT), found %s"
+                                      % (", ".join(GROUPS["trait"]), _show(tok)))
+                self.expect(")", "')' to close has(...)")
+                return self.mk2("has", e, ("num", GROUPS["trait"][tok[1]]))
             if text in SENSES:
                 return ("sense", SENSES[text])
             if text in CONSTS:
@@ -679,7 +720,7 @@ class _Parser:
                 return ("num", 1)
             if text in ("false", "no"):
                 return ("num", 0)
-        raise ScriptError(line, "expected a number, a sense (%s), mem[N], rand(N) or a name, found %s"
+        raise ScriptError(line, "expected a number, a sense (%s), mem[N], rand(N), has(X, TRAIT) or a name, found %s"
                           % (", ".join(SENSES), _show((kind, text, line))))
 
 
@@ -774,9 +815,30 @@ class _Gen:
                 self.patch(w, self.at())
 
 
-def compile_script(src, nbub=None, nframes=None):
+def v2_words(code):
+    """What in compiled `code` needs language version 2: [word], empty if none."""
+    out = []
+    n = code[1]
+    for e in range(n):
+        if code[2 + 3 * e] >= V1_EVENTS:
+            out.append("on " + EVENT_NAME[code[2 + 3 * e]])
+    pc = 2 + 3 * n
+    while pc < len(code):
+        op = OPS[code[pc]]
+        if op.name == "BIT":
+            out.append("has()")
+        elif op.name in ("ACT", "ACTK") and code[pc + 1] >= V1_ACTIONS:
+            out.append(ACTION_NAME[code[pc + 1]])
+        elif op.name == "SENSE" and code[pc + 1] >= V1_SENSES:
+            out.append(_SENSES[code[pc + 1]][1])
+        pc += 1 + op.nops
+    return list(dict.fromkeys(out))
+
+
+def compile_script(src, nbub=None, nframes=None, v2=None):
     """The readable language into bytecode (bytes). `nbub` and `nframes`, when
     given, are the item's, and `say N` / `frame N` are checked against them.
+    Without v2 (the default is V2), a word of version 2 is refused.
     Raises ScriptError(line, message)."""
     p = _Parser(src, nbub, nframes)
     handlers = p.script()
@@ -809,7 +871,12 @@ def compile_script(src, nbub=None, nframes=None):
         raise ScriptError(0, "the script is %d bytes; at most %d -- make it shorter" % (len(out), SCRIPT_MAX))
     if check(out) != 0:                             # a compiler bug, never the writer's
         raise AssertionError("compiled a script the machine would ignore:\n" + disassemble(out))
-    return bytes(out)
+    code = bytes(out)
+    if not (V2 if v2 is None else v2):
+        newer = v2_words(code)
+        if newer:
+            raise ScriptError(0, "%s: not in this version of the language" % ", ".join(newer))
+    return code
 
 
 # ---- the simulated day ------------------------------------------------------
@@ -864,7 +931,8 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
         rep.problem("the bytecode is not a script this machine would run")
         return rep
     rnd = xorshift(seed)
-    world = {"x": 120, "near": 1, "dist": 40, "time": 0, "weather": 0}
+    world = {"x": 120, "near": 1, "dist": 40, "time": 0, "weather": 0, "hour": 0, "berries": 2,
+             "fed": 0, "world": 0, "neartraits": 0, "newtraits": 0, "stuck": 0, "sulking": 0}
     mem = [0] * MEM
     current = [None]
 
@@ -888,6 +956,12 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
             return int(gift)
         if name == "random":
             return rnd() & 255
+        if name in world:
+            return world[name]
+        if name == "traits":
+            return 0x22                                 # shiny, light: something to test
+        if name == "playing":
+            return 1
         return 0
 
     def act(a, arg):
@@ -901,6 +975,13 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
         if word == "walk":
             lo, hi = {0: (8, 80), 1: (100, 176), 2: (180, 224), 3: (78, 96)}.get(arg, (10, 226))
             world["x"] = lo + rnd() % (hi - lo + 1)
+        if word == "eat" and world["berries"] > 0:
+            world["berries"] -= 1
+            world["fed"] += 1
+        if word == "sound" and not 1 <= arg <= len(GROUPS["sound"]):
+            rep.problem("on %s: 'sound %d' is not a sound" % (current[0], arg))
+        if word == "signal" and not 1 <= arg <= 255:
+            rep.problem("on %s: 'signal %d': a signal is 1..255" % (current[0], arg))
 
     io = Io(sense, act, rnd)
 
@@ -924,9 +1005,23 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
     phases = {5: 1, 8: 2, 17: 3, 20: 4}             # dawn, day, dusk, night (js_phase_of)
     tick = 0
     for hour in range(24):
+        world["hour"] = hour
+        fire("hour", hour + 1)
         if hour in phases:
             world["time"] = phases[hour]
             fire("time", phases[hour])
+        if hour == 11:
+            world["newtraits"] = (1 << GROUPS["trait"]["food"]) | (1 << GROUPS["trait"]["sweet"])
+            fire("new", 0)
+        if hour == 15:
+            world["world"] = GROUPS["world"]["ants"]
+            fire("world", world["world"])
+        if hour == 16:
+            world["world"] = 0
+        if hour == 18:
+            world["world"] = GROUPS["world"]["visitor"]
+            fire("world", world["world"])
+            world["world"] = 0
         if hour == 7:
             world["weather"] = GROUPS["weather"]["rainy"]
             fire("weather", world["weather"])
@@ -938,7 +1033,15 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
             if t % 30 == 7:
                 world["near"] = 1 + rnd() % 4
                 world["dist"] = rnd() % 17
+                world["neartraits"] = (rnd() & 0xFFFF) if world["near"] >= 3 else 0
                 fire("near", world["near"])
+            if t % 45 == 30:
+                world["berries"] += 1
+                fire("berry", 0)
+            if t % 60 == 41:
+                fire("signal", 1 + rnd() % 3)
+            if hour == 14 and t == 12:
+                fire("bumped", 0)
             else:
                 world["dist"] = 17 + rnd() % 60
             if t % 40 == 20:
@@ -956,10 +1059,10 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
     return rep
 
 
-def prepare_script(src, nbub=MAX_BUB, nframes=MAX_FRAMES):
+def prepare_script(src, nbub=MAX_BUB, nframes=MAX_FRAMES, v2=None):
     """What generation calls: compile, check, and live through a day. The
     bytecode, or ScriptError whose message lists every problem."""
-    code = compile_script(src, nbub, nframes)
+    code = compile_script(src, nbub, nframes, v2)
     rep = simulate_day(code, nbub, nframes)
     if not rep.ok:
         raise ScriptError(0, "the script failed its simulated day: " + "; ".join(rep.problems))
@@ -968,25 +1071,40 @@ def prepare_script(src, nbub=MAX_BUB, nframes=MAX_FRAMES):
 
 # ---- the guide, for the generation prompt -----------------------------------
 
-def _guide():
+def _guide(v2=True):
     acts = []
     for _n, word, kind, doc in _ACTIONS:
-        if word == "nothing":
+        if word == "nothing" or (not v2 and _n >= V1_ACTIONS):
             continue
         form = {
             "none": word, "opt": "%s [N]" % word, "num": "%s N" % word,
             "bubble": "%s N" % word, "frame": "%s N" % word,
             "zone": "%s to ZONE" % word, "particle": "%s PARTICLE" % word,
-            "glow": "%s on|off|toggle" % word,
+            "glow": "%s on|off|toggle" % word, "sound": "%s SOUND" % word,
+            "trait": "%s TRAIT" % word,
         }[kind]
         acts.append("  %-18s %s" % (form, doc))
     evs = []
     for _n, word, filt, doc in _EVENTS:
+        if not v2 and _n >= V1_EVENTS:
+            continue
         form = {"none": "on %s:" % word, "every": "on tick: / on tick every N:",
-                "number": "on %s: / on %s N:" % (word, word)}.get(
+                "hour": "on %s: / on %s 0..23:" % (word, word),
+                "count": "on %s: / on %s N:" % (word, word)}.get(
             filt, "on %s: / on %s %s:" % (word, word, "|".join(GROUPS.get(filt, {}))))
         evs.append("  %-34s %s" % (form, doc))
-    sens = ["  %-9s %s" % (word, doc) for _n, word, doc in _SENSES]
+    sens = ["  %-10s %s" % (word, doc) for _n, word, doc in _SENSES if v2 or _n < V1_SENSES]
+    if v2:
+        names = ("; world events " + ", ".join(GROUPS["world"]) + "; sounds " +
+                 ", ".join(GROUPS["sound"]) + "; traits " + ", ".join(GROUPS["trait"]) + ".")
+        extra = ["Traits are what an item is (its record lists its own); scripts react to traits,",
+                 "not to names, so an item meets things made after it:",
+                 "  on near: if has(neartraits, food) then seek food; eat end; end"]
+        has = ["EXPRESSIONS: numbers -32768..32767, mem[K], rand(N) (0..N-1), has(X, TRAIT)",
+               "(1 if the traits X include TRAIT), the senses"]
+    else:
+        names, extra = ".", []
+        has = ["EXPRESSIONS: numbers -32768..32767, mem[K], rand(N) (0..N-1), the senses"]
     return "\n".join([
         "JAR SCRIPT -- a tiny language for one item's behaviour. Compiled to at most",
         "256 bytes; every handler run may take at most 64 instructions.",
@@ -1005,12 +1123,13 @@ def _guide():
         "  if C then ... elif C then ... else ... end",
         "  return             stop here",
         "",
-        "EXPRESSIONS: numbers -32768..32767, mem[K], rand(N) (0..N-1), the senses",
+    ] + has + [
         "below, + - * / % (whole numbers), == != < <= > >=, and or not, ( ).",
         "Names for numbers: zones " + ", ".join(GROUPS["zone"]) + "; particles " +
         ", ".join(GROUPS["particle"]) + "; kinds " + ", ".join(GROUPS["near"]) +
         "; times " + ", ".join(GROUPS["time"]) + "; weathers " + ", ".join(GROUPS["weather"]) +
-        " (the real weather where the owner lives; 0 when not known).",
+        " (the real weather where the owner lives; 0 when not known)" + names,
+    ] + extra + [
         "",
         "SENSES",
     ] + sens + [
@@ -1037,4 +1156,6 @@ def _guide():
     ])
 
 
-LANGUAGE_GUIDE = _guide()
+LANGUAGE_GUIDE_V1 = _guide(False)
+LANGUAGE_GUIDE_V2 = _guide(True)
+LANGUAGE_GUIDE = LANGUAGE_GUIDE_V2 if V2 else LANGUAGE_GUIDE_V1

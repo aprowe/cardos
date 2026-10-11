@@ -1,0 +1,58 @@
+# v2: written by tools/make_jarvm_fixtures.py -- do not edit
+seed 4242
+sense 9 18
+sense 10 3
+sense 11 2
+sense 14 -32768
+sense 15 514
+mem 0 0 0 0 0 0 0 0
+ev 8 19
+ev 8 3
+ev 9 2
+ev 9 9
+ev 10 1
+ev 10 2
+ev 11 0
+ev 12 0
+ev 13 0
+ev 2 1
+ev 1 0
+ev 1 0
+--
+check 0
+act 12 5
+ret 0 2
+mem 0 0 0 0 0 0 0 0
+ret 0 3
+mem 18 0 0 0 0 0 0 0
+act 14 0
+act 17 3
+ret 0 3
+mem 18 0 0 0 0 0 0 0
+ret 1 0
+mem 18 0 0 0 0 0 0 0
+act 23 0
+act 21 20
+ret 0 3
+mem 18 0 0 0 0 0 0 0
+act 22 0
+ret 0 2
+mem 18 0 0 0 0 0 0 0
+act 13 0
+ret 0 7
+mem 18 0 0 0 0 0 0 0
+act 15 0
+ret 0 7
+mem 18 0 0 0 0 0 0 0
+ret 0 11
+mem 18 10 0 0 0 0 0 0
+act 18 0
+act 19 0
+act 20 0
+ret 0 4
+mem 18 10 0 0 0 0 0 0
+ret 0 9
+mem 18 10 2 0 0 0 0 0
+act 12 13
+ret 0 10
+mem 18 10 4 0 0 0 0 0

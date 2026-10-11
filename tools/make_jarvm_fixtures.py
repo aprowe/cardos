@@ -36,6 +36,20 @@ E = V.EVENTS
 OP = V.OP
 
 
+VERSION2 = """
+on hour 18: sound horn; end
+on hour: mem[0] = hour; end
+on signal 2: throw; signal 3; end
+on world ants: shake; boost 20; end
+on world: nudge; end
+on new: if has(newtraits, shiny) then burst sparkle else burst heart end; end
+on berry: if berries > 2 then eat else drop end; end
+on bumped: mem[1] = has(neartraits, sleepy) * 10 + has(neartraits, food); end
+on near: seek food; fly; home; end
+on poke: mem[2] += fed; if mem[2] > 3 then sound bang end; end
+"""
+
+
 def asm(entries, code, fmt=V.FORMAT):
     """Bytes by hand: entries [(event, filter, offset from code start)]."""
     base = 2 + 3 * len(entries)
@@ -120,10 +134,24 @@ FIXTURES = [
      [("near", 2), ("near", 1), ("near", 3), ("near", 0), ("time", 4), ("time", 1),
       ("jam", 1), ("jam", 2), ("weather", 2), ("weather", 1), ("poke", 0), ("gift", 0)]),
     ("limit", V.compile_script(LONG), 1, {}, [0] * 8, [("poke", 0), ("poke", 0)]),
+    # version 2: the new events with their filters, has() (BIT) on bit 15 and
+    # beyond, and every new action
+    ("v2", V.compile_script(VERSION2, v2=True), 4242,
+     {V.SENSES["neartraits"]: -32768, V.SENSES["newtraits"]: 0x0202, V.SENSES["berries"]: 3,
+      V.SENSES["fed"]: 2, V.SENSES["hour"]: 18},
+     [0] * 8,
+     [("hour", 19), ("hour", 3), ("signal", 2), ("signal", 9), ("world", 1), ("world", 2),
+      ("new", 0), ("berry", 0), ("bumped", 0), ("near", 1), ("poke", 0), ("poke", 0)]),
     ("clamp", asm([(E["poke"], 0, 0)],
                   [OP["SENSE"], 6, OP["STORE"], 0, OP["SENSE"], 0, OP["STORE"], 1, OP["END"]]),
      3, {6: 40000, 0: -40000}, [0] * 8, [("poke", 0)]),
     # by hand: what a compiler never makes
+    ("bit_range", asm([(E["poke"], 0, 0)],
+                      [OP["PUSH8"], 7, OP["PUSH8"], 99, OP["BIT"], OP["STORE"], 0,
+                       OP["PUSH8"], 0xFF, OP["PUSH8"], 15, OP["BIT"], OP["STORE"], 1,
+                       OP["PUSH8"], 5, OP["PUSH8"], 0xFE, OP["BIT"], OP["STORE"], 2,
+                       OP["PUSH8"], 5, OP["PUSH8"], 2, OP["BIT"], OP["STORE"], 3, OP["END"]]),
+     1, {}, [9] * 8, [("poke", 0)]),
     ("loop", asm([(E["poke"], 0, 0)], [OP["ACTK"], 1, 0, OP["JMP"], 5]),
      1, {}, [0] * 8, [("poke", 0), ("tick", 0)]),
     ("underflow", asm([(E["poke"], 0, 0)], [OP["ACTK"], 7, 0, OP["ADD"], OP["END"]]),

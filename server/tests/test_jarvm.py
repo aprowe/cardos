@@ -34,7 +34,7 @@ class Rec(V.Io):
 
 
 def go(src, event="poke", arg=0, mem=None, senses=None, nbub=4):
-    code = V.compile_script(src, nbub=nbub)
+    code = V.compile_script(src, nbub=nbub, v2=True)
     io = Rec(senses)
     mem = mem if mem is not None else [0] * 8
     r, steps = V.run(code, E[event], arg, mem, io)
@@ -52,8 +52,9 @@ class TableTest(unittest.TestCase):
             self.assertIn(name, V.OP)
         self.assertEqual(V.OPS[V.OP["ADD"]].pops, 2)
         self.assertEqual(V.OPS[V.OP["ACTK"]].nops, 2)
-        self.assertEqual(V.NACTIONS, 12)
-        self.assertEqual(V.NSENSES, 9)
+        self.assertEqual(V.NACTIONS, 24)
+        self.assertEqual(V.NSENSES, 19)
+        self.assertEqual((V.V1_EVENTS, V.V1_ACTIONS, V.V1_SENSES), (8, 12, 9))
         self.assertEqual(V.GROUPS["zone"]["water"], 3)
 
     def test_a_line_it_cannot_read_is_an_error_not_a_skip(self):
@@ -79,6 +80,11 @@ class StatementTest(unittest.TestCase):
             ("glow on", ("glow", 1)), ("glow off", ("glow", 0)), ("glow toggle", ("glow", 2)),
             ("emit sparkle", ("emit", 0)), ("emit puff", ("emit", 4)), ("wait 8", ("wait", 8)),
             ("hop 300", ("hop", 300)), ("wait -1", ("wait", -1)),
+            ("sound horn", ("sound", 5)), ("burst sparkle", ("burst", 0)), ("throw", ("throw", 0)),
+            ("eat", ("eat", 0)), ("drop", ("drop", 0)), ("signal 3", ("signal", 3)),
+            ("seek food", ("seek", 0)), ("fly", ("fly", 0)), ("home", ("home", 0)),
+            ("boost", ("boost", 0)), ("boost 20", ("boost", 20)), ("nudge", ("nudge", 0)),
+            ("shake", ("shake", 0)),
         ]
         for stmt, want in cases:
             r, trace, _m, _s = go("on poke: %s; end" % stmt)
@@ -328,11 +334,71 @@ class DayTest(unittest.TestCase):
 
 class GuideTest(unittest.TestCase):
     def test_the_guide_names_every_word(self):
-        g = V.LANGUAGE_GUIDE
-        for word in list(A) + list(S) + list(E):
+        g = V.LANGUAGE_GUIDE_V2
+        for word in list(A) + list(S) + list(E) + list(V.GROUPS["trait"]) + list(V.GROUPS["sound"]):
             if word != "nothing":
                 self.assertIn(word, g)
-        self.assertLess(len(g), 4000)
+        self.assertLess(len(g), 7000)
+        v1 = V.LANGUAGE_GUIDE_V1
+        for word in ("burst", "throw", "on hour", "has(", "neartraits"):
+            self.assertNotIn(word, v1)                       # nothing a device cannot run yet
+        self.assertLess(len(v1), 4000)
+
+
+class VersionTwoTest(unittest.TestCase):
+    def test_new_events_narrow(self):
+        src = ("on hour 18: sound horn; end\non hour: say 1; end\n"
+               "on signal 2: throw; end\non world ants: shake; end\n"
+               "on new: if has(newtraits, sweet) then hop 10 end; end\n"
+               "on berry: eat; end\non bumped: say 2; end")
+        self.assertEqual(go(src, "hour", 19)[1], [("sound", V.GROUPS["sound"]["horn"])])  # 18 + 1
+        self.assertEqual(go(src, "hour", 3)[1], [("say", 0)])
+        self.assertEqual(go(src, "signal", 2)[1], [("throw", 0)])
+        self.assertEqual(go(src, "signal", 3)[1], [])
+        self.assertEqual(go(src, "world", V.GROUPS["world"]["ants"])[1], [("shake", 0)])
+        sweet = 1 << V.GROUPS["trait"]["sweet"]
+        self.assertEqual(go(src, "new", senses={S["newtraits"]: sweet})[1], [("hop", 10)])
+        self.assertEqual(go(src, "new", senses={S["newtraits"]: 1})[1], [])
+        self.assertEqual(go(src, "bumped")[1], [("say", 1)])
+
+    def test_has_reads_a_bit_and_bit_fifteen(self):
+        sleepy = V.GROUPS["trait"]["sleepy"]
+        self.assertEqual(sleepy, 15)
+        src = "on poke: if has(neartraits, sleepy) then say 1 else say 2 end; end"
+        self.assertEqual(go(src, senses={S["neartraits"]: -32768})[1], [("say", 0)])  # bit 15
+        self.assertEqual(go(src, senses={S["neartraits"]: 0x7FFF})[1], [("say", 1)])
+        with self.assertRaises(V.ScriptError):
+            V.compile_script("on poke: if has(traits, purple) then hop end; end", v2=True)
+
+    def test_filters_are_checked(self):
+        for bad in ("on hour 24: hop; end", "on signal 0: hop; end", "on world rain: hop; end"):
+            with self.assertRaises(V.ScriptError, msg=bad):
+                V.compile_script(bad, v2=True)
+
+    def test_version_one_refuses_what_version_two_adds(self):
+        with self.assertRaises(V.ScriptError) as e:
+            V.compile_script("on poke: burst sparkle; end", v2=False)
+        self.assertIn("burst", str(e.exception))
+        with self.assertRaises(V.ScriptError):
+            V.compile_script("on berry: hop; end", v2=False)
+        with self.assertRaises(V.ScriptError):
+            V.compile_script("on poke: if berries > 0 then hop end; end", v2=False)
+        code = V.compile_script("on poke: hop; say 1; end", v2=False)
+        self.assertEqual(V.v2_words(code), [])
+
+    def test_a_name_means_one_number(self):
+        self.assertEqual(V.CONSTS["water"], V.GROUPS["zone"]["water"])
+        self.assertEqual(V.GROUPS["trait"]["wet"], 6)
+
+    def test_an_interactive_item_lives_through_its_day(self):
+        src = ("on poke:\n  burst sparkle; sound bang; say 1\nend\n"
+               "on near:\n  if has(neartraits, food) and fed < 5 then seek food; eat end\nend\n"
+               "on berry: eat; drop; end\non world ants: shake; signal 2; end")
+        rep = V.simulate_day(V.compile_script(src, 2, 1, v2=True), 2, 1)
+        self.assertTrue(rep.ok, rep.problems)
+        self.assertGreater(rep.actions.get("eat", 0), 0)
+        self.assertGreater(rep.actions.get("burst", 0), 0)
+        self.assertEqual(rep.events.get("world"), 2)
 
 
 def _fixtures_module():

@@ -218,6 +218,7 @@ static JV_OPT int jv_run(const uint8_t *s, int n, int ev, int arg, int16_t *mem,
     case JVO_NOT:    x = !x; break;
     case JVO_AND:    x = x && y; break;
     case JVO_OR:     x = x || y; break;
+    case JVO_BIT:    x = (y >= 0 && y <= 15) ? (x >> y) & 1 : 0; break;
     case JVO_JMP:    pc = a; break;
     case JVO_JZ:     if (!x) pc = a; break;
     default:                                   /* ACT, ACTK */
