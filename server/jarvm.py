@@ -920,12 +920,17 @@ _ZONE_X = [(0, 78, 0), (78, 98, 3), (98, 178, 1), (178, 240, 2)]  # js_zone_of
 
 
 def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hour=120,
-                 gift=False, days=3):
+                 gift=False, days=3, trace=None):
     """Fire a day of events at a compiled script -- compressed: each hour is
     `ticks_per_hour` ticks, with nears, shipped jars, a jam and its fix,
     pokes, a gift, a weather change and dawn, day, dusk and night among
     them -- and report. The script fails the day if it faults, hits the step
-    limit, says a bubble the item does not have, or does nothing visible."""
+    limit, says a bubble the item does not have, or does nothing visible.
+
+    `trace`, if given, is called once for every handler that ran, with a
+    dict: hour, tick, event, arg, result, steps, actions [(word, arg)] and
+    x afterwards -- Jar Lab's timeline (server/jarlab.py). It changes
+    nothing about the day."""
     rep = DayReport()
     if check(script) != 0:
         rep.problem("the bytecode is not a script this machine would run")
@@ -964,9 +969,14 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
             return 1
         return 0
 
+    acts = []
+    clock = [0, 0]                                      # hour, tick: for the trace
+
     def act(a, arg):
         word = ACTION_NAME[a]
         rep.actions[word] = rep.actions.get(word, 0) + 1
+        if trace:
+            acts.append((word, arg))
         if a not in INVISIBLE:
             rep.visible += 1
         if word == "say" and not 0 <= arg < nbub:
@@ -989,10 +999,15 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
         ev = EVENTS[word]
         current[0] = word
         rep.events[word] = rep.events.get(word, 0) + 1
+        del acts[:]
         r, steps = run(script, ev, arg, mem, io)
         rep.max_steps = max(rep.max_steps, steps)
         if r == NONE:
             return
+        if trace:
+            trace({"hour": clock[0], "tick": clock[1], "event": word, "arg": arg,
+                   "result": RESULT_NAME.get(r, str(r)), "steps": steps,
+                   "actions": list(acts), "x": world["x"]})
         rep.runs += 1
         if r == LIMIT:
             rep.problem("on %s: ran %d instructions without reaching its end (too long, or a loop)"
@@ -1006,6 +1021,7 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
     tick = 0
     for hour in range(24):
         world["hour"] = hour
+        clock[0] = hour
         fire("hour", hour + 1)
         if hour in phases:
             world["time"] = phases[hour]
@@ -1028,6 +1044,7 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
         if hour == 12:
             fire("gift", 0)
         for t in range(ticks_per_hour):
+            clock[1] = tick
             fire("tick", tick)
             tick += 1
             if t % 30 == 7:
