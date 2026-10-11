@@ -1,0 +1,17 @@
+Game Night
+................
+.KKKKKKK........
+.KWWWWWK........
+.KWKWWWK.KKKKKK.
+.KWWWWWK.KyyyyK.
+.KWWKWWK.KGGGGK.
+.KWWWWWK.KyyyyK.
+.KWWWKWK.KGGGGK.
+.KWWWWWK.KyyyyK.
+.KKKKKKK.KGGGGK.
+.........KyyyyK.
+..rrrr...KGGGGK.
+.rrrrrr..KooooK.
+.rrWrrr..KooooK.
+..rrrr...KKKKKK.
+................

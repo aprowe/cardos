@@ -11,6 +11,29 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.16.0 -- 2026-10-11
+
+- **Game Night** (Games): four tools for the table, each on its own.
+  - *Score*: players or teams across, rounds down, totals at the bottom and
+    the leader in gold. Type a number, Enter goes to the next player. `f`
+    spins for who goes first, `g` sets it, `l` makes the lowest total win.
+  - *Dice*: 1-9 dice of 2 to 100 sides, or typed (`3d6+2`, `d%`). Space
+    rolls, and so does a shake on the ADV. 1-9 hold a die. A d2 is a coin.
+  - *Timer*: presets from 30 s to 10 min. The last ten seconds tick, and it
+    rings at zero. It keeps running behind the other tools.
+  - *Buzzer*: a loud Taboo buzzer, a ding for correct, a skip, and counts of
+    each. The top button buzzes.
+  - `j` anywhere plays thinking music (an original tune) for a slow answer.
+- **Iron** (Games), britney's Build turn, finished: press the creases out
+  of a tea towel, a silk shirt and a bedsheet without scorching them.
+- **The jar's light is the real sky**: sunrise, sunset, clouds, rain and
+  snow where you are.
+- **The shop**: a stock is 2 random items, 2 of Tibbs's picks and 4 new; a
+  paid commission (`f`) is 8 new finds.
+- **Tibbs remembers**: every exchange is kept, and he keeps a notebook he
+  starts a fresh conversation from. Bribes and trades are struck by talking
+  to him (the device side comes with the next Jar release).
+
 ## v0.15.1 -- 2026-10-10
 
 - **A new stock every 4 hours**, not once a day. Each stock is keyed by its
