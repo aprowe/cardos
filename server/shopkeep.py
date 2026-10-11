@@ -68,6 +68,7 @@ SEED_CUT = 500                # characters of each side of one of those
 PAGE_LEN = 1500               # a player's page of the notebook
 STORY_LEN = 2500              # the shop's story so far
 NOTE_TIMEOUT = 300
+NOTE_BATCH = 40               # exchanges folded in by one notebook call
 NAME = "Tibbs"
 
 CHARACTER = (
@@ -265,7 +266,7 @@ def update_notebook(chat, store=None):
         return False
     try:
         since = _get(st, "tibbs/noted_t", 0)
-        rows = history(since=since)
+        rows = history(since=since)[:NOTE_BATCH]       # a long backlog goes in pieces
         if not rows:
             return False
         nb = notebook(st)
