@@ -1,0 +1,35 @@
+[
+ {
+  "example": "pillbug",
+  "today_f1": 100,
+  "today_f2": 49,
+  "ext_f1": 115,
+  "ext_f2": 64,
+  "table": 32,
+  "today_lines": 14,
+  "ext_lines": 18,
+  "today_lost": "no momentum or bounce: 'rolling' is a walk to a zone with the frames swapped"
+ },
+ {
+  "example": "tree",
+  "today_f1": 73,
+  "today_f2": 37,
+  "ext_f1": 61,
+  "ext_f2": 32,
+  "table": 22,
+  "today_lines": 13,
+  "ext_lines": 12,
+  "today_lost": "shakes on a signal number the bird must agree on, not on a landing"
+ },
+ {
+  "example": "bird",
+  "today_f1": 105,
+  "today_f2": 56,
+  "ext_f1": 104,
+  "ext_f2": 68,
+  "table": 30,
+  "today_lines": 12,
+  "ext_lines": 14,
+  "today_lost": "flies about and goes home; cannot pick a perch or arc to it; the tree learns by signal"
+ }
+]

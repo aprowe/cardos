@@ -1,0 +1,527 @@
+[
+ {
+  "name": "Thimble Beetle",
+  "kind": "critter",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "shiny",
+   "small"
+  ],
+  "script": "on poke:\n  say 1; hop 8\nend\non near:\n  if has(neartraits, food) then seek food; eat end\nend\non tick every 40:\n  if rand(4) == 0 then walk to garden; frame 2 end\nend\non time night:\n  say 2; emit zzz\nend",
+  "bytes": 57,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Moss Lantern",
+  "kind": "hanging",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "light",
+   "cosy"
+  ],
+  "script": "on time dusk: glow on; frame 2; end\non time dawn: glow off; frame 1; end\non poke: glow toggle; say 1; end\non weather foggy: glow on; say 2; end\non tick every 20: if rand(10) == 0 then emit sparkle end; end",
+  "bytes": 57,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Bubble Jelly",
+  "kind": "floating",
+  "bubbles": 2,
+  "frames": 3,
+  "traits": [
+   "wet",
+   "soft"
+  ],
+  "script": "on tick every 12: if rand(5) == 0 then emit puff end; end\non poke: float 4; frame 2; say 1; end\non weather rainy: say 2; frame 3; burst puff; end\non near critter: float; end\non signal 7: glow toggle; end",
+  "bytes": 57,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Acorn Rocking Chair",
+  "kind": "furniture",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "cosy",
+   "plant"
+  ],
+  "script": "on near:\n  if has(neartraits, sleepy) then frame 2; emit zzz; say 1 end\nend\non poke: frame 2; sound clock; wait 4; frame 1; end\non time night: emit zzz; end\non bumped: say 2; hop 4; end",
+  "bytes": 55,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Tin Snailherd",
+  "kind": "critter",
+  "bubbles": 3,
+  "frames": 2,
+  "traits": [
+   "clockwork",
+   "noisy"
+  ],
+  "script": "on tick every 60:\n  if sulking then walk to works; nudge; say 1 end\nend\non poke: say 2; sound clock; frame 2; end\non jam jammed: say 3; walk to works; end\non near snail: nudge; end",
+  "bytes": 49,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Teacup Fern",
+  "kind": "plant",
+  "bubbles": 1,
+  "frames": 2,
+  "traits": [
+   "plant",
+   "fragile"
+  ],
+  "script": "on weather rainy: frame 2; emit sparkle; end\non weather sunny: frame 1; end\non poke: say 1; emit heart; end\non berry: if rand(3) == 0 then emit sparkle end; end",
+  "bytes": 44,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Cricket Fiddler",
+  "kind": "critter",
+  "bubbles": 2,
+  "frames": 3,
+  "traits": [
+   "music",
+   "noisy",
+   "wild"
+  ],
+  "script": "on time dusk: frame 2; sound chirp; emit note; end\non tick every 30: if playing then frame 3; emit note end; end\non poke: say 1; sound chirp; hop; end\non near:\n  if has(neartraits, music) then say 2; burst note end\nend",
+  "bytes": 59,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Pebble Owl",
+  "kind": "decor",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "sleepy",
+   "big"
+  ],
+  "script": "on time night: frame 2; say 1; end\non time dawn: frame 1; emit zzz; end\non poke: flip; say 2; end\non near critter: face; end",
+  "bytes": 39,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Paper Kite Fish",
+  "kind": "floating",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "light",
+   "fragile"
+  ],
+  "script": "on world breeze: float 8; burst puff; say 1; end\non poke: flip; frame 2; end\non tick every 24: if rand(6) == 0 then flip end; end\non weather stormy: say 2; float; end",
+  "bytes": 50,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Cork Clock",
+  "kind": "hanging",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "clockwork",
+   "noisy"
+  ],
+  "script": "on hour:\n  if hour == 12 then say 1; sound ding else sound clock end\n  frame 2\nend\non time dawn: frame 1; end\non poke: say 2; frame 1; end\non jam jammed: frame 2; end",
+  "bytes": 51,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Sugar Shell",
+  "kind": "decor",
+  "bubbles": 1,
+  "frames": 2,
+  "traits": [
+   "sweet",
+   "shiny"
+  ],
+  "script": "on world ants: frame 2; say 1; burst heart; end\non poke: emit sparkle; frame 1; end\non near moss: emit heart; end",
+  "bytes": 32,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Thistle Hedgehog",
+  "kind": "critter",
+  "bubbles": 3,
+  "frames": 2,
+  "traits": [
+   "wild",
+   "soft"
+  ],
+  "script": "on poke: frame 2; say 1; wait 8; frame 1; end\non near:\n  if has(neartraits, fragile) then stop; say 2 end\nend\non tick every 50: if rand(3) == 0 then walk to anywhere end; end\non berry: walk to garden; eat; say 3; end\non time night: frame 2; emit zzz; end",
+  "bytes": 73,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Brass Bellows",
+  "kind": "furniture",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "noisy",
+   "clockwork"
+  ],
+  "script": "on poke: frame 2; burst puff; sound whoosh; end\non tick every 40: frame 1; end\non jam fixed: boost 15; say 1; end\non world dark: say 2; end",
+  "bytes": 39,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Glowworm Garland",
+  "kind": "hanging",
+  "bubbles": 2,
+  "frames": 3,
+  "traits": [
+   "light",
+   "soft"
+  ],
+  "script": "on time night: glow on; frame 2; end\non time day: glow off; frame 1; end\non tick every 16:\n  if time == night and rand(4) == 0 then frame 2 + rand(2) end\nend\non poke: burst sparkle; say 1; end\non world dark: glow on; say 2; end",
+  "bytes": 71,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Raincloud Puff",
+  "kind": "floating",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "wet",
+   "soft"
+  ],
+  "script": "on weather rainy: frame 2; say 1; end\non weather sunny: frame 1; say 2; end\non tick every 20:\n  if weather == rainy and rand(3) == 0 then emit puff end\nend\non poke: sound splash; burst puff; end",
+  "bytes": 53,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Mushroom Stool",
+  "kind": "furniture",
+  "bubbles": 1,
+  "frames": 2,
+  "traits": [
+   "cosy",
+   "soft",
+   "plant"
+  ],
+  "script": "on near moss: frame 2; emit heart; end\non poke: hop 3; sound boing; frame 1; end\non time dusk: say 1; end",
+  "bytes": 32,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Clockwork Mouse",
+  "kind": "critter",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "clockwork",
+   "small"
+  ],
+  "script": "on poke: say 1; frame 2; walk to anywhere; end\non tick every 32:\n  if rand(4) == 0 then walk to anywhere; sound clock end\nend\non near:\n  if has(neartraits, food) then seek food; eat; say 2 end\nend\non world ants: seek sweet; end",
+  "bytes": 60,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Tiny Accordion",
+  "kind": "decor",
+  "bubbles": 2,
+  "frames": 3,
+  "traits": [
+   "music",
+   "noisy"
+  ],
+  "script": "on poke: frame 2; sound tune; emit note; frame 3; say 1; end\non shipped: emit note; end\non signal 7: frame 2; burst note; end\non new:\n  if has(newtraits, music) then say 2; burst note end\nend",
+  "bytes": 55,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Dandelion Clock",
+  "kind": "plant",
+  "bubbles": 1,
+  "frames": 3,
+  "traits": [
+   "plant",
+   "light",
+   "fragile"
+  ],
+  "script": "on world breeze: frame 3; burst puff; say 1; end\non time dawn: frame 1; end\non poke: frame 2; emit puff; end\non tick every 80: if rand(10) == 0 then frame 2 end; end",
+  "bytes": 47,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Button Toad",
+  "kind": "critter",
+  "bubbles": 3,
+  "frames": 2,
+  "traits": [
+   "wet",
+   "noisy"
+  ],
+  "script": "on weather rainy: walk to water; say 1; sound plop; end\non poke: hop 12; sound boing; say 2; end\non near critter: hop; end\non tick every 48: if rand(5) == 0 then hop 4; frame 2 end; end\non world leak: walk to water; say 3; end",
+  "bytes": 63,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Teapot Ghost",
+  "kind": "floating",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "spooky",
+   "fragile"
+  ],
+  "script": "on time night: glow on; float 6; say 1; end\non time dawn: glow off; frame 1; end\non poke: frame 2; say 2; sound whoosh; end\non world dark: burst puff; glow toggle; end",
+  "bytes": 48,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Candle Stub",
+  "kind": "decor",
+  "bubbles": 1,
+  "frames": 2,
+  "traits": [
+   "light",
+   "cosy"
+  ],
+  "script": "on time dusk: glow on; frame 2; end\non time dawn: glow off; frame 1; end\non world breeze: glow off; frame 1; say 1; end\non poke: glow toggle; end",
+  "bytes": 42,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Shell Wind Chime",
+  "kind": "hanging",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "music",
+   "shiny"
+  ],
+  "script": "on world breeze: sound ding; burst note; frame 2; end\non weather stormy: sound ding; say 1; end\non poke: sound ding; emit note; frame 2; end\non tick every 40: frame 1; end\non bumped: say 2; sound ding; end",
+  "bytes": 55,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Marble Run",
+  "kind": "furniture",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "clockwork",
+   "shiny"
+  ],
+  "script": "on shipped: sound coin; frame 2; emit sparkle; end\non poke: sound boing; burst sparkle; say 1; frame 1; end\non jam fixed: say 2; boost 10; end",
+  "bytes": 41,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Moth Box",
+  "kind": "hanging",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "soft",
+   "sleepy"
+  ],
+  "script": "on time night: fly; glow on; end\non time dawn: home; glow off; end\non poke: say 1; fly; end\non near:\n  if has(neartraits, light) then say 2 end\nend",
+  "bytes": 46,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Sock Puppet Worm",
+  "kind": "critter",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "soft",
+   "cosy"
+  ],
+  "script": "on poke: say 1; frame 2; hop 4; end\non tick every 44: if rand(5) == 0 then walk to garden; frame 1 end; end\non near:\n  if has(neartraits, cosy) then seek cosy; emit heart end\nend\non weather snowy: say 2; end",
+  "bytes": 57,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Cactus Bottle",
+  "kind": "plant",
+  "bubbles": 1,
+  "frames": 2,
+  "traits": [
+   "plant",
+   "wild"
+  ],
+  "script": "on weather sunny: frame 2; say 1; end\non weather rainy: frame 1; end\non bumped: emit puff; end\non tick every 120: if rand(8) == 0 then emit sparkle end; end",
+  "bytes": 41,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Crystal Prism",
+  "kind": "hanging",
+  "bubbles": 1,
+  "frames": 3,
+  "traits": [
+   "shiny",
+   "light",
+   "fragile"
+  ],
+  "script": "on time day: frame 2; burst sparkle; end\non weather sunny: frame 3; glow on; end\non weather cloudy: frame 1; glow off; end\non poke: burst sparkle; say 1; end",
+  "bytes": 42,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Bramble Squirrel",
+  "kind": "critter",
+  "bubbles": 3,
+  "frames": 2,
+  "traits": [
+   "wild",
+   "food"
+  ],
+  "script": "on berry: walk to garden; eat; say 1; end\non poke: say 2; hop 10; frame 2; end\non tick every 36:\n  if fed > 3 and rand(6) == 0 then drop; say 3 end\nend\non near snail: flip; end",
+  "bytes": 59,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Tiny Gramophone",
+  "kind": "furniture",
+  "bubbles": 1,
+  "frames": 2,
+  "traits": [
+   "music",
+   "noisy"
+  ],
+  "script": "on poke: frame 2; sound tune; burst note; signal 7; end\non hour 18: sound tune; say 1; end\non tick every 20:\n  if playing and rand(3) == 0 then emit note end\nend",
+  "bytes": 46,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Drifting Lily Pad",
+  "kind": "floating",
+  "bubbles": 1,
+  "frames": 2,
+  "traits": [
+   "wet",
+   "plant"
+  ],
+  "script": "on world leak: frame 2; say 1; end\non poke: float 3; sound splash; end\non near snail: emit heart; end\non weather rainy: frame 2; end",
+  "bytes": 36,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Lighthouse Shell",
+  "kind": "decor",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "noisy",
+   "light"
+  ],
+  "script": "on hour 18: sound horn; glow on; say 1; end\non weather foggy: sound horn; glow on; frame 2; end\non time dawn: glow off; frame 1; end\non poke: sound horn; say 2; end",
+  "bytes": 48,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Bumblebee Cart",
+  "kind": "critter",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "sweet",
+   "noisy"
+  ],
+  "script": "on world bloom: seek plant; burst heart; say 1; end\non tick every 40: if rand(3) == 0 then seek plant end; end\non poke: sound fizz; hop; say 2; end\non near:\n  if has(neartraits, plant) then frame 2; emit heart end\nend",
+  "bytes": 60,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Sleepy Cushion",
+  "kind": "furniture",
+  "bubbles": 1,
+  "frames": 2,
+  "traits": [
+   "cosy",
+   "soft",
+   "sleepy"
+  ],
+  "script": "on time night: emit zzz; frame 2; end\non time dawn: frame 1; end\non bumped: sound plop; frame 2; say 1; end\non near critter: emit zzz; end",
+  "bytes": 39,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Pinwheel",
+  "kind": "decor",
+  "bubbles": 1,
+  "frames": 3,
+  "traits": [
+   "light",
+   "shiny"
+  ],
+  "script": "on tick every 8:\n  if world == breeze then frame 2 + rand(2) end\nend\non poke: frame 2; say 1; sound whoosh; end\non weather stormy: frame 3; emit puff; end",
+  "bytes": 47,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Copper Kettle",
+  "kind": "furniture",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "noisy",
+   "cosy"
+  ],
+  "script": "on time dawn: sound fizz; burst puff; say 1; end\non poke: frame 2; emit puff; say 2; end\non tick every 60: frame 1; end\non weather snowy: glow on; burst puff; end",
+  "bytes": 45,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Snowglobe Imp",
+  "kind": "floating",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "spooky",
+   "shiny"
+  ],
+  "script": "on weather snowy: burst sparkle; frame 2; say 1; end\non poke:\n  mem[0] += 1\n  if mem[0] > 2 then shake; say 2; mem[0] = 0 else emit sparkle end\nend\non time night: glow on; end\non time dawn: glow off; end",
+  "bytes": 62,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Pip Seedling",
+  "kind": "plant",
+  "bubbles": 2,
+  "frames": 3,
+  "traits": [
+   "plant",
+   "fragile"
+  ],
+  "script": "on tick every 200:\n  if days > 4 then frame 3 elif days > 1 then frame 2 end\nend\non weather rainy: say 1; emit heart; end\non poke: say 2; hop 2; end\non time dawn: emit sparkle; end",
+  "bytes": 55,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Tin Soldier",
+  "kind": "critter",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "clockwork",
+   "noisy"
+  ],
+  "script": "on time dawn: sound tune; walk to dock; say 1; end\non shipped: frame 2; say 2; end\non poke: flip; hop 4; frame 1; end\non world visitor: walk to dock; emit heart; end",
+  "bytes": 48,
+  "origin": "claude-short"
+ },
+ {
+  "name": "Firefly Jar Lamp",
+  "kind": "hanging",
+  "bubbles": 2,
+  "frames": 2,
+  "traits": [
+   "light",
+   "wild"
+  ],
+  "script": "on time dusk: glow on; burst sparkle; end\non time dawn: glow off; frame 1; end\non signal 7: frame 2; emit note; end\non poke: glow toggle; say 1; end\non new:\n  if has(newtraits, spooky) then say 2 end\nend",
+  "bytes": 56,
+  "origin": "claude-short"
+ }
+]
