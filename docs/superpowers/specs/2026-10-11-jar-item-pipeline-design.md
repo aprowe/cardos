@@ -252,3 +252,38 @@ places. The old prompts were tuned this way, and the new ones need the same.
 by another session (cardos-78) as this is written. Implementation should be
 done by that session, or after its work is committed, in this worktree's
 branch (`jar-item-pipeline`).
+
+## Server build plan (cardos-78, branch jar-pipeline-server)
+
+Test-first, in this order; each step is a failing test, then the code.
+
+1. **Rolls and rules** (`server/jar.py`): `ACTIVITIES` and `roll_activity`
+   beside `FORMS`; the motion vocabularies (`TRAVELS`, `IDLES`, `LIVELY`)
+   and `MOTION_RULES` (the table in section 2); `move_fallback(travel, idle)`
+   for byte 72. Tests: proportions over many draws; the fallback table.
+2. **The record** (after the layout is agreed with cardos-6f): `encode` /
+   `decode` bytes 215-217, `_ext` true when any is set, a shared fixture
+   both suites read. Tests: round trip, an old record reads as zeros.
+3. **check_item's motion and behaviour rules**: a motion outside the
+   activity's row is refused; `still` with nothing passes; `reacts` with no
+   habit and no script handler is refused. The checks are split by stage
+   (text and motion: fitter; frames: artist; habits and script: behaviour)
+   so a refusal can be routed.
+4. **Tibbs's search** (`server/shopkeep.py`): the stock turn returns
+   `search` instead of briefs when staged, asks for somewhere new given his
+   last few (`tibbs/searches`), keeps the commission, and gives no sparks or
+   chance events. With no answer, the search is empty and the log says so.
+5. **The stages** (`server/jarstages.py`, new; the DM's prompt is one
+   function there, `dm_prompt`, with its world paragraph beside it, so DM
+   strategy can be added in one place): DM, fitter, artist, behaviour, each
+   with its own schema; what each prompt must and must not contain is
+   tested; the artist and the behaviour writer run on two threads.
+6. **Combine, check, route, store**: one redo per find to the stage at
+   fault; DM or fitter failure drops the find (counted against
+   `MAX_FAILS`); `concept/ID` kept beside the record; stages run with
+   `limit=None`.
+7. **The switch**: `CARDOS_JAR_STAGES=1` selects the pipeline in
+   `generate` and `_make_day`; with it off, a test pins that the one-call
+   path is what runs.
+8. **Real output**: about 20 finds on the droplet through the pipeline,
+   read and shown to alex before the switch is flipped.
