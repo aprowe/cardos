@@ -1121,6 +1121,24 @@ latch on: sell one cute thing and every find is cute. So:
 
 Change the prompts with care: they were tuned against real output.
 
+**Items are made in stages** (2026-10-11, v0.20.0, spec
+docs/superpowers/specs/2026-10-11-jar-item-pipeline-design.md). The only
+path: `jar.generate(search=)` -> `server/jarstages.py`. Per find the code
+rolls kind, tier, form and activity (`jar.ACTIVITIES`); the DM writes a
+concept from Tibbs's search (`dm_prompt` is the one place to grow its
+strategy); the fitter writes the sheet inside `jar.motion_rules(activity,
+kind)` (only critters travel); the artist and the behaviour writer run on
+two threads; `check_parts` routes a refusal to the stage at fault, once.
+`concept/ID` is kept beside the record (never sent to devices); remakes
+(`jarstages.remake`) start from it. Stages run with limit=None. Motion
+parts are record bytes 215 travel, 216 idle, 217 lively (agreed with the
+device side: a still thing with no idle is written lively=normal so it
+never reads as all-zero, which means "an old item, use byte 72"; the
+fixture is test/fixtures/jar_item_motion.bin). Tibbs's stock turn now
+answers `search` (his last six in tibbs/searches); sparks, briefs and the
+chance event are gone. `tools/jar_stages_trial.py` runs real finds in a
+scratch state. Jar Lab still previews the old one-call prompt.
+
 **Jar Lab: the bench for prompts and behaviour** (2026-10-11,
 `server/jarlab.py`, `server/jarlab.html`). At `/dash/jarlab` (under /dash
 because the cookie's Path is /dash; `/jarlab` redirects), the dashboard's

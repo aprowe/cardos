@@ -11,6 +11,24 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.20.0 -- 2026-10-11
+
+Jar Factory (`update apps`) and the server. Devices should update: new items
+use bytes 215-217, which older Jar builds read only through byte 72.
+
+- **Items are made in stages** (server/jarstages.py). Tibbs is asked where he
+  went searching; a DM invents each find from that, knowing almost nothing
+  of the game; a fitter writes the game sheet; an artist and a behaviour
+  writer work in parallel; a refusal goes back to the stage at fault. The
+  code rolls each find's kind, tier, form and activity (still 35%, reacts
+  30%, ambles 25%, restless 10%). No sparks, no random words, no flag: the
+  one-call path is gone. Pip's and Bramble's remakes go through the same
+  stages from the item's concept.
+- **Things can keep still, and motion is made of parts**: travel (crawl,
+  hop, slide, float, fly; critters only), idle (sway, bob, wobble, spin,
+  pulse, flicker, blink) and liveliness, in record bytes 215-217, drawn by
+  the scene; byte 72 keeps the nearest old movement.
+
 ## v0.19.0 -- 2026-10-11
 
 Jar Factory (`update apps`) and the server.
