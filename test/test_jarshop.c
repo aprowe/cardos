@@ -435,6 +435,35 @@ static int hold_server(const char *m, const char *path, const char *body, char *
   return day_server(m, path, body, out, cap);
 }
 
+/* A commission struck in talk: /jar/day says "deal", and the shop asks for
+ * the fresh stock itself -- with its report, and charging nothing (the coins
+ * went at the counter). */
+static int DEAL;
+static int deal_server(const char *m, const char *path, const char *body, char *out, int cap) {
+  if (!strcmp(path, "/jar/day") && strcmp(m, "POST") && DEAL && NEXT_BATCH < 2)
+    return snprintf(out, (size_t)cap, "ok 2027-01-15\ntags rainy\nitems 3\nbatch 1\ndeal\n");
+  if (!strncmp(path, "/jar/day?fresh=1", 16)) DEAL = 0;
+  return hold_server(m, path, body, out, cap);
+}
+
+void test_jarshop_a_deal_struck_in_talk_brings_a_fresh_stock(void) {
+  const JfReq *r;
+  card(5000);
+  jf_handler = deal_server;
+  NEXT_BATCH = 0;
+  DEAL = 1;
+  FORGE = 0;
+  launch("shop");
+  tick(3300);
+  r = jf_last("/jar/day?fresh=1");
+  CHECK(r != 0);
+  CHECK(r && strcmp(r->method, "POST") == 0);
+  CHECK_EQ(J.coins, 5000);                    /* nothing taken here */
+  tick(3300);
+  CHECK_EQ(S.batch, 2);                       /* the new stock is on show */
+  CHECK_EQ(jf_count("/jar/day?fresh=1"), 1);  /* and asked for once */
+}
+
 void test_jarshop_held_items_stay_into_the_next_stock(void) {
   const JfReq *r;
   card(5000);
