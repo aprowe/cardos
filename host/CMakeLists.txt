@@ -36,6 +36,7 @@ file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
   ${ROOT}/kernel/app/capprel.c    # relocation arithmetic; elfload.c reads the tables
   ${ROOT}/kernel/app/xipcache.c    # the flash code cache; xipflash.c is the partition around it
   ${ROOT}/kernel/app/ovl.c         # data overlays; capprun.c binds them to the card
+  ${ROOT}/kernel/app/bigmode.c     # big-app mode; the heap is set at boot
   ${ROOT}/kernel/sys/g0gesture.c # voice.c is the device glue around it
   ${ROOT}/kernel/sys/printdoc.c  # printq.c/btprint.c are the task and radio around it
   ${ROOT}/kernel/sys/serframe.c  # serlink.c is the device glue around it
