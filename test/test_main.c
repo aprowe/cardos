@@ -483,7 +483,7 @@ void test_jarshop_held_items_stay_into_the_next_stock(void);
 void test_jarshop_a_refused_item_is_said_and_not_fetched_again(void);
 void test_jarshop_paying_tibbs(void);
 void test_jarshop_a_paid_ask_waits_for_a_busy_slot(void);
-void test_jarshop_tibbs_and_his_seed_packets(void);
+void test_jarshop_tibbs_and_no_seed_packets(void);
 void test_jarshop_g_buys_and_goes_to_send_a_gift(void);
 void test_jarsim_every_coin_is_a_jar_that_left(void);
 void test_jarsim_starts_at_about_three_a_minute(void);
@@ -1558,7 +1558,7 @@ int main(void) {
   RUN(test_jarshop_a_refused_item_is_said_and_not_fetched_again);
   RUN(test_jarshop_paying_tibbs);
   RUN(test_jarshop_a_paid_ask_waits_for_a_busy_slot);
-  RUN(test_jarshop_tibbs_and_his_seed_packets);
+  RUN(test_jarshop_tibbs_and_no_seed_packets);
   RUN(test_jarshop_g_buys_and_goes_to_send_a_gift);
   printf("-- jarsim --\n");
   RUN(test_jarsim_every_coin_is_a_jar_that_left);

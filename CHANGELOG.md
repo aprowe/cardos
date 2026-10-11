@@ -11,6 +11,14 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.18.2 -- 2026-10-11
+
+Jar Factory (`update apps`).
+
+- **No more seeds.** Any bed is planted with any of the four plants, free,
+  from the Garden; a plant grows in an hour, not three days. The shop no
+  longer sells seed packets, and the Garden says what each plant makes.
+
 ## v0.18.1 -- 2026-10-11
 
 - **Jar Factory was missing from an original Cardputer's launcher.** The

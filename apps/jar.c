@@ -1574,7 +1574,6 @@ static void scene_start(void) {
 #undef S
 #undef NS
 #undef SAY
-#undef SEEDS
 #undef net_reply
 #undef key_card
 #undef V_CARD

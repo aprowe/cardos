@@ -178,11 +178,11 @@ void test_jarstore_garden_grows_in_real_time(void) {
   CHECK(J.bed[1].young);
   CHECK_EQ(js_garden_mix(&J, mix), 3);
   CHECK_EQ(mix[JPL_FLOWER], 0);
-  CHECK_EQ(js_bed_days(&J.bed[1], T0 + 3600), 3);
-  CHECK_EQ(js_bed_days(&J.bed[1], T0 + 86400 * 2 + 10), 1);
-  js_settle_beds(&J, T0 + 86400 * 2);
+  CHECK_EQ(js_bed_mins(&J.bed[1], T0 + 60), 59);
+  CHECK_EQ(js_bed_mins(&J.bed[1], T0 + 3600 - 70), 2);
+  js_settle_beds(&J, T0 + 3599);
   CHECK(J.bed[1].young);
-  js_settle_beds(&J, T0 + 86400 * 3);
+  js_settle_beds(&J, T0 + 3600);                    /* an hour to grow */
   CHECK(!J.bed[1].young);
   CHECK_EQ(J.bed[1].at, 0);
   CHECK_EQ(js_garden_mix(&J, mix), 4);
@@ -190,7 +190,7 @@ void test_jarstore_garden_grows_in_real_time(void) {
   /* with no clock a plant waits, and starts counting when one comes */
   js_plant(&J, 2, JPL_REED, 0);
   CHECK_EQ(J.bed[2].at, 1);
-  CHECK_EQ(js_bed_days(&J.bed[2], 0), -1);
+  CHECK_EQ(js_bed_mins(&J.bed[2], 0), -1);
   js_settle_beds(&J, 0);
   CHECK(J.bed[2].young);
   js_settle_beds(&J, T0);

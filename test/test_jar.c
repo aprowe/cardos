@@ -637,13 +637,13 @@ void test_jar_a_gift_floats_down_and_a_thank_you_is_hearts(void) {
 
 void test_jar_a_young_bed_in_the_scene(void) {
   start(T0);
-  js_plant(&J, 0, JPL_FLOWER, T0 - 86400);
+  js_plant(&J, 0, JPL_FLOWER, T0 - 600);
   save();
   reopen();
   CHECK(J.bed[0].young);
   ticks(1000);
   dump("19_young_bed");
-  fakeapi_epoch = T0 + 3 * 86400;
+  fakeapi_epoch = T0 + 3600;
   ticks(1500);                              /* a minute's tick: it comes of age */
   CHECK(!J.bed[0].young);
 }

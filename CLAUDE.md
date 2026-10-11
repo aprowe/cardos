@@ -1154,8 +1154,9 @@ The rest:
 - Prices are chosen before an item is made (`TIERS`: common to treasure,
   30-900), kept in record byte 207 (in fives, signed), and a dear item gets
   more care and more effort.
-- Plants steer nothing: the shop sells seed packets now and then, and the
-  Garden plants from seeds (`/var/jar/seeds.txt`).
+- Plants steer nothing. Since v0.18.2 there are no seeds: the Garden plants
+  any bed with any plant, free, and it grows in an hour (`JS_MATURE_S`).
+  Different growth rates or looks per plant are a later idea, not now.
 - The shelf is gone.
 
 ## Hardware facts — measured on the actual device, not from a datasheet

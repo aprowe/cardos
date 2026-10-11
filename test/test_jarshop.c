@@ -179,7 +179,6 @@ void test_jarshop_upgrades(void) {
 void test_jarshop_garden_plants_and_asks_before_pulling_up(void) {
   card(200);
   launch("garden");
-  CHECK_EQ(SEEDS[JPL_FLOWER], 1);         /* a card with no seeds file starts with one of each */
   CHECK_EQ(G.view, V_GARDEN);
   shot("s06_garden");
   key(CAPP_KEY_ENTER);                    /* bed 1: a grown berry bush */
@@ -199,9 +198,7 @@ void test_jarshop_garden_plants_and_asks_before_pulling_up(void) {
   key('y');
   CHECK_EQ(J.bed[0].type, JPL_FLOWER);
   CHECK(J.bed[0].young);
-  CHECK_EQ(J.coins, 200);                 /* seeds, not coins */
-  CHECK_EQ(SEEDS[JPL_FLOWER], 0);
-  CHECK(strcmp(fakefs_get("/var/jar/seeds.txt"), "1 1 1 0 ") == 0);
+  CHECK_EQ(J.coins, 200);                 /* free */
   CHECK(strstr(saved(), "plant 3 1800000000 ") != 0);
   CHECK_EQ(G.view, V_GARDEN);
   /* a young bed is replanted without asking */
@@ -210,13 +207,12 @@ void test_jarshop_garden_plants_and_asks_before_pulling_up(void) {
   key(CAPP_KEY_ENTER);
   CHECK(!G.asking);
   CHECK_EQ(J.bed[0].type, JPL_SHROOM);
-  /* no flower seeds left: nothing planted */
+  /* and again: no seeds to run out of */
   key(CAPP_KEY_ENTER);
   key(CAPP_KEY_DOWN);
   key(CAPP_KEY_ENTER);
-  CHECK_EQ(J.bed[0].type, JPL_SHROOM);
-  CHECK(strstr(U.msg, "No seeds") != 0);
-  key(CAPP_KEY_ESC);
+  CHECK_EQ(J.bed[0].type, JPL_FLOWER);
+  CHECK(strstr(U.msg, "an hour") != 0);
   /* beds not bought yet */
   key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT);
   key(CAPP_KEY_ENTER);
@@ -642,7 +638,9 @@ void test_jarshop_a_paid_ask_waits_for_a_busy_slot(void) {
   JF_PENDING = 0;
 }
 
-void test_jarshop_tibbs_and_his_seed_packets(void) {
+/* His line, his prices -- and a seed line from an older server sells nothing:
+ * plants are free now. */
+void test_jarshop_tibbs_and_no_seed_packets(void) {
   card(500);
   jf_handler = tibbs_server;
   FORGE = 0;
@@ -653,28 +651,14 @@ void test_jarshop_tibbs_and_his_seed_packets(void) {
   CHECK(fakefs_exists("/var/jar/say.txt"));
   CHECK_EQ(S.price[0], 450);                  /* the server's price */
   CHECK(S.price[1] >= 45 && S.price[1] <= 200); /* none given: worked out as before */
-  CHECK_EQ(S.seed, JPL_REED + 1);
-  CHECK_EQ(S.seed_price, 25);
-  CHECK(!G.tile[1].seed && !G.tile[2].seed && G.tile[3].seed);   /* only the last is seeds */
+  CHECK_EQ(S.seed, 0);
+  CHECK_EQ(page_count(), 3);                  /* no packet tile after the items */
   shot("s14_tibbs");
-  /* the seed packet is the last tile */
   key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT);
-  CHECK(U.card.seed);
-  CHECK(strcmp(U.name, "reed seeds") == 0);
-  shot("s15_seeds");
-  key(' ');                                   /* seeds are not held */
-  CHECK_EQ(S.held, 0);
-  key(CAPP_KEY_ENTER);
-  CHECK_EQ((int)J.coins, 475);
-  CHECK_EQ(SEEDS[JPL_REED], 2);
-  CHECK(S.seed_sold);
-  CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "seed 2 25 1") != 0);
-  key(CAPP_KEY_ENTER);                        /* sold: once */
-  CHECK_EQ((int)J.coins, 475);
-  /* opened again: his line and the sold packet are kept */
+  CHECK_EQ(G.sel, 2);                         /* the last item is the last tile */
+  /* opened again: his line is kept */
   launch("shop");
   CHECK(strcmp(SAY, "Power went out, so I sorted the back shelf by candle.") == 0);
-  CHECK(S.seed_sold);
   /* t: talk to him, in Jar Post */
   key('t');
   CHECK(strcmp(RAN, "Jar Post") == 0 && strcmp(RAN_ARGS, "talk") == 0);

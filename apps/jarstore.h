@@ -43,7 +43,6 @@
 #define JST_FRIENDS   CAPP_VAR "/jar/friends.txt"
 #define JST_PUB       CAPP_VAR "/jar/server.pub"
 #define JST_SAY       CAPP_VAR "/jar/say.txt"    /* Tibbs's line of the day */
-#define JST_SEEDS     CAPP_VAR "/jar/seeds.txt"  /* seed packets: a count a plant */
 
 #define JST_POSTAGE   10
 #define JST_NOTE      24
@@ -300,26 +299,6 @@ static JST_OPT int jst_stock_read(const CardApi *api, const JStock *s, int k, JI
   }
   jst_stock_path(api, s->gen, k, p, sizeof p);
   return jst_read_rec(api, p, io);
-}
-
-/* ---- seed packets ------------------------------------------------------------------ */
-
-/* Seeds in hand, a count a plant, into s. A card that has never had the file
- * starts with one of each (the garden used to be planted for coins). */
-static JST_OPT void jst_seeds_load(const CardApi *api, int *s, char *text, int cap) {
-  const char *p = text;
-  int i;
-  if (jst_get(api, JST_SEEDS, text, cap) <= 0) {
-    for (i = 0; i < JPL_KINDS; i++) s[i] = 1;
-    return;
-  }
-  for (i = 0; i < JPL_KINDS; i++) s[i] = (int)js_num(&p);
-}
-
-static JST_OPT int jst_seeds_save(const CardApi *api, const int *s, char *text, int cap) {
-  int n = 0, i;
-  for (i = 0; i < JPL_KINDS; i++) n += api->fmt(text + n, (size_t)(cap - n), "%d ", s[i]);
-  return jst_put(api, JST_SEEDS, text, n);
 }
 
 /* ---- mail ----------------------------------------------------------------------- */

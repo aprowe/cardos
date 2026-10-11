@@ -117,10 +117,6 @@ def pick_tier(rng, bribe=0):
     raise AssertionError("unreachable")
 
 
-# Plants are sold as seed packets now and then, instead of steering the
-# stock (the owner: "i dont want the plants to influence the shop").
-SEED_CHANCE = 30              # percent of stocks with a seed packet
-SEED_PRICE = {"berry": 25, "reed": 25, "mushroom": 30, "flower": 30}   # apps/jarsim.h JS_PLANT_NAME
 SCRIPT_SRC_MAX = 1200         # a script's source, as Claude writes it
 STOCK_TTL = 3 * 86400
 FRIENDS_MAX = 64
@@ -1427,9 +1423,8 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
                 st.put(NS, "stock/%s/%d" % (person, len(base)), rec, ttl=STOCK_TTL)
                 base.append(i)
         _set_shown(st, person, base)
-        # Plants are seed packets now and then, instead of steering the stock.
-        rng = random.Random()
-        seed = rng.choice(sorted(SEED_PRICE)) if rng.randrange(100) < SEED_CHANCE else ""
+        # No seed packets (2026-10-11): any bed is planted with anything, free.
+        seed = ""
         _set_day(person, {"state": "pending", "date": key[1], "tags": [], "n": len(base),
                           "batch": batch, "req": req, "seed": seed}, st)
     threading.Thread(target=_make_day, args=(chat, person, req, date, st, batch, len(base),
@@ -1779,9 +1774,6 @@ def _day_text(cur):
         cur["date"], ", ".join(cur.get("tags", [])), cur["n"], cur.get("batch", 0))
     if cur.get("say"):
         out += "say %s\n" % cur["say"]
-    if cur.get("seed"):
-        name = {"fern": "reed", "cactus": "reed"}.get(cur["seed"], cur["seed"])   # old plants
-        out += "seed %s %d\n" % (name, SEED_PRICE.get(name, 25))
     return out + ("more\n" if cur["state"] == "pending" else "")
 
 

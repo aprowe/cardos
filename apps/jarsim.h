@@ -193,7 +193,7 @@ enum { JPL_BERRY = 0, JPL_REED, JPL_SHROOM, JPL_FLOWER, JPL_KINDS };
 enum { JRS_SPORES = 0, JRS_NECTAR, JRS_TWIGS, JRS_KINDS };
 #define JS_RES_MAX     999
 #define JS_BED_LV_MAX  3
-#define JS_MATURE_S    (3u * 86400u)   /* three real days to grow */
+#define JS_MATURE_S    3600u           /* an hour to grow (the owner, 2026-10-11) */
 #define JS_SHELF       4
 static JS_OPT const char *const JS_PLANT_NAME[JPL_KINDS] = { "berry", "reed", "mushroom", "flower" };
 static JS_OPT const char *const JS_PLANT_SHORT[JPL_KINDS] = { "berry", "reed", "shroom", "flower" };
@@ -426,14 +426,14 @@ static JS_OPT int js_bed_grown(const JBed *b, uint32_t now) {
   return now - b->at >= JS_MATURE_S;
 }
 
-/* Whole days until it is grown, rounded up; 0 when it is. -1 without a
+/* Whole minutes until it is grown, rounded up; 0 when it is. -1 without a
  * clock. */
-static JS_OPT int js_bed_days(const JBed *b, uint32_t now) {
+static JS_OPT int js_bed_mins(const JBed *b, uint32_t now) {
   uint32_t left;
   if (js_bed_grown(b, now)) return 0;
   if (b->at == 1 || !now) return -1;
   left = now < b->at ? JS_MATURE_S : JS_MATURE_S - (now - b->at);
-  return (int)((left + 86399u) / 86400u);
+  return (int)((left + 59u) / 60u);
 }
 
 /* Bring the beds up to `now`: a plant set with no clock starts counting, a
@@ -449,7 +449,7 @@ static JS_OPT void js_settle_beds(Jar *j, uint32_t now) {
   }
 }
 
-/* Plant `type` in bed i (paid for by the caller). It starts young. */
+/* Plant `type` in bed i: free, any plant in any bed. It starts young. */
 static JS_OPT void js_plant(Jar *j, int i, int type, uint32_t now) {
   JBed *b = &j->bed[i];
   b->type = (uint8_t)js_plant_type((uint32_t)type);

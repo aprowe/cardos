@@ -79,7 +79,7 @@ static JU_OPT int ui_run(const char *app, const char *args) {
 typedef struct {
   uint32_t id;
   uint16_t price, pal[8];
-  uint8_t kind, move, flags, in_jar, shelved, sold, held, seed, ok;
+  uint8_t kind, move, flags, in_jar, shelved, sold, held, ok;
   uint8_t frame[JI_FRAME_BYTES];
 } Tile;
 
