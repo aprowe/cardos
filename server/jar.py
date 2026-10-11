@@ -735,10 +735,18 @@ def record_tags(tags):
 
 # ---- asking Claude for items ------------------------------------------------------------
 
-def item_schema():
+def _habit_words(e):
+    """The events and actions a habit may name: version 1's until V2."""
+    ev = [w for w, v in e["events"].items() if jarvm.V2 or v < jarvm.V1_EVENTS]
+    ac = [w for w, v in e["actions"].items() if w != "none" and (jarvm.V2 or v < jarvm.V1_ACTIONS)]
+    return ev, ac
+
+
+def item_schema(form=None):
     e = enums()
     printable = "^[ -~]+$"
-    return {
+    events, actions = _habit_words(e)
+    s = {
         "type": "object",
         "required": ["name", "line", "kind", "movement", "speed", "zone", "habits",
                      "bubbles", "palette", "frames"],
@@ -753,9 +761,9 @@ def item_schema():
             "habits": {"type": "array", "maxItems": MAX_HAB, "items": {
                 "type": "object", "required": ["when", "do"], "additionalProperties": False,
                 "properties": {
-                    "when": {"enum": list(e["events"])},
+                    "when": {"enum": events},
                     "when_arg": {"type": "integer", "minimum": 0, "maximum": 255},
-                    "do": {"enum": [a for a in e["actions"] if a != "none"]},
+                    "do": {"enum": actions},
                     "do_arg": {"type": "integer", "minimum": 0, "maximum": 255}}}},
             "bubbles": {"type": "array", "maxItems": MAX_BUB, "items": {
                 "type": "string", "minLength": 1, "maxLength": BUB_LEN, "pattern": printable}},
@@ -769,10 +777,22 @@ def item_schema():
             "script": {"type": "string", "maxLength": SCRIPT_SRC_MAX},
         },
     }
+    if jarvm.V2:
+        p = s["properties"]
+        p["traits"] = {"type": "array", "minItems": 1, "maxItems": 4,
+                       "items": {"enum": list(jarvm.GROUPS["trait"])}}
+        p["voice"] = {"enum": list(jarvm.GROUPS["sound"]) + ["none"]}
+        s["required"] = s["required"] + ["traits"]
+        if form == "furniture":
+            p["surface"] = {"type": "integer", "minimum": 0, "maximum": 13}
+            s["required"] = s["required"] + ["surface"]
+        if form == "part":
+            p["frames"] = dict(p["frames"], minItems=2)
+    return s
 
 
-def batch_schema(n, kind=None):
-    one = item_schema()
+def batch_schema(n, kind=None, form=None):
+    one = item_schema(form)
     if kind:
         one = dict(one, properties=dict(one["properties"], kind={"enum": [kind]}))
     return {"type": "object", "required": ["items"], "additionalProperties": False,
@@ -798,7 +818,44 @@ GAME = (
     "the jars out. Its shop sells odd collectible things the player places in the jar.")
 
 
-def prompt_for(brief, owned=(), avoid=(), kind=None, tier=None):
+# ---- what an item is (language v2: server/jarvm.py V2) ----------------------
+#
+# The code rolls an item's form, as it rolls its kind and its price: the
+# model latches on to whatever it was last asked for (the owner: "AI tends to
+# over fit"), so furniture, scenery and the rest come by the dice.
+FORMS = (                     # (name, percent, kinds it suits)
+    ("furniture", 12, ("floor",)),
+    ("scenery", 8, ("floor",)),
+    ("part", 10, ("floor", "hanging")),
+    ("big", 10, ("floor", "critter")),
+)
+FORM_WORDS = {
+    "furniture": "It is furniture: a shelf, table, stool, crate or ledge that other things stand "
+                 "on. Draw it with a flat top that runs most of its width, and give surface: the "
+                 "row (0-15, from the top of the picture) of that flat top.",
+    "scenery": "It is scenery: a big backdrop piece -- a plant, a window, a lamp post, a poster "
+               "-- drawn twice the size behind everything; it does not move or get in the way. "
+               "Fill the 16x16 grid with it.",
+    "part": "It has a part that leaves home and comes back: make its LAST frame the part alone "
+            "(a bird, a moth, a spark, a bee -- small, centred), and the other frames the thing "
+            "itself (its house, nest, hive, lamp). A script uses fly and home; left alone the "
+            "part goes out now and then by itself.",
+    "big": "It is big: drawn at twice the size, so the 16x16 picture should be bold and simple, "
+           "readable when doubled.",
+}
+
+
+def roll_form(kind, rng):
+    """None, or one of FORMS that suits `kind`."""
+    r = rng.randrange(100)
+    for name, chance, kinds in FORMS:
+        if r < chance:
+            return name if kind in kinds else None
+        r -= chance
+    return None
+
+
+def prompt_for(brief, owned=(), avoid=(), kind=None, tier=None, form=None):
     """The prompt for one item, from the shopkeeper's brief (server/shopkeep.py)."""
     e = enums()
     lines = [
@@ -809,6 +866,8 @@ def prompt_for(brief, owned=(), avoid=(), kind=None, tier=None):
     ]
     if kind:
         lines.append("Make it %s." % KIND_WORDS[kind])
+    if form and jarvm.V2:
+        lines.append(FORM_WORDS[form])
     if tier:
         lines.append("It will sell for %d coins. %s" % (tier[1], tier[3]))
     if avoid:
@@ -846,20 +905,37 @@ def prompt_for(brief, owned=(), avoid=(), kind=None, tier=None):
         "passing. Bubble and frame numbers in scripts count from 1.",
         "Keep everything friendly for all ages. Write the JSON compactly, without "
         "indentation.",
+    ]
+    if jarvm.V2:
+        lines += [
+            "- traits: 1 to 4 words from: %s -- what it is, for other items' scripts to react "
+            "to (a cake is food and sweet; a music box is music and clockwork)." %
+            ", ".join(jarvm.GROUPS["trait"]),
+            "- voice (optional): its sound, one of: %s." % ", ".join(jarvm.GROUPS["sound"]),
+            "MAKE IT DO SOMETHING. The best items are ones you play with and that play with "
+            "each other: poke it and it sets off fireworks (burst sparkle) or a sound; it "
+            "throws the nearest small thing about; it eats ripe berries (eat) and leaves "
+            "pellets that feed the bushes (drop); it chases anything sweet (seek sweet); it "
+            "signals the others (signal N / on signal N:); it sounds on the hour (on hour 12: "
+            "sound horn); it reacts to world events (on world ants:, on world dark:) and to new "
+            "arrivals (on new: if has(newtraits, food) ...). React to traits, never to names. "
+            "Not every item needs a script: a cheap one can be a simple sitter.",
+        ]
+    lines += [
         "",
         "The script language:",
-        jarvm.LANGUAGE_GUIDE,
+        jarvm.LANGUAGE_GUIDE_V2 if jarvm.V2 else jarvm.LANGUAGE_GUIDE_V1,
     ]
     return "\n".join(lines)
 
 
-def check_item(raw, nameset=()):
+def check_item(raw, nameset=(), form=None):
     """What is wrong with one item Claude gave (a dict as the schema shapes
     it): a list of reasons, empty if nothing. Covers what the schema cannot:
     sprites, the text filter, the recipe's arguments, names already used."""
     e = enums()
     why = []
-    errs = ask.validate(raw, item_schema())
+    errs = ask.validate(raw, item_schema(form))
     if errs:
         return errs
     texts = [raw["name"], raw["line"]] + list(raw["bubbles"])
@@ -907,7 +983,7 @@ def check_item(raw, nameset=()):
     return why
 
 
-def compile_script(raw, log=None):
+def compile_script(raw, log=None, form=None):
     """An item's script source -> its bytecode, or b"" when it has none or it
     does not compile and live through a simulated day: the item then ships
     with its recipe alone, which always works -- a failed script is not worth
@@ -916,18 +992,46 @@ def compile_script(raw, log=None):
     if not src:
         return b""
     try:
-        return jarvm.prepare_script(src, nbub=len(raw.get("bubbles") or []),
-                                    nframes=len(raw.get("frames") or []))
+        nframes = len(raw.get("frames") or [])
+        if form == "part" and nframes >= 2:
+            nframes -= 1                                # the last frame is the part, not a pose
+        return jarvm.prepare_script(src, nbub=len(raw.get("bubbles") or []), nframes=nframes)
     except jarvm.ScriptError as e:
         if log:
             log("script of %r dropped: %s" % (raw.get("name"), e))
         return b""
 
 
-def to_item(raw, item_id, made, tags, log=None, price=0):
+def traits_tags(traits):
+    """Trait words into the record's 24-byte tag field, as many as fit."""
+    out = ""
+    for w in traits or []:
+        w = str(w).strip().lower()
+        if w in jarvm.GROUPS["trait"] and w not in out.split(","):
+            nxt = w if not out else out + "," + w
+            if len(nxt) <= TAGS_LEN:
+                out = nxt
+    return out
+
+
+def to_item(raw, item_id, made, tags, log=None, price=0, form=None):
     """A checked item (Claude's dict) -> the dict encode() takes."""
     e = enums()
-    return {
+    ext = {}
+    if jarvm.V2:
+        tags = traits_tags(raw.get("traits")) or tags
+        voice = raw.get("voice")
+        if voice and voice != "none":
+            ext["voice"] = jarvm.GROUPS["sound"].get(voice, 0)
+        if form == "furniture":
+            ext.update(role=1, surface=max(0, min(13, int(raw.get("surface", 4)))))
+        elif form == "scenery":
+            ext.update(role=2, scale=2)
+        elif form == "big":
+            ext["scale"] = 2
+        elif form == "part" and len(raw.get("frames") or []) >= 2:
+            ext.update(part=1, pdx=0, pdy=-6)
+    return dict(ext, **{
         "price": int(price),
         "id": item_id, "kind": e["kinds"][raw["kind"]], "flags": 0,
         "name": raw["name"], "line": raw["line"],
@@ -939,8 +1043,8 @@ def to_item(raw, item_id, made, tags, log=None, price=0):
         "bubbles": list(raw["bubbles"]), "mem": [0] * MEM,
         "maker": MAKER, "made": int(made), "tags": tags, "gifted": "",
         "frames": [pack_frame(f) for f in raw["frames"]],
-        "script": compile_script(raw, log),
-    }
+        "script": compile_script(raw, log, form),
+    })
 
 
 def generate(chat, person, req, date, store=None, signer=None, now=None, log=None,
@@ -963,17 +1067,18 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
         briefs.append(shopkeep.loose_brief(rng))
     owned = [n.lower() for n in req.get("owned", [])]
     names, records, last_error, fails = [], [], None, 0
-    tier = None
+    tier = form = None
     while len(records) < want and fails < MAX_FAILS:
         k = len(records)
         kind = KIND_PLAN[(kind_at + k) % len(KIND_PLAN)]
         taken = set(owned) | {n.strip().lower() for n in names}
         if tier is None:                               # chosen first; kept through a retry
             tier = pick_tier(rng, req.get("bribe", 0) if req.get("finds") else 0)
+            form = roll_form(kind, rng) if jarvm.V2 else None
         try:
             got = ask.ask_shape(chat, prompt_for(briefs[k], req.get("owned", []), names, kind,
-                                                 tier),
-                                batch_schema(1, kind), user=person or "pool", limit=limit,
+                                                 tier, form),
+                                batch_schema(1, kind, form), user=person or "pool", limit=limit,
                                 timeout=GEN_TIMEOUT, store=st, effort=tier[2],
                                 model=shopkeep.MODEL, cwd=shopkeep.home())
         except ask.RateLimited:
@@ -987,7 +1092,7 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
                 log("item %d: %s" % (k + 1, e))
             continue
         raw = (got.get("items") or [None])[0]
-        why = check_item(raw, taken) if isinstance(raw, dict) else ["no item"]
+        why = check_item(raw, taken, form) if isinstance(raw, dict) else ["no item"]
         if why:
             fails += 1
             if log:
@@ -997,14 +1102,14 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
         names.append(raw["name"])
         item_id = ID_BASE + st.incr(NS, "next_id")
         rec = seal(encode(to_item(raw, item_id, now, record_tags([tier[0], kind]), log,
-                                  tier[1])), signer)
+                                  tier[1], form)), signer)
         st.put(NS, "rec/%d" % item_id, rec)
         if person:
             st.put(NS, "own/%d" % item_id, person.encode())
         records.append(rec)
         if log:
             log("%s: %s %s, %d coins (%s)" % (raw["name"], tier[0], kind, tier[1], briefs[k]))
-        tier = None
+        tier = form = None
         if on_item:
             on_item(k, rec)
     if not records:
