@@ -117,10 +117,6 @@ def pick_tier(rng, bribe=0):
     raise AssertionError("unreachable")
 
 
-# Plants are sold as seed packets now and then, instead of steering the
-# stock (the owner: "i dont want the plants to influence the shop").
-SEED_CHANCE = 30              # percent of stocks with a seed packet
-SEED_PRICE = {"berry": 25, "reed": 25, "mushroom": 30, "flower": 30}   # apps/jarsim.h JS_PLANT_NAME
 SCRIPT_SRC_MAX = 1200         # a script's source, as Claude writes it
 STOCK_TTL = 3 * 86400
 FRIENDS_MAX = 64
@@ -1427,9 +1423,8 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
                 st.put(NS, "stock/%s/%d" % (person, len(base)), rec, ttl=STOCK_TTL)
                 base.append(i)
         _set_shown(st, person, base)
-        # Plants are seed packets now and then, instead of steering the stock.
-        rng = random.Random()
-        seed = rng.choice(sorted(SEED_PRICE)) if rng.randrange(100) < SEED_CHANCE else ""
+        # No seed packets (2026-10-11): any bed is planted with anything, free.
+        seed = ""
         _set_day(person, {"state": "pending", "date": key[1], "tags": [], "n": len(base),
                           "batch": batch, "req": req, "seed": seed}, st)
     threading.Thread(target=_make_day, args=(chat, person, req, date, st, batch, len(base),
@@ -1602,8 +1597,9 @@ def deal_context(person, coins, store=None):
         "%d" % coins if coins is not None else "some", have)
 
 
-def make_deal(person, deal, coins=None, store=None):
-    """Carry out a deal Tibbs struck: None, or why it cannot be (he is told)."""
+def make_deal(person, deal, coins=None, store=None, dry=False):
+    """Carry out a deal Tibbs struck: None, or why it cannot be (he is told).
+    dry: only check it."""
     st = store or kv.store()
 
     def n(key, hi):
@@ -1635,6 +1631,8 @@ def make_deal(person, deal, coins=None, store=None):
     com = deal.get("commission") if isinstance(deal.get("commission"), dict) else None
     if not (take or give or trade or com):
         return None
+    if dry:
+        return None
     for i in trade:
         to_pool([i], person, st)
         tx = shopkeep.tx_add(person, "lose", i, st)
@@ -1655,6 +1653,42 @@ def make_deal(person, deal, coins=None, store=None):
     sys.stderr.write("jar: %s: deal: take %d give %d trade %s commission %s\n" % (
         person, take, give, trade, bool(com)))
     return None
+
+
+def deal_words(person, deal, store=None):
+    """What a deal with Tibbs would do, in the code's words; "" for none."""
+    st = store or kv.store()
+    mine = {i: name for i, name, _p in owned_by(person, st)}
+
+    def n(key):
+        try:
+            return max(0, int(deal.get(key) or 0))
+        except (TypeError, ValueError):
+            return 0
+    parts = []
+    if n("take"):
+        parts.append("pay %d coins" % min(n("take"), BRIBE_MAX))
+    trade = [mine.get(_int_or(i), "") for i in deal.get("trade_in") or []]
+    trade = [t for t in trade if t]
+    if trade:
+        parts.append("hand over " + ", ".join(trade))
+    if n("give"):
+        parts.append("get %d coins" % min(n("give"), DEAL_GIVE_MAX))
+    com = deal.get("commission") if isinstance(deal.get("commission"), dict) else None
+    if com:
+        ask_ = wire.flat(str(com.get("ask") or ""), 40, ascii=True)
+        parts.append("a new stock" + (": " + ask_ if ask_ else ""))
+    if not parts:
+        return ""
+    s = "; ".join(parts)
+    return s[0].upper() + s[1:] + "."
+
+
+def _int_or(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return -1
 
 
 def pending_deal(person, store=None):
@@ -1686,12 +1720,16 @@ def post_talk(h, args):
     coins, have, beds, body = town.parse_have(body)
     try:
         me = kv.me()
+        # A deal is only checked here (dry) and kept as an offer: nothing
+        # happens until the player confirms it (POST /jar/deal).
         if who == "tibbs":
             context = deal_context(me, coins) if coins is not None else ""
-            on_deal = (lambda p, d: make_deal(p, d, coins)) if context else None
+            on_deal = ((lambda p, d: (make_deal(p, d, coins, dry=True), deal_words(p, d)))
+                       if context else None)
         else:
-            context = town.context(me, coins, have, beds) if have is not None else ""
-            on_deal = ((lambda p, d: town.make_deal(who, p, d, coins, have, beds, h.chat))
+            context = town.context(me, coins, have, beds, who=who) if have is not None else ""
+            on_deal = ((lambda p, d: (town.make_deal(who, p, d, coins, have, beds, dry=True),
+                                      town.words(who, p, d, have, beds)))
                        if context else None)
         started = shopkeep.say(h.chat, me, body,
                                [f for f in friends_of(me) if mutual(me, f)], context=context,
@@ -1699,6 +1737,49 @@ def post_talk(h, args):
     except ValueError as e:
         raise KVError(str(e))
     h.text("pending\n" if started else "busy still answering\n")
+
+
+@kv_route
+def post_deal(h, args):
+    """yes or no to the offer from who=NPC: the body is what you have now
+    (the talk's lines: coins, have, beds) then "yes" or "no". -> "ok" (done,
+    its effects come as tx lines), "no" (declined), or "error WHY"."""
+    from . import town
+    try:
+        body = h.body(512).decode("utf-8", "replace")
+    except ValueError as e:
+        raise kv.TooBig(str(e))
+    who = _who(args)
+    coins, have, beds, answer = town.parse_have(body)
+    me = kv.me()
+    o = shopkeep.offer_take(me, who)
+    if not o:
+        h.text("error no offer waiting\n")
+        return
+    if answer.strip().lower() != "yes":
+        shopkeep.note("%s turned down the deal: %s" % (shopkeep.display(me), o["words"]), None, who)
+        h.text("no\n")
+        return
+    if who == "tibbs":
+        why = make_deal(me, o["deal"], coins)
+    else:
+        why = town.make_deal(who, me, o["deal"], coins, have, beds, h.chat if _chat_ok(h) else None)
+    if why:
+        shopkeep.note("%s said yes, but the deal fell through: %s" % (shopkeep.display(me), why),
+                      None, who)
+        h.text("error %s\n" % wire.flat(why, 80, ascii=True))
+        return
+    shopkeep.note("%s agreed: %s" % (shopkeep.display(me), o["words"]), None, who)
+    h.text("ok\n")
+
+
+@kv_route
+def get_jobs(h, args):
+    """what the lane is making you: "job WHO SECONDS_LEFT WHAT" lines"""
+    from . import town
+    me = kv.me()
+    town.release_due(me)
+    h.text(town.jobs_text(me))
 
 
 @kv_route
@@ -1733,7 +1814,9 @@ def get_patches(h, args):
 def get_talk(h, args):
     """Tibbs: "pending", "ok" or "error WHY", then his line of the day and the
     talk; with tx=LAST, the deals' effects after LAST ("tx ID pay|get|lose N")"""
+    from . import town
     raw = arg(args, "tx")
+    town.release_due(kv.me())                       # a job whose time has come
     h.text(shopkeep.talk_text(kv.me(), tx_after=int(raw) if raw.isdigit() else None,
                               who=_who(args)))
 
@@ -1742,8 +1825,10 @@ def get_talk(h, args):
 def get_tx(h, args):
     """the deals' effects after=N: "tx ID OP ARG" lines -- the lane's jobs
     finish while you are elsewhere"""
+    from . import town
     raw = arg(args, "after")
     after = int(raw) if raw.isdigit() else 0
+    town.release_due(kv.me())                       # a job whose time has come
     h.text("".join("tx %d %s %s\n" % (t["id"], t["op"], t["arg"])
                    for t in shopkeep.txs(kv.me()) if t["id"] > after))
 
@@ -1779,9 +1864,6 @@ def _day_text(cur):
         cur["date"], ", ".join(cur.get("tags", [])), cur["n"], cur.get("batch", 0))
     if cur.get("say"):
         out += "say %s\n" % cur["say"]
-    if cur.get("seed"):
-        name = {"fern": "reed", "cactus": "reed"}.get(cur["seed"], cur["seed"])   # old plants
-        out += "seed %s %d\n" % (name, SEED_PRICE.get(name, 25))
     return out + ("more\n" if cur["state"] == "pending" else "")
 
 
@@ -1915,6 +1997,8 @@ ROUTES = [
     ("GET", "/jar/patches", get_patches, "device_or_dash"),
     ("GET", "/jar/events", get_events, "device_or_dash"),
     ("GET", "/jar/tx", get_tx, "device_or_dash"),
+    ("POST", "/jar/deal", post_deal, "device_or_dash"),
+    ("GET", "/jar/jobs", get_jobs, "device_or_dash"),
     ("POST", "/jar/gift", post_gift, "device_or_dash"),
     ("POST", "/jar/thanks", post_thanks, "device_or_dash"),
 ]

@@ -35,6 +35,7 @@ static char ME[512];
 
 static char SAID[128], TXS[128], HAVE_SAID[64], BEDS_SAID[64], WHO_SAID[16];
 static int TALK_POLLS, COINS_SAID, ITEM_GOOD;
+static char OFFER[128], DEAL_BODY[256], DEAL_PATH[64];
 static uint32_t ITEM_ID;
 static int post_server(const char *m, const char *path, const char *body, char *out, int cap) {
   if (OFFLINE) return -1;
@@ -69,6 +70,17 @@ static int post_server(const char *m, const char *path, const char *body, char *
     TALK_POLLS = 0;
     return snprintf(out, (size_t)cap, "pending\n");
   }
+  if (!strncmp(path, "/jar/deal?who=", 14) && !strcmp(m, "POST")) {   /* yes or no */
+    size_t n = strlen(body ? body : "");
+    snprintf(DEAL_BODY, sizeof DEAL_BODY, "%s", body ? body : "");
+    snprintf(DEAL_PATH, sizeof DEAL_PATH, "%s", path);
+    OFFER[0] = 0;
+    if (n >= 3 && !strcmp(body + n - 3, "yes")) {
+      snprintf(TXS, sizeof TXS, "tx 1 usespores 12\n");
+      return snprintf(out, (size_t)cap, "ok\n");
+    }
+    return snprintf(out, (size_t)cap, "no\n");
+  }
   if (!strncmp(path, "/jar/item?id=", 13)) {   /* a deal's item, made again or new */
     JItem it;
     int k;
@@ -80,7 +92,8 @@ static int post_server(const char *m, const char *path, const char *body, char *
   if (!strncmp(path, "/jar/talk", 9)) {
     if (SAID[0] && TALK_POLLS++ < 1) return snprintf(out, (size_t)cap, "pending\nday\tA crate came in.\nme\t%s\n", SAID);
     if (!SAID[0]) return snprintf(out, (size_t)cap, "ok\nday\tA crate came in.\n");
-    return snprintf(out, (size_t)cap, "ok\nday\tA crate came in.\nme\t%s\nhim\tHm, I know a fellow down at the rail yard who might.\n%s", SAID, TXS);
+    return snprintf(out, (size_t)cap, "ok\nday\tA crate came in.\nme\t%s\nhim\tHm, I know a fellow down at the rail yard who might.\n%s%s%s%s",
+                    SAID, TXS, OFFER[0] ? "offer\t" : "", OFFER, OFFER[0] ? "\n" : "");
   }
   if (!strncmp(path, "/q/ack?q=jar.gifts&upto=", 24)) {
     uint32_t upto = (uint32_t)atoi(path + 24);
@@ -121,6 +134,7 @@ static void card(uint32_t coins) {
   GIFT_OK = 1;
   SAID[0] = 0;
   TXS[0] = 0;
+  OFFER[0] = DEAL_BODY[0] = DEAL_PATH[0] = 0;
   ITEM_GOOD = 1;
   ITEM_ID = 0;
   snprintf(ME, sizeof ME, "code K7Q2XP\nname Alex\nfriend maya\tMaya\t%u\tmutual\nfriend bo\tBo\t0\twaiting\n",
@@ -417,8 +431,8 @@ void test_jarpost_the_town_and_a_job_done(void) {
   key(CAPP_KEY_ENTER);
   CHECK_EQ(G.view, V_TALK);
   CHECK_EQ(G.npc, 1);
-  tick(20);
-  CHECK(strstr(jf_last("/jar/talk")->path, "who=pip") != 0);
+  tick(400);                                     /* after the Town's job list */
+  CHECK(jf_last("/jar/talk") && strstr(jf_last("/jar/talk")->path, "who=pip") != 0);
   snprintf(TXS, sizeof TXS, "tx 1 usespores 4\ntx 2 remake 7001\ntx 3 get 5\n");
   type("make my lamp glow green");
   key(CAPP_KEY_ENTER);
@@ -447,6 +461,46 @@ void test_jarpost_the_town_and_a_job_done(void) {
   CHECK(strcmp(RAN, "Jar Factory") == 0);
 }
 
+/* A deal is an offer until the player says yes: shown in the code's words,
+ * n turns it down with nothing paid, y sends what the jar has and "yes". */
+void test_jarpost_an_offer_waits_for_yes(void) {
+  card(50);
+  launch("town");
+  J.res[JRS_SPORES] = 20;
+  key(CAPP_KEY_DOWN);
+  key(CAPP_KEY_ENTER);                           /* Pip */
+  tick(400);
+  snprintf(OFFER, sizeof OFFER, "Pay 12 spores: Pip alters Moth Lamp: make it glow. Ready in 1h.");
+  type("can you make my lamp glow?");
+  key(CAPP_KEY_ENTER);
+  tick(9000);
+  CHECK(!TK_PENDING);
+  CHECK(strstr(G.offer, "Pay 12 spores") == G.offer);
+  CHECK_EQ(J.res[JRS_SPORES], 20);               /* nothing yet */
+  shot("p32_offer");
+  type("x");                                     /* not an answer: still asking */
+  CHECK(G.offer[0] != 0);
+  CHECK_EQ(G.inlen, 0);                          /* and not typed either */
+  key('n');
+  tick(400);
+  CHECK(strstr(DEAL_PATH, "who=pip") != 0);
+  CHECK(strstr(DEAL_BODY, "have spores=20 ") != 0);
+  CHECK(strstr(DEAL_BODY, "\nno") != 0);
+  CHECK_EQ(J.res[JRS_SPORES], 20);
+  CHECK(G.offer[0] == 0);
+  /* asked again, and this time yes */
+  snprintf(OFFER, sizeof OFFER, "Pay 12 spores: Pip alters Moth Lamp. Ready in 1h.");
+  type("ok, go on then");
+  key(CAPP_KEY_ENTER);
+  tick(9000);
+  CHECK(G.offer[0] != 0);
+  key('y');
+  tick(2000);
+  CHECK(strstr(DEAL_BODY, "\nyes") != 0);
+  CHECK_EQ(J.res[JRS_SPORES], 8);                /* the tx that came of it */
+  CHECK_EQ(J.txseen, 1);
+}
+
 /* Wren's furniture arrives as a new thing; one that fails its signature is
  * not taken, and the deal waits. */
 void test_jarpost_a_delivery_is_checked(void) {
@@ -455,7 +509,7 @@ void test_jarpost_a_delivery_is_checked(void) {
   key(CAPP_KEY_DOWN); key(CAPP_KEY_DOWN); key(CAPP_KEY_DOWN);
   key(CAPP_KEY_ENTER);
   CHECK_EQ(G.npc, 3);
-  tick(20);
+  tick(400);
   ITEM_GOOD = 0;
   snprintf(TXS, sizeof TXS, "tx 1 give 9100\n");
   type("a shelf please");

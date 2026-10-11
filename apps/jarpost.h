@@ -29,6 +29,10 @@
  *   POST /jar/talk?who=NPC        what you say to someone on the lane, after
  *                                 what you have (apps/jartx.h, jtx_have);
  *   GET  /jar/talk?who=NPC&tx=N   the conversation, and the deals' effects
+ *   POST /jar/deal?who=NPC        "yes" or "no" to the offer the talk shows
+ *                                 ("offer\tWORDS"): nothing is paid or
+ *                                 handed over before the player says yes
+ *   GET  /jar/jobs                "job WHO SECONDS WHAT": what each is making
  *   GET  /jar/item?id=ID          an item a deal changed or made: the Town
  *                                 (server/town.py; V_TOWN lists the lane)
  * Offline, sending and collecting say so and nothing changes.
@@ -44,7 +48,7 @@
 enum { V_FRIENDS = 0, V_GIFT, V_MAIL, V_CARD, V_PICK, V_TALK, V_TOWN };
 #define PK_MAX 64
 enum { IN_NONE = 0, IN_CODE, IN_NAME, IN_NOTE, IN_TALK };
-enum { N_ME = N_APP + 8, N_FRIEND, N_NAME, N_GIFT, N_PEEK, N_ACK, N_THANKS, N_SAY, N_HEAR, N_DEAL };
+enum { N_ME = N_APP + 8, N_FRIEND, N_NAME, N_GIFT, N_PEEK, N_ACK, N_THANKS, N_SAY, N_HEAR, N_DEAL, N_ANSWER, N_JOBS };
 
 /* The lane (server/shopkeep.py's CAST): who you can talk to in the Town. */
 #define NPC_N 4
@@ -95,6 +99,10 @@ typedef struct {
   /* the Town: who is being talked to, where Esc goes, a deal waiting on its item */
   int npc, tsel, talk_back, fetching;
   JTx fx;
+  /* an offer waiting for yes or no, and what each of the lane is making */
+  char offer[124];
+  char job[NPC_N][36];
+  uint32_t job_done[NPC_N];             /* ticks_ms when done, as it was told */
   /* sending from the friends list: who, then which of your things */
   int fsel, npk, psel, ptop;
   uint32_t pk[PK_MAX];
@@ -352,6 +360,41 @@ static void net_reply(int n) {
     if (TK_PENDING) TK_AGAIN = api->ticks_ms() + 3000;
     fetch_deal();
     return;
+  case N_ANSWER:
+    net_status("");
+    G.offer[0] = 0;
+    if (n < 0) { failed("The answer", n); return; }
+    if (str_starts(NET, "ok")) say("Agreed: it is done");
+    else if (str_starts(NET, "no")) say("Turned down");
+    else say(NET[0] && NET[5] ? NET + 6 : "That did not go through");
+    if (hear() == 0) net_status("");                  /* what it did, as tx lines */
+    return;
+  case N_JOBS: {
+    const char *p;
+    int i;
+    net_status("");
+    for (i = 0; i < NPC_N; i++) G.job[i][0] = 0;
+    if (n < 0) return;
+    for (p = NET; *p; p = tsv_next_line(p)) {
+      const char *q = p + 4;
+      char w[12];
+      int k = 0;
+      uint32_t secs;
+      if (!str_starts(p, "job ")) continue;
+      while (*q && *q != ' ' && k < (int)sizeof w - 1) w[k++] = *q++;
+      w[k] = 0;
+      while (*q == ' ') q++;
+      secs = str_uint(&q);
+      while (*q == ' ') q++;
+      for (i = 0; i < NPC_N; i++) {
+        if (!str_same(w, NPC_ID[i])) continue;
+        for (k = 0; q[k] && q[k] != '\n' && k < (int)sizeof G.job[i] - 1; k++) G.job[i][k] = q[k];
+        G.job[i][k] = 0;
+        G.job_done[i] = api->ticks_ms() + secs * 1000u;
+      }
+    }
+    return;
+  }
   case N_DEAL: {
     int len;
     char m[44];
@@ -555,6 +598,7 @@ static int tk_parse(void) {
   int pending = str_starts(p, "pending");
   if (str_starts(p, "error")) say(p[5] ? p + 6 : "He did not hear you");
   TK_N = 0;
+  G.offer[0] = 0;
   for (p = tsv_next_line(p); *p; p = tsv_next_line(p)) {
     if (str_starts(p, "tx ")) { tk_tx(p); continue; }
     tsv_field(p, 0, who, sizeof who);
@@ -568,6 +612,12 @@ static int tk_parse(void) {
       if (str_same(who, "day")) { tk_add(e, (int)(end - e), 2); tk_add("", 0, 2); }
       else if (str_same(who, "me")) tk_add(e, (int)(end - e), 1);
       else if (str_same(who, "him")) tk_add(e, (int)(end - e), 0);
+      else if (str_same(who, "offer")) {
+        int n = (int)(end - e);
+        if (n > (int)sizeof G.offer - 1) n = (int)sizeof G.offer - 1;
+        api->mem_cpy(G.offer, e, (size_t)n);
+        G.offer[n] = 0;
+      }
     }
   }
   return pending;
@@ -589,11 +639,23 @@ static void go_talk(int npc, int back) {
   G.fetching = 0;
   start_input(IN_TALK);
   if (!U.net && hear() == 0) net_status("knocking");
+  else TK_AGAIN = api->ticks_ms() + 300;            /* the line is busy (the Town's jobs): soon */
 }
 
 static void go_town(void) {
   G.view = V_TOWN;
   G.in = IN_NONE;
+  if (!U.net && send(N_JOBS, "GET", "/jar/jobs", 0) == 0) net_status("");
+}
+
+/* Yes or no to the offer, with what the jar has now (checked again). */
+static void answer(int yes) {
+  char body[200], path[32];
+  int n = jtx_have(body, (int)sizeof body - 8);
+  api->fmt(body + n, sizeof body - (size_t)n, "%s", yes ? "yes" : "no");
+  api->fmt(path, sizeof path, "/jar/deal?who=%s", NPC_ID[G.npc]);
+  if (send(N_ANSWER, "POST", path, body) == 0) net_status(yes ? "shaking on it" : "saying no");
+  else say("Busy: try again");
 }
 
 /* The Town: the lane's four, and what you have to pay them with. */
@@ -606,7 +668,12 @@ static void paint_town(void) {
     uint16_t bg = on ? C_PANEL : C_BG;
     box(4, y, SW - 8, 21, bg);
     text(10, y + 2, NPC_NAME[i], on ? C_GOLD : C_TEXT, bg);
-    text(10, y + 11, NPC_WHAT[i], C_DIM, bg);
+    if (G.job[i][0]) {                                /* busy: what, and how long */
+      int32_t left = (int32_t)(G.job_done[i] - api->ticks_ms());
+      api->fmt(b, sizeof b, "%s, %s", left > 0 ? jtx_dur((uint32_t)left / 1000u) : "ready",
+               G.job[i]);
+      textn(10, y + 11, b, 37, C_TRAIT, bg);
+    } else text(10, y + 11, NPC_WHAT[i], C_DIM, bg);
   }
   api->fmt(b, sizeof b, "%u spores  %u nectar  %u twigs", (unsigned)J.res[JRS_SPORES],
            (unsigned)J.res[JRS_NECTAR], (unsigned)J.res[JRS_TWIGS]);
@@ -643,6 +710,13 @@ static void paint_talk(void) {
     api->fmt(b, sizeof b, "%s: ...", NPC_NAME[G.npc]);
     text(4, y, b, C_DIM, C_BG);
   }
+  if (G.offer[0] && !TK_PENDING) {                    /* a deal: nothing happens till y */
+    box(2, SHT - BAR - 31, SW - 4, 30, C_PANEL);
+    outline(2, SHT - BAR - 31, SW - 4, 30, C_GOLD);
+    wrapped(5, SHT - BAR - 29, G.offer, 38, 2, C_TEXT, C_PANEL);
+    text(5, SHT - BAR - 11, "Deal?  y yes   n no", C_GOLD, C_PANEL);
+    return;
+  }
   box(2, SHT - BAR - 13, SW - 4, 12, C_PANEL);
   {
     int n = slen(G.input), from = n > 37 ? n - 37 : 0;   /* the end of what is typed */
@@ -652,6 +726,13 @@ static void paint_talk(void) {
 }
 
 static int key_talk(int k) {
+  if (G.offer[0] && !TK_PENDING) {                    /* the deal first: y or n */
+    int a = confirm_key(api, (uint8_t)k);
+    if (a == CONFIRM_WAIT) return 1;
+    if (U.net) { say("Busy: try again"); return 1; }
+    answer(a == CONFIRM_YES);
+    return 1;
+  }
   if (k == CAPP_KEY_ESC) {
     if (G.talk_back == V_TOWN) go_town();
     else to_jar();
@@ -730,6 +811,7 @@ static void post_paint(void *st, CRect c) {
   static const char *const H_FRIENDS[] = { "^v", "pick", "Ent", "send gift", "A", "add", "Esc", "jar", 0 };
   static const char *const H_PICK[] = { "^v", "pick", "Ent", "send this", "Esc", "back", 0 };
   static const char *const H_TALK[] = { "Ent", "say it", "Esc", "leave", 0 };
+  static const char *const H_OFFER[] = { "y", "accept", "n", "decline", 0 };
   static const char *const H_TOWN[] = { "^v", "pick", "Ent", "talk", "Esc", "jar", 0 };
   static const char *const H_INPUT[] = { "Ent", "ok", "Esc", "cancel", 0 };
   static const char *const H_GIFT[] = { "^v", "pick", "Ent", "next", "Esc", "back", 0 };
@@ -749,7 +831,7 @@ static void post_paint(void *st, CRect c) {
     break;
   case V_MAIL:    paint_mail(); h = H_MAIL; where = "Mail"; break;
   case V_PICK:    paint_pick(); h = H_PICK; where = "Send a Gift"; break;
-  case V_TALK:    paint_talk(); h = H_TALK; where = NPC_NAME[G.npc]; break;
+  case V_TALK:    paint_talk(); h = G.offer[0] && !TK_PENDING ? H_OFFER : H_TALK; where = NPC_NAME[G.npc]; break;
   case V_TOWN:    paint_town(); h = H_TOWN; where = "The Town"; break;
   case V_CARD:
     paint_card(M[G.card_mail].from, M[G.card_mail].note);

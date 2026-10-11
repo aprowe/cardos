@@ -466,7 +466,7 @@ static void garden(void) {
       for (l = 1; l < js_bed_lv(&J.bed[i]); l++) px(bx - 4 + 2 * l, JS_SOIL - 1, rgb(0xff, 0xd1, 0x66));
     }
     if (J.bed[i].ready) spr(PRODUCE[J.bed[i].type % JPL_KINDS], 0, bx - 2, JS_SOIL - 15 + (int)((J.steps / 20 + (uint32_t)i) & 1), 0);
-    else if (J.bed[i].grow > JS_GROW_MS * 2 / 3) px(bx, JS_SOIL - 13, rgb(0xd2, 0x80, 0x90));
+    else if (J.bed[i].grow > js_grow_ms(&J.bed[i]) * 2 / 3) px(bx, JS_SOIL - 13, rgb(0xd2, 0x80, 0x90));
   }
   /* the pond: a bottle cap of water */
   {
@@ -1440,6 +1440,7 @@ static void clock_minute(void) {
   js_set_hour(&J, t.synced ? t.hour : -1);       /* the real hour: on hour 18 */
   lv_events_minute(t.synced ? t.hour * 60 + t.min : -1);   /* the day's written events */
   js_settle_beds(&J, J.epoch);              /* a plant comes of age while you watch */
+  if (J.build_k && !js_settle_build(&J, J.epoch)) { say("An upgrade is finished"); save(); }
   set_sky(J.minute);
 }
 
@@ -1497,6 +1498,7 @@ static void load(void) {
   jst_dirs(api);
   if (jst_load(api, &J, SCR.text, sizeof SCR.text) != 0) { first_run(); return; }
   js_settle_beds(&J, now);
+  js_settle_build(&J, now);                        /* an upgrade finished while away */
   for (i = 0; i < J.nwant; i++) {
     int x = J.want[i].x, y = J.want[i].y, k;
     if (item_read(J.want[i].id) != 0) continue;
@@ -1574,7 +1576,6 @@ static void scene_start(void) {
 #undef S
 #undef NS
 #undef SAY
-#undef SEEDS
 #undef net_reply
 #undef key_card
 #undef V_CARD

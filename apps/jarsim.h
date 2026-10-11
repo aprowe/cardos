@@ -84,6 +84,11 @@
 #endif
 
 #define JS_GROW_MS     32000           /* a mature plant's berry, every so often */
+/* Twigs, spores and nectar come slower than berries: one a bed every four
+ * minutes of jar time at level 1 (three at 2, two at 3), about fifteen an
+ * hour. At the berry's pace a bed made a hundred an hour, and the lane's
+ * prices were nothing (the owner, 2026-10-11: "i have like 60 of each"). */
+#define JS_RES_GROW_MS 240000
 #define JS_WORK_MS     30000           /* a jar's machine time, shared out */
 #define JS_JAR_VALUE   1
 
@@ -193,7 +198,7 @@ enum { JPL_BERRY = 0, JPL_REED, JPL_SHROOM, JPL_FLOWER, JPL_KINDS };
 enum { JRS_SPORES = 0, JRS_NECTAR, JRS_TWIGS, JRS_KINDS };
 #define JS_RES_MAX     999
 #define JS_BED_LV_MAX  3
-#define JS_MATURE_S    (3u * 86400u)   /* three real days to grow */
+#define JS_MATURE_S    3600u           /* an hour to grow (the owner, 2026-10-11) */
 #define JS_SHELF       4
 static JS_OPT const char *const JS_PLANT_NAME[JPL_KINDS] = { "berry", "reed", "mushroom", "flower" };
 static JS_OPT const char *const JS_PLANT_SHORT[JPL_KINDS] = { "berry", "reed", "shroom", "flower" };
@@ -286,6 +291,8 @@ typedef struct {
   uint32_t txseen;                     /* the last of Tibbs's deals carried out (tx) */
   uint32_t patchseen;                  /* the last patch fetched (server/jarpatch.py) */
   uint16_t res[JRS_KINDS];             /* the stores: spores, nectar, twigs */
+  uint8_t  build_k;                    /* an upgrade being built: JU_* + 1, 0 none */
+  uint32_t build_at;                   /* ... done at this UTC second */
 
   /* the factory */
   JBed   bed[JS_MAX_BEDS];
@@ -426,14 +433,14 @@ static JS_OPT int js_bed_grown(const JBed *b, uint32_t now) {
   return now - b->at >= JS_MATURE_S;
 }
 
-/* Whole days until it is grown, rounded up; 0 when it is. -1 without a
+/* Whole minutes until it is grown, rounded up; 0 when it is. -1 without a
  * clock. */
-static JS_OPT int js_bed_days(const JBed *b, uint32_t now) {
+static JS_OPT int js_bed_mins(const JBed *b, uint32_t now) {
   uint32_t left;
   if (js_bed_grown(b, now)) return 0;
   if (b->at == 1 || !now) return -1;
   left = now < b->at ? JS_MATURE_S : JS_MATURE_S - (now - b->at);
-  return (int)((left + 86399u) / 86400u);
+  return (int)((left + 59u) / 60u);
 }
 
 /* Bring the beds up to `now`: a plant set with no clock starts counting, a
@@ -449,7 +456,7 @@ static JS_OPT void js_settle_beds(Jar *j, uint32_t now) {
   }
 }
 
-/* Plant `type` in bed i (paid for by the caller). It starts young. */
+/* Plant `type` in bed i: free, any plant in any bed. It starts young. */
 static JS_OPT void js_plant(Jar *j, int i, int type, uint32_t now) {
   JBed *b = &j->bed[i];
   b->type = (uint8_t)js_plant_type((uint32_t)type);
@@ -1076,7 +1083,7 @@ static JS_OPT int js_act(Jar *j, int i, int action, int arg) {
       if (d < bd) { bd = d; best = k; }
     }
     if (best >= 0 && !j->bed[best].ready && !j->bed[best].young)
-      j->bed[best].grow += JS_GROW_MS / 3;          /* fed: it ripens sooner */
+      j->bed[best].grow += JS_GROW_MS / 3;          /* fed: it ripens sooner (a berry's third) */
     return 0;
   }
   case JA_SIGNAL:
@@ -1309,6 +1316,11 @@ static JS_OPT int32_t js_rate_after(const Jar *j, int k) {
 /* A bed's level, 1 to 3. */
 static JS_OPT int js_bed_lv(const JBed *b) { return b->lv > 1 ? b->lv : 1; }
 
+/* How long a bed takes to ripen, in jar milliseconds at level 1. */
+static JS_OPT int32_t js_grow_ms(const JBed *b) {
+  return b->type % JPL_KINDS == JPL_BERRY ? JS_GROW_MS : JS_RES_GROW_MS;
+}
+
 /* Something from the stores (n of resource r): 0, or -1 if there is not that much. */
 static JS_OPT int js_res_use(Jar *j, int r, uint32_t n) {
   if (r < 0 || r >= JRS_KINDS || n > j->res[r]) return -1;
@@ -1344,10 +1356,16 @@ static JS_OPT void js_new_moss(Jar *j, int k) {
 
 /* Buy upgrade k: 0, -1 at the top, -2 not enough coins. It appears in the
  * scene at once, with a sparkle. */
-static JS_OPT int js_buy(Jar *j, int k) {
-  int c = js_up_cost(j, k);
-  if (c < 0) return -1;
-  if (js_spend(j, (uint32_t)c)) return -2;
+/* An upgrade takes real time to build (the owner, 2026-10-11): a quarter of
+ * an hour for the first of each, doubling a level, eight hours at most. */
+static JS_OPT uint32_t js_build_s(const Jar *j, int k) {
+  int lv = js_up_level(j, k) - (k == JU_BED ? 2 : k == JU_MACH ? 2 : k == JU_MOSS ? 1 : 0);
+  uint32_t s = 900u << (lv < 0 ? 0 : lv > 5 ? 5 : lv);
+  return s > 28800u ? 28800u : s;
+}
+
+/* Upgrade k, now. */
+static JS_OPT void js_up_apply(Jar *j, int k) {
   switch (k) {
   case JU_MOSS:
     js_new_moss(j, j->nmoss);
@@ -1370,7 +1388,35 @@ static JS_OPT int js_buy(Jar *j, int k) {
     j->nbeds++;
     break;
   }
+}
+
+/* Buy upgrade k at `now` (UTC seconds): paid now, built by js_build_s
+ * later -- or at once with no clock, which cannot time it. 0; -1 at the
+ * top; -2 not enough coins; -3 something is being built already. */
+static JS_OPT int js_buy_at(Jar *j, int k, uint32_t now) {
+  int c = js_up_cost(j, k);
+  if (c < 0) return -1;
+  if (j->build_k) return -3;
+  if (js_spend(j, (uint32_t)c)) return -2;
+  if (!now) { js_up_apply(j, k); return 0; }
+  j->build_k = (uint8_t)(k + 1);
+  j->build_at = now + js_build_s(j, k);
   return 0;
+}
+
+static JS_OPT int js_buy(Jar *j, int k) { return js_buy_at(j, k, 0); }
+
+/* What is being built, finished if its time has come. Seconds left, 0 none. */
+static JS_OPT uint32_t js_settle_build(Jar *j, uint32_t now) {
+  if (!j->build_k) return 0;
+  if (now && now >= j->build_at) {
+    int k = j->build_k - 1;
+    j->build_k = 0;
+    j->build_at = 0;
+    if (js_up_level(j, k) < js_up_max(k)) js_up_apply(j, k);
+    return 0;
+  }
+  return now ? j->build_at - now : 1;
 }
 
 /* ---- starting, and coming back ------------------------------------------- */
@@ -1511,7 +1557,7 @@ static JS_OPT void js_step_beds(Jar *j) {
     JBed *b = &j->bed[i];
     if (b->ready || b->young || b->mould || j->puddle >= 20) continue;
     b->grow += JS_STEP_MS * (js_bed_lv(b) + 1) / 2;   /* level 2 half as fast again, 3 twice */
-    if (b->grow >= JS_GROW_MS) { b->grow = JS_GROW_MS; b->ready = 1; js_event(j, JE_BERRY, 0); }
+    if (b->grow >= js_grow_ms(b)) { b->grow = js_grow_ms(b); b->ready = 1; js_event(j, JE_BERRY, 0); }
   }
 }
 
@@ -2094,7 +2140,7 @@ static JS_OPT void js_world_begin(Jar *j, int w) {
   case JWD_BLOOM:
     j->world_t = 10 * JS_HZ;
     for (k = 0; k < j->nbeds; k++)
-      if (!j->bed[k].young && !j->bed[k].mould) { j->bed[k].ready = 1; j->bed[k].grow = JS_GROW_MS; }
+      if (!j->bed[k].young && !j->bed[k].mould) { j->bed[k].ready = 1; j->bed[k].grow = js_grow_ms(&j->bed[k]); }
     break;
   }
   js_event(j, JE_WORLD, w);
@@ -2247,6 +2293,10 @@ static JS_OPT int js_save(const Jar *j, char *buf, int cap) {
   JS_KV("gseen", j->gseen);
   if (j->txseen) JS_KV("txseen", j->txseen);
   if (j->patchseen) JS_KV("patchseen", j->patchseen);
+  if (j->build_k) {
+    n = js_put3(buf, n, cap, "build ", j->build_k, " ");
+    n = js_put3(buf, n, cap, "", j->build_at, "\n");
+  }
   if (j->decor) JS_KV("decor", j->decor);
   n = js_put(buf, n, cap, "own");
   for (i = 0; i < j->nowned; i++) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, j->owned[i]); }
@@ -2326,8 +2376,7 @@ static JS_OPT int js_load(Jar *j, const char *t) {
       while (js_more(p)) {
         int32_t g = (int32_t)js_num(&p);
         if (i < JS_MAX_BEDS) {
-          j->bed[i].grow = g > JS_GROW_MS ? JS_GROW_MS : g;
-          j->bed[i].ready = j->bed[i].grow >= JS_GROW_MS;
+          j->bed[i].grow = g > JS_RES_GROW_MS ? JS_RES_GROW_MS : g;   /* ready: below, by type */
           i++;
         }
       }
@@ -2362,6 +2411,11 @@ static JS_OPT int js_load(Jar *j, const char *t) {
     else if (js_word_is(w, "gseen")) j->gseen = js_num(&p);
     else if (js_word_is(w, "txseen")) j->txseen = js_num(&p);
     else if (js_word_is(w, "patchseen")) j->patchseen = js_num(&p);
+    else if (js_word_is(w, "build")) {
+      uint32_t k = js_num(&p);
+      j->build_at = js_num(&p);
+      j->build_k = (uint8_t)(k >= 1 && k <= JU_KINDS ? k : 0);
+    }
     else if (js_word_is(w, "decor")) j->decor = js_num(&p);
     else if (js_word_is(w, "chores")) {
       uint32_t m;
@@ -2391,6 +2445,14 @@ static JS_OPT int js_load(Jar *j, const char *t) {
     if (*p) p++;
   }
   if (j->dock > 6) j->pile0 = j->dock;
+  {
+    int i;
+    for (i = 0; i < JS_MAX_BEDS; i++) {
+      JBed *b = &j->bed[i];
+      if (b->grow > js_grow_ms(b)) b->grow = js_grow_ms(b);
+      b->ready = (uint8_t)(!b->young && b->grow >= js_grow_ms(b));
+    }
+  }
   return 0;
 }
 

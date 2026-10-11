@@ -751,10 +751,18 @@ class Town(unittest.TestCase):
         from server import town
         st = self.own(501)
         before = st.get(jar.NS, "rec/501")
-        why = town.make_deal("pip", "alex", {"spend": {"spores": 4},
-                                             "modify": {"item": 501, "how": "make it glow"}},
-                             coins=10, have={"spores": 5}, store=st, sync=True)
+        deal = {"spend": {"spores": 12}, "modify": {"item": 501, "how": "make it glow"}}
+        self.assertEqual(town.words("pip", "alex", deal, store=st),
+                         "Pay 12 spores: Pip alters Owl: make it glow. Ready in 1h.")
+        why = town.make_deal("pip", "alex", deal, coins=10, have={"spores": 15}, store=st, sync=True)
         self.assertIsNone(why)
+        self.assertEqual(st.get(jar.NS, "rec/501"), before)    # made, held until its time
+        self.assertEqual([(t["op"], t["arg"]) for t in shopkeep.txs("alex", st)], [("usespores", 12)])
+        self.assertIn("job pip ", town.jobs_text("alex", st))
+        self.assertIn("still making", town.make_deal(            # one job at a time
+            "pip", "alex", deal, have={"spores": 15}, store=st, dry=True))
+        self.assertEqual(town.release_due("alex", st), 0)       # not yet
+        self.assertEqual(town.release_due("alex", st, now=time.time() + 3601), 1)
         after = st.get(jar.NS, "rec/501")
         self.assertNotEqual(after, before)
         self.assertEqual(jar.decode(after)["id"], 501)          # the same thing, made again
@@ -762,15 +770,16 @@ class Town(unittest.TestCase):
         self.assertIn("make it glow", self.stub.calls[-1][1])
         self.assertIn("frame 0:", self.stub.calls[-1][1])       # it was shown the old one
         ops = [(t["op"], t["arg"]) for t in shopkeep.txs("alex", st)]
-        self.assertEqual(ops, [("usespores", 4), ("remake", 501)])
-        self.assertIn("altered", shopkeep._get(st, "tibbs/events", [])[-1])   # the lane hears
-        self.assertIn("altered", shopkeep._get(st, "wren/events", [])[-1])
+        self.assertEqual(ops, [("usespores", 12), ("remake", 501)])
+        self.assertEqual(town.jobs_text("alex", st), "")
+        self.assertIn("finished", shopkeep._get(st, "tibbs/events", [])[-1])   # the lane hears
+        self.assertIn("make it glow", shopkeep._get(st, "wren/events", [])[-1])
 
     def test_what_cannot_be_done_is_refused(self):
         from server import town
         st = self.own(502, "Lamp", "floor")
         self.assertIn("only 1 spores", town.make_deal(
-            "pip", "alex", {"spend": {"spores": 4}, "modify": {"item": 502, "how": "x"}},
+            "pip", "alex", {"spend": {"spores": 12}, "modify": {"item": 502, "how": "x"}},
             have={"spores": 1}, store=st))
         self.assertIn("do not own", town.make_deal(
             "pip", "alex", {"spend": {"spores": 1}, "modify": {"item": 9, "how": "x"}},
@@ -781,32 +790,39 @@ class Town(unittest.TestCase):
         self.assertIn("as good as it gets", town.make_deal(
             "bramble", "alex", {"spend": {"nectar": 9}, "grow": {"bed": 1}},
             have={"nectar": 9}, beds=[("berry", 3)], store=st))
-        self.assertIn("is 6 nectar", town.make_deal(
-            "bramble", "alex", {"spend": {"nectar": 3}, "grow": {"bed": 1}},
+        self.assertIn("is 35 nectar", town.make_deal(
+            "bramble", "alex", {"spend": {"nectar": 9}, "grow": {"bed": 1}},
             have={"nectar": 9}, beds=[("berry", 2)], store=st))
         self.assertEqual(shopkeep.txs("alex", st), [])          # nothing taken for any of it
 
     def test_bramble_grows_a_bed_and_evolves_a_critter(self):
         from server import town
         st = self.own(503, "Newt", "critter")
-        self.assertIsNone(town.make_deal("bramble", "alex", {"spend": {"nectar": 3}, "grow": {"bed": 2}},
-                                         have={"nectar": 4}, beds=[("berry", 1), ("flower", 1)],
+        grow = {"spend": {"nectar": 15}, "grow": {"bed": 2}}
+        beds = [("berry", 1), ("flower", 1)]
+        self.assertEqual(town.words("bramble", "alex", grow, beds=beds, store=st),
+                         "Pay 15 nectar: Bramble grows bed 2 to level 2. Ready in 2h.")
+        self.assertIsNone(town.make_deal("bramble", "alex", grow, have={"nectar": 40}, beds=beds,
                                          store=st))
+        self.assertEqual(town.release_due("alex", st, now=time.time() + 7201), 1)
         self.assertIsNone(town.make_deal("bramble", "alex",
-                                         {"spend": {"nectar": 5}, "evolve": {"item": 503, "how": "wings"}},
-                                         have={"nectar": 5}, store=st, sync=True))
+                                         {"spend": {"nectar": 25}, "evolve": {"item": 503, "how": "wings"}},
+                                         have={"nectar": 25}, store=st, sync=True))
+        town.release_due("alex", st, now=time.time() + 9 * 3600)
         ops = [(t["op"], t["arg"]) for t in shopkeep.txs("alex", st)]
-        self.assertEqual(ops, [("usenectar", 3), ("bedup", 1), ("usenectar", 5), ("remake", 503)])
+        self.assertEqual(ops, [("usenectar", 15), ("bedup", 1), ("usenectar", 25), ("remake", 503)])
         self.assertIn("evolved form", self.stub.calls[-1][1])
 
     def test_wren_builds_to_order(self):
         from server import town
         st = kv.store()
         self.assertIsNone(town.make_deal("wren", "alex",
-                                         {"spend": {"twigs": 5}, "build": {"what": "a two-tier shelf"}},
-                                         have={"twigs": 6}, store=st, sync=True))
+                                         {"spend": {"twigs": 25}, "build": {"what": "a two-tier shelf"}},
+                                         have={"twigs": 60}, store=st, sync=True))
+        self.assertIn("job wren 7", town.jobs_text("alex", st))  # about two hours: 7xxx s
+        town.release_due("alex", st, now=time.time() + 3 * 3600)
         ops = [(t["op"], t["arg"]) for t in shopkeep.txs("alex", st)]
-        self.assertEqual(ops[0], ("usetwigs", 5))
+        self.assertEqual(ops[0], ("usetwigs", 25))
         self.assertEqual(ops[1][0], "give")
         it = jar.decode(st.get(jar.NS, "rec/%d" % ops[1][1]))
         self.assertEqual(it["role"], 1)                         # furniture
@@ -821,6 +837,7 @@ class Town(unittest.TestCase):
                        have={"spores": 3}, store=st, sync=True)
         ops = [(t["op"], t["arg"]) for t in shopkeep.txs("alex", st)]
         self.assertEqual(ops, [("usespores", 3), ("gainspores", 3)])
+        self.assertEqual(town.jobs_text("alex", st), "")          # nothing held
         self.assertIn("owe them a redo", shopkeep._get(st, "pip/events", [])[-1])
 
 
@@ -1382,6 +1399,17 @@ class Routes(unittest.TestCase):
         self.assertIn("him\tDone, and done.", body)
         self.assertNotIn("DEAL", body)                           # the tag never reaches them
         self.assertIn("They have 500 coins, and own: %d:" % owl, self.tibbs.prompts[-1])
+        # nothing happens until they say yes: an offer, in the code's words
+        self.assertNotIn("tx ", body)
+        self.assertIn("offer\tPay 300 coins; hand over ", body)
+        self.assertIn("a new stock: brass birds.", body)
+        self.assertNotIn(owl, jar.pool_ids(st))
+        s, ans = self.req("POST", "/jar/deal?who=tibbs", self.alex, "coins 500\nyes")
+        self.assertEqual(ans, "ok\n")
+        self.assertEqual(self.req("POST", "/jar/deal?who=tibbs", self.alex, "coins 500\nyes")[1],
+                         "error no offer waiting\n")                 # once
+        body = self.req("GET", "/jar/talk?tx=0", self.alex)[1]
+        self.assertNotIn("offer\t", body)
         self.assertIn("tx 1 lose %d" % owl, body)
         self.assertIn("tx 2 pay 300", body)
         self.assertIn("tx 3 get 50", body)
@@ -1406,7 +1434,25 @@ class Routes(unittest.TestCase):
                 break
             time.sleep(0.02)
         self.assertNotIn("tx ", body)
+        self.assertNotIn("offer\t", body)                       # not even offered
         self.assertIsNone(jar.pending_deal("alex"))
+
+    def test_an_offer_declined_does_nothing(self):
+        deal = {"take": 40}
+        self.tibbs.answers.append("For you, forty.\nDEAL: " + json.dumps(deal))
+        self.req("POST", "/jar/talk", self.alex, "coins 100\nhow much to look harder?")
+        for _ in range(200):
+            body = self.req("GET", "/jar/talk?tx=0", self.alex)[1]
+            if body.startswith("ok"):
+                break
+            time.sleep(0.02)
+        self.assertIn("offer\tPay 40 coins.", body)
+        self.assertEqual(self.req("POST", "/jar/deal?who=tibbs", self.alex, "coins 100\nno")[1],
+                         "no\n")
+        body = self.req("GET", "/jar/talk?tx=0", self.alex)[1]
+        self.assertNotIn("tx ", body)
+        self.assertNotIn("offer\t", body)
+        self.assertIn("turned down", shopkeep._get(kv.store(), "tibbs/events", [])[-1])
         # an item that is not theirs cannot be traded either
         self.assertIn("do not own", jar.make_deal("alex", {"trade_in": [123456]}))
         # and a device that does not say its coins gets no deals at all

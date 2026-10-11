@@ -1121,6 +1121,24 @@ latch on: sell one cute thing and every find is cute. So:
 
 Change the prompts with care: they were tuned against real output.
 
+**Jar Lab: the bench for prompts and behaviour** (2026-10-11,
+`server/jarlab.py`, `server/jarlab.html`). At `/dash/jarlab` (under /dash
+because the cookie's Path is /dash; `/jarlab` redirects), the dashboard's
+cookie and an admin only. Pick kind, tier, price, form, brief (Sparks and
+Roll use the code's own dice), see the exact `jar.prompt_for` text and
+schema, edit it, and send it to Claude or a stub (dry run), or paste an
+answer to examine. Each item is run through `check_item`, its script
+compiled and given `simulate_day` (with the trace hook it gained for
+this: every handler run, its actions and x), packed with
+`to_item`/`encode` and decoded back: sprite drawn and animated, errors
+listed, the day replayed in a strip of jar with a per-hour chart and an
+event log. "Simulate only" iterates on a script with no Claude. Session
+history diffs prompts; named experiments are JSON in
+CARDOS_STATE/jarlab/. It never writes the pool, the ledger, rec/ID or
+next_id, never signs, and never touches sign_key.pem; to preview the other
+language version it flips `jarvm.V2` under a lock for the few ms of the
+pure calls (never across a Claude call). `server/tests/test_jarlab.py`.
+
 **The Town: four plants, three resources, three more people** (2026-10-11,
 v0.18.0). The owner asked for fewer plant kinds, each making its own thing,
 and neighbours for Tibbs who are paid in them:
@@ -1141,6 +1159,17 @@ and neighbours for Tibbs who are paid in them:
   ID`). Alteration is the old item and the request shown to Claude, made
   again under the same id and re-signed; Wren's is `jar.generate(...,
   force_form="furniture")`.
+- **Confirmation and real time** (v0.19.0, the owner: "needs confirmation
+  before any transaction", "upgrades and commissions should take real world
+  time"). A `DEAL:` line is only a dry run (`make_deal(..., dry=True)`) kept
+  as an offer worded by the code (`town.words`, `jar.deal_words`), shown as
+  `offer	WORDS` on /jar/talk; `POST /jar/deal?who=` with the have lines
+  and yes/no carries it out, re-checked. A job is made at once and held in
+  `held/PERSON` (`town.hold`/`ready`/`release_due`) until its time; the tx
+  is queued at hand-over so ids stay in order; `GET /jar/jobs` lists them.
+  Shop buys and upgrades ask y/n; upgrades are built over real time
+  (`js_buy_at`, `build K AT` in the save, `js_settle_build`).
+  Resource beds ripen in `JS_RES_GROW_MS` (4 min at level 1).
 - **On the device**: Jar Post's Town (`V_TOWN`, `post_open("town")`) lists
   the four and talks with `?who=`; `apps/jartx.h` carries out tx lines for
   the talk screen and for the scene, which asks `GET /jar/tx?after=` after
@@ -1154,8 +1183,9 @@ The rest:
 - Prices are chosen before an item is made (`TIERS`: common to treasure,
   30-900), kept in record byte 207 (in fives, signed), and a dear item gets
   more care and more effort.
-- Plants steer nothing: the shop sells seed packets now and then, and the
-  Garden plants from seeds (`/var/jar/seeds.txt`).
+- Plants steer nothing. Since v0.18.2 there are no seeds: the Garden plants
+  any bed with any plant, free, and it grows in an hour (`JS_MATURE_S`).
+  Different growth rates or looks per plant are a later idea, not now.
 - The shelf is gone.
 
 ## Hardware facts — measured on the actual device, not from a datasheet

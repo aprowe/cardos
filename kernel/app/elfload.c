@@ -348,7 +348,7 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
   Elf32_Shdr *sh = NULL;
   uint8_t *code = NULL, *code_w = NULL, *data = NULL, *ro = NULL, *ro_heap = NULL;
   uint32_t code_size = 0, data_size = 0, prog_size = 0, ro_size = 0, code_cap = 0;
-  uint32_t ro_at, ram_size, claim;
+  uint32_t ro_at, ram_size, claim, info_len;
   uint32_t main_off = 0, info_off = 0, xip_off = 0;
   CappBases b;
   uint16_t head[2];
@@ -449,6 +449,18 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
    * the app, so it has no use for it. */
   if (foreground != LOAD_INFO && (rc = find_overlays(fd, &eh, sh, prog_size, out)) != CAPP_OK)
     goto done;
+  /* Nor for any of .data past capp_info, which the linker puts first: the
+   * scan reads only the descriptor and the constants it points to. .data
+   * holds the zeroed state too (capp.ld folds .bss in), so Jar's was 17 KB,
+   * and with its 15 KB of constants the scan wanted 32 KB in one piece --
+   * more than the arena, and more than an original Cardputer's heap had,
+   * so Jar was missing from its launcher (2026-10-11). */
+  info_len = prog_size;
+  if (foreground == LOAD_INFO) {
+    info_len = (info_off - CAPP_DATA_ORIGIN + (uint32_t)sizeof(CappInfo) + 3u) & ~3u;
+    if (info_len > prog_size) info_len = prog_size;
+    data_size = info_len;
+  }
 
   /* Where the constants go when they are not in flash: after the data
    * block, 16-aligned, in the same allocation. */
@@ -555,8 +567,8 @@ data:
    * is cleared first; what is past .data -- the overlay region -- stays
    * zeros. */
   memset(data, 0, data_size);
-  if (read_at(fd, sh[data_sec].sh_offset, data, prog_size) != 0) { rc = CAPP_ERR_NOT_ELF; goto done; }
-  rc = relocate(fd, sh, eh.e_shnum, data_sec, CAPP_DATA_ORIGIN, data, 0, prog_size, prog_size, &b);
+  if (read_at(fd, sh[data_sec].sh_offset, data, info_len) != 0) { rc = CAPP_ERR_NOT_ELF; goto done; }
+  rc = relocate(fd, sh, eh.e_shnum, data_sec, CAPP_DATA_ORIGIN, data, 0, info_len, prog_size, &b);
   if (rc != CAPP_OK) goto done;
   /* The constants, when they are in RAM, read and relocated like the data.
    * In flash they were written relocated. */

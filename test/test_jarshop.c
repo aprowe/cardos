@@ -106,6 +106,16 @@ void test_jarshop_buys_from_the_hand_made_stock(void) {
   CHECK_EQ(U.card.price, 60);
   shot("s01_stock");
   key(CAPP_KEY_ENTER);
+  CHECK_EQ(G.buying, 1);                          /* sure? nothing paid yet */
+  CHECK_EQ(J.coins, 100);
+  shot("s01b_sure");
+  key(CAPP_KEY_ENTER);                            /* Enter is not an answer */
+  CHECK_EQ(G.buying, 1);
+  key('n');
+  CHECK_EQ(J.coins, 100);
+  CHECK(!js_owns(&J, 5));
+  key(CAPP_KEY_ENTER);
+  key('y');
   CHECK_EQ(G.view, V_CARD);
   CHECK_EQ(J.coins, 40);
   CHECK(J.sold & (1u << 5));
@@ -162,11 +172,29 @@ void test_jarshop_upgrades(void) {
   card(500);
   launch("up");
   shot("s05_upgrades");
-  key(CAPP_KEY_ENTER);                    /* another mossling: 30 */
+  key(CAPP_KEY_ENTER);                    /* another mossling: 30 -- sure? */
+  CHECK_EQ(G.buying, 3);
+  shot("s05b_sure");
+  key('y');
+  CHECK_EQ(J.coins, 470);                 /* paid; built in a quarter of an hour */
+  CHECK_EQ(J.nmoss, 1);
+  CHECK_EQ(J.build_k, JU_MOSS + 1);
+  CHECK_EQ(J.build_at, T0 + 900);
+  CHECK(strstr(saved(), "build 1 1800000900") != 0);
+  shot("s05c_building");
+  key(CAPP_KEY_DOWN);
+  key(CAPP_KEY_ENTER);                    /* one at a time */
+  CHECK_EQ(G.buying, 0);
+  CHECK(strstr(U.msg, "one thing") != 0 || strstr(U.msg, "One thing") != 0);
+  fakeapi_epoch = T0 + 900;               /* a quarter of an hour on */
+  launch("up");
   CHECK_EQ(J.nmoss, 2);
-  CHECK_EQ(J.coins, 470);
+  CHECK_EQ(J.build_k, 0);
   key(CAPP_KEY_DOWN);
   key(CAPP_KEY_ENTER);                    /* the press: 120 */
+  key('y');
+  fakeapi_epoch = T0 + 900 + 900;
+  launch("up");
   CHECK_EQ(J.nmach, 3);
   CHECK(strstr(saved(), "up 2 2 3 0") != 0);
   J.coins = 0;
@@ -179,7 +207,6 @@ void test_jarshop_upgrades(void) {
 void test_jarshop_garden_plants_and_asks_before_pulling_up(void) {
   card(200);
   launch("garden");
-  CHECK_EQ(SEEDS[JPL_FLOWER], 1);         /* a card with no seeds file starts with one of each */
   CHECK_EQ(G.view, V_GARDEN);
   shot("s06_garden");
   key(CAPP_KEY_ENTER);                    /* bed 1: a grown berry bush */
@@ -199,9 +226,7 @@ void test_jarshop_garden_plants_and_asks_before_pulling_up(void) {
   key('y');
   CHECK_EQ(J.bed[0].type, JPL_FLOWER);
   CHECK(J.bed[0].young);
-  CHECK_EQ(J.coins, 200);                 /* seeds, not coins */
-  CHECK_EQ(SEEDS[JPL_FLOWER], 0);
-  CHECK(strcmp(fakefs_get("/var/jar/seeds.txt"), "1 1 1 0 ") == 0);
+  CHECK_EQ(J.coins, 200);                 /* free */
   CHECK(strstr(saved(), "plant 3 1800000000 ") != 0);
   CHECK_EQ(G.view, V_GARDEN);
   /* a young bed is replanted without asking */
@@ -210,13 +235,12 @@ void test_jarshop_garden_plants_and_asks_before_pulling_up(void) {
   key(CAPP_KEY_ENTER);
   CHECK(!G.asking);
   CHECK_EQ(J.bed[0].type, JPL_SHROOM);
-  /* no flower seeds left: nothing planted */
+  /* and again: no seeds to run out of */
   key(CAPP_KEY_ENTER);
   key(CAPP_KEY_DOWN);
   key(CAPP_KEY_ENTER);
-  CHECK_EQ(J.bed[0].type, JPL_SHROOM);
-  CHECK(strstr(U.msg, "No seeds") != 0);
-  key(CAPP_KEY_ESC);
+  CHECK_EQ(J.bed[0].type, JPL_FLOWER);
+  CHECK(strstr(U.msg, "an hour") != 0);
   /* beds not bought yet */
   key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT);
   key(CAPP_KEY_ENTER);
@@ -288,6 +312,7 @@ void test_jarshop_fetches_the_days_stock_and_checks_each_record(void) {
   {
     int before = (int)J.coins, p = S.price[0];
     key(CAPP_KEY_ENTER);
+    key('y');
     CHECK_EQ((int)J.coins, before - p);
     CHECK(js_owns(&J, 9000));
     CHECK_EQ(jst_item_read(&A, 9000, &IO) > 0, 1);
@@ -368,6 +393,7 @@ void test_jarshop_items_show_as_they_are_made(void) {
   CHECK(strcmp(S.date, "2027-01-15") == 0);
   CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "item 9000") != 0);
   key(CAPP_KEY_ENTER);                        /* bought while the rest is made */
+  key('y');
   CHECK(js_owns(&J, 9000));
   key(CAPP_KEY_ESC);
   tick(4200);
@@ -402,6 +428,7 @@ void test_jarshop_opened_again_it_picks_up_the_rest_of_a_stock(void) {
   CHECK_EQ(S.n, 1);
   CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "batch 7") != 0);
   key(CAPP_KEY_ENTER);                        /* bought */
+  key('y');
   CHECK(js_owns(&J, 9000));
   /* closed; later the server has finished */
   HALF = 1;
@@ -485,6 +512,7 @@ void test_jarshop_held_items_stay_into_the_next_stock(void) {
   key(CAPP_KEY_LEFT);
   key(CAPP_KEY_LEFT);
   key(CAPP_KEY_ENTER);                        /* buy 9000 */
+  key('y');
   CHECK(js_owns(&J, 9000));
   key(CAPP_KEY_ESC);
   key('r');                                   /* a new stock, paid for */
@@ -500,6 +528,7 @@ void test_jarshop_held_items_stay_into_the_next_stock(void) {
   CHECK_EQ(S.sold, 0);
   /* buying a held one lets go of it */
   key(CAPP_KEY_ENTER);
+  key('y');
   CHECK(js_owns(&J, 9001));
   CHECK_EQ(S.held, 0);
 }
@@ -642,7 +671,9 @@ void test_jarshop_a_paid_ask_waits_for_a_busy_slot(void) {
   JF_PENDING = 0;
 }
 
-void test_jarshop_tibbs_and_his_seed_packets(void) {
+/* His line, his prices -- and a seed line from an older server sells nothing:
+ * plants are free now. */
+void test_jarshop_tibbs_and_no_seed_packets(void) {
   card(500);
   jf_handler = tibbs_server;
   FORGE = 0;
@@ -653,28 +684,14 @@ void test_jarshop_tibbs_and_his_seed_packets(void) {
   CHECK(fakefs_exists("/var/jar/say.txt"));
   CHECK_EQ(S.price[0], 450);                  /* the server's price */
   CHECK(S.price[1] >= 45 && S.price[1] <= 200); /* none given: worked out as before */
-  CHECK_EQ(S.seed, JPL_REED + 1);
-  CHECK_EQ(S.seed_price, 25);
-  CHECK(!G.tile[1].seed && !G.tile[2].seed && G.tile[3].seed);   /* only the last is seeds */
+  CHECK_EQ(S.seed, 0);
+  CHECK_EQ(page_count(), 3);                  /* no packet tile after the items */
   shot("s14_tibbs");
-  /* the seed packet is the last tile */
   key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT);
-  CHECK(U.card.seed);
-  CHECK(strcmp(U.name, "reed seeds") == 0);
-  shot("s15_seeds");
-  key(' ');                                   /* seeds are not held */
-  CHECK_EQ(S.held, 0);
-  key(CAPP_KEY_ENTER);
-  CHECK_EQ((int)J.coins, 475);
-  CHECK_EQ(SEEDS[JPL_REED], 2);
-  CHECK(S.seed_sold);
-  CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "seed 2 25 1") != 0);
-  key(CAPP_KEY_ENTER);                        /* sold: once */
-  CHECK_EQ((int)J.coins, 475);
-  /* opened again: his line and the sold packet are kept */
+  CHECK_EQ(G.sel, 2);                         /* the last item is the last tile */
+  /* opened again: his line is kept */
   launch("shop");
   CHECK(strcmp(SAY, "Power went out, so I sorted the back shelf by candle.") == 0);
-  CHECK(S.seed_sold);
   /* t: talk to him, in Jar Post */
   key('t');
   CHECK(strcmp(RAN, "Jar Post") == 0 && strcmp(RAN_ARGS, "talk") == 0);
@@ -689,6 +706,8 @@ void test_jarshop_g_buys_and_goes_to_send_a_gift(void) {
   tick(3500);
   CHECK_EQ(S.n, 3);
   key('g');
+  CHECK(!js_owns(&J, 9000));                  /* sure? first */
+  key('y');
   CHECK(js_owns(&J, 9000));
   CHECK(strcmp(RAN, "Jar Post") == 0);
   CHECK(strcmp(RAN_ARGS, "gift 9000") == 0);

@@ -46,13 +46,15 @@ enum { N_DAY_POST = N_APP, N_DAY_POLL, N_ITEM };
 typedef struct {
   JStock s;                                               /* the stock on show */
   JStock ns;                                              /* the day's batch, arriving */
-  /* Tibbs's line of the day (server/shopkeep.py), and seeds in hand. Talking
-   * to him is Jar Post's ("talk"); t opens it. */
+  /* Tibbs's line of the day (server/shopkeep.py). Talking to him is Jar
+   * Post's ("talk"); t opens it. */
   char say[144];
-  int seeds[JPL_KINDS];
   struct {
   int view, back, pick, slot, sel, top, ntile;
   int up_sel, bed, plant, asking;
+  /* sure? before anything is paid (the owner, 2026-10-11): 1 buy the stock
+   * item, 2 buy it and gift it, 3 the upgrade */
+  int buying;
   Tile tile[8];
   int k, nitems, polls, tried, again;
   /* The server makes a stock one item at a time and says "more" until it is
@@ -80,7 +82,6 @@ static ShopMem SHOP_MEM;
 #define S     SHOP_MEM.s
 #define NS    SHOP_MEM.ns
 #define SAY   SHOP_MEM.say
-#define SEEDS SHOP_MEM.seeds
 #define G     SHOP_MEM.g
 
 #define RESTOCK_COST 40        /* r: a new stock now */
@@ -94,27 +95,16 @@ static const int PLANT_SPR[JPL_KINDS] = { SPR_BUSH, SPR_REED, SPR_SHROOM, SPR_FL
 /* ---- the grids ------------------------------------------------------------------- */
 
 static int stuff_mode(void) { return G.view == V_STUFF; }
-static int page_count(void) { return stuff_mode() ? J.nowned : S.n + (S.seed ? 1 : 0); }
-
-/* The seed packet is the stock's last tile. */
-static void seed_tile(Tile *t) {
-  api->mem_set(t, 0, sizeof *t);
-  t->seed = S.seed;
-  t->price = S.seed_price;
-  t->sold = S.seed_sold;
-  t->ok = !S.seed_sold;
-}
+static int page_count(void) { return stuff_mode() ? J.nowned : S.n; }
 
 /* What the grid shows, and the selected one's words. Card I/O: from key
  * handlers and tick, never from paint. */
 static void load_page(void) {
   int i, n = page_count();
-  /* whole tiles, not just .ok: a seed tile's mark once stayed on the item after it */
   api->mem_set(G.tile, 0, sizeof G.tile);
   G.ntile = 0;
   for (i = 0; i < 8 && G.top * 4 + i < n; i++) {
     int k = G.top * 4 + i, ok;
-    if (!stuff_mode() && k == S.n) { seed_tile(&G.tile[i]); G.ntile = i + 1; continue; }
     ok = stuff_mode() ? jst_item_read(api, J.owned[k], &IO) >= 0 : jst_stock_read(api, &S, k, &IO) >= 0;
     if (ok) {
       tile_from(&G.tile[i], &IO.it);
@@ -129,11 +119,7 @@ static void load_page(void) {
   }
   U.card.ok = 0;
   i = G.sel - G.top * 4;
-  if (i >= 0 && i < G.ntile && G.tile[i].ok && G.tile[i].seed) {
-    ji_copy(&U.card, &G.tile[i], (int)sizeof U.card);
-    api->fmt(U.name, sizeof U.name, "%s seeds", JS_PLANT_NAME[G.tile[i].seed - 1]);
-    api->fmt(U.line, sizeof U.line, "Plant them in the Garden");
-  } else if (i >= 0 && i < G.ntile && G.tile[i].ok) {
+  if (i >= 0 && i < G.ntile && G.tile[i].ok) {
     ji_copy(&U.card, &G.tile[i], (int)sizeof U.card);
     if (stuff_mode()) jst_item_read(api, G.tile[i].id, &IO);
     else jst_stock_read(api, &S, G.sel, &IO);
@@ -366,7 +352,7 @@ static int day_reply(void) {
   const char *p = NET;
   char date[12], tags[sizeof NS.tags], *c;
   uint32_t batch = 0;
-  int was_more, seed = 0, seed_price = 0;
+  int was_more;
   if (!str_starts(p, "ok")) return 0;
   tsv_field(p + (p[2] ? 3 : 2), 0, date, sizeof date);
   for (c = date; *c; c++) if (*c == ' ') *c = 0;
@@ -385,18 +371,7 @@ static int day_reply(void) {
       SAY[i] = 0;
       jst_clean(SAY);
       jst_put(api, JST_SAY, SAY, i);
-    } else if (str_starts(p, "seed ")) {
-      char name[16];
-      const char *q;
-      int j;
-      tsv_field(p + 5, 0, name, sizeof name);
-      for (q = name; *q && *q != ' '; q++) {}
-      seed = 0;
-      for (j = 0; j < JPL_KINDS; j++)
-        if (str_starts(name, JS_PLANT_NAME[j]) && (name[slen(JS_PLANT_NAME[j])] == ' ')) seed = j + 1;
-      if (*q == ' ') { q++; seed_price = (int)str_uint(&q); }
-    }
-    else if (str_starts(p, "more")) G.more = 1;
+    } else if (str_starts(p, "more")) G.more = 1;
     else if (str_starts(p, "deal")) G.deal = 1;     /* agreed at the counter: a fresh stock */
   }
   /* No count is not a count of none: an older server answered a POST for a
@@ -425,9 +400,9 @@ static int day_reply(void) {
     G.live = 0;
   }
   ji_copy(NS.tags, tags, (int)sizeof NS.tags);
-  if (seed != NS.seed) NS.seed_sold = 0;
-  NS.seed = (uint8_t)seed;
-  NS.seed_price = (uint16_t)seed_price;
+  NS.seed = 0;                                    /* seed packets are gone: plants are free */
+  NS.seed_sold = 0;
+  NS.seed_price = 0;
   return 1;
 }
 
@@ -510,12 +485,10 @@ static void detail(int x) {
             "Sold. More with the next batch.", 17, 4, C_DIM, C_PANEL);
     return;
   }
-  if (t->seed) spr(PLANT_SPR[t->seed - 1], x + 38, BAR + 5, 2, C_PANEL);
-  else pic(t->frame, t->pal, 1, 16, 16, x + 36, BAR + 5, 2, C_PANEL);
+  pic(t->frame, t->pal, 1, 16, 16, x + 36, BAR + 5, 2, C_PANEL);
   textn(x + 2, BAR + 41, U.name, 17, C_TEXT, C_PANEL);
   wrapped(x + 2, BAR + 51, U.line, 17, 2, C_DIM, C_PANEL);
-  if (t->seed) api->fmt(b, sizeof b, "you have %d", SEEDS[t->seed - 1]);
-  else api->fmt(b, sizeof b, "%s, %s", t->kind == JK_CRITTER ? "critter" : t->kind == JK_HANGING ? "hanging" : "floor",
+  api->fmt(b, sizeof b, "%s, %s", t->kind == JK_CRITTER ? "critter" : t->kind == JK_HANGING ? "hanging" : "floor",
                 MOVE_NAME[t->move % JM_KINDS]);
   textn(x + 2, BAR + 71, b, 17, C_TRAIT, C_PANEL);
   if (stuff_mode())
@@ -546,8 +519,7 @@ static void paint_grid(void) {
     int x = 4 + (i % 4) * 30, y = BAR + 13 + (i / 4) * 30;
     box(x, y, 28, 28, C_PANEL);
     if (i < G.ntile && t->ok) {
-      if (t->seed) spr(PLANT_SPR[t->seed - 1], x + 8, y + 2, 1, C_PANEL);
-      else pic(t->frame, t->pal, 1, 16, 16, x + 6, y + 2, 1, C_PANEL);
+      pic(t->frame, t->pal, 1, 16, 16, x + 6, y + 2, 1, C_PANEL);
       if (stuff) {
         if (t->in_jar) box(x + 23, y + 2, 3, 3, C_GOLD);
       } else {
@@ -589,6 +561,11 @@ static void paint_up(void) {
     default:      spr(SPR_BUSH, 8, y + 5, 1, C_PANEL); break;
     }
     text(26, y + 4, UP_NAME[k], C_TEXT, C_PANEL);
+    if (J.build_k == k + 1) {                       /* being built: how long */
+      api->fmt(b, sizeof b, "building: %s left", jtx_dur(J.build_at > U.now ? J.build_at - U.now : 0));
+      text(26, y + 14, b, C_GOLD, C_PANEL);
+      continue;
+    }
     if (cost < 0) {
       api->fmt(b, sizeof b, "all %d", js_up_max(k) + (k == JU_BELT));
       text(26, y + 14, b, C_DIM, C_PANEL);
@@ -612,13 +589,13 @@ static void paint_garden(void) {
   char b[40];
   box(0, BAR, SW, BODY, C_BG);
   for (i = 0; i < JS_MAX_BEDS; i++) {
-    int bx = 4 + i * 39, y = BAR + 4, has = i < J.nbeds, d = js_bed_days(&J.bed[i], U.now);
+    int bx = 4 + i * 39, y = BAR + 4, has = i < J.nbeds, d = js_bed_mins(&J.bed[i], U.now);
     const JBed *bd = &J.bed[i];
     box(bx, y, 36, 62, C_PANEL);
     box(bx + 2, y + 42, 32, 3, has ? C_SOIL : C_BG);
     if (has) {
       if (bd->young) {                                  /* a shoot, taller by the day */
-        int h = d < 0 ? 4 : 4 + (3 - (d > 3 ? 3 : d)) * 4;
+        int h = d < 0 ? 4 : 4 + (60 - (d > 60 ? 60 : d)) / 5;
         box(bx + 17, y + 42 - h, 2, h, CAPP_RGB(0x5a, 0xa8, 0x48));
         box(bx + 14, y + 42 - h, 3, 2, CAPP_RGB(0x5a, 0xa8, 0x48));
         box(bx + 19, y + 44 - h, 3, 2, CAPP_RGB(0x5a, 0xa8, 0x48));
@@ -627,23 +604,20 @@ static void paint_garden(void) {
       if (!bd->young && js_bed_lv(bd) > 1) api->fmt(b, sizeof b, "level %d", js_bed_lv(bd));
       else if (!bd->young) api->fmt(b, sizeof b, "grown");
       else if (d < 0) api->fmt(b, sizeof b, "paused");
-      else api->fmt(b, sizeof b, "%d day%s", d, d == 1 ? "" : "s");
+      else api->fmt(b, sizeof b, "%d min", d);
       text(bx + 18 - slen(b) * 3, y + 54, b, bd->young ? C_DIM : C_TRAIT, C_PANEL);
     } else text(bx + 4, y + 26, "U:buy", C_DIM, C_PANEL);
     if (i == G.bed) outline(bx - 1, y - 1, 38, 64, C_GOLD);
   }
-  /* Seeds in hand: the shop sells packets now and then. */
-  text(6, BAR + 71, "Seeds:", C_DIM, C_BG);
-  for (i = 0, x = 6 + 7 * 6; i < JPL_KINDS; i++) {
-    char b[8];
-    spr(PLANT_SPR[i], x, BAR + 68, 1, C_BG);
-    api->fmt(b, sizeof b, "%d", SEEDS[i]);
-    text(x + 13, BAR + 71, b, SEEDS[i] ? C_GOLD : C_DIM, C_BG);
-    x += 36;
+  /* What each makes, under its picture. */
+  for (i = 0, x = 6; i < JPL_KINDS; i++) {
+    static const char *const MAKES[JPL_KINDS] = { "jam", "twigs", "spores", "nectar" };
+    spr(PLANT_SPR[i], x, BAR + 70, 1, C_BG);
+    text(x + 14, BAR + 73, MAKES[i], C_TRAIT, C_BG);
+    x += 14 + slen(MAKES[i]) * 6 + 6;
   }
-  text(6, BAR + 87, "Berries: jam. Reed: twigs. Mushroom:", C_DIM, C_BG);
-  text(6, BAR + 95, "spores. Flower: nectar. 3 days to grow;", C_DIM, C_BG);
-  text(6, BAR + 103, "the shop sells seeds. T: the Town.", C_DIM, C_BG);
+  text(6, BAR + 91, "Plant any bed with anything, free;", C_DIM, C_BG);
+  text(6, BAR + 99, "it grows in an hour. T: the Town.", C_DIM, C_BG);
 }
 
 static void paint_plant(void) {
@@ -661,10 +635,10 @@ static void paint_plant(void) {
     {
       static const char *const MAKES[JPL_KINDS] = {
         "jam, for coins", "twigs, for Wren", "spores, for Pip", "nectar, for Bramble" };
-      text(24, y + 9, MAKES[i], C_DIM, C_PANEL);
+      text(24, y + 8, MAKES[i], C_DIM, C_PANEL);
     }
-    api->fmt(b, sizeof b, "%d seed%s", SEEDS[i], SEEDS[i] == 1 ? "" : "s");
-    text(SW - 10 - slen(b) * 6, y + 5, b, SEEDS[i] ? C_GOLD : C_DIM, C_PANEL);
+    if (i == (int)(J.bed[G.bed].type % JPL_KINDS) && G.bed < J.nbeds)
+      text(SW - 10 - 3 * 6, y + 5, "now", C_GOLD, C_PANEL);
   }
   if (G.asking) {
     box(20, BAR + 40, SW - 40, 30, C_BG);
@@ -682,7 +656,7 @@ static void shop_paint(void *st, CRect c) {
   static const char *const H_STUFF[] = { "Ent", "open", "G", "gift", "Tab", "shop", "Esc", "jar", 0 };
   static const char *const H_PICK[] = { "Ent", "choose", "Esc", "back", 0 };
   static const char *const H_CARD[] = { "Ent", "in jar", "G", "gift", "Esc", "back", 0 };
-  static const char *const H_UP[] = { "^v", "pick", "Ent", "buy", "Esc", "jar", 0 };
+  static const char *const H_UP[] = { "^v", "pick", "Ent", "build", "Esc", "jar", 0 };
   static const char *const H_GARDEN[] = { "<>", "bed", "Ent", "plant", "T", "town", "Esc", "jar", 0 };
   static const char *const H_PLANT[] = { "^v", "pick", "Ent", "plant", "Esc", "back", 0 };
   const char *const *h = H_STOCK;
@@ -707,6 +681,22 @@ static void shop_paint(void *st, CRect c) {
   case V_GARDEN: paint_garden(); h = H_GARDEN; where = "Garden"; break;
   case V_PLANT:  paint_plant(); h = H_PLANT; where = "Garden"; break;
   }
+  if (G.buying) {
+    static const char *const H_BUY[] = { "y", "yes", "n", "no", 0 };
+    char b[48];
+    char q[72];
+    if (G.buying == 3)
+      api->fmt(q, sizeof q, "%s for %d coins? Ready in %s.", UP_NAME[G.up_sel],
+               js_up_cost(&J, G.up_sel), jtx_dur(js_build_s(&J, G.up_sel)));
+    else api->fmt(q, sizeof q, "Buy %s for %u coins%s?", U.name, (unsigned)S.price[G.sel],
+                  G.buying == 2 ? ", as a gift" : "");
+    box(14, BAR + 28, SW - 28, 40, C_BG);              /* the question: nothing is paid before y */
+    outline(14, BAR + 28, SW - 28, 40, C_GOLD);
+    wrapped(20, BAR + 33, q, 33, 2, C_TEXT, C_BG);
+    text(20, BAR + 55, "y yes   n no", C_GOLD, C_BG);
+    (void)b;
+    h = H_BUY;
+  }
   top_bar(where);
   hints(h);
   paint_note();
@@ -723,25 +713,20 @@ static void grid_move(int d) {
   load_page();
 }
 
+/* Could the selected stock item be bought? Says why not. */
+static int can_buy(void) {
+  int k = G.sel;
+  if (!U.card.ok || k >= S.n || jst_sold(&S, &J, k)) return 0;
+  if (J.coins < S.price[k]) { say("Not enough coins yet"); return 0; }
+  return 1;
+}
+
 /* Buy stock slot G.sel: its record (as it came) becomes an owned item. Its
  * id, or 0 when it was not bought. */
 static uint32_t buy(void) {
   int k = G.sel, n;
   uint32_t id;
   char p[48];
-  if (k == S.n && S.seed && !S.seed_sold) {              /* the seed packet: seeds, not a thing */
-    if (J.coins < S.seed_price) return 0;
-    js_spend(&J, S.seed_price);
-    SEEDS[S.seed - 1]++;
-    jst_seeds_save(api, SEEDS, TEXT, sizeof TEXT);
-    S.seed_sold = 1;
-    jst_stock_save(api, &S, TEXT, sizeof TEXT);
-    save();
-    api->fmt(p, sizeof p, "%s seeds: plant them in the Garden", JS_PLANT_NAME[S.seed - 1]);
-    say(p);
-    load_page();
-    return 0;
-  }
   if (k >= S.n || jst_sold(&S, &J, k)) return 0;
   if (J.coins < S.price[k]) return 0;             /* the price is in red already */
   n = jst_stock_read(api, &S, k, &IO);
@@ -798,12 +783,12 @@ static int key_grid(int k) {
     }
     return 1;
   case 'g': case 'G':
-    if (G.view == V_STOCK) { uint32_t id = U.card.ok ? buy() : 0; if (id) gift(id); }
+    if (G.view == V_STOCK) { if (can_buy()) G.buying = 2; }
     else if (U.card.ok && !G.pick) gift(U.card.id);
     return 1;
   case CAPP_KEY_ENTER:
     if (!U.card.ok) return 1;
-    if (G.view == V_STOCK) { uint32_t id = buy(); if (id) open_card(id, V_STOCK); return 1; }
+    if (G.view == V_STOCK) { if (can_buy()) G.buying = 1; return 1; }
     if (G.pick == P_DECOR) { J.decor = U.card.id; to_jar(); return 1; }
     open_card(U.card.id, V_STUFF);
     return 1;
@@ -821,14 +806,27 @@ static int key_card(int k) {
   return 1;
 }
 
+/* The upgrade, paid for and begun (confirmed). */
+static void do_upgrade(void) {
+  int r = js_buy_at(&J, G.up_sel, api->epoch());
+  if (r == 0) {
+    save();
+    say(J.build_k ? "Paid: the builders are on it" : "Bought: it is in the jar");
+  } else if (r == -2) say("Not enough coins yet");
+  else if (r == -3) say("One thing is built at a time");
+}
+
 static int key_up(int k) {
   switch (k) {
   case CAPP_KEY_UP:   if (G.up_sel > 0) G.up_sel--; return 1;
   case CAPP_KEY_DOWN: if (G.up_sel < JU_KINDS - 1) G.up_sel++; return 1;
   case CAPP_KEY_ENTER: {
-    int r = js_buy(&J, G.up_sel);
-    if (r == 0) { save(); say("Bought: it is in the jar"); }
-    else if (r == -2) say("Not enough coins yet");
+    int c = js_up_cost(&J, G.up_sel);
+    js_settle_build(&J, U.now);
+    if (c < 0) return 1;
+    if (J.build_k) { say("One thing is built at a time"); return 1; }
+    if ((uint32_t)c > J.coins) { say("Not enough coins yet"); return 1; }
+    G.buying = 3;                                   /* sure? */
     return 1;
   }
   case CAPP_KEY_ESC: to_jar(); return 1;
@@ -837,13 +835,9 @@ static int key_up(int k) {
 }
 
 static void do_plant(void) {
-  int t = G.plant;
-  if (SEEDS[t] <= 0) { say("No seeds: the shop has them now and then"); return; }
-  SEEDS[t]--;
-  jst_seeds_save(api, SEEDS, TEXT, sizeof TEXT);
-  js_plant(&J, G.bed, t, api->epoch());
+  js_plant(&J, G.bed, G.plant, api->epoch());
   save();
-  say(api->epoch() ? "Planted: grown in 3 days" : "Planted: it grows once there is a clock");
+  say(api->epoch() ? "Planted: grown in an hour" : "Planted: it grows once there is a clock");
   G.view = V_GARDEN;
 }
 
@@ -860,7 +854,6 @@ static int key_garden(int k) {
     case CAPP_KEY_DOWN: if (G.plant < JPL_KINDS - 1) G.plant++; return 1;
     case CAPP_KEY_ESC:  G.view = V_GARDEN; return 1;
     case CAPP_KEY_ENTER:
-      if (SEEDS[G.plant] <= 0) { say("No seeds: the shop has them now and then"); return 1; }
       if (!J.bed[G.bed].young) G.asking = 1;     /* a grown plant: ask first */
       else do_plant();
       return 1;
@@ -888,6 +881,19 @@ static int shop_key(void *st, uint8_t k) {
   (void)st;
   U.dirty = 1;
   if (U.msg[0]) U.msg[0] = 0;
+  if (G.buying) {
+    int a = confirm_key(api, k), what = G.buying;
+    if (a == CONFIRM_WAIT) return 1;
+    G.buying = 0;
+    if (a != CONFIRM_YES) return 1;
+    if (what == 3) { do_upgrade(); return 1; }
+    {
+      uint32_t id = buy();
+      if (id && what == 2) gift(id);
+      else if (id) open_card(id, V_STOCK);
+    }
+    return 1;
+  }
   if ((k == 't' || k == 'T') && !G.pay && (G.view == V_STOCK || G.view == V_STUFF)) {
     save();                                       /* Tibbs is Jar Post's */
     if (ui_run("Jar Post", "talk") != 0) say("No Jar Post app");
@@ -978,7 +984,7 @@ static void shop_open(const char *s) {
   if (ui_load()) return;
   if (jst_get(api, JST_SAY, SAY, sizeof SAY) < 0) SAY[0] = 0;
   jst_clean(SAY);
-  jst_seeds_load(api, SEEDS, TEXT, sizeof TEXT);
+  if (J.build_k && !js_settle_build(&J, U.now)) save();   /* an upgrade finished while away */
   if (str_same(s, "stuff")) go_stuff(P_BROWSE);
   else if (str_same(s, "decor")) go_stuff(P_DECOR);
   else if (str_same(s, "up")) G.view = V_UP;
