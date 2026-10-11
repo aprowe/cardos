@@ -1136,6 +1136,7 @@ static JS_OPT int js_item_event(Jar *j, int i, int ev, int arg) {
    * the recipe is skipped. No handler: the recipe takes it. Stopped (the
    * step limit, or a fault): a ? bubble, and the recipe takes this event --
    * the script is tried again at the next one. */
+  if (ev == JE_POKE && p->voice && !j->snd && p->voice <= JSD_KINDS) j->snd = p->voice;   /* its voice */
   if (p->slen) {
     int r = js_script(j, i, ev, arg);
     if (r == JV_DONE) return 1;

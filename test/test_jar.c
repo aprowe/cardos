@@ -807,3 +807,65 @@ void test_jar_ledges_in_the_scene(void) {
   dump("38_ledges_night");
   fakeapi_now.hour = 12;
 }
+
+
+/* The living jar on screen: a big table with a cup on it, a fern behind,
+ * a birdhouse whose bird is out, ants at the berries, a puddle, mould; then
+ * the lights going out. The chores' line, x for them, b for the sound. */
+static void square(JItem *it, int c) {
+  int i;
+  for (i = 0; i < 256; i++) {
+    int x = i % 16, y = i / 16;
+    ji_set_px(it->frames[0], i, (y >= 4 && x >= 1 && x <= 14) ? (y == 4 ? 7 : c) : 0);
+  }
+}
+
+void test_jar_the_living_jar_draws(void) {
+  static JItem it;
+  int table, cup, house, k;
+  start(T0);
+  STAY = 1;
+  fakeapi_now.synced = 1;
+  fakeapi_now.hour = 12;
+  jf_item(&it, 801, "Table", "cosy");
+  it.kind = JK_FLOOR; it.move = JM_SITS; it.role = JR_FURNITURE; it.scale = 2; it.surface = 4;
+  square(&it, 3);
+  table = js_place(&J, &it, 150, 0);
+  jf_item(&it, 802, "Cup", "food");
+  it.kind = JK_FLOOR; it.move = JM_SITS;
+  cup = js_place(&J, &it, 150, 0);
+  CHECK_EQ(js_put_on(&J, cup, table), 0);
+  jf_item(&it, 803, "Big Fern", "plant");
+  it.kind = JK_FLOOR; it.role = JR_BACKGROUND; it.scale = 2;
+  CHECK(js_place(&J, &it, 60, 0) >= 0);
+  jf_item(&it, 804, "Birdhouse", "cosy");
+  it.kind = JK_FLOOR; it.move = JM_SITS; it.part = 1;
+  house = js_place(&J, &it, 205, 0);
+  CHECK(J.placed[house].part);
+  CHECK_EQ(js_act(&J, house, JA_FLY, 0), 0);
+  for (k = 0; k < J.nbeds; k++) { J.bed[k].ready = 1; J.bed[k].grow = JS_GROW_MS; }
+  J.bed[1].mould = 1;
+  J.puddle = 30;
+  J.pel_t[0] = 900; J.pel_x[0] = 40;
+  js_world_begin(&J, JWD_ANTS);
+  ticks(2500);
+  dump("40_living_jar");
+  CHECK(J.placed[house].pst == 1 || J.placed[house].pst == 2);
+  js_world_begin(&J, JWD_DARK);
+  ticks(1500);
+  dump("41_lights_out");
+  /* the chores' line comes round, and x does them all */
+  J.sulk = 1;
+  ticks(31000);
+  CHECK(strstr(G.msg, "x") != 0);
+  ticks(400);
+  key('x');
+  CHECK_EQ(js_chores(&J), 0);
+  /* b: music and sounds, sounds only, quiet -- kept */
+  key('b');
+  CHECK_EQ(LV.mode, LV_SOUNDS_ONLY);
+  CHECK(strstr(fakefs_get("/var/jar/sound.txt"), "1") != 0);
+  key('b');
+  key('b');
+  CHECK_EQ(LV.mode, LV_ALL);
+}
