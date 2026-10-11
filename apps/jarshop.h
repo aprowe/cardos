@@ -65,6 +65,7 @@ typedef struct {
   int pay, paid, finds;
   uint32_t pay_until;            /* a paid ask the one HTTP slot was busy for: try till then */
   uint32_t ask_again;            /* the stock's own ask found the slot busy: again then */
+  uint8_t deal;                  /* Tibbs has a commission struck in talk: ask for it */
   char ask[48];
   } g;
 } ShopMem;
@@ -390,6 +391,7 @@ static int day_reply(void) {
       if (*q == ' ') { q++; seed_price = (int)str_uint(&q); }
     }
     else if (str_starts(p, "more")) G.more = 1;
+    else if (str_starts(p, "deal")) G.deal = 1;     /* agreed at the counter: a fresh stock */
   }
   /* No count is not a count of none: an older server answered a POST for a
    * stock it had already made with "ok DATE" alone, and that replaced the
@@ -925,6 +927,15 @@ static int shop_tick(void *st, uint32_t now) {
   (void)st;
   net_tick(now);
   pay_retry(now);
+  /* A commission struck in talk: the fresh stock it paid for, once the
+   * stock here has settled. The coins went at the counter. */
+  if (G.deal && !U.net && !G.more && !G.pay_until) {
+    G.deal = 0;
+    s_fresh = 1;
+    G.tried = 0;
+    start_day();
+    if (U.net) net_status("Tibbs goes out looking");
+  }
   /* The slot was busy (a reply being drained, the device's own poll): ask
    * again rather than wait for the next open. */
   if (G.ask_again && !U.net && (int32_t)(now - G.ask_again) >= 0) {

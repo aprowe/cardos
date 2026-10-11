@@ -33,8 +33,8 @@ static Msg Q[4];
 static int NQ, OFFLINE, GIFT_OK;
 static char ME[512];
 
-static char SAID[128];
-static int TALK_POLLS;
+static char SAID[128], TXS[128];
+static int TALK_POLLS, COINS_SAID;
 static int post_server(const char *m, const char *path, const char *body, char *out, int cap) {
   if (OFFLINE) return -1;
   if (!strcmp(path, "/jar/pubkey")) return snprintf(out, (size_t)cap, "%s\n", JF_PUBHEX);
@@ -51,14 +51,17 @@ static int post_server(const char *m, const char *path, const char *body, char *
     return snprintf(out, (size_t)cap, "%u\t-\t%u\t%d\n%s\n", Q[0].id, T0, (int)strlen(Q[0].body), Q[0].body);
   }
   if (!strcmp(path, "/jar/talk") && !strcmp(m, "POST")) {
-    snprintf(SAID, sizeof SAID, "%s", body ? body : "");
+    const char *b = body ? body : "";
+    COINS_SAID = -1;
+    if (!strncmp(b, "coins ", 6) && strchr(b, '\n')) { COINS_SAID = atoi(b + 6); b = strchr(b, '\n') + 1; }
+    snprintf(SAID, sizeof SAID, "%s", b);
     TALK_POLLS = 0;
     return snprintf(out, (size_t)cap, "pending\n");
   }
-  if (!strcmp(path, "/jar/talk")) {
+  if (!strncmp(path, "/jar/talk", 9)) {
     if (SAID[0] && TALK_POLLS++ < 1) return snprintf(out, (size_t)cap, "pending\nday\tA crate came in.\nme\t%s\n", SAID);
     if (!SAID[0]) return snprintf(out, (size_t)cap, "ok\nday\tA crate came in.\n");
-    return snprintf(out, (size_t)cap, "ok\nday\tA crate came in.\nme\t%s\nhim\tHm, I know a fellow down at the rail yard who might.\n", SAID);
+    return snprintf(out, (size_t)cap, "ok\nday\tA crate came in.\nme\t%s\nhim\tHm, I know a fellow down at the rail yard who might.\n%s", SAID, TXS);
   }
   if (!strncmp(path, "/q/ack?q=jar.gifts&upto=", 24)) {
     uint32_t upto = (uint32_t)atoi(path + 24);
@@ -98,6 +101,7 @@ static void card(uint32_t coins) {
   OFFLINE = 0;
   GIFT_OK = 1;
   SAID[0] = 0;
+  TXS[0] = 0;
   snprintf(ME, sizeof ME, "code K7Q2XP\nname Alex\nfriend maya\tMaya\t%u\tmutual\nfriend bo\tBo\t0\twaiting\n",
            T0 - 3 * 3600);
   fakeapi_epoch = T0;
@@ -363,7 +367,8 @@ void test_jarpost_talking_to_tibbs(void) {
   key(CAPP_KEY_ENTER);
   tick(20);
   r = jf_last("/jar/talk");
-  CHECK(r && strcmp(r->method, "POST") == 0 && strcmp(r->body, "got any gears?") == 0);
+  CHECK(r && strcmp(r->method, "POST") == 0 && strcmp(SAID, "got any gears?") == 0);
+  CHECK_EQ(COINS_SAID, 0);                       /* what is in hand goes with it: he can deal */
   CHECK(TK_PENDING);
   shot("p22_talk_waiting");
   tick(3100);                                 /* still thinking */
@@ -374,4 +379,39 @@ void test_jarpost_talking_to_tibbs(void) {
   shot("p23_talk");
   key(CAPP_KEY_ESC);
   CHECK(strcmp(RAN, "Jar Factory") == 0);
+}
+
+
+/* A deal struck in talk: he took 120 coins and the Moth Lamp, gave 30 back;
+ * each done once, even when the same lines come again. */
+void test_jarpost_a_deal_in_talk_is_carried_out_once(void) {
+  card(500);
+  launch("talk");
+  tick(20);
+  snprintf(TXS, sizeof TXS, "tx 1 pay 120\ntx 2 lose 7001\ntx 3 get 30\n");
+  type("120 for owls, and the lamp?");
+  key(CAPP_KEY_ENTER);
+  tick(20);
+  CHECK_EQ(COINS_SAID, 500);
+  CHECK(strcmp(SAID, "120 for owls, and the lamp?") == 0);
+  tick(6500);
+  CHECK(!TK_PENDING);
+  CHECK_EQ(J.coins, 500 - 120 + 30);
+  CHECK_EQ(J.txseen, 3);
+  CHECK(!js_owns(&J, 7001));
+  CHECK(fakefs_get("/var/jar/items/7001.itm") == 0);
+  CHECK(strstr(fakefs_get("/var/jar/jar.txt"), "txseen 3") != 0);
+  CHECK(strstr(jf_last("/jar/talk")->path, "tx=") != 0);
+  /* heard again: nothing twice */
+  type("thanks");
+  key(CAPP_KEY_ENTER);
+  tick(6500);
+  CHECK_EQ(J.coins, 410);
+  /* a pay he asks for that is more than is here takes what there is */
+  snprintf(TXS, sizeof TXS, "tx 4 pay 9999\n");
+  type("deal");
+  key(CAPP_KEY_ENTER);
+  tick(6500);
+  CHECK_EQ(J.coins, 0);
+  CHECK_EQ(J.txseen, 4);
 }

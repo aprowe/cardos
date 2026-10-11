@@ -485,8 +485,44 @@ static void tk_add(const char *s, int n, int who) {
   }
 }
 
+/* A deal's effect, once: "tx ID pay N" (coins to him), "get N" (coins from
+ * him), "lose ITEM" (a thing handed over). Done in order, each id once --
+ * J.txseen is in the save. */
+static void tk_tx(const char *p) {
+  const char *q = p + 3;
+  uint32_t id = str_uint(&q), n;
+  char what[8];
+  if (id <= J.txseen) return;
+  while (*q == ' ') q++;
+  tsv_field(q, 0, what, sizeof what);
+  {
+    char *c;
+    for (c = what; *c; c++) if (*c == ' ') *c = 0;
+  }
+  while (*q && *q != ' ') q++;
+  while (*q == ' ') q++;
+  n = str_uint(&q);
+  if (str_same(what, "pay")) {
+    J.coins = J.coins > n ? J.coins - n : 0;
+    api->fmt(U.msg, sizeof U.msg, "You paid Tibbs %u", (unsigned)n);
+  } else if (str_same(what, "get")) {
+    J.coins += n;
+    api->fmt(U.msg, sizeof U.msg, "Tibbs paid you %u", (unsigned)n);
+  } else if (str_same(what, "lose") && js_owns(&J, n)) {
+    char path[48];
+    js_disown(&J, n);
+    jst_item_path(api, n, path, sizeof path);
+    api->remove(path);
+    api->fmt(U.msg, sizeof U.msg, "Handed over to Tibbs");
+  }
+  U.msg_until = api->ticks_ms() + 4000;
+  J.txseen = id;
+  save();
+}
+
 /* GET /jar/talk: "pending" | "ok" | "error WHY", then "day\tTEXT", "me\tTEXT"
- * and "him\tTEXT" lines. 1 while he is still answering. */
+ * and "him\tTEXT" lines, then the deals' "tx" lines. 1 while he is still
+ * answering. */
 static int tk_parse(void) {
   const char *p = NET, *e;
   char who[8];
@@ -494,6 +530,7 @@ static int tk_parse(void) {
   if (str_starts(p, "error")) say(p[5] ? p + 6 : "He did not hear you");
   TK_N = 0;
   for (p = tsv_next_line(p); *p; p = tsv_next_line(p)) {
+    if (str_starts(p, "tx ")) { tk_tx(p); continue; }
     tsv_field(p, 0, who, sizeof who);
     e = p;
     while (*e && *e != '\t' && *e != '\n') e++;
@@ -510,10 +547,16 @@ static int tk_parse(void) {
   return pending;
 }
 
+static int hear(void) {
+  char path[40];
+  api->fmt(path, sizeof path, "/jar/talk?tx=%u", (unsigned)J.txseen);
+  return send(N_HEAR, "GET", path, 0);
+}
+
 static void go_talk(void) {
   G.view = V_TALK;
   start_input(IN_TALK);
-  if (!U.net && send(N_HEAR, "GET", "/jar/talk", 0) == 0) net_status("knocking");
+  if (!U.net && hear() == 0) net_status("knocking");
 }
 
 static void paint_talk(void) {
@@ -544,7 +587,12 @@ static int key_talk(int k) {
   if (TK_PENDING || U.net) { say("He is still talking"); return 1; }
   jst_clean(G.input);
   tk_add(G.input, G.inlen, 1);
-  if (send(N_SAY, "POST", "/jar/talk", G.input) != 0) { say("Busy: try again"); return 1; }
+  {
+    /* what you have first: with it he can strike a deal (a bribe, a trade) */
+    char body[TK_SAY + 24];
+    api->fmt(body, sizeof body, "coins %u\n%s", (unsigned)J.coins, G.input);
+    if (send(N_SAY, "POST", "/jar/talk", body) != 0) { say("Busy: try again"); return 1; }
+  }
   TK_PENDING = 1;
   start_input(IN_TALK);
   return 1;
@@ -797,7 +845,7 @@ static int post_tick(void *st, uint32_t now) {
     if (n != CAPP_HTTP_PENDING) net_reply(n);
   } else if (TK_AGAIN && (int32_t)(now - TK_AGAIN) >= 0) {
     TK_AGAIN = 0;                                   /* is he done talking? */
-    if (G.view != V_TALK || send(N_HEAR, "GET", "/jar/talk", 0) != 0) TK_PENDING = 0;
+    if (G.view != V_TALK || hear() != 0) TK_PENDING = 0;
   }
   if (U.msg[0] && (int32_t)(now - U.msg_until) > 0) { U.msg[0] = 0; U.dirty = 1; }
   if (!U.dirty) return 0;

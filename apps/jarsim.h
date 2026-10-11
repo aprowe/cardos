@@ -266,6 +266,7 @@ typedef struct {
   uint16_t parcels;                    /* gifts collected, not yet opened */
   uint32_t decor;                      /* an item the companion asked to place */
   uint32_t gseen;                      /* the last gift the jar announced */
+  uint32_t txseen;                     /* the last of Tibbs's deals carried out (tx) */
 
   /* the factory */
   JBed   bed[JS_MAX_BEDS];
@@ -2145,6 +2146,7 @@ static JS_OPT int js_save(const Jar *j, char *buf, int cap) {
   n = js_put(buf, n, cap, "\n");
   JS_KV("parcels", j->parcels);
   JS_KV("gseen", j->gseen);
+  if (j->txseen) JS_KV("txseen", j->txseen);
   if (j->decor) JS_KV("decor", j->decor);
   n = js_put(buf, n, cap, "own");
   for (i = 0; i < j->nowned; i++) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, j->owned[i]); }
@@ -2246,6 +2248,7 @@ static JS_OPT int js_load(Jar *j, const char *t) {
       while (js_more(p)) { uint32_t id = js_num(&p); if (i < JS_SHELF) j->shelf[i++] = id; }
     } else if (js_word_is(w, "parcels")) j->parcels = (uint16_t)js_num(&p);
     else if (js_word_is(w, "gseen")) j->gseen = js_num(&p);
+    else if (js_word_is(w, "txseen")) j->txseen = js_num(&p);
     else if (js_word_is(w, "decor")) j->decor = js_num(&p);
     else if (js_word_is(w, "chores")) {
       uint32_t m;
