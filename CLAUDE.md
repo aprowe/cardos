@@ -1121,6 +1121,24 @@ latch on: sell one cute thing and every find is cute. So:
 
 Change the prompts with care: they were tuned against real output.
 
+**Jar Lab: the bench for prompts and behaviour** (2026-10-11,
+`server/jarlab.py`, `server/jarlab.html`). At `/dash/jarlab` (under /dash
+because the cookie's Path is /dash; `/jarlab` redirects), the dashboard's
+cookie and an admin only. Pick kind, tier, price, form, brief (Sparks and
+Roll use the code's own dice), see the exact `jar.prompt_for` text and
+schema, edit it, and send it to Claude or a stub (dry run), or paste an
+answer to examine. Each item is run through `check_item`, its script
+compiled and given `simulate_day` (with the trace hook it gained for
+this: every handler run, its actions and x), packed with
+`to_item`/`encode` and decoded back: sprite drawn and animated, errors
+listed, the day replayed in a strip of jar with a per-hour chart and an
+event log. "Simulate only" iterates on a script with no Claude. Session
+history diffs prompts; named experiments are JSON in
+CARDOS_STATE/jarlab/. It never writes the pool, the ledger, rec/ID or
+next_id, never signs, and never touches sign_key.pem; to preview the other
+language version it flips `jarvm.V2` under a lock for the few ms of the
+pure calls (never across a Claude call). `server/tests/test_jarlab.py`.
+
 **The Town: four plants, three resources, three more people** (2026-10-11,
 v0.18.0). The owner asked for fewer plant kinds, each making its own thing,
 and neighbours for Tibbs who are paid in them:
