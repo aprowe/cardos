@@ -103,7 +103,7 @@ MOTION_SAID = {
 
 def fitter_prompt(concept, kind, form, activity, tier):
     e = jar.enums()
-    rules = jar.MOTION_RULES[activity]
+    rules = jar.motion_rules(activity, kind)
     lines = [
         jar.GAME,
         "",
@@ -152,7 +152,7 @@ def fitter_prompt(concept, kind, form, activity, tier):
 
 def fitter_schema(kind, form, activity):
     e = jar.enums()
-    rules = jar.MOTION_RULES[activity]
+    rules = jar.motion_rules(activity, kind)
     printable = "^[ -~]+$"
     p = {
         "name": {"type": "string", "minLength": 1, "maxLength": jar.NAME_LEN,

@@ -170,6 +170,22 @@ class Checks(unittest.TestCase):
         self.assertEqual(jar.check_item(motion_raw("still", idle="flicker"), activity="still"),
                          [])
 
+    def test_only_a_critter_travels(self):
+        # the device moves only critters about; decor and furniture keep their place
+        for kind in ("floor", "hanging"):
+            why = jar.check_item(motion_raw("ambles", "crawl", "bob", kind=kind),
+                                 activity="ambles")
+            self.assertTrue(any("travel" in w for w in why), (kind, why))
+            self.assertEqual(jar.check_item(motion_raw("restless", "none", "spin", kind=kind,
+                                                       speed="fast"), activity="restless"), [])
+            self.assertEqual(jar.motion_rules("restless", kind)["travel"], ("none",))
+        self.assertEqual(jar.check_item(motion_raw("ambles", "crawl", "bob"), activity="ambles"),
+                         [])
+        from server import jarstages
+        s = jarstages.fitter_schema("floor", None, "restless")
+        self.assertEqual(s["properties"]["travel"]["enum"], ["none"])
+        self.assertNotIn("none", s["properties"]["idle"]["enum"])
+
     def test_still_may_do_nothing_and_reacts_may_not(self):
         quiet = motion_raw("still", habits=[], bubbles=[])
         self.assertEqual(jar.check_item(quiet, activity="still"), [])

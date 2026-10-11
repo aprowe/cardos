@@ -893,6 +893,16 @@ MOTION_RULES = {
 }
 
 
+def motion_rules(activity, kind="critter"):
+    """MOTION_RULES' row for `activity`, for a thing of `kind`: only a critter
+    travels on the device (decor and furniture keep their place), so for any
+    other kind travel is none and a restless one is restless in place."""
+    rules = MOTION_RULES[activity]
+    if kind == "critter":
+        return rules
+    return dict(rules, travel=("none",))
+
+
 def roll_activity(rng):
     r = rng.randrange(sum(p for _, p in ACTIVITIES))
     for name, pct in ACTIVITIES:
@@ -1013,7 +1023,7 @@ def check_parts(raw, nameset=(), activity=None):
     if raw["name"].strip().lower() in nameset:
         why.append("the name %r is taken" % raw["name"])
     if activity is not None:
-        rules = MOTION_RULES[activity]
+        rules = motion_rules(activity, raw.get("kind"))
         for part, key in (("travel", "travel"), ("idle", "idle"), ("speed", "speed")):
             if raw.get(key) not in rules[part]:
                 why.append("%s %r does not suit a thing that %s (allowed: %s)" % (
