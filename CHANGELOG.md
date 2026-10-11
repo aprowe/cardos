@@ -11,6 +11,14 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.18.1 -- 2026-10-11
+
+- **Jar Factory was missing from an original Cardputer's launcher.** The
+  icon scan loaded an app's whole data block (which holds its zeroed state)
+  and its constants in one piece -- 32 KB for Jar, more than that board's
+  largest free block -- to read the descriptor at its start. It now loads
+  the descriptor and the constants only. Firmware (`update os`).
+
 ## v0.18.0 -- 2026-10-11
 
 Jar Factory only; API 46 as before (`update apps`).
