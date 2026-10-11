@@ -90,6 +90,7 @@ static struct {
   int view;
   int dsel, dmove, dnew;                /* decorate: selection, moving, a new one */
   int16_t dx0, dy0, dl0;                /* where it was: to put it back on Esc */
+  uint32_t don0;                        /* ... and the furniture it stood on */
   char dname[JI_NAME + 1];              /* the item selected in decorate */
   char dline[JI_LINE + 1];
   char msg[40];
@@ -547,16 +548,12 @@ static void item_at(int i, int *x, int *y) {
   else *y = JS_SOIL - 16 - p->lift - p->yoff / 16;
 }
 
+static void save(void);
+#include "apps/jarlive.h"
+
 static void items(void) {
-  int i, x, y;
-  for (i = 0; i < J.nplaced; i++) {
-    const JPlaced *p = &J.placed[i];
-    int f = p->slot[p->cur % (p->nframes ? p->nframes : 1)];
-    item_at(i, &x, &y);
-    if (p->kind == JK_HANGING) fill(x + 7, 9, 1, y - 8, rgb(0xc8, 0xc0, 0xb0));
-    if (p->glow) glow(x + 8, y + 8, 14, 255, 220, 140, 110);
-    if (f < JS_POOL) pic(J.pool[f], p->pal, 1, 16, 16, x, y, p->flip, 1);
-  }
+  int i;
+  for (i = 0; i < J.nplaced; i++) lv_item(i);
 }
 
 static void workers(void) {
@@ -663,11 +660,15 @@ static void weather_back(void) {
 /* The light: everything in the jar towards the hour's and the weather's
  * colour. The space outside the glass stays the interface's. */
 static void light(void) {
-  int i, n = (SY1 - SY0) * SW, a = G.lit[3];
+  int i, n = (SY1 - SY0) * SW, a = G.lit[3], r = G.lit[0], g = G.lit[1], b = G.lit[2];
   uint16_t *p = SB;
+  if (J.world == JWD_DARK) {                 /* the lights go out: night blue, deep */
+    a = a + 150 > 210 ? 210 : a + 150;
+    r = 10; g = 12; b = 34;
+  }
   if (a <= 0) return;
   for (i = 0; i < n; i++)
-    if (p[i] != C_BG) p[i] = mix(p[i], G.lit[0], G.lit[1], G.lit[2], a);
+    if (p[i] != C_BG) p[i] = mix(p[i], r, g, b, a);
 }
 
 /* What glows lights its own corner again: lamps in the dark. */
@@ -684,12 +685,15 @@ static void lamps(void) {
 static void scene(void) {
   background();
   weather_back();
+  lv_scenery();
   ledges();
   garden();
   works();
   dock();
+  lv_world();
   items();
   workers();
+  lv_parts();
   parachute();
   light();
   lamps();
@@ -1021,13 +1025,33 @@ static int key_decor(int k) {
     /* Up and down: a hanging thing's string, or what stands -- up onto a
      * ledge, down to the one below. */
     case CAPP_KEY_UP: case CAPP_KEY_DOWN:
-      if (p->kind == JK_HANGING) js_move_to(&J, G.dsel, x, k == CAPP_KEY_UP ? y - 2 : y + 2);
-      else js_set_level(&J, G.dsel, k == CAPP_KEY_UP ? p->level + 1 : p->level - 1);
+      if (p->kind == JK_HANGING) { js_move_to(&J, G.dsel, x, k == CAPP_KEY_UP ? y - 2 : y + 2); return 1; }
+      if (k == CAPP_KEY_DOWN && p->on_id) { js_get_off(&J, G.dsel); return 1; }   /* off the furniture */
+      if (k == CAPP_KEY_UP && !p->on_id) {      /* furniture under it first, then the ledges */
+        int f;
+        for (f = 0; f < J.nplaced; f++)
+          if (f != G.dsel && J.placed[f].role == JR_FURNITURE && J.placed[f].level == p->level &&
+              x >= J.placed[f].home_x - 8 * J.placed[f].scale &&
+              x <= J.placed[f].home_x + 8 * J.placed[f].scale &&
+              js_put_on(&J, G.dsel, f) == 0) return 1;
+      }
+      if (p->on_id) return 1;
+      js_set_level(&J, G.dsel, k == CAPP_KEY_UP ? p->level + 1 : p->level - 1);
       return 1;
-    case CAPP_KEY_ENTER: G.dmove = 0; G.dnew = 0; save(); return 1;
+    case CAPP_KEY_ENTER:
+      if (G.dnew) js_announce(&J, G.dsel);       /* the others hear: on new */
+      G.dmove = 0;
+      G.dnew = 0;
+      save();
+      return 1;
     case CAPP_KEY_ESC:
       if (G.dnew) { js_unplace(&J, G.dsel); G.dsel = 0; decor_select(0); save(); }
-      else { p->level = (uint8_t)G.dl0; js_move_to(&J, G.dsel, G.dx0, G.dy0); }
+      else {
+        js_get_off(&J, G.dsel);
+        p->level = (uint8_t)G.dl0;
+        js_move_to(&J, G.dsel, G.dx0, G.dy0);
+        if (G.don0) js_put_on(&J, G.dsel, js_find(&J, G.don0));
+      }
       G.dmove = 0;
       G.dnew = 0;
       return 1;
@@ -1044,6 +1068,7 @@ static int key_decor(int k) {
     G.dx0 = p->home_x;
     G.dy0 = p->home_y;
     G.dl0 = p->level;
+    G.don0 = p->on_id;
     return 1;
   case 'n': case 'N': open_app("Jar Shop", "decor"); return 1;
   case 'x': case 'X':
@@ -1080,6 +1105,8 @@ static int scene_key(void *st, unsigned char k) {
     default: return 1;
     }
   }
+  /* x (the chores) and b (the sound) are harmless: they work bars or no bars */
+  if (G.view == V_JAR && !G.menu && lv_key(k)) { G.last_key = now; return 1; }
   /* Bars hidden: a key brings them back and does nothing else. */
   if (G.view == V_JAR && G.bars > 0) { G.last_key = now; return 1; }
   G.last_key = now;
@@ -1290,6 +1317,7 @@ static void clock_minute(void) {
   api->now(&t);
   J.epoch = api->epoch();
   js_set_minute(&J, sun_minute(t.synced ? t.hour * 60 + t.min : -1));
+  js_set_hour(&J, t.synced ? t.hour : -1);       /* the real hour: on hour 18 */
   js_settle_beds(&J, J.epoch);              /* a plant comes of age while you watch */
   set_sky(J.minute);
 }
@@ -1298,6 +1326,7 @@ static int scene_tick(void *st, uint32_t now) {
   uint32_t dt;
   int steps = 0, want;
   (void)st;
+  lv_tick(now);
   if (!G.last_ms) G.last_ms = now;
   dt = now - G.last_ms;
   G.last_ms = now;
@@ -1392,6 +1421,7 @@ static void scene_start(void) {
   G.next_q = api->ticks_ms() + NET_FIRST_MS;
   load();
   J.weather = SKYQ.w;                       /* as last asked: no event for coming back */
+  lv_open();
   clock_minute();
 }
 
