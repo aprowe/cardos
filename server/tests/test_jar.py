@@ -828,12 +828,12 @@ class Routes(unittest.TestCase):
             self.req("POST", "/jar/day", self.alex, "")
             self.assertTrue(first.wait(10))
             s, body = self.req("GET", "/jar/day", self.alex)
-            # 3 at random, 3 he chose, the first new one; the second is being made
-            self.assertTrue(body.startswith("ok ") and "\nitems 7\nbatch " in body
+            # 2 at random, 2 he chose, the first new one; the second is being made
+            self.assertTrue(body.startswith("ok ") and "\nitems 5\nbatch " in body
                             and body.endswith("\nmore\n"), body)
             self.assertEqual(self.req("POST", "/jar/day", self.alex, ""), (200, body))
-            self.item(self.alex, 6)
-            self.assertEqual(self.req("GET", "/jar/item?i=7", self.alex)[0], 404)
+            self.item(self.alex, 4)
+            self.assertEqual(self.req("GET", "/jar/item?i=5", self.alex)[0], 404)
             gate.set()
             for _ in range(500):
                 s, body = self.req("GET", "/jar/day", self.alex)
@@ -855,7 +855,7 @@ class Routes(unittest.TestCase):
         return [jar.decode(self.item(tok, i))["id"] for i in range(n)]
 
     def test_the_pool_turns_over_and_items_stay_unique(self):
-        # Alex's stock is 3 random and 3 Tibbs's from the pool, and 2 new.
+        # Alex's stock is 2 random and 2 Tibbs's from the pool, and 4 new.
         # Alex buys one and holds one; the next stock keeps the held one
         # first, the bought one is Alex's for good, and the rest go back to
         # the pool -- but not straight back to Alex. Sam's shop takes from the
@@ -863,8 +863,8 @@ class Routes(unittest.TestCase):
         st = kv.store()
         self.make_day(self.alex)
         first = self.ids(self.alex, 8)
-        self.assertEqual(len(jar.pool_ids(st)), 12 - 6)
-        self.assertIn("Pick 3 of those", self.tibbs.prompts[0])
+        self.assertEqual(len(jar.pool_ids(st)), 12 - 4)
+        self.assertIn("Pick 2 of those", self.tibbs.prompts[0])
         s, body = self.req("POST", "/jar/day?fresh=1", self.alex,
                            "bought %d\nheld %d\n" % (first[0], first[1]))
         body = self.wait_day(self.alex)

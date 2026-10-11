@@ -977,8 +977,8 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
 # goes back to the pool then. Under _day_lock.
 
 STOCK_SIZE = 8                # a shop's stock: held, then random and Tibbs's picks, then new
-NEW_ITEMS = 2                 # new finds in each stock
-MAX_FINDS = 5                 # new finds a paid commission may ask for (the shop: f)
+NEW_ITEMS = 4                 # new finds in each stock
+MAX_FINDS = 8                 # new finds a paid commission may ask for (the shop: f)
 ASK_LEN = 100                 # what a commission may say to look for
 POOL_SHOWN = 40               # pool items Tibbs is shown to choose from
 MAX_HELD = 4                  # items a person may hold in their shop
