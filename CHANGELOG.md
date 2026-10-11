@@ -11,6 +11,25 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.19.0 -- 2026-10-11
+
+Jar Factory (`update apps`) and the server.
+
+- **Nothing changes hands before you say yes.** A deal struck in talk (with
+  Tibbs, Pip, Bramble or Wren) is an offer, written by the code -- "Pay 25
+  twigs: Wren builds a two-tier shelf. Ready in 2h 5m." -- and y accepts, n
+  declines; buying in the shop and buying an upgrade ask first too.
+- **Resources are worth something.** Reed, mushroom and flower beds make one
+  every four minutes of jar time (three at level 2, two at 3), not every
+  half minute; the lane's prices went up about four times (Pip 10-40
+  spores, Bramble 20-40 nectar or 15/35 for a bed, Wren 10-60 twigs).
+- **Work takes real time.** A job is made at once (a failure is refunded at
+  once) and handed over when it is done: about five minutes a resource
+  spent, half an hour to eight hours; a bed's level takes two or six hours.
+  One job at a time with each of them; the Town shows what each is making
+  and how long is left. Upgrades are built too: a quarter of an hour for the
+  first of each, doubling a level, eight hours at most, one at a time.
+
 ## v0.18.2 -- 2026-10-11
 
 Jar Factory (`update apps`).

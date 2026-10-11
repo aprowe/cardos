@@ -466,6 +466,7 @@ void test_jarpost_offline_the_post_says_so(void);
 void test_jarpost_a_gift_starts_from_a_friend(void);
 void test_jarpost_talking_to_tibbs(void);
 void test_jarpost_the_town_and_a_job_done(void);
+void test_jarpost_an_offer_waits_for_yes(void);
 void test_jarpost_a_delivery_is_checked(void);
 void test_jarpost_a_deal_in_talk_is_carried_out_once(void);
 void test_jarshop_without_a_jar_opens_the_jar(void);
@@ -1540,6 +1541,7 @@ int main(void) {
   RUN(test_jarpost_a_gift_starts_from_a_friend);
   RUN(test_jarpost_talking_to_tibbs);
   RUN(test_jarpost_the_town_and_a_job_done);
+  RUN(test_jarpost_an_offer_waits_for_yes);
   RUN(test_jarpost_a_delivery_is_checked);
   RUN(test_jarpost_a_deal_in_talk_is_carried_out_once);
   printf("-- jarshop --\n");

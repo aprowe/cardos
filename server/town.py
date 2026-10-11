@@ -18,6 +18,8 @@ Claude from the old one and the request: the same id, a new signed record.
 Wren's furniture is a new item, made to the description. Each is a job on a
 thread; the effect is queued when it is done, and the lane hears about it.
 """
+import base64
+import json
 import random
 import sys
 import threading
@@ -28,7 +30,12 @@ from . import ask, jar, jarvm, kv, shopkeep, wire
 RES_MAX = 99
 HOW_LEN = 160
 BED_LEVEL_MAX = 3
-BED_COST = {2: 3, 3: 6}
+BED_COST = {2: 15, 3: 35}
+BED_SECS = {2: 2 * 3600, 3: 6 * 3600}
+JOB_MIN, JOB_MAX = 1800, 8 * 3600
+SECS_PER = {"pip": 300, "bramble": 360, "wren": 300}   # a job's time, a resource spent
+RES_OF = {"pip": "spores", "bramble": "nectar", "wren": "twigs"}
+_held_lock = threading.Lock()
 PLANTS = ("berry", "reed", "shroom", "flower")
 PLANT_RESOURCE = {"berry": "jam", "reed": "twigs", "shroom": "spores", "flower": "nectar"}
 
@@ -60,9 +67,13 @@ def parse_have(body):
     return coins, have, beds[:8], "\n".join(lines)
 
 
-def context(person, coins, have, beds, store=None):
-    """What an NPC is told the customer has."""
+def context(person, coins, have, beds, store=None, who=None):
+    """What an NPC is told the customer has (and what they are making them)."""
     parts = [jar.deal_context(person, coins, store)]
+    for j in held(person, store):
+        if j["who"] == who:
+            parts.append("You are still making them: %s (ready in about %s); you take one "
+                         "job of theirs at a time." % (j["what"], _ago(j["due"] - time.time())))
     if have is not None:
         parts.append("Their stores: %s." % ", ".join("%d %s" % (have.get(r, 0), r)
                                                    for r in shopkeep.RESOURCES))
@@ -91,13 +102,36 @@ def _int(v):
         return None
 
 
+def _ago(secs):
+    secs = max(60, int(secs))
+    if secs < 3600:
+        return "%d min" % ((secs + 59) // 60)
+    return "%dh" % ((secs + 1800) // 3600)
+
+
+def job_secs(who, n, level=None):
+    """How long a job takes, in real seconds."""
+    if level:
+        return BED_SECS[level]
+    return max(JOB_MIN, min(JOB_MAX, n * SECS_PER[who]))
+
+
+def _item_name(item, st):
+    rec = st.get(jar.NS, "rec/%d" % item)
+    return jar.decode(rec)["name"] if rec else "item %d" % item
+
+
 def make_deal(who, person, deal, coins=None, have=None, beds=(), chat=None, store=None,
-              sync=False):
-    """Carry out a deal Pip, Bramble or Wren struck: None, or why it cannot be."""
+              sync=False, dry=False):
+    """Carry out a deal Pip, Bramble or Wren struck: None, or why it cannot be.
+    dry: only check it; words(...) then says what it would do."""
     st = store or kv.store()
-    res = {"pip": "spores", "bramble": "nectar", "wren": "twigs"}.get(who)
+    res = RES_OF.get(who)
     if not res:
         return "nobody here takes that kind of deal"
+    for j in held(person, st):
+        if j["who"] == who:
+            return "%s is still making them %s" % (shopkeep.name_of(who), j["what"])
     n = _spend(deal, res, have)
     if n is None:
         return "they have only %d %s" % ((have or {}).get(res, 0), res)
@@ -138,15 +172,21 @@ def make_deal(who, person, deal, coins=None, have=None, beds=(), chat=None, stor
         job = ("build", 0, what, "build")
     if not job:
         return "no job in it"
+    if dry:
+        return None
+    kind, arg, how, verb = job
+    level = (beds[arg][1] + 1 if beds and arg < len(beds) else 2) if kind == "bedup" else None
+    due = time.time() + job_secs(who, n, level)
+    what = {"remake": ("%s, %s" % (_item_name(arg, st), how or "changed")) if verb == "modify"
+            else "%s, evolved" % _item_name(arg, st),
+            "bedup": "bed %d to level %s" % (arg + 1, level), "build": how}[kind]
+    hold(person, who, kind, arg, due, what[:60], st)
     if n:
         shopkeep.tx_add(person, "use" + res, n, st)
     if take:
         shopkeep.tx_add(person, "pay", take, st)
-    kind, arg, how, verb = job
     if kind == "bedup":
-        shopkeep.tx_add(person, "bedup", arg, st)
-        shopkeep.town_note("%s grew %s's garden bed %d a level." % (
-            shopkeep.name_of(who), shopkeep.display(person), arg + 1), st, besides=who)
+        ready(person, who, "bedup", arg, st)
         return None
     run = (lambda: _job(chat, who, person, kind, arg, how, verb, st, n))
     if sync:
@@ -213,22 +253,19 @@ def remake_prompt(old, how, verb, kind_name):
 
 
 def _job(chat, who, person, kind, arg, how, verb, st, spent=0):
-    """A job, done: the effect queued and the lane told; on failure the
-    resources come back (use<res> is undone with a gain)."""
-    res = {"pip": "spores", "bramble": "nectar", "wren": "twigs"}[who]
+    """A job, made: held until its time (release_due hands it over); on
+    failure the resources come back at once (use<res> undone with a gain)."""
+    res = RES_OF[who]
     try:
         if kind == "remake":
-            name = remake(chat, person, arg, how, verb, st)
-            shopkeep.tx_add(person, "remake", arg, st)
-            shopkeep.town_note("%s %s %s's %s%s." % (
-                shopkeep.name_of(who), "altered" if verb == "modify" else "evolved",
-                shopkeep.display(person), name, (" (" + how + ")") if how else ""), st)
+            name, rec = remake(chat, person, arg, how, verb, st)
+            ready(person, who, "remake", arg, st, rec=rec, name=name)
         else:
             item_id, name = build(chat, person, how, st)
-            shopkeep.tx_add(person, "give", item_id, st)
-            shopkeep.town_note("Wren built %s a %s: %s." % (shopkeep.display(person), name, how), st)
+            ready(person, who, "give", item_id, st, name=name)
     except Exception as e:                              # noqa: BLE001 - the customer is told
         sys.stderr.write("jar: %s: %s's job failed: %s\n" % (person, who, e))
+        unhold(person, who, st)
         if spent:
             shopkeep.tx_add(person, "gain" + res, spent, st)   # what was paid comes back
         shopkeep.note("The job for %s fell through (%s); you owe them a redo." % (
@@ -264,9 +301,105 @@ def remake(chat, person, item_id, how, verb, store=None):
     it = jar.to_item(raw, item_id, time.time(), old.get("tags") or "", None, old["price"], form)
     if not jarvm.V2 or not it.get("tags"):
         it["tags"] = old.get("tags") or it.get("tags", "")
-    rec = jar.seal(jar.encode(it))
-    st.put(jar.NS, "rec/%d" % item_id, rec)
-    return raw["name"]
+    return raw["name"], jar.seal(jar.encode(it))      # written when it is handed over
+
+
+# ---- held: made, not yet handed over ---------------------------------------------
+#
+# The owner (2026-10-11): "commissions should take real world time". A job is
+# made at once (so a failure is refunded at once) and held until its time:
+# one entry a shopkeeper, from the deal ("making") to the hand-over, when its
+# effect becomes a tx with the next id -- ids stay in order, which the
+# device's txseen depends on.
+
+def held(person, store=None):
+    st = store or kv.store()
+    raw = st.get(jar.NS, "held/" + person)
+    return json.loads(raw) if raw else []
+
+
+def _set_held(person, lst, st):
+    st.put(jar.NS, "held/" + person, json.dumps(lst).encode())
+
+
+def hold(person, who, kind, arg, due, what, st):
+    with _held_lock:
+        lst = [j for j in held(person, st) if j["who"] != who]
+        lst.append({"who": who, "kind": kind, "arg": arg, "due": due, "what": what,
+                    "op": None, "rec": None, "name": ""})
+        _set_held(person, lst, st)
+
+
+def unhold(person, who, st):
+    with _held_lock:
+        _set_held(person, [j for j in held(person, st) if j["who"] != who], st)
+
+
+def ready(person, who, op, arg, st, rec=None, name=""):
+    """The job is made: it waits for its time."""
+    with _held_lock:
+        lst = held(person, st)
+        for j in lst:
+            if j["who"] == who:
+                j.update(op=op, arg=arg, name=name,
+                         rec=base64.b64encode(rec).decode() if rec else None)
+        _set_held(person, lst, st)
+
+
+def release_due(person, store=None, now=None):
+    """Hand over what is ready and due: the record written, the effect queued,
+    the lane told. How many."""
+    st = store or kv.store()
+    now = now or time.time()
+    with _held_lock:
+        lst = held(person, st)
+        due = [j for j in lst if j["op"] and j["due"] <= now]
+        if not due:
+            return 0
+        _set_held(person, [j for j in lst if j not in due], st)
+    for j in due:
+        if j["rec"]:
+            st.put(jar.NS, "rec/%d" % j["arg"], base64.b64decode(j["rec"]))
+        shopkeep.tx_add(person, j["op"], j["arg"], st)
+        shopkeep.town_note("%s finished %s's job: %s." % (
+            shopkeep.name_of(j["who"]), shopkeep.display(person), j["what"]), st)
+    return len(due)
+
+
+def jobs_text(person, store=None, now=None):
+    """GET /jar/jobs: "job WHO SECONDS_LEFT WHAT" a line."""
+    now = now or time.time()
+    return "".join("job %s %d %s\n" % (j["who"], max(0, int(j["due"] - now)),
+                                       wire.flat(j["what"], 60, ascii=True))
+                   for j in held(person, store))
+
+
+def words(who, person, deal, have=None, beds=(), store=None):
+    """What a deal would do, in the code's words (the player confirms this)."""
+    st = store or kv.store()
+    res = RES_OF[who]
+    s = deal.get("spend") if isinstance(deal.get("spend"), dict) else {}
+    n = _int(s.get(res)) or 0
+    take = max(0, _int(deal.get("take")) or 0)
+    pay = "%d %s" % (n, res) + (" + %d coins" % take if take else "")
+    if who == "pip":
+        m = deal.get("modify") or {}
+        what = "Pip alters %s: %s" % (_item_name(_int(m.get("item")) or 0, st),
+                                      wire.flat(str(m.get("how") or "as agreed"), 50, ascii=True))
+        secs = job_secs(who, n)
+    elif who == "bramble" and isinstance(deal.get("evolve"), dict):
+        what = "Bramble evolves %s" % _item_name(_int(deal["evolve"].get("item")) or 0, st)
+        secs = job_secs(who, n)
+    elif who == "bramble":
+        bed = _int((deal.get("grow") or {}).get("bed")) or 1
+        level = (beds[bed - 1][1] + 1) if beds and bed <= len(beds) else 2
+        what = "Bramble grows bed %d to level %d" % (bed, level)
+        secs = job_secs(who, n, level)
+    else:
+        what = "Wren builds %s" % wire.flat(str((deal.get("build") or {}).get("what") or ""),
+                                           50, ascii=True)
+        secs = job_secs(who, n)
+    return "Pay %s: %s. Ready in %s." % (pay, what, _ago(secs))
 
 
 def build(chat, person, what, store=None):

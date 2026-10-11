@@ -106,6 +106,16 @@ void test_jarshop_buys_from_the_hand_made_stock(void) {
   CHECK_EQ(U.card.price, 60);
   shot("s01_stock");
   key(CAPP_KEY_ENTER);
+  CHECK_EQ(G.buying, 1);                          /* sure? nothing paid yet */
+  CHECK_EQ(J.coins, 100);
+  shot("s01b_sure");
+  key(CAPP_KEY_ENTER);                            /* Enter is not an answer */
+  CHECK_EQ(G.buying, 1);
+  key('n');
+  CHECK_EQ(J.coins, 100);
+  CHECK(!js_owns(&J, 5));
+  key(CAPP_KEY_ENTER);
+  key('y');
   CHECK_EQ(G.view, V_CARD);
   CHECK_EQ(J.coins, 40);
   CHECK(J.sold & (1u << 5));
@@ -162,11 +172,29 @@ void test_jarshop_upgrades(void) {
   card(500);
   launch("up");
   shot("s05_upgrades");
-  key(CAPP_KEY_ENTER);                    /* another mossling: 30 */
+  key(CAPP_KEY_ENTER);                    /* another mossling: 30 -- sure? */
+  CHECK_EQ(G.buying, 3);
+  shot("s05b_sure");
+  key('y');
+  CHECK_EQ(J.coins, 470);                 /* paid; built in a quarter of an hour */
+  CHECK_EQ(J.nmoss, 1);
+  CHECK_EQ(J.build_k, JU_MOSS + 1);
+  CHECK_EQ(J.build_at, T0 + 900);
+  CHECK(strstr(saved(), "build 1 1800000900") != 0);
+  shot("s05c_building");
+  key(CAPP_KEY_DOWN);
+  key(CAPP_KEY_ENTER);                    /* one at a time */
+  CHECK_EQ(G.buying, 0);
+  CHECK(strstr(U.msg, "one thing") != 0 || strstr(U.msg, "One thing") != 0);
+  fakeapi_epoch = T0 + 900;               /* a quarter of an hour on */
+  launch("up");
   CHECK_EQ(J.nmoss, 2);
-  CHECK_EQ(J.coins, 470);
+  CHECK_EQ(J.build_k, 0);
   key(CAPP_KEY_DOWN);
   key(CAPP_KEY_ENTER);                    /* the press: 120 */
+  key('y');
+  fakeapi_epoch = T0 + 900 + 900;
+  launch("up");
   CHECK_EQ(J.nmach, 3);
   CHECK(strstr(saved(), "up 2 2 3 0") != 0);
   J.coins = 0;
@@ -284,6 +312,7 @@ void test_jarshop_fetches_the_days_stock_and_checks_each_record(void) {
   {
     int before = (int)J.coins, p = S.price[0];
     key(CAPP_KEY_ENTER);
+    key('y');
     CHECK_EQ((int)J.coins, before - p);
     CHECK(js_owns(&J, 9000));
     CHECK_EQ(jst_item_read(&A, 9000, &IO) > 0, 1);
@@ -364,6 +393,7 @@ void test_jarshop_items_show_as_they_are_made(void) {
   CHECK(strcmp(S.date, "2027-01-15") == 0);
   CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "item 9000") != 0);
   key(CAPP_KEY_ENTER);                        /* bought while the rest is made */
+  key('y');
   CHECK(js_owns(&J, 9000));
   key(CAPP_KEY_ESC);
   tick(4200);
@@ -398,6 +428,7 @@ void test_jarshop_opened_again_it_picks_up_the_rest_of_a_stock(void) {
   CHECK_EQ(S.n, 1);
   CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "batch 7") != 0);
   key(CAPP_KEY_ENTER);                        /* bought */
+  key('y');
   CHECK(js_owns(&J, 9000));
   /* closed; later the server has finished */
   HALF = 1;
@@ -481,6 +512,7 @@ void test_jarshop_held_items_stay_into_the_next_stock(void) {
   key(CAPP_KEY_LEFT);
   key(CAPP_KEY_LEFT);
   key(CAPP_KEY_ENTER);                        /* buy 9000 */
+  key('y');
   CHECK(js_owns(&J, 9000));
   key(CAPP_KEY_ESC);
   key('r');                                   /* a new stock, paid for */
@@ -496,6 +528,7 @@ void test_jarshop_held_items_stay_into_the_next_stock(void) {
   CHECK_EQ(S.sold, 0);
   /* buying a held one lets go of it */
   key(CAPP_KEY_ENTER);
+  key('y');
   CHECK(js_owns(&J, 9001));
   CHECK_EQ(S.held, 0);
 }
@@ -673,6 +706,8 @@ void test_jarshop_g_buys_and_goes_to_send_a_gift(void) {
   tick(3500);
   CHECK_EQ(S.n, 3);
   key('g');
+  CHECK(!js_owns(&J, 9000));                  /* sure? first */
+  key('y');
   CHECK(js_owns(&J, 9000));
   CHECK(strcmp(RAN, "Jar Post") == 0);
   CHECK(strcmp(RAN_ARGS, "gift 9000") == 0);

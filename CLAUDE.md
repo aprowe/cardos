@@ -1141,6 +1141,17 @@ and neighbours for Tibbs who are paid in them:
   ID`). Alteration is the old item and the request shown to Claude, made
   again under the same id and re-signed; Wren's is `jar.generate(...,
   force_form="furniture")`.
+- **Confirmation and real time** (v0.19.0, the owner: "needs confirmation
+  before any transaction", "upgrades and commissions should take real world
+  time"). A `DEAL:` line is only a dry run (`make_deal(..., dry=True)`) kept
+  as an offer worded by the code (`town.words`, `jar.deal_words`), shown as
+  `offer	WORDS` on /jar/talk; `POST /jar/deal?who=` with the have lines
+  and yes/no carries it out, re-checked. A job is made at once and held in
+  `held/PERSON` (`town.hold`/`ready`/`release_due`) until its time; the tx
+  is queued at hand-over so ids stay in order; `GET /jar/jobs` lists them.
+  Shop buys and upgrades ask y/n; upgrades are built over real time
+  (`js_buy_at`, `build K AT` in the save, `js_settle_build`).
+  Resource beds ripen in `JS_RES_GROW_MS` (4 min at level 1).
 - **On the device**: Jar Post's Town (`V_TOWN`, `post_open("town")`) lists
   the four and talks with `?who=`; `apps/jartx.h` carries out tx lines for
   the talk screen and for the scene, which asks `GET /jar/tx?after=` after

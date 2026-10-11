@@ -52,6 +52,9 @@ typedef struct {
   struct {
   int view, back, pick, slot, sel, top, ntile;
   int up_sel, bed, plant, asking;
+  /* sure? before anything is paid (the owner, 2026-10-11): 1 buy the stock
+   * item, 2 buy it and gift it, 3 the upgrade */
+  int buying;
   Tile tile[8];
   int k, nitems, polls, tried, again;
   /* The server makes a stock one item at a time and says "more" until it is
@@ -558,6 +561,11 @@ static void paint_up(void) {
     default:      spr(SPR_BUSH, 8, y + 5, 1, C_PANEL); break;
     }
     text(26, y + 4, UP_NAME[k], C_TEXT, C_PANEL);
+    if (J.build_k == k + 1) {                       /* being built: how long */
+      api->fmt(b, sizeof b, "building: %s left", jtx_dur(J.build_at > U.now ? J.build_at - U.now : 0));
+      text(26, y + 14, b, C_GOLD, C_PANEL);
+      continue;
+    }
     if (cost < 0) {
       api->fmt(b, sizeof b, "all %d", js_up_max(k) + (k == JU_BELT));
       text(26, y + 14, b, C_DIM, C_PANEL);
@@ -648,7 +656,7 @@ static void shop_paint(void *st, CRect c) {
   static const char *const H_STUFF[] = { "Ent", "open", "G", "gift", "Tab", "shop", "Esc", "jar", 0 };
   static const char *const H_PICK[] = { "Ent", "choose", "Esc", "back", 0 };
   static const char *const H_CARD[] = { "Ent", "in jar", "G", "gift", "Esc", "back", 0 };
-  static const char *const H_UP[] = { "^v", "pick", "Ent", "buy", "Esc", "jar", 0 };
+  static const char *const H_UP[] = { "^v", "pick", "Ent", "build", "Esc", "jar", 0 };
   static const char *const H_GARDEN[] = { "<>", "bed", "Ent", "plant", "T", "town", "Esc", "jar", 0 };
   static const char *const H_PLANT[] = { "^v", "pick", "Ent", "plant", "Esc", "back", 0 };
   const char *const *h = H_STOCK;
@@ -673,6 +681,22 @@ static void shop_paint(void *st, CRect c) {
   case V_GARDEN: paint_garden(); h = H_GARDEN; where = "Garden"; break;
   case V_PLANT:  paint_plant(); h = H_PLANT; where = "Garden"; break;
   }
+  if (G.buying) {
+    static const char *const H_BUY[] = { "y", "yes", "n", "no", 0 };
+    char b[48];
+    char q[72];
+    if (G.buying == 3)
+      api->fmt(q, sizeof q, "%s for %d coins? Ready in %s.", UP_NAME[G.up_sel],
+               js_up_cost(&J, G.up_sel), jtx_dur(js_build_s(&J, G.up_sel)));
+    else api->fmt(q, sizeof q, "Buy %s for %u coins%s?", U.name, (unsigned)S.price[G.sel],
+                  G.buying == 2 ? ", as a gift" : "");
+    box(14, BAR + 28, SW - 28, 40, C_BG);              /* the question: nothing is paid before y */
+    outline(14, BAR + 28, SW - 28, 40, C_GOLD);
+    wrapped(20, BAR + 33, q, 33, 2, C_TEXT, C_BG);
+    text(20, BAR + 55, "y yes   n no", C_GOLD, C_BG);
+    (void)b;
+    h = H_BUY;
+  }
   top_bar(where);
   hints(h);
   paint_note();
@@ -687,6 +711,14 @@ static void grid_move(int d) {
   while (G.sel < G.top * 4) G.top--;
   while (G.sel >= (G.top + 2) * 4) G.top++;
   load_page();
+}
+
+/* Could the selected stock item be bought? Says why not. */
+static int can_buy(void) {
+  int k = G.sel;
+  if (!U.card.ok || k >= S.n || jst_sold(&S, &J, k)) return 0;
+  if (J.coins < S.price[k]) { say("Not enough coins yet"); return 0; }
+  return 1;
 }
 
 /* Buy stock slot G.sel: its record (as it came) becomes an owned item. Its
@@ -751,12 +783,12 @@ static int key_grid(int k) {
     }
     return 1;
   case 'g': case 'G':
-    if (G.view == V_STOCK) { uint32_t id = U.card.ok ? buy() : 0; if (id) gift(id); }
+    if (G.view == V_STOCK) { if (can_buy()) G.buying = 2; }
     else if (U.card.ok && !G.pick) gift(U.card.id);
     return 1;
   case CAPP_KEY_ENTER:
     if (!U.card.ok) return 1;
-    if (G.view == V_STOCK) { uint32_t id = buy(); if (id) open_card(id, V_STOCK); return 1; }
+    if (G.view == V_STOCK) { if (can_buy()) G.buying = 1; return 1; }
     if (G.pick == P_DECOR) { J.decor = U.card.id; to_jar(); return 1; }
     open_card(U.card.id, V_STUFF);
     return 1;
@@ -774,14 +806,27 @@ static int key_card(int k) {
   return 1;
 }
 
+/* The upgrade, paid for and begun (confirmed). */
+static void do_upgrade(void) {
+  int r = js_buy_at(&J, G.up_sel, api->epoch());
+  if (r == 0) {
+    save();
+    say(J.build_k ? "Paid: the builders are on it" : "Bought: it is in the jar");
+  } else if (r == -2) say("Not enough coins yet");
+  else if (r == -3) say("One thing is built at a time");
+}
+
 static int key_up(int k) {
   switch (k) {
   case CAPP_KEY_UP:   if (G.up_sel > 0) G.up_sel--; return 1;
   case CAPP_KEY_DOWN: if (G.up_sel < JU_KINDS - 1) G.up_sel++; return 1;
   case CAPP_KEY_ENTER: {
-    int r = js_buy(&J, G.up_sel);
-    if (r == 0) { save(); say("Bought: it is in the jar"); }
-    else if (r == -2) say("Not enough coins yet");
+    int c = js_up_cost(&J, G.up_sel);
+    js_settle_build(&J, U.now);
+    if (c < 0) return 1;
+    if (J.build_k) { say("One thing is built at a time"); return 1; }
+    if ((uint32_t)c > J.coins) { say("Not enough coins yet"); return 1; }
+    G.buying = 3;                                   /* sure? */
     return 1;
   }
   case CAPP_KEY_ESC: to_jar(); return 1;
@@ -836,6 +881,19 @@ static int shop_key(void *st, uint8_t k) {
   (void)st;
   U.dirty = 1;
   if (U.msg[0]) U.msg[0] = 0;
+  if (G.buying) {
+    int a = confirm_key(api, k), what = G.buying;
+    if (a == CONFIRM_WAIT) return 1;
+    G.buying = 0;
+    if (a != CONFIRM_YES) return 1;
+    if (what == 3) { do_upgrade(); return 1; }
+    {
+      uint32_t id = buy();
+      if (id && what == 2) gift(id);
+      else if (id) open_card(id, V_STOCK);
+    }
+    return 1;
+  }
   if ((k == 't' || k == 'T') && !G.pay && (G.view == V_STOCK || G.view == V_STUFF)) {
     save();                                       /* Tibbs is Jar Post's */
     if (ui_run("Jar Post", "talk") != 0) say("No Jar Post app");
@@ -926,6 +984,7 @@ static void shop_open(const char *s) {
   if (ui_load()) return;
   if (jst_get(api, JST_SAY, SAY, sizeof SAY) < 0) SAY[0] = 0;
   jst_clean(SAY);
+  if (J.build_k && !js_settle_build(&J, U.now)) save();   /* an upgrade finished while away */
   if (str_same(s, "stuff")) go_stuff(P_BROWSE);
   else if (str_same(s, "decor")) go_stuff(P_DECOR);
   else if (str_same(s, "up")) G.view = V_UP;

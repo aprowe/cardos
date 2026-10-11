@@ -191,7 +191,9 @@ void test_jar_the_shop_and_the_post_are_screens_of_one_app(void) {
   CHECK_EQ(SHOP_P->s.n, 8);                          /* the hand-made stock, offline */
   CHECK(UI_P->card.ok);
   before = J.coins;
-  key(CAPP_KEY_ENTER);                               /* bought */
+  key(CAPP_KEY_ENTER);                               /* sure? */
+  CHECK_EQ(J.coins, before);                         /* nothing paid before y */
+  key('y');                                          /* bought */
   CHECK(J.coins < before);
   key(CAPP_KEY_ESC);                                 /* the card */
   key(CAPP_KEY_ESC);                                 /* the jar */

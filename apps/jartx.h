@@ -118,6 +118,15 @@ static JTX_OPT int jtx_install(const JTx *t, const uint8_t *raw, int n, const JI
   return 0;
 }
 
+/* A duration for people: "45 min", "2h", "2h 10m". Static: one at a time. */
+static JTX_OPT const char *jtx_dur(uint32_t s) {
+  static char b[16];
+  if (s < 3600) api->fmt(b, sizeof b, "%u min", (unsigned)((s + 59) / 60));
+  else if (s % 3600 < 60) api->fmt(b, sizeof b, "%uh", (unsigned)(s / 3600));
+  else api->fmt(b, sizeof b, "%uh %um", (unsigned)(s / 3600), (unsigned)(s % 3600 / 60));
+  return b;
+}
+
 /* What the jar has, for talk: the lines before the words. */
 static JTX_OPT int jtx_have(char *b, int n) {
   int i, k = api->fmt(b, (size_t)n, "coins %u\nhave spores=%u nectar=%u twigs=%u\nbeds ",

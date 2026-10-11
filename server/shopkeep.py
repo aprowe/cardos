@@ -132,9 +132,10 @@ CAST = {
             "[You can take a job, if you and they agree right now: end your answer with one more "
             "line, exactly: DEAL: {\"spend\": {\"spores\": N}, \"take\": coins (optional), "
             "\"modify\": {\"item\": the id of one of their things, \"how\": what to change, "
-            "in a sentence}}. A small change is 2-3 spores, a big one 5-8; never more spores "
-            "than they have. The thing comes back changed, the same thing. Say nothing about the "
-            "DEAL line itself.]"),
+            "in a sentence}}. A small change is 10-15 spores, a big one 25-40; never more spores "
+            "than they have. It takes you an hour or more (about five minutes a spore); the thing "
+            "comes back changed, the same thing. They will be asked to confirm. Say nothing "
+            "about the DEAL line itself.]"),
     },
     "bramble": {
         "name": "Bramble", "where": "in Bramble's greenhouse",
@@ -151,8 +152,9 @@ CAST = {
             "line, exactly: DEAL: {\"spend\": {\"nectar\": N}, then either \"evolve\": "
             "{\"item\": the id of one of their critters, \"how\": what it becomes, in a "
             "sentence} or \"grow\": {\"bed\": the bed's number, from 1}}. Evolving a critter is "
-            "4-8 nectar; growing a bed a level is 3 nectar for level 2, 6 for level 3 (3 is the "
-            "most). Never more nectar than they have. Say nothing about the DEAL line itself.]"),
+            "20-40 nectar and takes a few hours; growing a bed a level is 15 nectar for level 2 "
+            "(two hours), 35 for level 3 (six hours; 3 is the most). Never more nectar than they "
+            "have. They will be asked to confirm. Say nothing about the DEAL line itself.]"),
     },
     "wren": {
         "name": "Wren", "where": "in Wren's woodshop",
@@ -167,8 +169,9 @@ CAST = {
         "deal": (
             "[You can take a commission, if you and they agree right now: end your answer with "
             "one more line, exactly: DEAL: {\"spend\": {\"twigs\": N}, \"build\": {\"what\": "
-            "the piece, described in a sentence}}. A stool or a small shelf is 3-4 twigs, a table "
-            "or a big shelf 5-7, something grand 8-10; never more twigs than they have. Say "
+            "the piece, described in a sentence}}. A stool or a small shelf is 10-15 twigs, a table "
+            "or a big shelf 20-30, something grand 40-60; never more twigs than they have. Good "
+            "work takes time: about five minutes a twig. They will be asked to confirm. Say "
             "nothing about the DEAL line itself.]"),
     },
 }
@@ -577,14 +580,48 @@ def split_deal(out):
     return out.strip(), None
 
 
+# ---- offers: nothing changes hands until the player says yes ------------------------
+#
+# The owner (2026-10-11): "needs confirmation before any transaction". A DEAL
+# line is checked (a dry run) and kept as the person's offer from this
+# shopkeeper, worded by the code, not the model; the device shows it and
+# answers POST /jar/deal, which carries it out then -- checked again against
+# what the player has at that moment.
+
+OFFER_TTL = 1800
+
+
+def offer_put(person, who, deal, words, store=None):
+    _put(store or kv.store(), who + "/offer/" + person,
+         {"deal": deal, "words": words, "at": time.time()})
+
+
+def offer_get(person, who, store=None):
+    o = _get(store or kv.store(), who + "/offer/" + person, None)
+    if not o or time.time() - o.get("at", 0) > OFFER_TTL:
+        return None
+    return o
+
+
+def offer_take(person, who, store=None):
+    """The offer, gone once taken (yes or no)."""
+    st = store or kv.store()
+    with _meta:
+        o = offer_get(person, who, st)
+        _put(st, who + "/offer/" + person, None)
+    return o
+
+
 def _reply(chat, person, said, friends, st, context="", on_deal=None, who="tibbs"):
     try:
         out = turn(chat, talk_prompt(person, said, friends, context, who), person, st, who=who)
         out, deal = split_deal(out)
         if deal and on_deal:
-            why = on_deal(person, deal)
+            why, words = on_deal(person, deal)          # a dry run, and what it would do
             if why:                                     # it fell through: they hear why
                 note("The deal with %s fell through: %s" % (display(person), why), st, who)
+            elif words:
+                offer_put(person, who, deal, words, st)
         reply = wire.flat(out, REPLY_LEN, ascii=True)
         _log_add(st, person, "him", reply, who)
         _set_talk(st, person, {"state": "ok"}, who)
@@ -602,8 +639,9 @@ def _reply(chat, person, said, friends, st, context="", on_deal=None, who="tibbs
 def say(chat, person, text, friends=(), store=None, context="", on_deal=None, who="tibbs"):
     """A player says something; his reply comes on a thread. False if he is
     still answering them. `context` tells him what they have (coins, things),
-    and with it he may strike a deal, which on_deal(person, deal) carries out
-    -- returning why not, if it cannot."""
+    and with it he may strike a deal: on_deal(person, deal) checks it
+    without doing it, answering (why not, or None; its words), and a good
+    one waits as the person's offer until they say yes (POST /jar/deal)."""
     st = store or kv.store()
     text = wire.flat(text, SAY_LEN, ascii=True)
     if not text:
@@ -634,6 +672,9 @@ def talk_text(person, store=None, tx_after=None, who="tibbs"):
         out.append("day\t" + day)
     for c in _log(st, person, who)[-TALK_SENT:]:
         out.append("%s\t%s" % (c["who"], wire.flat(c["text"], SENT_LEN, ascii=True)))
+    o = offer_get(person, who, st)
+    if o and s["state"] != "pending":
+        out.append("offer\t" + wire.flat(o["words"], 120, ascii=True))
     if tx_after is not None:
         for t in txs(person, st):
             if t["id"] > tx_after:
