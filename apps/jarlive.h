@@ -329,7 +329,9 @@ static void lv_pose(int i, LvPose *o) {
   v = lv_tri(t, per, a);
   switch (p->idle) {
   case JID_SWAY: o->shear = v; break;
-  case JID_BOB: o->dy = v; break;
+  case JID_BOB:                               /* on a string, a bob is a swing */
+    if (p->kind == JK_HANGING) o->dx = v; else o->dy = v;
+    break;
   case JID_WOBBLE: o->h = 16 + v; o->w = 16 - v; break;
   case JID_PULSE: o->w = o->h = 16 + v; break;
   case JID_SPIN: {
@@ -340,9 +342,11 @@ static void lv_pose(int i, LvPose *o) {
     break;
   }
   case JID_FLICKER: {
+    /* its frames, while nothing else has chosen one: walking, climbing and
+     * a habit's or script's `frame` win; its glow flickers whatever */
     uint32_t r = hash2((int)(t / LV_FLICK[lv]), (int)p->id);
-    if (p->nframes > 1) o->frame = (int)(r % p->nframes);
-    else o->glow = (int)(r & 1);
+    if (p->nframes > 1 && !p->moving && !p->climb && p->cur == 0) o->frame = (int)(r % p->nframes);
+    else if (p->nframes <= 1) o->glow = (int)(r & 1);
     break;
   }
   case JID_BLINK:
@@ -364,8 +368,10 @@ static void lv_pic(const uint8_t *data, const uint16_t *pal, int x, int y, const
   y += (hanging ? 0 : 16 * s - H) + o->dy * s;
   if (y + H <= SY0 || y >= SY1) return;
   for (r = 0; r < H; r++) {
-    int sr = r * 16 / H, lean = H > 1 ? o->shear * s * (hanging ? r : H - 1 - r) / (H - 1) : 0;
+    int sr, lean;
     if (y + r < SY0 || y + r >= SY1) continue;
+    sr = r * 16 / H;
+    lean = H > 1 ? o->shear * s * (hanging ? r : H - 1 - r) / (H - 1) : 0;
     for (c = 0; c < W; c++) {
       int sc = c * 16 / W, v = ji_px(data, sr * 16 + (o->flip ? 15 - sc : sc));
       if (v) px(x + c + lean, y + r, swap16(pal[v]));

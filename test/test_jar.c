@@ -1062,11 +1062,11 @@ void test_jar_old_items_have_no_idle(void) {
   PoseRange r;
   int i, m;
   start(T0);
-  for (m = 0; m < JM_KINDS; m++) {
+  for (m = 0; m < JM_KINDS * JK_KINDS; m++) {
     jf_item(&it, 900 + (uint32_t)m, "Old", "odd");
-    it.kind = JK_CRITTER;
-    it.move = (uint8_t)m;
-    i = js_place(&J, &it, 60 + m * 30, 0);
+    it.kind = (uint8_t)(m / JM_KINDS);
+    it.move = (uint8_t)(m % JM_KINDS);
+    i = js_place(&J, &it, 30 + m * 12, 20);
     CHECK(i >= 0);
     CHECK_EQ(J.placed[i].given, 0);
     pose_range(i, 400, &r);
@@ -1074,6 +1074,7 @@ void test_jar_old_items_have_no_idle(void) {
     CHECK(r.lo_sh == 0 && r.hi_sh == 0 && r.lo_dx == 0 && r.hi_dx == 0 && r.lo_dy == 0 && r.hi_dy == 0);
     CHECK_EQ(r.hides, 0);
     CHECK_EQ(r.glows, 0);
+    js_unplace(&J, i);                       /* room for the next: the pool is small */
   }
 }
 
@@ -1123,6 +1124,37 @@ void test_jar_each_idle_moves_as_described(void) {
   i = idler(919, JID_BLINK, JLV_NORMAL, 1);
   pose_range(i, 800, &r);
   CHECK(r.hides > 0 && r.hides < 800 / 5);
+}
+
+/* Flicker gives way: a frame a habit or script chose stays, and so does the
+ * walk. A hanging bob swings rather than leaving its string. */
+void test_jar_flicker_gives_way_and_a_hanging_bob_swings(void) {
+  static JItem it;
+  PoseRange r;
+  int i;
+  start(T0);
+  i = idler(940, JID_FLICKER, JLV_JITTERY, 3);
+  CHECK_EQ(js_act(&J, i, JA_FRAME, 2), 0);
+  pose_range(i, 200, &r);
+  CHECK_EQ(r.frames[2], 200);
+  jf_item(&it, 941, "Firefly", "odd");
+  it.kind = JK_CRITTER;
+  it.travel = JTV_CRAWL;
+  it.idle = JID_FLICKER;
+  it.lively = JLV_JITTERY;
+  i = js_place(&J, &it, 120, 0);
+  J.placed[i].moving = 1;
+  J.placed[i].cur = 1;
+  pose_range(i, 200, &r);
+  CHECK_EQ(r.frames[1], 200);
+  jf_item(&it, 942, "Bell", "odd");
+  it.kind = JK_HANGING;
+  it.idle = JID_BOB;
+  it.lively = JLV_NORMAL;
+  i = js_place(&J, &it, 100, 20);
+  pose_range(i, 400, &r);
+  CHECK(r.lo_dx < 0 && r.hi_dx > 0);
+  CHECK(r.lo_dy == 0 && r.hi_dy == 0);
 }
 
 /* Liveliness: calm is slower and smaller, jittery quicker and bigger. */

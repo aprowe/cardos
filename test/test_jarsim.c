@@ -967,6 +967,34 @@ void test_jarsim_parts_are_placed_and_drive_the_move(void) {
   CHECK_EQ(J.placed[i].move, JM_SWAYS);
 }
 
+/* Only a critter gets about: decor and furniture with a travel keep their
+ * place (they would walk on the spot against the drift home). */
+void test_jarsim_only_critters_travel(void) {
+  static JItem it;
+  int i, k;
+  int32_t x;
+  fresh(24);
+  mk_item(&it, 531, JK_FLOOR, JM_WANDERS);
+  it.travel = JTV_CRAWL;
+  it.idle = JID_BOB;
+  it.lively = JLV_NORMAL;
+  i = js_place(&J, &it, 100, 0);
+  CHECK_EQ(J.placed[i].travel, JTV_NONE);
+  CHECK_EQ(J.placed[i].idle, JID_BOB);
+  CHECK_EQ(J.placed[i].move, JM_SITS);
+  mk_item(&it, 532, JK_CRITTER, JM_FLOATS);
+  it.role = JR_FURNITURE;
+  it.travel = JTV_FLOAT;
+  it.lively = JLV_NORMAL;
+  k = js_place(&J, &it, 160, 0);
+  CHECK_EQ(J.placed[k].travel, JTV_NONE);
+  CHECK_EQ(J.placed[k].home_y, 0);
+  x = J.placed[i].x;
+  run_s(60);
+  CHECK_EQ(J.placed[i].x, x);
+  CHECK_EQ(J.placed[i].moving, 0);
+}
+
 /* A still thing keeps still: the same place and the same frame for a
  * minute. An old sitting item still shows its other frame now and then.
  * (None, none, calm would be all zero -- no parts at all -- so the server

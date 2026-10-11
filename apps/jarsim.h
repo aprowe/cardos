@@ -627,6 +627,9 @@ static JS_OPT int js_place(Jar *j, const JItem *it, int x, int y) {
   p->pdy = it->pdy;
   ji_parts(it, &p->travel, &p->idle, &p->lively);
   p->given = (uint8_t)(it->travel || it->idle || it->lively);
+  /* only a critter gets about: decor drifts back to its place (and carries
+   * what stands on it), so it would walk on the spot */
+  if (p->given && (p->kind != JK_CRITTER || p->role != JR_THING)) p->travel = JTV_NONE;
   if (p->given) p->move = (uint8_t)ji_move_of(p->travel, p->idle);
   if (p->role == JR_BACKGROUND) { p->kind = JK_FLOOR; p->move = JM_SITS; p->travel = JTV_NONE; }
   if (p->role == JR_FURNITURE && p->kind == JK_CRITTER) p->kind = JK_FLOOR;
@@ -1831,7 +1834,8 @@ static JS_OPT int js_step_climb(Jar *j, int i) {
   JPlaced *p = &j->placed[i];
   int c = p->climb;
   if (!c) return 0;
-  if (p->nframes > 1 && (j->steps & 7) == 0) p->cur = (uint8_t)((p->cur + 1) % p->nframes);
+  if (p->nframes > 1 && p->travel != JTV_SLIDE && (j->steps & 7) == 0)
+    p->cur = (uint8_t)((p->cur + 1) % p->nframes);
   if (c == JC_TO_UP || c == JC_TO_DOWN) {
     uint8_t f = p->flip;
     p->tx = (int32_t)JS_LEDGE_UP[c == JC_TO_UP ? p->goal : p->level] * JS_FX;

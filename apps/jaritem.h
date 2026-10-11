@@ -378,6 +378,8 @@ static JI_OPT int jitem_decode(JItem *it, const uint8_t *in, int n) {
     it->pdx = (int8_t)in[212];
     it->pdy = (int8_t)in[213];
     it->voice = in[214];
+    /* a part from a newer server is none here, as agreed: byte 72's nearer
+     * guess is not used once any part is given (ji_parts) */
     it->travel = in[215] < JTV_KINDS ? in[215] : JTV_NONE;
     it->idle = in[216] < JID_KINDS ? in[216] : JID_NONE;
     it->lively = in[217] < JLV_KINDS ? in[217] : JLV_CALM;
