@@ -549,7 +549,9 @@ static void dock(void) {
 static void item_at(int i, int *x, int *y) {
   const JPlaced *p = &J.placed[i];
   int bob = 0, ph = p->phase & 255;
-  if (p->move == JM_FLOATS || p->move == JM_SWAYS) bob = (ph < 128 ? ph : 255 - ph) * 7 / 128 - 3;
+  /* an old floater bobs and an old swayer swings; with parts of its own,
+   * the idle does that (apps/jarlive.h, lv_pose) */
+  if (!p->given && (p->move == JM_FLOATS || p->move == JM_SWAYS)) bob = (ph < 128 ? ph : 255 - ph) * 7 / 128 - 3;
   *x = p->x / JS_FX - 8;
   if (p->kind == JK_HANGING) { *y = JS_LID + p->home_y; *x += bob / 2; }
   else if (p->kind == JK_CRITTER) *y = JS_SOIL - 16 - p->lift - p->home_y - p->yoff / 16 - (p->move == JM_FLOATS ? bob : 0);

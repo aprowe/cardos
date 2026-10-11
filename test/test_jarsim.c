@@ -935,3 +935,124 @@ void test_jarsim_a_patch_runs_where_the_script_does_not(void) {
   CHECK_EQ(js_item_event(&J, b, JE_POKE, 0), 1);       /* and the other still runs */
   CHECK_EQ(js_set_patch(&J, b, (const uint8_t *)"\x09\x00", 2), -1);   /* not one this machine runs */
 }
+
+/* ---- motion as parts (2026-10-11, the item pipeline spec, section 2) ---- */
+
+static int place_moving(uint32_t id, int travel, int idle, int lively, int move) {
+  static JItem it;
+  mk_item(&it, id, JK_CRITTER, move);
+  it.travel = (uint8_t)travel;
+  it.idle = (uint8_t)idle;
+  it.lively = (uint8_t)lively;
+  return js_place(&J, &it, 120, 0);
+}
+
+/* Its own parts are kept, and the sim moves by them, not by byte 72. */
+void test_jarsim_parts_are_placed_and_drive_the_move(void) {
+  int i;
+  fresh(21);
+  i = place_moving(501, JTV_HOP, JID_NONE, JLV_CALM, JM_SITS);
+  CHECK(i >= 0);
+  CHECK_EQ(J.placed[i].travel, JTV_HOP);
+  CHECK_EQ(J.placed[i].idle, JID_NONE);
+  CHECK_EQ(J.placed[i].lively, JLV_CALM);
+  CHECK_EQ(J.placed[i].given, 1);
+  CHECK_EQ(J.placed[i].move, JM_HOPS);
+  /* an old item's come from byte 72 */
+  i = place_moving(502, 0, 0, 0, JM_SWAYS);
+  CHECK_EQ(J.placed[i].travel, JTV_NONE);
+  CHECK_EQ(J.placed[i].idle, JID_SWAY);
+  CHECK_EQ(J.placed[i].lively, JLV_NORMAL);
+  CHECK_EQ(J.placed[i].given, 0);
+  CHECK_EQ(J.placed[i].move, JM_SWAYS);
+}
+
+/* Only a critter gets about: decor and furniture with a travel keep their
+ * place (they would walk on the spot against the drift home). */
+void test_jarsim_only_critters_travel(void) {
+  static JItem it;
+  int i, k;
+  int32_t x;
+  fresh(24);
+  mk_item(&it, 531, JK_FLOOR, JM_WANDERS);
+  it.travel = JTV_CRAWL;
+  it.idle = JID_BOB;
+  it.lively = JLV_NORMAL;
+  i = js_place(&J, &it, 100, 0);
+  CHECK_EQ(J.placed[i].travel, JTV_NONE);
+  CHECK_EQ(J.placed[i].idle, JID_BOB);
+  CHECK_EQ(J.placed[i].move, JM_SITS);
+  mk_item(&it, 532, JK_CRITTER, JM_FLOATS);
+  it.role = JR_FURNITURE;
+  it.travel = JTV_FLOAT;
+  it.lively = JLV_NORMAL;
+  k = js_place(&J, &it, 160, 0);
+  CHECK_EQ(J.placed[k].travel, JTV_NONE);
+  CHECK_EQ(J.placed[k].home_y, 0);
+  x = J.placed[i].x;
+  run_s(60);
+  CHECK_EQ(J.placed[i].x, x);
+  CHECK_EQ(J.placed[i].moving, 0);
+}
+
+/* A still thing keeps still: the same place and the same frame for a
+ * minute. An old sitting item still shows its other frame now and then.
+ * (None, none, calm would be all zero -- no parts at all -- so the server
+ * writes a still thing's liveliness as normal.) */
+void test_jarsim_a_still_thing_keeps_still(void) {
+  int i, k, s, moved = 0, frames = 0, old_frames = 0;
+  int32_t x;
+  fresh(22);
+  i = place_moving(511, JTV_NONE, JID_NONE, JLV_NORMAL, JM_SITS);
+  k = place_moving(512, 0, 0, 0, JM_SITS);
+  x = J.placed[i].x;
+  for (s = 0; s < 60 * JS_HZ; s++) {
+    js_step(&J);
+    if (J.placed[i].x != x || J.placed[i].yoff) moved++;
+    if (J.placed[i].cur) frames++;
+    if (J.placed[k].cur) old_frames++;
+  }
+  CHECK_EQ(moved, 0);
+  CHECK_EQ(frames, 0);
+  CHECK(old_frames > 0);
+}
+
+/* How it travels: crawl and slide stay on the ground, a slide without
+ * stepping its legs; a hop leaves it; float and fly are off the ground,
+ * fly higher and faster. */
+void test_jarsim_travel_kinds_move_as_described(void) {
+  int c, s, h, f, y, k, mc = 0, ms = 0, sf = 0, air_c = 0, air_s = 0, hops = 0;
+  int32_t xc, xs, xf, xy, df = 0, dy = 0;
+  fresh(23);
+  c = place_moving(521, JTV_CRAWL, JID_NONE, JLV_NORMAL, JM_SITS);
+  s = place_moving(522, JTV_SLIDE, JID_NONE, JLV_NORMAL, JM_SITS);
+  h = place_moving(523, JTV_HOP, JID_NONE, JLV_NORMAL, JM_SITS);
+  f = place_moving(524, JTV_FLOAT, JID_NONE, JLV_NORMAL, JM_SITS);
+  y = place_moving(525, JTV_FLY, JID_NONE, JLV_NORMAL, JM_SITS);
+  CHECK(c >= 0 && s >= 0 && h >= 0 && f >= 0 && y >= 0);
+  CHECK_EQ(J.placed[c].home_y, 0);
+  CHECK_EQ(J.placed[s].home_y, 0);
+  CHECK(J.placed[f].home_y > 0);
+  CHECK(J.placed[y].home_y > J.placed[f].home_y);
+  xc = J.placed[c].x; xs = J.placed[s].x; xf = J.placed[f].x; xy = J.placed[y].x;
+  for (k = 0; k < 120 * JS_HZ; k++) {
+    js_step(&J);
+    if (J.placed[c].x != xc) mc++;
+    if (J.placed[s].x != xs) ms++;
+    if (J.placed[c].yoff) air_c++;
+    if (J.placed[s].yoff) air_s++;
+    if (J.placed[s].cur) sf++;
+    if (J.placed[h].yoff) hops++;
+    df += js_abs(J.placed[f].x - xf);
+    dy += js_abs(J.placed[y].x - xy);
+    xc = J.placed[c].x; xs = J.placed[s].x; xf = J.placed[f].x; xy = J.placed[y].x;
+  }
+  CHECK(mc > 0);
+  CHECK(ms > 0);
+  CHECK_EQ(air_c, 0);
+  CHECK_EQ(air_s, 0);
+  CHECK_EQ(sf, 0);
+  CHECK(hops > 0);
+  printf("    float travelled %d px, fly %d px in 2 min\n", (int)(df / JS_FX), (int)(dy / JS_FX));
+  CHECK(dy > df);
+}

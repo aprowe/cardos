@@ -270,6 +270,10 @@ typedef struct {
    * furniture's top row; and the furniture it stands on, by id (0 none) */
   uint8_t  role, scale, surface, voice;
   int8_t   pdx, pdy;
+  /* how it moves (the record's motion parts, or byte 72's when it has
+   * none -- given says which): travel drives the sim, idle and lively are
+   * drawn by the scene */
+  uint8_t  travel, idle, lively, given;
   uint32_t on_id;
   int16_t  on_lo, on_hi;               /* that furniture's top, px */
   uint16_t poff, plen;                 /* its patch in j->spool: what it learned of a newcomer */
@@ -628,7 +632,13 @@ static JS_OPT int js_place(Jar *j, const JItem *it, int x, int y) {
   p->voice = it->voice;
   p->pdx = it->pdx;
   p->pdy = it->pdy;
-  if (p->role == JR_BACKGROUND) { p->kind = JK_FLOOR; p->move = JM_SITS; }   /* scenery */
+  ji_parts(it, &p->travel, &p->idle, &p->lively);
+  p->given = (uint8_t)(it->travel || it->idle || it->lively);
+  /* only a critter gets about: decor drifts back to its place (and carries
+   * what stands on it), so it would walk on the spot */
+  if (p->given && (p->kind != JK_CRITTER || p->role != JR_THING)) p->travel = JTV_NONE;
+  if (p->given) p->move = (uint8_t)ji_move_of(p->travel, p->idle);
+  if (p->role == JR_BACKGROUND) { p->kind = JK_FLOOR; p->move = JM_SITS; p->travel = JTV_NONE; }
   if (p->role == JR_FURNITURE && p->kind == JK_CRITTER) p->kind = JK_FLOOR;
   if (p->scale == 2) p->tags |= JT_BIT(JT_BIG);
   if (it->part && p->nframes >= 2) {           /* the last frame is the part, not a pose */
@@ -650,7 +660,8 @@ static JS_OPT int js_place(Jar *j, const JItem *it, int x, int y) {
   p->home_x = (int16_t)x;
   p->home_y = (int16_t)(p->kind == JK_HANGING ? js_clamp(y, 0, 60) :
                         p->kind == JK_CRITTER && p->move == JM_FLOATS ?
-                        (p->zone == JZ_HIGH ? 64 : 26) : 0);
+                        (p->travel == JTV_FLY ? (p->zone == JZ_HIGH ? 76 : 44) :
+                         p->zone == JZ_HIGH ? 64 : 26) : 0);
   p->x = p->tx = (int32_t)x * JS_FX;
   p->say = -1;
   p->t = (int16_t)js_rr(j, 20, 120);
@@ -1869,7 +1880,8 @@ static JS_OPT int js_step_climb(Jar *j, int i) {
   JPlaced *p = &j->placed[i];
   int c = p->climb;
   if (!c) return 0;
-  if (p->nframes > 1 && (j->steps & 7) == 0) p->cur = (uint8_t)((p->cur + 1) % p->nframes);
+  if (p->nframes > 1 && p->travel != JTV_SLIDE && (j->steps & 7) == 0)
+    p->cur = (uint8_t)((p->cur + 1) % p->nframes);
   if (c == JC_TO_UP || c == JC_TO_DOWN) {
     uint8_t f = p->flip;
     p->tx = (int32_t)JS_LEDGE_UP[c == JC_TO_UP ? p->goal : p->level] * JS_FX;
@@ -1977,6 +1989,7 @@ static JS_OPT void js_step_item(Jar *j, int i) {
   js_range(p, &lo, &hi);
   switch (p->move) {
   case JM_SITS:
+    if (p->given) break;                      /* its idle is the scene's: it keeps still */
     if (--p->t <= 0) {
       if (p->cur && p->nframes > 1) { p->cur = 0; p->t = (int16_t)js_rr(j, 120, 320); }
       else if (p->nframes > 1) { p->cur = 1; p->t = 8; }
@@ -2000,19 +2013,25 @@ static JS_OPT void js_step_item(Jar *j, int i) {
     if (p->kind == JK_HANGING) break;
     if (p->moving) {
       uint8_t f = p->flip;
-      if (js_walk(&p->x, p->tx, spd, &f)) { p->moving = 0; p->t = (int16_t)js_rr(j, 40, 200); }
+      /* a flier goes twice as fast and beats its wings at twice the rate;
+       * a slider glides, no steps; the rest step their frames as they go */
+      if (js_walk(&p->x, p->tx, p->travel == JTV_FLY ? spd * 2 : spd, &f)) {
+        p->moving = 0;
+        p->t = (int16_t)js_rr(j, 40, 200);
+      }
       p->flip = f;
-      if (p->nframes > 1 && (j->steps % 6) == 0) p->cur = (uint8_t)((p->cur + 1) % p->nframes);
+      if (p->nframes > 1 && p->travel != JTV_SLIDE && (j->steps % (p->travel == JTV_FLY ? 3 : 6)) == 0)
+        p->cur = (uint8_t)((p->cur + 1) % p->nframes);
     } else if (--p->t <= 0) {
       if (js_maybe_climb(j, i)) break;
       p->tx = (int32_t)js_rr(j, lo, hi) * JS_FX;
       p->moving = 1;
-    } else if (p->move == JM_FLOATS && p->nframes > 1 && (j->steps % 8) == 0) {
+    } else if (p->move == JM_FLOATS && p->nframes > 1 && (j->steps % (p->travel == JTV_FLY ? 4 : 8)) == 0) {
       p->cur = (uint8_t)((p->cur + 1) % p->nframes);   /* wings, tentacles */
     }
     break;
-  case JM_SWAYS:
-    if (p->kind != JK_HANGING && p->nframes > 1) p->cur = (uint8_t)((p->phase >> 7) & 1);
+  case JM_SWAYS:                              /* given parts: the scene sways it */
+    if (!p->given && p->kind != JK_HANGING && p->nframes > 1) p->cur = (uint8_t)((p->phase >> 7) & 1);
     break;
   }
 }

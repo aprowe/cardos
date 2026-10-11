@@ -47,7 +47,18 @@
  *              (a birdhouse's bird); 0 none
  *   212     2  the part's home: x, y from the item's middle, px, signed
  *   214     1  voice: its sound (1..14, apps/jarvm.def's sound names), 0 none
- *   215     9  zero
+ *   215     1  travel: how it gets about -- none crawl hop slide float fly (JTV_*)
+ *   216     1  idle: what it does in place -- none sway bob wobble spin pulse
+ *              flicker blink (JID_*)
+ *   217     1  liveliness: calm normal jittery (JLV_*), the idle's pace and size
+ *   218     6  zero
+ *
+ * MOTION AS PARTS (2026-10-11, docs/superpowers/specs/
+ * 2026-10-11-jar-item-pipeline-design.md, section 2). Bytes 215-217 say how
+ * a thing moves; byte 72 is still written, with the nearest old movement
+ * (ji_move_of), so a Jar that knows only 208 bytes shows something
+ * sensible. An item whose three parts are all zero -- every item made
+ * before them -- takes its parts from byte 72 instead (ji_parts).
  *
  * A frame is 16x16 at 3 bits a pixel, 96 bytes: pixel i (row-major) is bits
  * 3i..3i+2 of the frame read as one little-endian bit string. Frame 0 is the
@@ -97,6 +108,10 @@ enum { JK_FLOOR = 0, JK_HANGING, JK_CRITTER, JK_KINDS };
 enum { JM_SITS = 0, JM_HOPS, JM_WANDERS, JM_SWAYS, JM_FLOATS, JM_KINDS };
 enum { JSP_SLOW = 0, JSP_MEDIUM, JSP_FAST, JSP_KINDS };
 enum { JZ_GARDEN = 0, JZ_WORKS, JZ_DOCK, JZ_WATER, JZ_HIGH, JZ_ANYWHERE, JZ_KINDS };
+enum { JTV_NONE = 0, JTV_CRAWL, JTV_HOP, JTV_SLIDE, JTV_FLOAT, JTV_FLY, JTV_KINDS };
+enum { JID_NONE = 0, JID_SWAY, JID_BOB, JID_WOBBLE, JID_SPIN, JID_PULSE, JID_FLICKER,
+       JID_BLINK, JID_KINDS };
+enum { JLV_CALM = 0, JLV_NORMAL, JLV_JITTERY, JLV_KINDS };
 
 /* The events (spec, "Events"). The event argument narrows a habit:
  *   tick     every N item ticks (4 a second); 0 is every tick
@@ -146,6 +161,8 @@ typedef struct {
   uint16_t script_len;
   uint8_t  price5;                       /* the price in fives; 0 none given */
   uint8_t  role, scale, surface, part, voice;   /* the longer header; 0 / 1 for a thing */
+  uint8_t  travel, idle, lively;         /* motion parts as recorded; all 0 is none
+                                          * given (ji_parts falls back to move) */
   int8_t   pdx, pdy;
   uint8_t  script[JI_SCRIPT_MAX];
   uint8_t  frames[JI_MAX_FRAMES][JI_FRAME_BYTES];
@@ -211,7 +228,33 @@ static JI_OPT void ji_get_str(char *out, const uint8_t *p, int n) {
 /* The size an item would encode to. */
 /* Does it need the longer header? */
 static JI_OPT int ji_ext(const JItem *it) {
-  return it->role || it->scale > 1 || it->surface || it->part || it->voice || it->pdx || it->pdy;
+  return it->role || it->scale > 1 || it->surface || it->part || it->voice || it->pdx || it->pdy ||
+         it->travel || it->idle || it->lively;
+}
+
+/* The old movement nearest a pair of parts: what byte 72 says. */
+static JI_OPT int ji_move_of(int travel, int idle) {
+  switch (travel) {
+  case JTV_CRAWL: case JTV_SLIDE: return JM_WANDERS;
+  case JTV_HOP: return JM_HOPS;
+  case JTV_FLOAT: case JTV_FLY: return JM_FLOATS;
+  default: return idle == JID_SWAY ? JM_SWAYS : JM_SITS;
+  }
+}
+
+/* The parts an item moves by: its own, or -- none given -- byte 72's, at
+ * normal liveliness, which is how every older item has always moved. */
+static JI_OPT void ji_parts(const JItem *it, uint8_t *travel, uint8_t *idle, uint8_t *lively) {
+  static const uint8_t T[JM_KINDS] = { JTV_NONE, JTV_HOP, JTV_CRAWL, JTV_NONE, JTV_FLOAT };
+  if (it->travel || it->idle || it->lively) {
+    *travel = it->travel;
+    *idle = it->idle;
+    *lively = it->lively;
+    return;
+  }
+  *travel = T[it->move < JM_KINDS ? it->move : JM_SITS];
+  *idle = it->move == JM_SWAYS ? JID_SWAY : JID_NONE;
+  *lively = JLV_NORMAL;
 }
 
 static JI_OPT int jitem_size(const JItem *it) {
@@ -268,6 +311,9 @@ static JI_OPT int jitem_encode(const JItem *it, uint8_t *out, int cap) {
     out[212] = (uint8_t)it->pdx;
     out[213] = (uint8_t)it->pdy;
     out[214] = it->voice;
+    out[215] = it->travel;
+    out[216] = it->idle;
+    out[217] = it->lively;
   }
   o = out[1];
   ji_copy(out + o, it->sig, it->sig_len);       o += it->sig_len;
@@ -332,6 +378,11 @@ static JI_OPT int jitem_decode(JItem *it, const uint8_t *in, int n) {
     it->pdx = (int8_t)in[212];
     it->pdy = (int8_t)in[213];
     it->voice = in[214];
+    /* a part from a newer server is none here, as agreed: byte 72's nearer
+     * guess is not used once any part is given (ji_parts) */
+    it->travel = in[215] < JTV_KINDS ? in[215] : JTV_NONE;
+    it->idle = in[216] < JID_KINDS ? in[216] : JID_NONE;
+    it->lively = in[217] < JLV_KINDS ? in[217] : JLV_CALM;
   }
 
   o = hdr;

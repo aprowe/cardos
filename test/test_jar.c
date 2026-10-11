@@ -1014,3 +1014,184 @@ void test_jar_the_days_events_come_at_their_time(void) {
   CHECK(strstr(G.msg, "Ant Parade") != 0);
   CHECK(LVE.ev[0].done);
 }
+
+/* ---- motion as parts: the idle, drawn (the item pipeline spec, section 2) ---- */
+
+/* A thing with these parts, placed on the soil with nothing else moving it. */
+static int idler(uint32_t id, int idle, int lively, int frames) {
+  static JItem it;
+  int i;
+  jf_item(&it, id, "Idler", "odd");
+  it.kind = JK_FLOOR;
+  it.move = JM_SITS;
+  it.nframes = (uint8_t)frames;
+  it.idle = (uint8_t)idle;
+  it.lively = (uint8_t)lively;
+  if (!idle && !lively) it.lively = JLV_NORMAL;      /* never all zero (decision 3) */
+  i = js_place(&J, &it, 40 + (int)(id % 8) * 20, 0);
+  CHECK(i >= 0);
+  return i;
+}
+
+typedef struct { int lo_dx, hi_dx, lo_dy, hi_dy, lo_w, hi_w, lo_h, hi_h, lo_sh, hi_sh;
+                 int flips, frames[JI_MAX_FRAMES], hides, glows, n; } PoseRange;
+
+/* Its pose at every step for `steps` steps. */
+static void pose_range(int i, int steps, PoseRange *r) {
+  LvPose o;
+  int s, last_flip = -1;
+  memset(r, 0, sizeof *r);
+  r->lo_dx = r->lo_dy = r->lo_w = r->lo_h = r->lo_sh = 999;
+  r->hi_dx = r->hi_dy = r->hi_w = r->hi_h = r->hi_sh = -999;
+  for (s = 0; s < steps; s++) {
+    J.steps++;
+    lv_pose(i, &o);
+#define RNG(f, v) do { if ((v) < r->lo_##f) r->lo_##f = (v); if ((v) > r->hi_##f) r->hi_##f = (v); } while (0)
+    RNG(dx, o.dx); RNG(dy, o.dy); RNG(w, o.w); RNG(h, o.h); RNG(sh, o.shear);
+#undef RNG
+    if (last_flip >= 0 && o.flip != last_flip) r->flips++;
+    last_flip = o.flip;
+    if (o.frame >= 0 && o.frame < JI_MAX_FRAMES) r->frames[o.frame]++;
+    if (o.hide) r->hides++;
+    if (o.glow) r->glows++;
+    r->n++;
+  }
+}
+
+/* An old item (no parts of its own) is drawn exactly as before: no idle. */
+void test_jar_old_items_have_no_idle(void) {
+  static JItem it;
+  PoseRange r;
+  int i, m;
+  start(T0);
+  for (m = 0; m < JM_KINDS * JK_KINDS; m++) {
+    jf_item(&it, 900 + (uint32_t)m, "Old", "odd");
+    it.kind = (uint8_t)(m / JM_KINDS);
+    it.move = (uint8_t)(m % JM_KINDS);
+    i = js_place(&J, &it, 30 + m * 12, 20);
+    CHECK(i >= 0);
+    CHECK_EQ(J.placed[i].given, 0);
+    pose_range(i, 400, &r);
+    CHECK(r.lo_w == 16 && r.hi_w == 16 && r.lo_h == 16 && r.hi_h == 16);
+    CHECK(r.lo_sh == 0 && r.hi_sh == 0 && r.lo_dx == 0 && r.hi_dx == 0 && r.lo_dy == 0 && r.hi_dy == 0);
+    CHECK_EQ(r.hides, 0);
+    CHECK_EQ(r.glows, 0);
+    js_unplace(&J, i);                       /* room for the next: the pool is small */
+  }
+}
+
+void test_jar_each_idle_moves_as_described(void) {
+  PoseRange r;
+  int i;
+  start(T0);
+  /* none: a still thing keeps still */
+  i = idler(910, JID_NONE, JLV_NORMAL, 2);
+  pose_range(i, 400, &r);
+  CHECK(r.lo_w == 16 && r.hi_w == 16 && r.lo_h == 16 && r.hi_h == 16 && r.lo_sh == 0 && r.hi_sh == 0);
+  CHECK(r.lo_dy == 0 && r.hi_dy == 0 && r.frames[1] == 0 && r.flips == 0);
+  /* sway: the top leans both ways, the base stays */
+  i = idler(911, JID_SWAY, JLV_NORMAL, 1);
+  pose_range(i, 400, &r);
+  CHECK(r.lo_sh < 0 && r.hi_sh > 0);
+  CHECK(r.lo_dy == 0 && r.hi_dy == 0 && r.lo_w == 16 && r.hi_h == 16);
+  /* bob: up and down, its shape the same */
+  i = idler(912, JID_BOB, JLV_NORMAL, 1);
+  pose_range(i, 400, &r);
+  CHECK(r.lo_dy < 0 && r.hi_dy > 0);
+  CHECK(r.lo_w == 16 && r.hi_w == 16 && r.lo_sh == 0 && r.hi_sh == 0);
+  /* wobble: squashed and stretched, wider as it is lower */
+  i = idler(913, JID_WOBBLE, JLV_NORMAL, 1);
+  pose_range(i, 400, &r);
+  CHECK(r.lo_h < 16 && r.hi_h > 16 && r.lo_w < 16 && r.hi_w > 16);
+  /* spin: narrows to an edge and turns over */
+  i = idler(914, JID_SPIN, JLV_NORMAL, 1);
+  pose_range(i, 400, &r);
+  CHECK(r.lo_w <= 4 && r.hi_w == 16 && r.lo_h == 16 && r.hi_h == 16);
+  CHECK(r.flips > 0);
+  /* pulse: grows and shrinks, both ways at once */
+  i = idler(915, JID_PULSE, JLV_NORMAL, 1);
+  pose_range(i, 400, &r);
+  CHECK(r.lo_w < 16 && r.hi_w > 16 && r.lo_h < 16 && r.hi_h > 16);
+  /* flicker: its frames in no order; with one frame, its glow */
+  i = idler(916, JID_FLICKER, JLV_NORMAL, 2);
+  pose_range(i, 400, &r);
+  CHECK(r.frames[0] > 40 && r.frames[1] > 40);
+  i = idler(917, JID_FLICKER, JLV_NORMAL, 1);
+  pose_range(i, 400, &r);
+  CHECK(r.glows > 40 && r.glows < 360);
+  /* blink: its last frame now and then; with one frame, gone now and then */
+  i = idler(918, JID_BLINK, JLV_NORMAL, 3);
+  pose_range(i, 800, &r);
+  CHECK(r.frames[2] > 0 && r.frames[2] < 800 / 5 && r.frames[1] == 0);
+  i = idler(919, JID_BLINK, JLV_NORMAL, 1);
+  pose_range(i, 800, &r);
+  CHECK(r.hides > 0 && r.hides < 800 / 5);
+}
+
+/* Flicker gives way: a frame a habit or script chose stays, and so does the
+ * walk. A hanging bob swings rather than leaving its string. */
+void test_jar_flicker_gives_way_and_a_hanging_bob_swings(void) {
+  static JItem it;
+  PoseRange r;
+  int i;
+  start(T0);
+  i = idler(940, JID_FLICKER, JLV_JITTERY, 3);
+  CHECK_EQ(js_act(&J, i, JA_FRAME, 2), 0);
+  pose_range(i, 200, &r);
+  CHECK_EQ(r.frames[2], 200);
+  jf_item(&it, 941, "Firefly", "odd");
+  it.kind = JK_CRITTER;
+  it.travel = JTV_CRAWL;
+  it.idle = JID_FLICKER;
+  it.lively = JLV_JITTERY;
+  i = js_place(&J, &it, 120, 0);
+  J.placed[i].moving = 1;
+  J.placed[i].cur = 1;
+  pose_range(i, 200, &r);
+  CHECK_EQ(r.frames[1], 200);
+  jf_item(&it, 942, "Bell", "odd");
+  it.kind = JK_HANGING;
+  it.idle = JID_BOB;
+  it.lively = JLV_NORMAL;
+  i = js_place(&J, &it, 100, 20);
+  pose_range(i, 400, &r);
+  CHECK(r.lo_dx < 0 && r.hi_dx > 0);
+  CHECK(r.lo_dy == 0 && r.hi_dy == 0);
+}
+
+/* Liveliness: calm is slower and smaller, jittery quicker and bigger. */
+void test_jar_liveliness_sets_pace_and_size(void) {
+  LvPose o;
+  int lv, i, s, turns[JLV_KINDS], size[JLV_KINDS];
+  start(T0);
+  for (lv = 0; lv < JLV_KINDS; lv++) {
+    int last = 0;
+    i = idler(920 + (uint32_t)lv, JID_BOB, lv, 1);
+    turns[lv] = size[lv] = 0;
+    for (s = 0; s < 800; s++) {
+      J.steps++;
+      lv_pose(i, &o);
+      if (o.dy != last && (o.dy == 0)) turns[lv]++;
+      if (o.dy > size[lv]) size[lv] = o.dy;
+      last = o.dy;
+    }
+  }
+  printf("    bob crossings in 20 s: calm %d normal %d jittery %d; size %d %d %d px\n",
+         turns[0], turns[1], turns[2], size[0], size[1], size[2]);
+  CHECK(turns[JLV_CALM] < turns[JLV_NORMAL] && turns[JLV_NORMAL] < turns[JLV_JITTERY]);
+  CHECK(size[JLV_CALM] < size[JLV_JITTERY]);
+}
+
+/* The idles on screen: a frame each, to look at (JAR_DUMP=dir). */
+void test_jar_idles_draw(void) {
+  int k;
+  start(T0);
+  fakeapi_now.synced = 1;
+  fakeapi_now.hour = 12;
+  for (k = JID_SWAY; k < JID_KINDS; k++) idler(930 + (uint32_t)k, k, JLV_JITTERY, 2);
+  ticks(700);
+  dump("50_idles_a");
+  ticks(300);
+  dump("51_idles_b");
+  CHECK(J.nplaced >= JID_KINDS - 1);
+}

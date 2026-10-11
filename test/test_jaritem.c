@@ -298,3 +298,163 @@ void test_jaritem_the_longer_header_matches_the_server(void) {
   CHECK_EQ(jitem_decode(&it, again, n - 16), 0);
   CHECK_EQ(it.scale, 1);
 }
+
+/* Motion as parts (2026-10-11, the item pipeline spec, section 2): bytes
+ * 215-217 of the longer header, and byte 72 for the readers that know only
+ * movement. */
+void test_jaritem_motion_parts_round_trip(void) {
+  static JItem a, b;
+  uint8_t buf[JI_MAX];
+  int n, i;
+  fill_item(&a, 2);
+  a.travel = JTV_SLIDE;
+  a.idle = JID_FLICKER;
+  a.lively = JLV_JITTERY;
+  n = jitem_encode(&a, buf, sizeof buf);
+  CHECK(n > 0);
+  CHECK_EQ(buf[1], JI_HDR_EXT);           /* parts alone take the longer header */
+  CHECK_EQ(buf[215], JTV_SLIDE);
+  CHECK_EQ(buf[216], JID_FLICKER);
+  CHECK_EQ(buf[217], JLV_JITTERY);
+  for (i = 218; i < JI_HDR_EXT; i++) CHECK_EQ(buf[i], 0);
+  CHECK_EQ(buf[208], JR_THING);
+  CHECK_EQ(buf[209], 1);
+  CHECK_EQ(jitem_decode(&b, buf, n), 0);
+  CHECK_EQ(b.travel, JTV_SLIDE);
+  CHECK_EQ(b.idle, JID_FLICKER);
+  CHECK_EQ(b.lively, JLV_JITTERY);
+  CHECK_EQ(b.role, JR_THING);
+}
+
+void test_jaritem_any_motion_part_takes_the_longer_header(void) {
+  static JItem a;
+  fill_item(&a, 1);
+  CHECK(!ji_ext(&a));
+  a.travel = JTV_FLY;   CHECK(ji_ext(&a)); a.travel = 0;
+  a.idle = JID_BLINK;   CHECK(ji_ext(&a)); a.idle = 0;
+  a.lively = JLV_NORMAL; CHECK(ji_ext(&a)); a.lively = 0;
+  CHECK(!ji_ext(&a));
+}
+
+/* A part this device does not know reads as none, alone: the others stay. */
+void test_jaritem_unknown_motion_part_reads_as_none(void) {
+  static JItem a, b;
+  uint8_t buf[JI_MAX];
+  int n;
+  fill_item(&a, 1);
+  a.travel = JTV_HOP;
+  a.idle = JID_BOB;
+  a.lively = JLV_NORMAL;
+  n = jitem_encode(&a, buf, sizeof buf);
+  buf[215] = 9;
+  CHECK_EQ(jitem_decode(&b, buf, n), 0);
+  CHECK_EQ(b.travel, JTV_NONE);
+  CHECK_EQ(b.idle, JID_BOB);
+  CHECK_EQ(b.lively, JLV_NORMAL);
+  buf[216] = 8;
+  buf[217] = 3;
+  CHECK_EQ(jitem_decode(&b, buf, n), 0);
+  CHECK_EQ(b.idle, JID_NONE);
+  CHECK_EQ(b.lively, JLV_CALM);
+}
+
+/* Byte 72 from the parts: the server writes it, and a Jar that knows only
+ * the 208-byte header moves by it. The table is the agreed one. */
+void test_jaritem_parts_give_the_nearest_old_movement(void) {
+  int i;
+  CHECK_EQ(ji_move_of(JTV_CRAWL, JID_NONE), JM_WANDERS);
+  CHECK_EQ(ji_move_of(JTV_SLIDE, JID_SPIN), JM_WANDERS);
+  CHECK_EQ(ji_move_of(JTV_HOP, JID_SWAY), JM_HOPS);
+  CHECK_EQ(ji_move_of(JTV_FLOAT, JID_PULSE), JM_FLOATS);
+  CHECK_EQ(ji_move_of(JTV_FLY, JID_NONE), JM_FLOATS);
+  CHECK_EQ(ji_move_of(JTV_NONE, JID_SWAY), JM_SWAYS);
+  for (i = 0; i < JID_KINDS; i++)
+    if (i != JID_SWAY) CHECK_EQ(ji_move_of(JTV_NONE, i), JM_SITS);
+}
+
+/* No parts (an old item, or a short header): they come from byte 72, at
+ * normal liveliness, so an old item moves as it always has. */
+void test_jaritem_old_movement_gives_parts(void) {
+  static JItem a;
+  static const uint8_t WANT[JM_KINDS][2] = {
+    { JTV_NONE, JID_NONE },     /* sits */
+    { JTV_HOP, JID_NONE },      /* hops */
+    { JTV_CRAWL, JID_NONE },    /* wanders */
+    { JTV_NONE, JID_SWAY },     /* sways */
+    { JTV_FLOAT, JID_NONE },    /* floats */
+  };
+  uint8_t t, d, l;
+  int m;
+  fill_item(&a, 1);
+  for (m = 0; m < JM_KINDS; m++) {
+    a.move = (uint8_t)m;
+    ji_parts(&a, &t, &d, &l);
+    CHECK_EQ(t, WANT[m][0]);
+    CHECK_EQ(d, WANT[m][1]);
+    CHECK_EQ(l, JLV_NORMAL);
+    CHECK_EQ(ji_move_of(t, d), m);        /* and back again */
+  }
+  /* parts given win over byte 72, calm included */
+  a.move = JM_HOPS;
+  a.travel = JTV_NONE;
+  a.idle = JID_PULSE;
+  a.lively = JLV_CALM;
+  ji_parts(&a, &t, &d, &l);
+  CHECK_EQ(t, JTV_NONE);
+  CHECK_EQ(d, JID_PULSE);
+  CHECK_EQ(l, JLV_CALM);
+}
+
+/* An old record (208 bytes) reads with no parts and writes back the same. */
+void test_jaritem_old_record_has_no_parts(void) {
+  static JItem a, b;
+  uint8_t buf[JI_MAX], again[JI_MAX];
+  int n;
+  fill_item(&a, 2);
+  n = jitem_encode(&a, buf, sizeof buf);
+  CHECK_EQ(buf[1], JI_HDR);
+  CHECK_EQ(jitem_decode(&b, buf, n), 0);
+  CHECK_EQ(b.travel, 0);
+  CHECK_EQ(b.idle, 0);
+  CHECK_EQ(b.lively, 0);
+  CHECK_EQ(jitem_encode(&b, again, sizeof again), n);
+  CHECK(memcmp(again, buf, (size_t)n) == 0);
+}
+
+/* The server's motion record (server/tests/test_jarstages.py --fixture):
+ * read here with its parts, its signed message the same, written back the
+ * same. */
+void test_jaritem_motion_parts_match_the_server(void) {
+  static uint8_t rec[JI_MAX + 64], want[JI_MAX], got[JI_MAX], again[JI_MAX];
+  static JItem it;
+  FILE *f = fopen("test/fixtures/jar_item_motion.bin", "rb");
+  FILE *g = fopen("test/fixtures/jar_item_motion_message.bin", "rb");
+  int n, w, m;
+  uint8_t t, d, l;
+  if (!f || !g) {
+    if (f) fclose(f);
+    if (g) fclose(g);
+    printf("  (skipped: test/fixtures/jar_item_motion*.bin not here)\n");
+    return;
+  }
+  n = (int)fread(rec, 1, sizeof rec, f);
+  w = (int)fread(want, 1, sizeof want, g);
+  fclose(f);
+  fclose(g);
+  CHECK_EQ(rec[1], JI_HDR_EXT);
+  m = ji_signed_message(rec, n, got, sizeof got);
+  CHECK(m == w && memcmp(got, want, (size_t)w) == 0);
+  CHECK_EQ(jitem_decode(&it, rec, n), 0);
+  CHECK_EQ(it.id, 4545u);
+  CHECK_EQ(it.move, JM_HOPS);
+  CHECK_EQ(it.travel, JTV_HOP);
+  CHECK_EQ(it.idle, JID_FLICKER);
+  CHECK_EQ(it.lively, JLV_JITTERY);
+  CHECK_EQ(ji_move_of(it.travel, it.idle), it.move);
+  ji_parts(&it, &t, &d, &l);
+  CHECK_EQ(t, JTV_HOP);
+  CHECK_EQ(d, JID_FLICKER);
+  CHECK_EQ(l, JLV_JITTERY);
+  CHECK_EQ(jitem_encode(&it, again, sizeof again), n);
+  CHECK(memcmp(again, rec, (size_t)n) == 0);
+}
