@@ -67,8 +67,9 @@ def exchanges(path):
 
 def main():
     st = kv.store()
-    if len(sys.argv) > 1:
-        path = sys.argv[1]
+    files = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if files:
+        path = files[0]
     else:
         sid = shopkeep._get(st, "tibbs/session", None)
         if not sid:
