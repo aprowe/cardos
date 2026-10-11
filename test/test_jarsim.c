@@ -757,3 +757,85 @@ void test_jarsim_chores_stop_the_jar_until_the_player_comes(void) {
   CHECK_EQ(js_act(&J, 0, JA_NUDGE, 0), 0);
   CHECK_EQ(J.sulk, 0);
 }
+
+
+static int place_ext(uint32_t id, int kind, int move, int x, int role, int scale, int surface,
+                     int part) {
+  static JItem it;
+  mk_item(&it, id, kind, move);
+  it.role = (uint8_t)role;
+  it.scale = (uint8_t)scale;
+  it.surface = (uint8_t)surface;
+  it.part = (uint8_t)part;
+  return js_place(&J, &it, x, 0);
+}
+
+void test_jarsim_furniture_carries_what_stands_on_it(void) {
+  int table, cup, frog, i;
+  static char buf[2048];
+  fresh(20);
+  table = place_ext(10, JK_FLOOR, JM_SITS, 120, JR_FURNITURE, 2, 4, 0);
+  cup = place_ext(11, JK_FLOOR, JM_SITS, 60, JR_THING, 1, 0, 0);
+  frog = place_ext(12, JK_CRITTER, JM_WANDERS, 100, JR_THING, 1, 0, 0);
+  CHECK(table >= 0 && cup >= 0 && frog >= 0);
+  CHECK(J.placed[table].tags & JT_BIT(JT_BIG));          /* twice the size is big */
+  CHECK_EQ(js_put_on(&J, cup, table), 0);
+  CHECK_EQ(J.placed[cup].lift, (16 - 4) * 2);              /* on its top */
+  CHECK(J.placed[cup].home_x >= 120 - 13 && J.placed[cup].home_x <= 120 + 13);
+  CHECK_EQ(js_put_on(&J, frog, table), 0);
+  CHECK_EQ(js_put_on(&J, table, cup), -1);                 /* a cup is not furniture */
+  for (i = 0; i < 60 * JS_HZ; i++) js_step(&J);
+  CHECK(J.placed[frog].x / JS_FX >= 120 - 13 && J.placed[frog].x / JS_FX <= 120 + 13);  /* stays up */
+  js_move_to(&J, table, 160, 0);
+  CHECK(J.placed[cup].home_x >= 160 - 13 && J.placed[cup].home_x <= 160 + 13);   /* carried */
+  /* saved and loaded: back on the table */
+  js_save(&J, buf, sizeof buf);
+  CHECK(strstr(buf, "place 11 ") != 0);
+  CHECK(strstr(buf, " 0 10\n") != 0);
+  {
+    static Jar K;
+    memset(&K, 0, sizeof K);
+    js_init(&K, 1);
+    CHECK_EQ(js_load(&K, buf), 0);
+    for (i = 0; i < K.nwant; i++) if (K.want[i].id == 11) CHECK_EQ(K.want[i].on, 10);
+  }
+  /* thrown off it; and when the table goes, what is on it comes down */
+  J.placed[frog].x = J.placed[cup].x + 6 * JS_FX;
+  CHECK_EQ(js_act(&J, frog, JA_THROW, 0), 0);
+  CHECK_EQ(J.placed[cup].on_id, 0);
+  CHECK_EQ(js_put_on(&J, cup, table), 0);
+  js_unplace(&J, table);
+  cup = js_find(&J, 11);
+  CHECK_EQ(J.placed[cup].on_id, 0);
+  CHECK_EQ(J.placed[cup].lift, 0);
+}
+
+void test_jarsim_scenery_and_a_part(void) {
+  int tree, house, d;
+  fresh(21);
+  tree = place_ext(30, JK_CRITTER, JM_WANDERS, 100, JR_BACKGROUND, 2, 0, 0);
+  CHECK_EQ(J.placed[tree].kind, JK_FLOOR);               /* scenery does not walk */
+  house = place_ext(31, JK_FLOOR, JM_SITS, 104, JR_THING, 1, 0, 1);
+  CHECK_EQ(js_nearest_item(&J, house, &d), -1);          /* the tree is not a neighbour */
+  CHECK_EQ(J.placed[house].part, 1);
+  CHECK_EQ(J.placed[house].nframes, 1);                  /* the last frame is the bird */
+  CHECK_EQ(js_act(&J, house, JA_FLY, 0), 0);
+  CHECK_EQ(js_act(&J, house, JA_HOME, 0), 0);
+}
+
+void test_jarsim_chores_are_saved(void) {
+  static char buf[2048];
+  static Jar K;
+  fresh(22);
+  J.sulk = 1;
+  J.puddle = 33;
+  J.bed[1].mould = 1;
+  js_save(&J, buf, sizeof buf);
+  memset(&K, 0, sizeof K);
+  js_init(&K, 1);
+  CHECK_EQ(js_load(&K, buf), 0);
+  CHECK_EQ(K.sulk, 1);
+  CHECK_EQ(K.puddle, 33);
+  CHECK_EQ(K.bed[1].mould, 1);
+  CHECK_EQ(js_chores(&K), JC_SULK | JC_PUDDLE | JC_MOULD);
+}

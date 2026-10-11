@@ -256,3 +256,45 @@ void test_jaritem_signed_message_matches_the_servers_fixture(void) {
     CHECK_EQ(it.sig_len, 64);
   }
 }
+
+
+/* The longer header (2026-10-11): what the server wrote, read here, and
+ * written back the same; what a thing writes is unchanged. */
+void test_jaritem_the_longer_header_matches_the_server(void) {
+  static uint8_t rec[JI_MAX + 64], want[JI_MAX], got[JI_MAX], again[JI_MAX];
+  static JItem it;
+  FILE *f = fopen("test/fixtures/jar_item_ext.bin", "rb");
+  FILE *g = fopen("test/fixtures/jar_item_ext_message.bin", "rb");
+  int n, w, m;
+  if (!f || !g) {
+    if (f) fclose(f);
+    if (g) fclose(g);
+    printf("  (skipped: test/fixtures/jar_item_ext*.bin not here)\n");
+    return;
+  }
+  n = (int)fread(rec, 1, sizeof rec, f);
+  w = (int)fread(want, 1, sizeof want, g);
+  fclose(f);
+  fclose(g);
+  CHECK_EQ(rec[1], JI_HDR_EXT);
+  m = ji_signed_message(rec, n, got, sizeof got);
+  CHECK(m == w && memcmp(got, want, (size_t)w) == 0);
+  CHECK_EQ(jitem_decode(&it, rec, n), 0);
+  CHECK_EQ(it.role, JR_FURNITURE);
+  CHECK_EQ(it.scale, 2);
+  CHECK_EQ(it.surface, 4);
+  CHECK_EQ(it.part, 1);
+  CHECK_EQ(it.pdx, -6);
+  CHECK_EQ(it.pdy, -9);
+  CHECK_EQ(it.voice, 2);
+  CHECK_EQ(it.nframes, 2);
+  CHECK_EQ(jitem_encode(&it, again, sizeof again), n);
+  CHECK(memcmp(again, rec, (size_t)n) == 0);
+  /* a thing keeps the short header */
+  it.role = it.scale = it.surface = it.part = it.voice = 0;
+  it.pdx = it.pdy = 0;
+  CHECK_EQ(jitem_encode(&it, again, sizeof again), n - 16);
+  CHECK_EQ(again[1], JI_HDR);
+  CHECK_EQ(jitem_decode(&it, again, n - 16), 0);
+  CHECK_EQ(it.scale, 1);
+}
