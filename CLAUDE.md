@@ -1025,6 +1025,39 @@ sunset; the jar moves its clock so they fall in dawn and dusk, tints the sky,
 dims everything in front by the hour and the weather (glowing items light
 their corner), draws rain, snow and lightning, and fires `on weather rainy:`.
 
+**The living jar** (2026-10-11, branch `jar-living` until API 46 is on
+main; design in docs/superpowers/specs/2026-10-11-jar-living-world-design.md).
+- **Language v2** (apps/jarvm.def, both machines, cross-checked fixtures):
+  `on hour/signal/world/new/berry/bumped`; `sound`, `burst`, `throw`, `eat`,
+  `drop`, `signal`, `seek`, `fly`/`home`, `boost`, `nudge`, `shake`; senses
+  incl. `traits`/`neartraits`/`newtraits` read with `has(X, TRAIT)` (a BIT op).
+  Traits are the record's tag field, sixteen words; scripts react to traits,
+  never names. A name must mean one number (water was a zone and a trait).
+- **Gated:** server/jarvm.py makes and accepts only v1 until
+  `CARDOS_JAR_V2=1` -- a device needs a jar.capp built with v2. Turn it on in
+  /etc/cardos/env after jar-living reaches devices.
+- **The sim** (apps/jarsim.h): world events (ants, leak, breeze, visitor,
+  dark, bloom) every 20-60 min; chores that stop production until the player
+  comes (snail sulks, mould, puddle; js_chores/js_fix, saved); furniture
+  (js_put_on, rides along, a fifth number on "place"); scenery; parts.
+  Coins are still only jars that left: a visitor leaves jars on the dock.
+- **The record's longer header** (224 bytes, still version 1): role, scale,
+  surface, part, part home, voice. Things keep 208 byte for byte.
+- **The scene** (apps/jarlive.h): drawing for all of it, a sound bank and a
+  sparse soundtrack (apps/synth.h, b cycles), x for chores, keep_awake.
+- **AI on the fly:** patches (server/jarpatch.py) -- a few handlers for an
+  item in the jar about a newcomer's traits, signed, fetched with the post,
+  run for events the item's own script leaves; the day's events
+  (server/jarevents.py) -- times and kinds rolled by the code, named by Claude.
+- **Deals in talk:** `coins N` before the words; `DEAL:` lines; `tx` effects
+  done once (txseen); a commission comes as a `deal` line on /jar/day.
+- **Tibbs's memory:** CARDOS_STATE/tibbs/history (every exchange), a
+  notebook every 20 turns, a seeded fresh session after 150 or a lost one;
+  tools/tibbs_backfill.py put his past in.
+
+**A shop's stock is 8 items** (2026-10-11): 2 random, 2 of Tibbs's picks, 4
+new; a paid commission is 8 new. The older note below says 4.
+
 **A shop's stock is 4 items, from a shared pool** (2026-10-10). Every item
 ever made goes into one pool (`server/jar.py`, "the pool"), and `own/ID` is
 where an item is: absent means the pool; a name means that person's shop or

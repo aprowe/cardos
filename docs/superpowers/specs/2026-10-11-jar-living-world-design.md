@@ -172,6 +172,13 @@ The same patch path carries world events written for the day by Claude from
 the jar and the real weather; and Tibbs can hand over a scripted event as
 part of a deal.
 
+## Status (2026-10-11, end of day)
+
+All stages A-H are built and host-tested on branch `jar-living`; none has
+run on a device. B-H need API 46 on main (jar data is 31 KB on this
+branch, most of the growth const tables that go to flash). Then: rebase,
+build, test on both devices, set CARDOS_JAR_V2=1 on the droplet, deploy.
+
 ## Order of work
 
 1. C (language v2 + traits) and D (events, chores) in the portable headers,
