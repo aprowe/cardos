@@ -33,8 +33,9 @@ static Msg Q[4];
 static int NQ, OFFLINE, GIFT_OK;
 static char ME[512];
 
-static char SAID[128], TXS[128];
-static int TALK_POLLS, COINS_SAID;
+static char SAID[128], TXS[128], HAVE_SAID[64], BEDS_SAID[64], WHO_SAID[16];
+static int TALK_POLLS, COINS_SAID, ITEM_GOOD;
+static uint32_t ITEM_ID;
 static int post_server(const char *m, const char *path, const char *body, char *out, int cap) {
   if (OFFLINE) return -1;
   if (!strcmp(path, "/jar/pubkey")) return snprintf(out, (size_t)cap, "%s\n", JF_PUBHEX);
@@ -50,13 +51,31 @@ static int post_server(const char *m, const char *path, const char *body, char *
     if (!NQ) return 0;
     return snprintf(out, (size_t)cap, "%u\t-\t%u\t%d\n%s\n", Q[0].id, T0, (int)strlen(Q[0].body), Q[0].body);
   }
-  if (!strcmp(path, "/jar/talk") && !strcmp(m, "POST")) {
-    const char *b = body ? body : "";
+  if (!strncmp(path, "/jar/talk", 9) && !strcmp(m, "POST")) {
+    const char *b = body ? body : "", *w = strstr(path, "who=");
+    snprintf(WHO_SAID, sizeof WHO_SAID, "%s", w ? w + 4 : "");
     COINS_SAID = -1;
-    if (!strncmp(b, "coins ", 6) && strchr(b, '\n')) { COINS_SAID = atoi(b + 6); b = strchr(b, '\n') + 1; }
+    HAVE_SAID[0] = BEDS_SAID[0] = 0;
+    for (;;) {                                  /* what the jar has, before the words */
+      const char *e = strchr(b, '\n');
+      if (!e) break;
+      if (!strncmp(b, "coins ", 6)) COINS_SAID = atoi(b + 6);
+      else if (!strncmp(b, "have ", 5)) snprintf(HAVE_SAID, sizeof HAVE_SAID, "%.*s", (int)(e - b - 5), b + 5);
+      else if (!strncmp(b, "beds ", 5)) snprintf(BEDS_SAID, sizeof BEDS_SAID, "%.*s", (int)(e - b - 5), b + 5);
+      else break;
+      b = e + 1;
+    }
     snprintf(SAID, sizeof SAID, "%s", b);
     TALK_POLLS = 0;
     return snprintf(out, (size_t)cap, "pending\n");
+  }
+  if (!strncmp(path, "/jar/item?id=", 13)) {   /* a deal's item, made again or new */
+    JItem it;
+    int k;
+    jf_item(&it, (uint32_t)atoi(path + 13), "Moth Lamp II", "glowing,night");
+    ITEM_ID = it.id;
+    k = jf_signed_b64(&it, out, cap, ITEM_GOOD);
+    return k;
   }
   if (!strncmp(path, "/jar/talk", 9)) {
     if (SAID[0] && TALK_POLLS++ < 1) return snprintf(out, (size_t)cap, "pending\nday\tA crate came in.\nme\t%s\n", SAID);
@@ -102,6 +121,8 @@ static void card(uint32_t coins) {
   GIFT_OK = 1;
   SAID[0] = 0;
   TXS[0] = 0;
+  ITEM_GOOD = 1;
+  ITEM_ID = 0;
   snprintf(ME, sizeof ME, "code K7Q2XP\nname Alex\nfriend maya\tMaya\t%u\tmutual\nfriend bo\tBo\t0\twaiting\n",
            T0 - 3 * 3600);
   fakeapi_epoch = T0;
@@ -381,6 +402,75 @@ void test_jarpost_talking_to_tibbs(void) {
   CHECK(strcmp(RAN, "Jar Factory") == 0);
 }
 
+
+/* The Town: the lane's four; Pip takes spores and alters the Moth Lamp in
+ * place -- the same id, the new record fetched, checked and written. */
+void test_jarpost_the_town_and_a_job_done(void) {
+  card(50);
+  launch("town");
+  J.res[JRS_SPORES] = 6;                         /* as if the save had said so */
+  J.res[JRS_TWIGS] = 2;
+  J.bed[0].lv = 2;
+  CHECK_EQ(G.view, V_TOWN);
+  shot("p30_town");
+  key(CAPP_KEY_DOWN);
+  key(CAPP_KEY_ENTER);
+  CHECK_EQ(G.view, V_TALK);
+  CHECK_EQ(G.npc, 1);
+  tick(20);
+  CHECK(strstr(jf_last("/jar/talk")->path, "who=pip") != 0);
+  snprintf(TXS, sizeof TXS, "tx 1 usespores 4\ntx 2 remake 7001\ntx 3 get 5\n");
+  type("make my lamp glow green");
+  key(CAPP_KEY_ENTER);
+  tick(20);
+  CHECK(strcmp(WHO_SAID, "pip") == 0);
+  CHECK_EQ(COINS_SAID, 50);
+  CHECK(strcmp(HAVE_SAID, "spores=6 nectar=0 twigs=2") == 0);
+  CHECK(strcmp(BEDS_SAID, "berry2,berry1") == 0);
+  CHECK(strcmp(SAID, "make my lamp glow green") == 0);
+  shot("p31_pip");
+  tick(9000);
+  CHECK(!TK_PENDING);
+  CHECK_EQ(J.res[JRS_SPORES], 2);
+  CHECK_EQ(ITEM_ID, 7001);                       /* fetched */
+  CHECK_EQ(J.txseen, 3);                         /* and the one after it, heard again */
+  CHECK_EQ(J.coins, 55);
+  {
+    JIo io;
+    CHECK(jst_item_read(&A, 7001, &io) >= 0);
+    CHECK(strcmp(io.it.name, "Moth Lamp II") == 0);
+  }
+  CHECK(js_owns(&J, 7001));
+  key(CAPP_KEY_ESC);
+  CHECK_EQ(G.view, V_TOWN);                      /* back to the lane, not the jar */
+  key(CAPP_KEY_ESC);
+  CHECK(strcmp(RAN, "Jar Factory") == 0);
+}
+
+/* Wren's furniture arrives as a new thing; one that fails its signature is
+ * not taken, and the deal waits. */
+void test_jarpost_a_delivery_is_checked(void) {
+  card(50);
+  launch("town");
+  key(CAPP_KEY_DOWN); key(CAPP_KEY_DOWN); key(CAPP_KEY_DOWN);
+  key(CAPP_KEY_ENTER);
+  CHECK_EQ(G.npc, 3);
+  tick(20);
+  ITEM_GOOD = 0;
+  snprintf(TXS, sizeof TXS, "tx 1 give 9100\n");
+  type("a shelf please");
+  key(CAPP_KEY_ENTER);
+  tick(9000);
+  CHECK(!js_owns(&J, 9100));
+  CHECK_EQ(J.txseen, 0);                         /* not done: asked for again later */
+  ITEM_GOOD = 1;
+  type("hello?");
+  key(CAPP_KEY_ENTER);
+  tick(9000);
+  CHECK(js_owns(&J, 9100));
+  CHECK_EQ(J.txseen, 1);
+  CHECK(fakefs_exists("/var/jar/items/9100.itm"));
+}
 
 /* A deal struck in talk: he took 120 coins and the Moth Lamp, gave 30 back;
  * each done once, even when the same lines come again. */

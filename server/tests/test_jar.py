@@ -127,10 +127,16 @@ class Stub:
                 return {"items": b}
             out = []
             kinds = schema["properties"]["items"]["items"]["properties"]["kind"]["enum"]
+            req = schema["properties"]["items"]["items"]["required"]
             for _ in range(n):
                 self.serial += 1
-                out.append(raw_item("Thing %d" % self.serial, kind=kinds[0] if len(kinds) == 1
-                                    else "critter"))
+                it = raw_item("Thing %d" % self.serial, kind=kinds[0] if len(kinds) == 1
+                              else "critter")
+                if "surface" in req:
+                    it["surface"] = 4
+                if "traits" in req:
+                    it["traits"] = ["cosy"]
+                out.append(it)
             return {"items": out}
 
 
@@ -640,9 +646,9 @@ class VersionTwo(unittest.TestCase):
             whens = s["properties"]["habits"]["items"]["properties"]["when"]["enum"]
             self.assertNotIn("hour", whens)
             self.assertNotIn("burst", s["properties"]["habits"]["items"]["properties"]["do"]["enum"])
-            p = jar.prompt_for("a brass beetle", kind="critter", form="furniture")
+            p = jar.prompt_for("a brass beetle", kind="critter", form="scenery")
             self.assertNotIn("burst", p)
-            self.assertNotIn("furniture", p)
+            self.assertNotIn("scenery", p)                     # furniture is Wren's: always
 
     def test_the_prompt_and_the_schema(self):
         p = jar.prompt_for("a bird table", kind="floor", form="furniture")
@@ -699,6 +705,123 @@ class VersionTwo(unittest.TestCase):
         self.assertEqual(jar.traits_tags(["clockwork", "fragile", "spooky", "music"]),
                          "clockwork,fragile,spooky")             # 24 bytes at most
         self.assertEqual(jar.traits_tags(["Food", "food"]), "food")
+
+
+class Town(unittest.TestCase):
+    """Pip, Bramble and Wren: their deals and their jobs (server/town.py)."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        os.environ["CARDOS_STATE"] = self.dir
+        sign.forget_cached()
+        self.stub = Stub()
+        p = mock.patch("server.ask.ask_shape", self.stub)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch("server.sign.sign", test_signer)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def tearDown(self):
+        kv.close_all()
+        sign.forget_cached()
+        os.environ.pop("CARDOS_STATE", None)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def own(self, item_id, name="Owl", kind="critter"):
+        st = kv.store()
+        it = jar.to_item(raw_item(name, kind=kind), item_id, 1791504000, "shiny")
+        st.put(jar.NS, "rec/%d" % item_id, jar.seal(jar.encode(it), test_signer))
+        st.put(jar.NS, "own/%d" % item_id, b"alex")
+        return st
+
+    def test_what_the_device_says_it_has(self):
+        from server import town
+        coins, have, beds, words = town.parse_have(
+            "coins 40\nhave spores=3 nectar=1 twigs=12 gold=9\nbeds berry1,reed2,shroom3\nhello there")
+        self.assertEqual((coins, have, beds, words),
+                         (40, {"spores": 3, "nectar": 1, "twigs": 12},
+                          [("berry", 1), ("reed", 2), ("shroom", 3)], "hello there"))
+        self.assertEqual(town.parse_have("just words")[3], "just words")
+        ctx = town.context("alex", 40, have, beds)
+        self.assertIn("3 spores, 1 nectar, 12 twigs", ctx)
+        self.assertIn("2: reed, level 2", ctx)
+
+    def test_pip_alters_an_item_in_place(self):
+        from server import town
+        st = self.own(501)
+        before = st.get(jar.NS, "rec/501")
+        why = town.make_deal("pip", "alex", {"spend": {"spores": 4},
+                                             "modify": {"item": 501, "how": "make it glow"}},
+                             coins=10, have={"spores": 5}, store=st, sync=True)
+        self.assertIsNone(why)
+        after = st.get(jar.NS, "rec/501")
+        self.assertNotEqual(after, before)
+        self.assertEqual(jar.decode(after)["id"], 501)          # the same thing, made again
+        self.assertTrue(jar.verified(after, test_pub()))
+        self.assertIn("make it glow", self.stub.calls[-1][1])
+        self.assertIn("frame 0:", self.stub.calls[-1][1])       # it was shown the old one
+        ops = [(t["op"], t["arg"]) for t in shopkeep.txs("alex", st)]
+        self.assertEqual(ops, [("usespores", 4), ("remake", 501)])
+        self.assertIn("altered", shopkeep._get(st, "tibbs/events", [])[-1])   # the lane hears
+        self.assertIn("altered", shopkeep._get(st, "wren/events", [])[-1])
+
+    def test_what_cannot_be_done_is_refused(self):
+        from server import town
+        st = self.own(502, "Lamp", "floor")
+        self.assertIn("only 1 spores", town.make_deal(
+            "pip", "alex", {"spend": {"spores": 4}, "modify": {"item": 502, "how": "x"}},
+            have={"spores": 1}, store=st))
+        self.assertIn("do not own", town.make_deal(
+            "pip", "alex", {"spend": {"spores": 1}, "modify": {"item": 9, "how": "x"}},
+            have={"spores": 5}, store=st))
+        self.assertIn("only a critter", town.make_deal(
+            "bramble", "alex", {"spend": {"nectar": 5}, "evolve": {"item": 502}},
+            have={"nectar": 9}, store=st))
+        self.assertIn("as good as it gets", town.make_deal(
+            "bramble", "alex", {"spend": {"nectar": 9}, "grow": {"bed": 1}},
+            have={"nectar": 9}, beds=[("berry", 3)], store=st))
+        self.assertIn("is 6 nectar", town.make_deal(
+            "bramble", "alex", {"spend": {"nectar": 3}, "grow": {"bed": 1}},
+            have={"nectar": 9}, beds=[("berry", 2)], store=st))
+        self.assertEqual(shopkeep.txs("alex", st), [])          # nothing taken for any of it
+
+    def test_bramble_grows_a_bed_and_evolves_a_critter(self):
+        from server import town
+        st = self.own(503, "Newt", "critter")
+        self.assertIsNone(town.make_deal("bramble", "alex", {"spend": {"nectar": 3}, "grow": {"bed": 2}},
+                                         have={"nectar": 4}, beds=[("berry", 1), ("flower", 1)],
+                                         store=st))
+        self.assertIsNone(town.make_deal("bramble", "alex",
+                                         {"spend": {"nectar": 5}, "evolve": {"item": 503, "how": "wings"}},
+                                         have={"nectar": 5}, store=st, sync=True))
+        ops = [(t["op"], t["arg"]) for t in shopkeep.txs("alex", st)]
+        self.assertEqual(ops, [("usenectar", 3), ("bedup", 1), ("usenectar", 5), ("remake", 503)])
+        self.assertIn("evolved form", self.stub.calls[-1][1])
+
+    def test_wren_builds_to_order(self):
+        from server import town
+        st = kv.store()
+        self.assertIsNone(town.make_deal("wren", "alex",
+                                         {"spend": {"twigs": 5}, "build": {"what": "a two-tier shelf"}},
+                                         have={"twigs": 6}, store=st, sync=True))
+        ops = [(t["op"], t["arg"]) for t in shopkeep.txs("alex", st)]
+        self.assertEqual(ops[0], ("usetwigs", 5))
+        self.assertEqual(ops[1][0], "give")
+        it = jar.decode(st.get(jar.NS, "rec/%d" % ops[1][1]))
+        self.assertEqual(it["role"], 1)                         # furniture
+        self.assertEqual(st.get(jar.NS, "own/%d" % ops[1][1]), b"alex")
+        self.assertIn("two-tier shelf", self.stub.calls[-1][1])
+
+    def test_a_job_that_fails_gives_the_resources_back(self):
+        from server import town
+        st = self.own(504)
+        self.stub.batches = [ValueError("no"), ValueError("no"), ValueError("no")]
+        town.make_deal("pip", "alex", {"spend": {"spores": 3}, "modify": {"item": 504, "how": "x"}},
+                       have={"spores": 3}, store=st, sync=True)
+        ops = [(t["op"], t["arg"]) for t in shopkeep.txs("alex", st)]
+        self.assertEqual(ops, [("usespores", 3), ("gainspores", 3)])
+        self.assertIn("owe them a redo", shopkeep._get(st, "pip/events", [])[-1])
 
 
 class Events(unittest.TestCase):
@@ -911,7 +1034,7 @@ class Shopkeeper(unittest.TestCase):
     def test_the_notebook_is_kept_every_so_many_turns(self):
         ran = []
         with mock.patch("server.shopkeep.NOTE_EVERY", 2), \
-                mock.patch("server.shopkeep.update_notebook", lambda c, s: ran.append(1)):
+                mock.patch("server.shopkeep.update_notebook", lambda c, s, *w: ran.append(1)):
             shopkeep.turn(object(), "a", "alex")
             self.assertEqual(ran, [])
             shopkeep.turn(object(), "b", "alex")

@@ -172,12 +172,12 @@ void test_jarstore_garden_grows_in_real_time(void) {
   js_init(&J, 3);
   J.nbeds = 4;
   CHECK_EQ(js_garden_mix(&J, mix), 4);              /* the starting beds are grown */
-  CHECK_EQ(mix[JPL_BERRY], 1);
+  CHECK_EQ(mix[JPL_BERRY], 2);
   CHECK_EQ(mix[JPL_SHROOM], 1);
-  js_plant(&J, 1, JPL_CACTUS, T0);
+  js_plant(&J, 1, JPL_FLOWER, T0);
   CHECK(J.bed[1].young);
   CHECK_EQ(js_garden_mix(&J, mix), 3);
-  CHECK_EQ(mix[JPL_CACTUS], 0);
+  CHECK_EQ(mix[JPL_FLOWER], 0);
   CHECK_EQ(js_bed_days(&J.bed[1], T0 + 3600), 3);
   CHECK_EQ(js_bed_days(&J.bed[1], T0 + 86400 * 2 + 10), 1);
   js_settle_beds(&J, T0 + 86400 * 2);
@@ -186,9 +186,9 @@ void test_jarstore_garden_grows_in_real_time(void) {
   CHECK(!J.bed[1].young);
   CHECK_EQ(J.bed[1].at, 0);
   CHECK_EQ(js_garden_mix(&J, mix), 4);
-  CHECK_EQ(mix[JPL_CACTUS], 1);
+  CHECK_EQ(mix[JPL_FLOWER], 1);
   /* with no clock a plant waits, and starts counting when one comes */
-  js_plant(&J, 2, JPL_FERN, 0);
+  js_plant(&J, 2, JPL_REED, 0);
   CHECK_EQ(J.bed[2].at, 1);
   CHECK_EQ(js_bed_days(&J.bed[2], 0), -1);
   js_settle_beds(&J, 0);
@@ -202,8 +202,8 @@ void test_jarstore_a_young_bed_makes_no_jam(void) {
   int i, picked = 0;
   memset(&J, 0, sizeof J);
   js_init(&J, 5);
-  js_plant(&J, 0, JPL_FLOWER, T0);
-  js_plant(&J, 1, JPL_FLOWER, T0);
+  js_plant(&J, 0, JPL_BERRY, T0);
+  js_plant(&J, 1, JPL_BERRY, T0);
   CHECK_EQ(js_rate_ph(&J), 0);
   for (i = 0; i < 120 * JS_HZ; i++) {
     js_step(&J);

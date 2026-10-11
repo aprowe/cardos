@@ -200,9 +200,9 @@ void test_jar_the_shop_and_the_post_are_screens_of_one_app(void) {
   CHECK_EQ(J.nplaced, placed);                       /* everything back where it was */
   CHECK(J.coins < before);                           /* and the purchase kept */
   ticks(200);
-  key('t');                                          /* Tibbs */
+  key('t');                                          /* the Town */
   CHECK_EQ(SCREEN, SC_POST);
-  CHECK_EQ(POST_P->g.view, V_TALK);
+  CHECK_EQ(POST_P->g.view, V_TOWN);
   key(CAPP_KEY_ESC);
   CHECK_EQ(SCREEN, SC_JAR);
   CHECK_EQ(J.nplaced, placed);
@@ -286,7 +286,7 @@ void test_jar_tibbs_from_the_shop_goes_back_to_the_shop(void) {
 
 void test_jar_keys_open_the_companions_after_saving(void) {
   static const struct { int k; const char *app, *screen; } K[] = {
-    { 's', "Jar Shop", "shop" }, { 'p', "Jar Shop", "garden" }, { 't', "Jar Post", "talk" },
+    { 's', "Jar Shop", "shop" }, { 'p', "Jar Shop", "garden" }, { 't', "Jar Post", "town" },
     { 'u', "Jar Shop", "up" }, { 'f', "Jar Post", "friends" }, { 'm', "Jar Post", "mail" },
   };
   int i;
@@ -637,7 +637,7 @@ void test_jar_a_gift_floats_down_and_a_thank_you_is_hearts(void) {
 
 void test_jar_a_young_bed_in_the_scene(void) {
   start(T0);
-  js_plant(&J, 0, JPL_CACTUS, T0 - 86400);
+  js_plant(&J, 0, JPL_FLOWER, T0 - 86400);
   save();
   reopen();
   CHECK(J.bed[0].young);
@@ -922,6 +922,59 @@ void test_jar_patches_arrive_signed_and_stay(void) {
   k = js_find(&J, id);
   CHECK(k >= 0 && J.placed[k].plen == sizeof patch);   /* it still knows */
   CHECK_EQ(J.patchseen, 2);
+}
+
+
+/* The lane's deals reach the jar while it is open: the stores, a bed's
+ * level, and an item in the jar made again, put back where it stood. */
+static char TX_LINES[256];
+static int TX_ITEM_GOOD = 1;
+static int tx_server(const char *m, const char *path, const char *body, char *out, int cap) {
+  if (!strncmp(path, "/jar/tx?after=", 14)) {
+    if (atoi(path + 14) >= 3) return 0;
+    return snprintf(out, (size_t)cap, "%s", TX_LINES);
+  }
+  if (!strncmp(path, "/jar/item?id=", 13)) {
+    JItem it;
+    jf_item(&it, (uint32_t)atoi(path + 13), "Glow Moth", "glowing");
+    return jf_signed_b64(&it, out, cap, TX_ITEM_GOOD);
+  }
+  return patch_server(m, path, body, out, cap);
+}
+
+void test_jar_the_lanes_deals_reach_the_open_jar(void) {
+  uint32_t id;
+  int k, x;
+  start(T0);
+  jst_put(&A, JST_PUB, JF_PUBHEX, (int)strlen(JF_PUBHEX));
+  id = J.placed[0].id;
+  x = J.placed[0].home_x;
+  J.res[JRS_TWIGS] = 5;
+  snprintf(TX_LINES, sizeof TX_LINES, "tx 1 usetwigs 4\ntx 2 remake %u\ntx 3 bedup 1\n", (unsigned)id);
+  PATCH_LINES[0] = 0;
+  jf_handler = tx_server;
+  GIFTS = 0;
+  THANKS = 0;
+  TX_ITEM_GOOD = 0;                                    /* a forged delivery: nothing past it */
+  ticks(4000);
+  CHECK_EQ(J.res[JRS_TWIGS], 1);
+  CHECK_EQ(J.txseen, 1);
+  CHECK_EQ(js_bed_lv(&J.bed[1]), 1);
+  TX_ITEM_GOOD = 1;
+  NET_UP = 1;
+  ticks(10 * 60 * 1000);                               /* the next poll */
+  CHECK_EQ(J.txseen, 3);
+  CHECK_EQ(js_bed_lv(&J.bed[1]), 2);
+  k = js_find(&J, id);
+  CHECK(k >= 0);
+  CHECK_EQ(J.placed[k].home_x, x);
+  {
+    JIo io;
+    CHECK(jst_item_read(&A, id, &io) >= 0);
+    CHECK(strcmp(io.it.name, "Glow Moth") == 0);
+  }
+  CHECK(strstr(fakefs_get("/var/jar/jar.txt"), "level 1 2") != 0);
+  dump("40_resources");
 }
 
 

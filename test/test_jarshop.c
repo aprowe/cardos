@@ -179,13 +179,13 @@ void test_jarshop_upgrades(void) {
 void test_jarshop_garden_plants_and_asks_before_pulling_up(void) {
   card(200);
   launch("garden");
-  CHECK_EQ(SEEDS[JPL_CACTUS], 1);         /* a card with no seeds file starts with one of each */
+  CHECK_EQ(SEEDS[JPL_FLOWER], 1);         /* a card with no seeds file starts with one of each */
   CHECK_EQ(G.view, V_GARDEN);
   shot("s06_garden");
   key(CAPP_KEY_ENTER);                    /* bed 1: a grown berry bush */
   CHECK_EQ(G.view, V_PLANT);
   key(CAPP_KEY_DOWN); key(CAPP_KEY_DOWN); key(CAPP_KEY_DOWN); key(CAPP_KEY_DOWN);
-  CHECK_EQ(G.plant, JPL_CACTUS);
+  CHECK_EQ(G.plant, JPL_FLOWER);
   shot("s07_plant");
   key(CAPP_KEY_ENTER);
   CHECK(G.asking);                        /* it is grown: sure? */
@@ -197,24 +197,24 @@ void test_jarshop_garden_plants_and_asks_before_pulling_up(void) {
   CHECK_EQ(J.bed[0].type, JPL_BERRY);
   key(CAPP_KEY_ENTER);
   key('y');
-  CHECK_EQ(J.bed[0].type, JPL_CACTUS);
+  CHECK_EQ(J.bed[0].type, JPL_FLOWER);
   CHECK(J.bed[0].young);
   CHECK_EQ(J.coins, 200);                 /* seeds, not coins */
-  CHECK_EQ(SEEDS[JPL_CACTUS], 0);
-  CHECK(strcmp(fakefs_get("/var/jar/seeds.txt"), "1 1 1 1 0 ") == 0);
-  CHECK(strstr(saved(), "plant 4 1800000000 ") != 0);
+  CHECK_EQ(SEEDS[JPL_FLOWER], 0);
+  CHECK(strcmp(fakefs_get("/var/jar/seeds.txt"), "1 1 1 0 ") == 0);
+  CHECK(strstr(saved(), "plant 3 1800000000 ") != 0);
   CHECK_EQ(G.view, V_GARDEN);
   /* a young bed is replanted without asking */
   key(CAPP_KEY_ENTER);
   key(CAPP_KEY_UP);
   key(CAPP_KEY_ENTER);
   CHECK(!G.asking);
-  CHECK_EQ(J.bed[0].type, JPL_FLOWER);
-  /* no cactus seeds left: nothing planted */
+  CHECK_EQ(J.bed[0].type, JPL_SHROOM);
+  /* no flower seeds left: nothing planted */
   key(CAPP_KEY_ENTER);
   key(CAPP_KEY_DOWN);
   key(CAPP_KEY_ENTER);
-  CHECK_EQ(J.bed[0].type, JPL_FLOWER);
+  CHECK_EQ(J.bed[0].type, JPL_SHROOM);
   CHECK(strstr(U.msg, "No seeds") != 0);
   key(CAPP_KEY_ESC);
   /* beds not bought yet */
@@ -541,7 +541,7 @@ void test_jarshop_a_refused_item_is_said_and_not_fetched_again(void) {
 static int tibbs_server(const char *m, const char *path, const char *body, char *out, int cap) {
   if (!strcmp(path, "/jar/day") && strcmp(m, "POST"))
     return snprintf(out, (size_t)cap, "ok 2027-01-15\ntags \nitems 3\nbatch 9\n"
-                    "say Power went out, so I sorted the back shelf by candle.\nseed fern 25\n");
+                    "say Power went out, so I sorted the back shelf by candle.\nseed reed 25\n");
   if (!strncmp(path, "/jar/item?i=", 12)) {
     JItem it;
     int k = atoi(path + 12), n;
@@ -653,20 +653,20 @@ void test_jarshop_tibbs_and_his_seed_packets(void) {
   CHECK(fakefs_exists("/var/jar/say.txt"));
   CHECK_EQ(S.price[0], 450);                  /* the server's price */
   CHECK(S.price[1] >= 45 && S.price[1] <= 200); /* none given: worked out as before */
-  CHECK_EQ(S.seed, JPL_FERN + 1);
+  CHECK_EQ(S.seed, JPL_REED + 1);
   CHECK_EQ(S.seed_price, 25);
   CHECK(!G.tile[1].seed && !G.tile[2].seed && G.tile[3].seed);   /* only the last is seeds */
   shot("s14_tibbs");
   /* the seed packet is the last tile */
   key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT); key(CAPP_KEY_RIGHT);
   CHECK(U.card.seed);
-  CHECK(strcmp(U.name, "fern seeds") == 0);
+  CHECK(strcmp(U.name, "reed seeds") == 0);
   shot("s15_seeds");
   key(' ');                                   /* seeds are not held */
   CHECK_EQ(S.held, 0);
   key(CAPP_KEY_ENTER);
   CHECK_EQ((int)J.coins, 475);
-  CHECK_EQ(SEEDS[JPL_FERN], 2);
+  CHECK_EQ(SEEDS[JPL_REED], 2);
   CHECK(S.seed_sold);
   CHECK(strstr(fakefs_get("/var/jar/stock.txt"), "seed 2 25 1") != 0);
   key(CAPP_KEY_ENTER);                        /* sold: once */

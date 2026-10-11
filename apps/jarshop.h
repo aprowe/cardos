@@ -9,7 +9,7 @@
  * THE DAILY STOCK (spec step 5; server/jar.py). When the shop opens and its
  * stock is not today's (UTC), it asks in the background, one request at a
  * time, never blocking:
- *   POST /jar/day   "garden mushroom=N,berry=N,fern=N,flower=N,cactus=N"
+ *   POST /jar/day   "garden mushroom=N,berry=N,reed=N,flower=N"
  *                   (grown beds), "shelf TAG,..." (the shelved items'
  *                   tags), "owned NAME,..." (up to 40), "tz ZONE"
  *   GET  /jar/day   again every 3 s while it says "pending", until
@@ -88,8 +88,8 @@ static ShopMem SHOP_MEM;
 #define FIND_N       8
 
 static const char *const UP_NAME[JU_KINDS] = { "Another mossling", "Another machine", "Faster belt", "Another bed" };
-static const int PLANT_SPR[JPL_KINDS] = { SPR_BUSH, SPR_FERN, SPR_SHROOM, SPR_FLOWER, SPR_CACTUS };
-static const char *const SHORT[JPL_KINDS] = { "berry", "fern", "shroom", "flower", "cactus" };
+static const int PLANT_SPR[JPL_KINDS] = { SPR_BUSH, SPR_REED, SPR_SHROOM, SPR_FLOWER };
+#define SHORT JS_PLANT_SHORT
 
 /* ---- the grids ------------------------------------------------------------------- */
 
@@ -624,7 +624,8 @@ static void paint_garden(void) {
         box(bx + 19, y + 44 - h, 3, 2, CAPP_RGB(0x5a, 0xa8, 0x48));
       } else spr(PLANT_SPR[bd->type % JPL_KINDS], bx + 6, y + 14, 2, C_PANEL);
       text(bx + 18 - slen(SHORT[bd->type % JPL_KINDS]) * 3, y + 46, SHORT[bd->type % JPL_KINDS], C_TEXT, C_PANEL);
-      if (!bd->young) api->fmt(b, sizeof b, "grown");
+      if (!bd->young && js_bed_lv(bd) > 1) api->fmt(b, sizeof b, "level %d", js_bed_lv(bd));
+      else if (!bd->young) api->fmt(b, sizeof b, "grown");
       else if (d < 0) api->fmt(b, sizeof b, "paused");
       else api->fmt(b, sizeof b, "%d day%s", d, d == 1 ? "" : "s");
       text(bx + 18 - slen(b) * 3, y + 54, b, bd->young ? C_DIM : C_TRAIT, C_PANEL);
@@ -640,8 +641,9 @@ static void paint_garden(void) {
     text(x + 13, BAR + 71, b, SEEDS[i] ? C_GOLD : C_DIM, C_BG);
     x += 36;
   }
-  text(6, BAR + 91, "Plants take 3 real days; grown", C_DIM, C_BG);
-  text(6, BAR + 99, "ones make jam. Seeds: the shop.", C_DIM, C_BG);
+  text(6, BAR + 87, "Berries: jam. Reed: twigs. Mushroom:", C_DIM, C_BG);
+  text(6, BAR + 95, "spores. Flower: nectar. 3 days to grow;", C_DIM, C_BG);
+  text(6, BAR + 103, "the shop sells seeds. T: the Town.", C_DIM, C_BG);
 }
 
 static void paint_plant(void) {
@@ -656,6 +658,11 @@ static void paint_plant(void) {
     if (i == G.plant) outline(4, y, SW - 8, 17, C_GOLD);
     pic(SPRITES[PLANT_SPR[i]].px, SPRITES[PLANT_SPR[i]].pal, 0, 12, 14, 7, y + 1, 1, C_PANEL);
     text(24, y + 1, JS_PLANT_NAME[i], C_TEXT, C_PANEL);
+    {
+      static const char *const MAKES[JPL_KINDS] = {
+        "jam, for coins", "twigs, for Wren", "spores, for Pip", "nectar, for Bramble" };
+      text(24, y + 9, MAKES[i], C_DIM, C_PANEL);
+    }
     api->fmt(b, sizeof b, "%d seed%s", SEEDS[i], SEEDS[i] == 1 ? "" : "s");
     text(SW - 10 - slen(b) * 6, y + 5, b, SEEDS[i] ? C_GOLD : C_DIM, C_PANEL);
   }
@@ -676,7 +683,7 @@ static void shop_paint(void *st, CRect c) {
   static const char *const H_PICK[] = { "Ent", "choose", "Esc", "back", 0 };
   static const char *const H_CARD[] = { "Ent", "in jar", "G", "gift", "Esc", "back", 0 };
   static const char *const H_UP[] = { "^v", "pick", "Ent", "buy", "Esc", "jar", 0 };
-  static const char *const H_GARDEN[] = { "<>", "bed", "Ent", "plant", "Esc", "jar", 0 };
+  static const char *const H_GARDEN[] = { "<>", "bed", "Ent", "plant", "T", "town", "Esc", "jar", 0 };
   static const char *const H_PLANT[] = { "^v", "pick", "Ent", "plant", "Esc", "back", 0 };
   const char *const *h = H_STOCK;
   const char *where = "Shop";
@@ -863,6 +870,10 @@ static int key_garden(int k) {
   switch (k) {
   case CAPP_KEY_LEFT:  if (G.bed > 0) G.bed--; return 1;
   case CAPP_KEY_RIGHT: if (G.bed < JS_MAX_BEDS - 1) G.bed++; return 1;
+  case 't': case 'T':                             /* Bramble grows beds: the Town */
+    save();
+    if (ui_run("Jar Post", "town") != 0) say("No Jar Post app");
+    return 1;
   case CAPP_KEY_ENTER:
     if (G.bed >= J.nbeds) { say("More beds are in Upgrades"); return 1; }
     G.view = V_PLANT;

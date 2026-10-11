@@ -70,11 +70,12 @@
 #define C_PINK   CAPP_RGB(0xff, 0x8f, 0xab)
 
 enum { V_JAR = 0, V_DECOR };
-enum { Q_IDLE = 0, Q_LEN, Q_PEEK, Q_THANKS, Q_ACK, Q_SKY, Q_PATCH, Q_EVENTS };   /* the post, the sky, ... */
+enum { Q_IDLE = 0, Q_LEN, Q_PEEK, Q_THANKS, Q_ACK, Q_SKY, Q_PATCH, Q_EVENTS, Q_TX, Q_ITEM };   /* the post, the sky, ... */
 #define SKY_EVERY_MS (30u * 60u * 1000u) /* how often to ask after the real sky */
 
 static const CardApi *api;
 static Jar J;
+#include "apps/jartx.h"
 
 /* The strip, and the same memory for the card and the network, which never
  * happen while a strip is being drawn -- and for the shop and post screens'
@@ -112,6 +113,7 @@ static struct {
   /* the menu: big tiles in place of seven squeezed words */
   int menu, msel;
   int lit[4];                           /* the light on everything: towards r g b, by a/256 */
+  JTx fx;                               /* a deal waiting on its item (apps/jartx.h) */
 } G;
 
 /* The real sky (GET /jar/sky): kept across the shop and the post, which
@@ -440,7 +442,9 @@ static void ledges(void) {
   shade(x0 + 14, y + 3, x1 - x0 - 18, 70);
 }
 
-static const int PLANT[5] = { SPR_BUSH, SPR_FERN, SPR_SHROOM, SPR_FLOWER, SPR_CACTUS };
+static const int PLANT[JPL_KINDS] = { SPR_BUSH, SPR_REED, SPR_SHROOM, SPR_FLOWER };
+/* What a ripe plant shows, and a mossling carries (JMoss.carry - 1). */
+static const int PRODUCE[JPL_KINDS] = { SPR_BERRY, SPR_TWIG, SPR_SPORE, SPR_NECTAR };
 
 static void garden(void) {
   int i;
@@ -456,8 +460,12 @@ static void garden(void) {
       fill(bx + 1 + sway, JS_SOIL - 5, 2, 1, g);
       continue;
     }
-    spr(PLANT[J.bed[i].type % 5], (int)((J.steps / 48 + (uint32_t)i) & 1), bx - 6, JS_SOIL - 13, 0);
-    if (J.bed[i].ready) spr(SPR_BERRY, 0, bx - 2, JS_SOIL - 15 + (int)((J.steps / 20 + (uint32_t)i) & 1), 0);
+    spr(PLANT[J.bed[i].type % JPL_KINDS], (int)((J.steps / 48 + (uint32_t)i) & 1), bx - 6, JS_SOIL - 13, 0);
+    {                                         /* its level: a pip a level past the first */
+      int l;
+      for (l = 1; l < js_bed_lv(&J.bed[i]); l++) px(bx - 4 + 2 * l, JS_SOIL - 1, rgb(0xff, 0xd1, 0x66));
+    }
+    if (J.bed[i].ready) spr(PRODUCE[J.bed[i].type % JPL_KINDS], 0, bx - 2, JS_SOIL - 15 + (int)((J.steps / 20 + (uint32_t)i) & 1), 0);
     else if (J.bed[i].grow > JS_GROW_MS * 2 / 3) px(bx, JS_SOIL - 13, rgb(0xd2, 0x80, 0x90));
   }
   /* the pond: a bottle cap of water */
@@ -562,7 +570,7 @@ static void workers(void) {
     const JMoss *m = &J.moss[k];
     int x = m->x / JS_FX - 5, y = JS_SOIL - 9 - m->yoff;
     spr(SPR_MOSS, m->frame, x, y, m->face);
-    if (m->carry) spr(SPR_BERRY, 0, x + 3, y - 4, 0);
+    if (m->carry) spr(PRODUCE[(m->carry - 1) % JPL_KINDS], 0, x + 3, y - 4, 0);
   }
   if (J.snail.st != S_AWAY) {
     const JSnail *s = &J.snail;
@@ -731,9 +739,9 @@ static void text2(int x, int y, const char *s, uint16_t c) {
 
 /* The jar's menu: Enter opens it, every command a big tile with its key in
  * the corner (the letters still work from the jar without it). */
-enum { M_SHOP, M_STUFF, M_DECOR, M_GARDEN, M_TIBBS, M_UP, M_FRIENDS, M_MAIL, M_N };
+enum { M_SHOP, M_STUFF, M_DECOR, M_GARDEN, M_TOWN, M_UP, M_FRIENDS, M_MAIL, M_N };
 static const char *const MENU_NAME[M_N] = {
-  "Shop", "My Stuff", "Decorate", "Garden", "Tibbs", "Upgrades", "Friends", "Mail" };
+  "Shop", "My Stuff", "Decorate", "Garden", "Town", "Upgrades", "Friends", "Mail" };
 static const char MENU_KEY[M_N] = { 'S', 'I', 'D', 'P', 'T', 'U', 'F', 'M' };
 #define MENU_TOP   (BAR + 2)
 #define MENU_ROW   26
@@ -787,9 +795,20 @@ static void bars(void) {
     api->fmt(b, sizeof b, "%u", (unsigned)J.coins);
     text(13, ty + 3, b, C_GOLD);
     if (G.view == V_JAR) {
+      static const int RES_SPR[JRS_KINDS] = { SPR_SPORE, SPR_NECTAR, SPR_TWIG };
+      int r;
       x = 13 + slen(b) * 6 + 6;
       rate_text(b, sizeof b);
       text(x, ty + 3, b, C_DIM);
+      x += slen(b) * 6 + 6;
+      for (r = 0; r < JRS_KINDS; r++) {             /* the stores, where there is room */
+        if (!J.res[r]) continue;
+        api->fmt(b, sizeof b, "%u", (unsigned)J.res[r]);
+        if (x + 7 + slen(b) * 6 > SW - 4 - 7 * 6 - (parcels() ? 40 : 0)) break;
+        spr(RES_SPR[r], 0, x, ty + 4, 0);
+        text(x + 6, ty + 3, b, C_TRAIT);
+        x += 7 + slen(b) * 6 + 4;
+      }
     } else {
       api->fmt(b, sizeof b, "Decorate %u/%d", (unsigned)J.nplaced, JS_MAX_PLACED);
       where = b;
@@ -1127,7 +1146,7 @@ static int scene_key(void *st, unsigned char k) {
   case 'i': case 'I': open_app("Jar Shop", "stuff"); return 1;
   case 'd': case 'D': G.view = V_DECOR; G.dmove = 0; decor_select(G.dsel); return 1;
   case 'p': case 'P': open_app("Jar Shop", "garden"); return 1;
-  case 't': case 'T': open_app("Jar Post", "talk"); return 1;     /* Tibbs, the shopkeeper */
+  case 't': case 'T': open_app("Jar Post", "town"); return 1;     /* the lane: Tibbs and his neighbours */
   case 'u': case 'U': open_app("Jar Shop", "up"); return 1;
   case 'z': case 'Z':
     G.zoom = 1;
@@ -1228,11 +1247,19 @@ static void sky_ask(void) {
   q_start(Q_SKY, "GET", path);
 }
 
+static void tx_ask(void);
+static int tx_lines(const char *t);
+static int tx_item(int n);
+
 static void post_reply(int n) {
   int was = G.q;
   char path[64];
   G.q = Q_IDLE;
-  if (n < 0 && (was == Q_PATCH || was == Q_EVENTS)) {  /* these too: the post goes on */
+  if (n < 0 && (was == Q_PATCH || was == Q_EVENTS)) {  /* these too: the deals, the post go on */
+    tx_ask();
+    return;
+  }
+  if (n < 0 && (was == Q_TX || was == Q_ITEM)) {
     q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
     return;
   }
@@ -1259,12 +1286,22 @@ static void post_reply(int n) {
       tz_of(tz, sizeof tz);
       url_enc(enc, sizeof enc, tz);
       if (lv_events_due(ep, sizeof ep, enc)) q_start(Q_EVENTS, "GET", ep);   /* the day's, once */
-      else q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
+      else tx_ask();
     }
     return;
   case Q_EVENTS:
     lv_events_reply(SCR.text);
-    q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
+    tx_ask();
+    return;
+  case Q_TX:
+    if (tx_lines(SCR.text)) {                       /* one brings an item: fetch it first */
+      api->fmt(path, sizeof path, "/jar/item?id=%u", (unsigned)G.fx.arg);
+      q_start(Q_ITEM, "GET", path);
+    } else q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
+    return;
+  case Q_ITEM:
+    if (tx_item(n) == 0) tx_ask();                  /* then the deals after it */
+    else q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
     return;
   case Q_LEN: {
     const char *p = SCR.text;
@@ -1298,6 +1335,64 @@ static void post_reply(int n) {
     return;
   }
   }
+}
+
+/* ---- the lane's deals (apps/jartx.h) ------------------------------------------ */
+
+/* The deals done since J.txseen: carried out, up to one that brings an
+ * item (1: G.fx is it). */
+static int tx_lines(const char *t) {
+  const char *p;
+  int changed = 0, r = 0;
+  for (p = t; *p && !r; p = tsv_next_line(p)) {
+    JTx x;
+    char m[40];
+    int a;
+    if (jtx_parse(p, &x) != 0) continue;
+    a = jtx_apply(&x, m, sizeof m);
+    if (a == JTX_FETCH) { api->mem_cpy(&G.fx, &x, sizeof x); r = 1; }
+    else if (a == JTX_DONE || a == JTX_BAD) changed = 1;
+    if (a == JTX_DONE && m[0]) say(m);
+  }
+  if (changed) save();
+  return r;
+}
+
+/* GET /jar/item answered (n bytes in SCR.text): the item a deal changed or
+ * made, checked and written; a changed one in the jar is put back as it
+ * is now. 0, or -1 (tried again with the next poll). */
+static int tx_item(int n) {
+  uint8_t *raw = (uint8_t *)SCR.ui.net, pub[65];
+  char hex[140], m[40];
+  int len, k;
+  (void)n;
+  len = b64_decode(SCR.text, raw, JI_MAX);
+  if (len <= 0) return -1;
+  api->mem_cpy(SCR.io.raw, raw, (size_t)len);
+  if (jitem_decode(&SCR.io.it, SCR.io.raw, len) != 0) return -1;
+  if (jst_get(api, JST_PUB, hex, sizeof hex) <= 0 || jst_pub_parse(hex, pub) != 0) return -1;
+  if (jst_verify(api, pub, SCR.io.raw, len, raw) != 1) {
+    api->log("jar: a delivery's signature did not check");
+    return -1;
+  }
+  if (jtx_install(&G.fx, SCR.io.raw, len, &SCR.io.it, m, sizeof m) != 0) return -1;
+  k = js_find(&J, SCR.io.it.id);
+  if (k >= 0) {                                    /* in the jar: as it is now, where it was */
+    int x = J.placed[k].home_x, y = J.placed[k].home_y, lv = J.placed[k].level;
+    js_unplace(&J, k);
+    k = js_place(&J, &SCR.io.it, x, y);
+    if (k >= 0 && lv) js_set_level(&J, k, lv);
+    if (k >= 0) js_item_event(&J, k, JE_POKE, 0);
+  }
+  say(m);
+  save();
+  return 0;
+}
+
+static void tx_ask(void) {
+  char path[40];
+  api->fmt(path, sizeof path, "/jar/tx?after=%u", (unsigned)J.txseen);
+  q_start(Q_TX, "GET", path);
 }
 
 /* Asking after the post: at the start, then every few minutes while the
@@ -1431,7 +1526,8 @@ const CappInfo capp_info = {
     0x4E, 0x02, 0x44, 0x22, 0x44, 0x72, 0x44, 0x22,
     0x7F, 0xFE, 0x40, 0x02, 0x40, 0x02, 0x3F, 0xFC },
   "Enter\tthe menu; S shop, I My Stuff, P garden\n"
-  "T\tTibbs; F friends; M mail; U upgrades\n"
+  "T\tthe Town: Tibbs, Pip, Bramble, Wren\n"
+  "F M U\tfriends, mail, upgrades\n"
   "D\tdecorate; ^v moves onto a ledge\n"
   "Z\tzoom 2x; Tab follows a critter\n"
   "Shop\tEnter buys, Space holds, G gifts\n"
@@ -1624,7 +1720,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   scene_start();
   if (str_same(s, "shop") || str_same(s, "stuff") || str_same(s, "garden") || str_same(s, "up"))
     jar_open("Jar Shop", s);
-  else if (str_same(s, "mail") || str_same(s, "talk") || str_same(s, "friends"))
+  else if (str_same(s, "mail") || str_same(s, "talk") || str_same(s, "friends") || str_same(s, "town"))
     jar_open("Jar Post", s);
   UI.paint = app_paint;
   UI.key = app_key;

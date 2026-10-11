@@ -1121,6 +1121,33 @@ latch on: sell one cute thing and every find is cute. So:
 
 Change the prompts with care: they were tuned against real output.
 
+**The Town: four plants, three resources, three more people** (2026-10-11,
+v0.18.0). The owner asked for fewer plant kinds, each making its own thing,
+and neighbours for Tibbs who are paid in them:
+- **Plants** (`apps/jarsim.h`, `JPL_*`): berry (jam, coins, as before), reed
+  (twigs), mushroom (spores), flower (nectar). Mosslings carry the non-berry
+  produce to `J.res[]`, saved as `res S N T`; a bed's level 1-3 (`level`
+  line) makes it grow 1x, 1.5x, 2x. Old saves' fern and cactus are reed.
+  Only berry beds count in `js_rate_ph`.
+- **People** (`server/shopkeep.py`, `CAST`): everything there takes `who`
+  (tibbs default) -- one Claude Code session each, the same history,
+  notebook and seeding as Tibbs's, in CARDOS_STATE/<who>. `town_note` tells
+  the others what happened. Pip alters a thing (spores), Bramble evolves a
+  critter or grows a bed (nectar), Wren builds furniture (twigs).
+- **Deals** (`server/town.py`): the device sends `coins`, `have` and `beds`
+  lines before the words (`jtx_have` in `apps/jartx.h`); a `DEAL:` line is
+  checked against them and becomes tx lines in the shared queue
+  (`use<res>`, `gain<res>` on a failed job, `bedup K`, `remake ID`, `give
+  ID`). Alteration is the old item and the request shown to Claude, made
+  again under the same id and re-signed; Wren's is `jar.generate(...,
+  force_form="furniture")`.
+- **On the device**: Jar Post's Town (`V_TOWN`, `post_open("town")`) lists
+  the four and talks with `?who=`; `apps/jartx.h` carries out tx lines for
+  the talk screen and for the scene, which asks `GET /jar/tx?after=` after
+  the patches and events. A `remake`/`give` stops the queue until the item
+  (`GET /jar/item?id=`) is fetched and its signature checks; a remade item
+  in the jar is put back where it stood and its old patch is deleted.
+
 The rest:
 - Talk replaces the old hint: Jar Post's Talk screen (`t` in the shop),
   `POST`/`GET /jar/talk`.

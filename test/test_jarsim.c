@@ -1,6 +1,7 @@
-/* Jar Factory's world on the host: apps/jarsim.h. Where coins come from,
+﻿/* Jar Factory's world on the host: apps/jarsim.h. Where coins come from,
  * that time away makes nothing, upgrades, items and their habits, the save. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "tinytest.h"
@@ -104,6 +105,62 @@ void test_jarsim_no_clock_no_away(void) {
   CHECK_EQ(J.phase, PH_NONE);
 }
 
+/* Each plant makes its own thing: berries go to the vat, the rest to the
+ * stores; a bed's level makes it grow faster; the save keeps both. */
+void test_jarsim_plants_make_their_own_things(void) {
+  static char buf[2048];
+  int i;
+  uint32_t shipped;
+  fresh(7);
+  J.nbeds = 4;                            /* berry, berry, reed, mushroom */
+  J.bed[0].type = J.bed[1].type = JPL_REED;
+  J.bed[2].type = JPL_SHROOM;
+  J.bed[3].type = JPL_FLOWER;
+  J.nmoss = 2;
+  CHECK_EQ(js_rate_ph(&J), 0);            /* nothing here makes jam */
+  shipped = J.shipped;
+  run_s(900);
+  CHECK_EQ(J.shipped, shipped);
+  CHECK(J.res[JRS_TWIGS] >= 4);           /* two reed beds */
+  CHECK(J.res[JRS_SPORES] >= 2);
+  CHECK(J.res[JRS_NECTAR] >= 2);
+  CHECK(J.res[JRS_TWIGS] > J.res[JRS_NECTAR]);
+  /* a level 3 bed grows twice as fast */
+  {
+    int a, b;
+    J.bed[3].lv = 3;
+    J.res[JRS_NECTAR] = J.res[JRS_SPORES] = 0;
+    run_s(900);
+    a = J.res[JRS_NECTAR]; b = J.res[JRS_SPORES];
+    CHECK(a >= b * 3 / 2);
+  }
+  CHECK_EQ(js_res_use(&J, JRS_TWIGS, 9999), -1);
+  CHECK_EQ(js_res_use(&J, JRS_TWIGS, 1), 0);
+  CHECK_EQ(js_res_of("nectar"), JRS_NECTAR);
+  CHECK_EQ(js_res_of("twigs 3"), JRS_TWIGS);
+  CHECK_EQ(js_res_of("twig"), -1);
+  /* the save */
+  J.res[JRS_SPORES] = 12; J.res[JRS_NECTAR] = 3; J.res[JRS_TWIGS] = 40;
+  i = js_save(&J, buf, sizeof buf);
+  buf[i] = 0;
+  CHECK(strstr(buf, "res 12 3 40\n") != 0);
+  CHECK(strstr(buf, "level 1 1 1 3\n") != 0);
+  {
+    Jar *k = (Jar *)calloc(1, sizeof *k);
+    js_init(k, 1);
+    CHECK_EQ(js_load(k, buf), 0);
+    CHECK_EQ(k->res[JRS_TWIGS], 40);
+    CHECK_EQ(js_bed_lv(&k->bed[3]), 3);
+    CHECK_EQ(js_bed_lv(&k->bed[0]), 1);
+    /* an old save's fern and cactus are reed */
+    CHECK_EQ(js_load(k, "jar 1\nup 3 1 2 0\nplant 1 0 4 0 3 0\n"), 0);
+    CHECK_EQ(k->bed[0].type, JPL_REED);
+    CHECK_EQ(k->bed[1].type, JPL_REED);
+    CHECK_EQ(k->bed[2].type, JPL_FLOWER);
+    free(k);
+  }
+}
+
 void test_jarsim_upgrades(void) {
   int32_t r0;
   fresh(5);
@@ -114,8 +171,9 @@ void test_jarsim_upgrades(void) {
   CHECK_EQ(js_buy(&J, JU_BED), 0);
   CHECK_EQ(J.coins, 10000 - 25);
   CHECK_EQ(J.nbeds, 3);
-  CHECK(js_rate_ph(&J) > r0);
-  CHECK_EQ(js_rate_after(&J, JU_MACH), js_rate_for(3, 1, 3, 0));
+  CHECK_EQ(J.bed[2].type, JPL_REED);
+  CHECK_EQ(js_rate_ph(&J), r0);           /* the third bed is reed: twigs, not jam */
+  CHECK_EQ(js_rate_after(&J, JU_MACH), js_rate_for(2, 1, 3, 0));
   while (js_buy(&J, JU_MACH) == 0) {}
   CHECK_EQ(J.nmach, JS_MAX_MACH);
   CHECK_EQ(js_up_cost(&J, JU_MACH), -1);
@@ -128,7 +186,7 @@ void test_jarsim_upgrades(void) {
   CHECK_EQ(J.belt, JS_MAX_BELT);
   CHECK_EQ(J.nbeds, JS_MAX_BEDS);
   /* everything bought makes a busier jar, and the loop still balances */
-  CHECK(js_rate_ph(&J) > 2 * r0);
+  CHECK(js_rate_ph(&J) > r0);            /* three of the six beds are berries */
   {
     uint32_t c = J.coins;
     run_s(600);

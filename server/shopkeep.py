@@ -80,7 +80,11 @@ CHARACTER = (
     "retired clockmaker, a seed lady, children who swap marbles, whoever turns up -- and "
     "whatever washes in. You are chatty, a little vain about your finds, forgetful about "
     "small things and sharp about people, given to tangents and small misadventures, and "
-    "kind underneath. Your customers know each other; you know them all, what they bought, "
+    "kind underneath. Your neighbours on the lane are Pip Cogsworth the tinkerer (she "
+    "alters things, paid in spores), Bramble the grower (evolves critters and plants, paid in "
+    "nectar) and Wren the carpenter (builds furniture to order, paid in twigs); you trade "
+    "gossip with them and send customers their way. "
+    "Your customers know each other; you know them all, what they bought, "
     "what they said, who sent what to whom, and you gossip -- fondly, never cruelly. You "
     "do not take orders; you take notes, and now and then it pays off. You never promise "
     "what tomorrow's stock will be, you cannot change anyone's jar, and you give nothing "
@@ -91,6 +95,107 @@ SYSTEM = CHARACTER + (
     "messages in square brackets are the shop telling you what is happening. Speak only as "
     "Tibbs, in plain ASCII, friendly for all ages. When asked for JSON, answer with only "
     "the JSON.")
+
+# ---- the town: Tibbs and his neighbours ------------------------------------------------------
+#
+# The owner (2026-10-11): fewer plants, each making its own resource -- berries
+# are jam and gold as before; spores, nectar and twigs are what the others
+# are paid in. "theres another npc that can modify items, theres one that can
+# modify or evolve creatures / plants, theres one that is a furniture builder
+# that can take requests. they know about eachother and each keep continuous
+# logs like tibbs." Each is one Claude Code session with the same memory as
+# his (history, notebook, seeded fresh sessions), in CARDOS_STATE/<who>.
+# Their deals are struck in talk, as his are, and carried out by
+# server/town.py.
+
+LANE = ("The lane: Tibbs's junk shop (buys nothing, sells odd finds for coins); Pip "
+        "Cogsworth's tinker's bench (alters a thing you own -- new look, new trick -- for "
+        "spores); Bramble's greenhouse (evolves a critter into a new form, or a garden bed into "
+        "a better one, for nectar); Wren's woodshop (builds furniture to order -- shelves, "
+        "tables, stools, things to stand others on -- for twigs). Customers grow spores, "
+        "nectar and twigs in their jar's garden, beside the berry bushes that make jam.")
+
+CAST = {
+    "tibbs": {"name": "Tibbs", "where": "at the counter of Tibbs's shop"},
+    "pip": {
+        "name": "Pip Cogsworth", "where": "at Pip's tinker's bench",
+        "character": (
+            "You are Pip Cogsworth, a tinkerer with a bench in a lean-to on the lane, spectacles "
+            "on your forehead and a pocket full of springs. You alter the odd things people keep "
+            "in their glass jars -- give a thing a new look, a new trick, a new habit, mend it, "
+            "soup it up -- and you are paid in spores, which you brew into a glue that makes the "
+            "changes take. You are brisk, practical, proud of clean work, fond of terrible puns "
+            "about gears, and honest about what a thing can and cannot become: you change it, "
+            "you do not swap it for something else. " + LANE + " You know your neighbours well "
+            "and gossip about them."),
+        "deal": (
+            "[You can take a job, if you and they agree right now: end your answer with one more "
+            "line, exactly: DEAL: {\"spend\": {\"spores\": N}, \"take\": coins (optional), "
+            "\"modify\": {\"item\": the id of one of their things, \"how\": what to change, "
+            "in a sentence}}. A small change is 2-3 spores, a big one 5-8; never more spores "
+            "than they have. The thing comes back changed, the same thing. Say nothing about the "
+            "DEAL line itself.]"),
+    },
+    "bramble": {
+        "name": "Bramble", "where": "in Bramble's greenhouse",
+        "character": (
+            "You are Bramble, who keeps a steamy greenhouse at the end of the lane, slow-spoken, "
+            "mud to the elbows, patient as a root. You coax living things into what they are "
+            "becoming: a critter into a new form (a larger, stranger, more capable version of "
+            "itself), a garden bed into a better one that bears more. You are paid in nectar, "
+            "which is what you feed them. You talk to the plants, you name everything, you "
+            "think long term, and you will not rush a living thing past what it can bear. " +
+            LANE + " You know your neighbours well and are fond of them in your quiet way."),
+        "deal": (
+            "[You can take a job, if you and they agree right now: end your answer with one more "
+            "line, exactly: DEAL: {\"spend\": {\"nectar\": N}, then either \"evolve\": "
+            "{\"item\": the id of one of their critters, \"how\": what it becomes, in a "
+            "sentence} or \"grow\": {\"bed\": the bed's number, from 1}}. Evolving a critter is "
+            "4-8 nectar; growing a bed a level is 3 nectar for level 2, 6 for level 3 (3 is the "
+            "most). Never more nectar than they have. Say nothing about the DEAL line itself.]"),
+    },
+    "wren": {
+        "name": "Wren", "where": "in Wren's woodshop",
+        "character": (
+            "You are Wren, the carpenter, whose woodshop smells of shavings and glue. You build "
+            "furniture to order for the little worlds in people's jars: shelves, tables, stools, "
+            "ladders, plinths, bunks -- things other things stand on -- from the twigs customers "
+            "bring you. You listen properly, ask one good question when a request is vague, "
+            "suggest something better when you can, and take pride in sturdy, charming work. "
+            "You are warm, dry-humoured and a little bossy about measurements. " + LANE + " You "
+            "know your neighbours well; you think Pip is a show-off and Bramble a saint."),
+        "deal": (
+            "[You can take a commission, if you and they agree right now: end your answer with "
+            "one more line, exactly: DEAL: {\"spend\": {\"twigs\": N}, \"build\": {\"what\": "
+            "the piece, described in a sentence}}. A stool or a small shelf is 3-4 twigs, a table "
+            "or a big shelf 5-7, something grand 8-10; never more twigs than they have. Say "
+            "nothing about the DEAL line itself.]"),
+    },
+}
+NPCS = tuple(CAST)
+RESOURCES = ("spores", "nectar", "twigs")
+
+
+def name_of(who):
+    return CAST.get(who, CAST["tibbs"])["name"]
+
+
+def system_of(who):
+    if who == "tibbs":
+        return SYSTEM
+    return CAST[who]["character"] + (
+        "\n\nThis conversation is your whole life on the lane, shared by every customer; "
+        "messages in square brackets are the lane telling you what is happening. Speak only as "
+        "%s, in plain ASCII, friendly for all ages. When asked for JSON, answer with only the "
+        "JSON." % CAST[who]["name"])
+
+
+def town_note(text, store=None, besides=None):
+    """News for everyone on the lane (but `besides`, who was there)."""
+    for who in NPCS:
+        if who != besides:
+            note(text, store, who)
+
 
 # ---- the dice -------------------------------------------------------------------------------
 
@@ -148,12 +253,17 @@ def loose_brief(rng):
 
 # ---- his one conversation ---------------------------------------------------------------------
 
-_lock = threading.Lock()      # one turn at a time: there is one Tibbs
+_locks = {}                   # one turn at a time each: there is one of each of them
 _meta = threading.Lock()      # the small records: events, logs
 
 
-def home():
-    d = os.path.join(os.environ.get("CARDOS_STATE") or os.path.expanduser("~/.cardos"), "tibbs")
+def _lock_of(who):
+    with _meta:
+        return _locks.setdefault(who, threading.Lock())
+
+
+def home(who="tibbs"):
+    d = os.path.join(os.environ.get("CARDOS_STATE") or os.path.expanduser("~/.cardos"), who)
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -170,42 +280,42 @@ def _put(st, key, value):
     st.put(NS, key, json.dumps(value).encode())
 
 
-def note(text, store=None):
-    """Something that happened in the shop, for his next turn."""
+def note(text, store=None, who="tibbs"):
+    """Something that happened in the shop, for his (or `who`'s) next turn."""
     st = store or kv.store()
     with _meta:
-        ev = _get(st, "tibbs/events", [])
+        ev = _get(st, who + "/events", [])
         ev.append(wire.flat(text, 300, ascii=True))
-        _put(st, "tibbs/events", ev[-EVENTS_KEPT:])
+        _put(st, who + "/events", ev[-EVENTS_KEPT:])
 
 
 # ---- his memory ---------------------------------------------------------------------
 
-_note_lock = threading.Lock()
+_note_locks = {}
 
 
-def _history_dir():
-    d = os.path.join(home(), "history")
+def _history_dir(who="tibbs"):
+    d = os.path.join(home(who), "history")
     os.makedirs(d, exist_ok=True)
     return d
 
 
-def history_add(kind, person, said, reply, now=None):
+def history_add(kind, person, said, reply, now=None, who="tibbs"):
     """One exchange, kept for good: a JSON line in this month's file."""
     t = time.time() if now is None else now
     line = json.dumps({"t": int(t), "kind": kind, "person": person or "", "said": said,
                        "reply": reply}, ensure_ascii=True)
-    path = os.path.join(_history_dir(), time.strftime("%Y-%m", time.gmtime(t)) + ".jsonl")
+    path = os.path.join(_history_dir(who), time.strftime("%Y-%m", time.gmtime(t)) + ".jsonl")
     with open(path, "a", encoding="ascii") as f:
         f.write(line + "\n")
 
 
-def history(n=SEED_RECENT, since=None):
+def history(n=SEED_RECENT, since=None, who="tibbs"):
     """The last `n` exchanges (or every one after time `since`), oldest first."""
     out = []
-    files = sorted(f for f in os.listdir(_history_dir()) if f.endswith(".jsonl"))
+    files = sorted(f for f in os.listdir(_history_dir(who)) if f.endswith(".jsonl"))
     for name in reversed(files):
-        with open(os.path.join(_history_dir(), name), encoding="ascii", errors="replace") as f:
+        with open(os.path.join(_history_dir(who), name), encoding="ascii", errors="replace") as f:
             rows = []
             for ln in f:
                 try:
@@ -221,9 +331,9 @@ def history(n=SEED_RECENT, since=None):
     return list(reversed(out))
 
 
-def notebook(store=None):
+def notebook(store=None, who="tibbs"):
     """{"shop": the story so far, "players": {name: their page}}."""
-    nb = _get(store or kv.store(), "tibbs/notebook", {})
+    nb = _get(store or kv.store(), who + "/notebook", {})
     return {"shop": nb.get("shop", ""), "players": dict(nb.get("players", {}))}
 
 
@@ -232,15 +342,15 @@ def _cut(s, n):
     return s if len(s) <= n else s[:n - 3] + "..."
 
 
-def seed(store=None):
+def seed(store=None, who="tibbs"):
     """What a fresh session opens with: his notebook, then what was said last."""
-    nb = notebook(store)
-    parts = ["[You are Tibbs, picking up where you left off -- the shop goes on, and so "
-             "does everything you knew. Your notebook, in your own words:]"]
+    nb = notebook(store, who)
+    parts = ["[You are %s, picking up where you left off -- the town goes on, and so "
+             "does everything you knew. Your notebook, in your own words:]" % name_of(who)]
     parts.append("The shop so far: " + (nb["shop"] or "(nothing written yet)"))
     for name in sorted(nb["players"]):
         parts.append("%s: %s" % (display(name), nb["players"][name]))
-    recent = history(SEED_RECENT)
+    recent = history(SEED_RECENT, who=who)
     if recent:
         parts.append("[The last things said in the shop, oldest first:]")
         for r in recent:
@@ -258,25 +368,37 @@ def _note_ask(chat, prompt):
     return out
 
 
-def update_notebook(chat, store=None):
+def _note_ask_npc(chat, prompt, who):
+    """The same for any of them: Tibbs's goes through _note_ask."""
+    if who == "tibbs":
+        return _note_ask(chat, prompt)
+    out, _sid = _chat.ask_once(chat, prompt, NOTE_TIMEOUT, system=system_of(who), model=MODEL,
+                               effort="medium", cwd=home(who))
+    return out
+
+
+def update_notebook(chat, store=None, who="tibbs"):
     """Fold the exchanges since the last update into his notebook. One at a
     time; a failure keeps the old notebook and tries again next time."""
     st = store or kv.store()
-    if not _note_lock.acquire(blocking=False):
+    with _meta:
+        lock = _note_locks.setdefault(who, threading.Lock())
+    if not lock.acquire(blocking=False):
         return False
     try:
-        since = _get(st, "tibbs/noted_t", 0)
-        rows = history(since=since)[:NOTE_BATCH]       # a long backlog goes in pieces
+        since = _get(st, who + "/noted_t", 0)
+        rows = history(since=since, who=who)[:NOTE_BATCH]   # a long backlog goes in pieces
         if not rows:
             return False
-        nb = notebook(st)
+        nb = notebook(st, who)
         people = sorted({r.get("person") for r in rows if r.get("person")})
-        lines = ["[Time to bring your notebook up to date, Tibbs. It is what you will "
+        lines = ["[Time to bring your notebook up to date, %s. It is what you will "
                  "remember when the details fade, so keep what matters: who each customer "
                  "is, what they have bought and asked you for, what they told you, their "
-                 "friends, promises you made, running jokes, and the story of the shop and "
-                 "your contacts. Rewrite it, do not just append; keep each page under %d "
-                 "characters and the shop's story under %d.]" % (PAGE_LEN, STORY_LEN),
+                 "friends, promises you made, running jokes, and the story of your trade, "
+                 "your neighbours and your contacts. Rewrite it, do not just append; keep "
+                 "each page under %d characters and the story under %d.]" % (
+                     name_of(who), PAGE_LEN, STORY_LEN),
                  "[Your notebook now:]",
                  "The shop so far: " + (nb["shop"] or "(empty)")]
         for name in sorted(set(nb["players"]) | set(people)):
@@ -291,22 +413,22 @@ def update_notebook(chat, store=None):
                      "{account name: their page}} -- every player, the ones not mentioned "
                      "since as they were.]")
         try:
-            raw = _note_ask(chat, "\n".join(lines))
+            raw = _note_ask_npc(chat, "\n".join(lines), who)
             got = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
         except (_chat.ClaudeError, ValueError) as e:
             import sys
-            sys.stderr.write("tibbs: notebook: %s\n" % e)
+            sys.stderr.write("%s: notebook: %s\n" % (who, e))
             return False
         shop = _cut(got.get("shop") or nb["shop"], STORY_LEN + SLACK)
         pages = dict(nb["players"])
         for name, page in (got.get("players") or {}).items():
             if isinstance(name, str) and isinstance(page, str) and page.strip():
                 pages[name[:40]] = _cut(page, PAGE_LEN + SLACK)
-        _put(st, "tibbs/notebook", {"shop": shop, "players": pages})
-        _put(st, "tibbs/noted_t", rows[-1].get("t", 0))
+        _put(st, who + "/notebook", {"shop": shop, "players": pages})
+        _put(st, who + "/noted_t", rows[-1].get("t", 0))
         return True
     finally:
-        _note_lock.release()
+        lock.release()
 
 
 def _ask(chat, prompt, session, effort):
@@ -315,53 +437,62 @@ def _ask(chat, prompt, session, effort):
                           model=MODEL, effort=effort, cwd=home())
 
 
-def turn(chat, text, user, store=None, effort=TALK_EFFORT, limit=ask.DAILY, kind="talk"):
+def _ask_npc(chat, prompt, session, effort, who):
+    """One turn of `who`'s session: Tibbs's goes through _ask (the tests' hook)."""
+    if who == "tibbs":
+        return _ask(chat, prompt, session, effort)
+    return _chat.ask_once(chat, prompt, TURN_TIMEOUT, resume=session, system=system_of(who),
+                          model=MODEL, effort=effort, cwd=home(who))
+
+
+def turn(chat, text, user, store=None, effort=TALK_EFFORT, limit=ask.DAILY, kind="talk",
+         who="tibbs"):
     """Say `text` to him in his one conversation: his answer. The news since
     his last turn goes first. Counts against `user`'s day. Kept in his
     history; a long session is replaced by a fresh one, seeded."""
     st = store or kv.store()
     if limit is not None:
         ask.take_turn(user, limit, st)
-    with _lock:
+    with _lock_of(who):
         with _meta:
-            ev = _get(st, "tibbs/events", [])
-            _put(st, "tibbs/events", [])
+            ev = _get(st, who + "/events", [])
+            _put(st, who + "/events", [])
         prompt = text
         if ev:
-            prompt = ("[Since you last spoke, around the shop:]\n" +
+            prompt = ("[Since you last spoke, around the town:]\n" +
                       "\n".join("- " + e for e in ev) + "\n\n" + text)
-        session = _get(st, "tibbs/session", None)
-        turns = _get(st, "tibbs/turns", 0)
+        session = _get(st, who + "/session", None)
+        turns = _get(st, who + "/turns", 0)
         fresh = False
         if session and turns >= ROTATE_AT:
             session = None                               # before it compacts: a seeded fresh one
         try:
-            if session is None and history(1):
-                out, sid = _ask(chat, seed(st) + "\n\n" + prompt, None, effort)
+            if session is None and history(1, who=who):
+                out, sid = _ask_npc(chat, seed(st, who) + "\n\n" + prompt, None, effort, who)
                 fresh = True
             else:
-                out, sid = _ask(chat, prompt, session, effort)
+                out, sid = _ask_npc(chat, prompt, session, effort, who)
                 fresh = session is None
         except _chat.ClaudeError as e:
             if not session or e.timed_out:
                 with _meta:                              # the news is not lost
-                    _put(st, "tibbs/events", ev + _get(st, "tibbs/events", []))
+                    _put(st, who + "/events", ev + _get(st, who + "/events", []))
                 raise
             # His session is gone (a new server, a cleared directory): a fresh
             # one, opened with his notebook and the last things said.
-            out, sid = _ask(chat, seed(st) + "\n\n" + prompt, None, effort)
+            out, sid = _ask_npc(chat, seed(st, who) + "\n\n" + prompt, None, effort, who)
             fresh = True
-        _put(st, "tibbs/session", sid)
-        _put(st, "tibbs/turns", 1 if fresh else turns + 1)
+        _put(st, who + "/session", sid)
+        _put(st, who + "/turns", 1 if fresh else turns + 1)
         try:
-            history_add(kind, user, prompt, out.strip())
+            history_add(kind, user, prompt, out.strip(), who=who)
         except OSError as e:
             import sys
-            sys.stderr.write("tibbs: history: %s\n" % e)
-        since = _get(st, "tibbs/since_note", 0) + 1
-        _put(st, "tibbs/since_note", 0 if since >= NOTE_EVERY else since)
+            sys.stderr.write("%s: history: %s\n" % (who, e))
+        since = _get(st, who + "/since_note", 0) + 1
+        _put(st, who + "/since_note", 0 if since >= NOTE_EVERY else since)
     if since >= NOTE_EVERY and chat is not None:
-        threading.Thread(target=update_notebook, args=(chat, st), daemon=True).start()
+        threading.Thread(target=update_notebook, args=(chat, st, who), daemon=True).start()
     return out.strip()
 
 
@@ -379,26 +510,26 @@ def display(person):
 
 # ---- talking ------------------------------------------------------------------------------------
 
-def _log(st, person):
-    return _get(st, "tibbs/log/" + person, [])
+def _log(st, person, who="tibbs"):
+    return _get(st, who + "/log/" + person, [])
 
 
-def _log_add(st, person, who, text):
+def _log_add(st, person, speaker, text, who="tibbs"):
     with _meta:
-        log = _log(st, person)
-        log.append({"who": who, "text": text})
-        _put(st, "tibbs/log/" + person, log[-LOG_KEPT:])
+        log = _log(st, person, who)
+        log.append({"who": speaker, "text": text})
+        _put(st, who + "/log/" + person, log[-LOG_KEPT:])
 
 
 _talking = set()
 
 
-def talk_state(person, store=None):
-    return _get(store or kv.store(), "tibbs/talk/" + person, {"state": "ok"})
+def talk_state(person, store=None, who="tibbs"):
+    return _get(store or kv.store(), who + "/talk/" + person, {"state": "ok"})
 
 
-def _set_talk(st, person, state):
-    _put(st, "tibbs/talk/" + person, state)
+def _set_talk(st, person, state, who="tibbs"):
+    _put(st, who + "/talk/" + person, state)
 
 
 def _friends_line(person, friends):
@@ -418,12 +549,14 @@ DEAL_RULES = (
     "than they have, and say nothing about the DEAL line itself.]")
 
 
-def talk_prompt(person, said, friends=(), context=""):
-    return ("[%s (account %s) is at the counter. %s%s They say:]\n%s\n\n"
-            "[Answer them as Tibbs, out loud: a few sentences at most, under %d characters. "
-            "No JSON.]%s" % (display(person), person, _friends_line(person, friends),
-                            (" " + context) if context else "", said, ASK_LEN,
-                            ("\n" + DEAL_RULES) if context else ""))
+def talk_prompt(person, said, friends=(), context="", who="tibbs"):
+    rules = DEAL_RULES if who == "tibbs" else CAST[who]["deal"]
+    return ("[%s (account %s) is %s. %s%s They say:]\n%s\n\n"
+            "[Answer them as %s, out loud: a few sentences at most, under %d characters. "
+            "No JSON.]%s" % (display(person), person, CAST[who]["where"],
+                            _friends_line(person, friends),
+                            (" " + context) if context else "", said, name_of(who), ASK_LEN,
+                            ("\n" + rules) if context else ""))
 
 
 def split_deal(out):
@@ -444,29 +577,29 @@ def split_deal(out):
     return out.strip(), None
 
 
-def _reply(chat, person, said, friends, st, context="", on_deal=None):
+def _reply(chat, person, said, friends, st, context="", on_deal=None, who="tibbs"):
     try:
-        out = turn(chat, talk_prompt(person, said, friends, context), person, st)
+        out = turn(chat, talk_prompt(person, said, friends, context, who), person, st, who=who)
         out, deal = split_deal(out)
         if deal and on_deal:
             why = on_deal(person, deal)
-            if why:                                     # it fell through: he hears why
-                note("The deal with %s fell through: %s" % (display(person), why), st)
+            if why:                                     # it fell through: they hear why
+                note("The deal with %s fell through: %s" % (display(person), why), st, who)
         reply = wire.flat(out, REPLY_LEN, ascii=True)
-        _log_add(st, person, "him", reply)
-        _set_talk(st, person, {"state": "ok"})
+        _log_add(st, person, "him", reply, who)
+        _set_talk(st, person, {"state": "ok"}, who)
     except ask.RateLimited:
-        _set_talk(st, person, {"state": "error", "why": "he has talked enough for today"})
+        _set_talk(st, person, {"state": "error", "why": "they have talked enough for today"}, who)
     except Exception as e:                              # noqa: BLE001 - said to the device
         import sys
-        sys.stderr.write("jar: %s: talk: %s\n" % (person, e))
-        _set_talk(st, person, {"state": "error", "why": "he did not hear you; try again"})
+        sys.stderr.write("jar: %s: talk to %s: %s\n" % (person, who, e))
+        _set_talk(st, person, {"state": "error", "why": "not heard; try again"}, who)
     finally:
         with _meta:
-            _talking.discard(person)
+            _talking.discard((who, person))
 
 
-def say(chat, person, text, friends=(), store=None, context="", on_deal=None):
+def say(chat, person, text, friends=(), store=None, context="", on_deal=None, who="tibbs"):
     """A player says something; his reply comes on a thread. False if he is
     still answering them. `context` tells him what they have (coins, things),
     and with it he may strike a deal, which on_deal(person, deal) carries out
@@ -476,30 +609,30 @@ def say(chat, person, text, friends=(), store=None, context="", on_deal=None):
     if not text:
         raise ValueError("say something")
     with _meta:
-        if person in _talking:
+        if (who, person) in _talking:
             return False
-        _talking.add(person)
-    _log_add(st, person, "me", text)
-    _set_talk(st, person, {"state": "pending"})
+        _talking.add((who, person))
+    _log_add(st, person, "me", text, who)
+    _set_talk(st, person, {"state": "pending"}, who)
     threading.Thread(target=_reply, args=(chat, person, text, list(friends), st, context,
-                                          on_deal), daemon=True).start()
+                                          on_deal, who), daemon=True).start()
     return True
 
 
-def talk_text(person, store=None, tx_after=None):
+def talk_text(person, store=None, tx_after=None, who="tibbs"):
     """GET /jar/talk: "pending", "ok" or "error WHY", then his last greeting
     as "day\\tTEXT" and the talk, "me\\tTEXT" / "him\\tTEXT"; then, for a
     device that asks (tx_after), the deals' effects after that one:
     "tx ID OP ARG" (pay N, get N, lose ITEM)."""
     st = store or kv.store()
-    s = talk_state(person, st)
-    if s.get("state") == "pending" and person not in _talking:
+    s = talk_state(person, st, who)
+    if s.get("state") == "pending" and (who, person) not in _talking:
         s = {"state": "ok"}                             # a restart lost the thread
     out = [s["state"] if s["state"] != "error" else "error " + s.get("why", "")]
-    day = _get(st, "tibbs/day/" + person, "")
+    day = _get(st, who + "/day/" + person, "")
     if day:
         out.append("day\t" + day)
-    for c in _log(st, person)[-TALK_SENT:]:
+    for c in _log(st, person, who)[-TALK_SENT:]:
         out.append("%s\t%s" % (c["who"], wire.flat(c["text"], SENT_LEN, ascii=True)))
     if tx_after is not None:
         for t in txs(person, st):

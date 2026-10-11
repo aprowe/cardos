@@ -11,6 +11,27 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.18.0 -- 2026-10-11
+
+Jar Factory only; API 46 as before (`update apps`).
+
+- **Four plants, each making its own thing.** Berries are jam and coins as
+  before; reed makes twigs, mushrooms spores, flowers nectar, which the
+  mosslings carry to the jar's stores (shown on the top bar). A save's fern
+  and cactus beds are reed now. Beds have a level (1-3) that makes them grow
+  faster.
+- **The Town** (T on the jar, or in the Garden): Tibbs and three neighbours,
+  each a resumed Claude conversation with a memory like his, who know each
+  other and hear what the others did:
+  - Pip Cogsworth, the tinker, alters one of your things for spores;
+  - Bramble, the grower, evolves a critter or grows a bed a level, for nectar;
+  - Wren, the carpenter, builds furniture to order, for twigs.
+  Deals are struck by talking, as with Tibbs. An altered or evolved thing
+  keeps its id and gets a new signed record; Wren's work is a new thing of
+  yours. A job that falls through gives the resources back.
+- The jar asks after finished jobs with the post (`GET /jar/tx`), so a
+  remade item changes in place while you watch.
+
 ## v0.17.0 -- 2026-10-11
 
 App API 46: every app must be updated with the firmware (`update all`).

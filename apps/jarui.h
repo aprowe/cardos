@@ -455,4 +455,6 @@ static JU_OPT int take_record(const char *p, const char *what) {
   return n;
 }
 
+#include "apps/jartx.h"
+
 #endif /* CARDOS_JARUI_H */

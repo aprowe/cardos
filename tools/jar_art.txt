@@ -103,6 +103,34 @@ rhrr
 .rr.
 end
 
+sprite twig 5 4
+pal b=#7a4a28 B=#b07c48 g=#7aae4a
+frame
+....g
+..BB.
+.Bb..
+B....
+end
+
+sprite spore 4 4
+pal s=#e0d4b8 w=#fff4e0 d=#a89878
+frame
+.s..
+swsd
+.sd.
+..d.
+end
+
+sprite nectar 4 5
+pal y=#ffd166 o=#e0962a h=#fff4c0
+frame
+.y..
+.yy.
+yhyo
+yyoo
+.oo.
+end
+
 sprite parcel 9 7
 pal K=#3a2418 w=#b07c48 d=#7a5030 y=#ffd166 r=#c8324a
 frame
@@ -308,38 +336,38 @@ eggggeggggge
 ...t....t...
 end
 
-sprite fern 12 14
-pal e=#2f6a2a g=#5aa848 l=#9ad870 t=#4a3a22
+sprite reed 12 14
+pal b=#7a4a28 B=#a8703a e=#4a7a2a g=#7aae4a l=#b8d880 t=#4a3a22
 frame
-......l.....
-.l...lg...l.
-.gl..lg..lg.
-..gl.gl.lg..
-l..glgllg..l
-gl..ggggg.lg
-.gl.ggegglg.
-..gggegeggg.
-...ggeeegg..
-....eeee....
-.....ee.....
-.....et.....
-....t..t....
-...t....t...
+...b......b.
+...B...b..B.
+...b...B..b.
+...B...b..B.
+...g...B..g.
+..lg...g..g.
+..g.g..g.g..
+..g.g.lg.g..
+...gg.g.gg..
+...g.gg.g...
+....eggge...
+....eeeee...
+.....tet....
+....t...t...
 frame
-.....l......
-l...lg...l..
-gl..lg..lg..
-.gl.gl.lg...
-l..glgllg..l
-gl..ggggg.lg
-.gl.ggegglg.
-..gggegeggg.
-...ggeeegg..
-....eeee....
-.....ee.....
-.....et.....
-....t..t....
-...t....t...
+....b.....b.
+....B..b..B.
+...b...B..b.
+...B...b..B.
+...g...B..g.
+..lg...g..g.
+..g.g..g.g..
+..g.g.lg.g..
+...gg.g.gg..
+...g.gg.g...
+....eggge...
+....eeeee...
+.....tet....
+....t...t...
 end
 
 sprite shroom 12 14
@@ -393,25 +421,6 @@ frame
 ..eg.gge....
 ...eegee....
 ....eee.....
-end
-
-sprite cactus 12 14
-pal K=#1a3a2a g=#4fae6a l=#8fdc9a e=#2a7a4a p=#ff8fab
-frame
-.....pp.....
-....KggK....
-....KglK....
-.K..KglK....
-KgK.KglK..K.
-KlK.KglK.KgK
-KlKKKglK.KlK
-.KggKglKKKlK
-..KKKglKggK.
-....KglKKK..
-....KglK....
-....KgeK....
-....KgeK....
-...KKKKKK...
 end
 
 # ---- small things ---------------------------------------------------------

@@ -26,6 +26,11 @@
  *                                 logged; one that cannot be checked is
  *                                 left on the server.
  *   POST /jar/thanks?to=NAME&id=ID  T on a gift: a heart on their jar.
+ *   POST /jar/talk?who=NPC        what you say to someone on the lane, after
+ *                                 what you have (apps/jartx.h, jtx_have);
+ *   GET  /jar/talk?who=NPC&tx=N   the conversation, and the deals' effects
+ *   GET  /jar/item?id=ID          an item a deal changed or made: the Town
+ *                                 (server/town.py; V_TOWN lists the lane)
  * Offline, sending and collecting say so and nothing changes.
  *
  * Host tests: test/test_jarpost.c (JAR_DUMP=dir writes its screens).
@@ -36,10 +41,21 @@
 
 #include "apps/jarui.h"
 
-enum { V_FRIENDS = 0, V_GIFT, V_MAIL, V_CARD, V_PICK, V_TALK };
+enum { V_FRIENDS = 0, V_GIFT, V_MAIL, V_CARD, V_PICK, V_TALK, V_TOWN };
 #define PK_MAX 64
 enum { IN_NONE = 0, IN_CODE, IN_NAME, IN_NOTE, IN_TALK };
-enum { N_ME = N_APP + 8, N_FRIEND, N_NAME, N_GIFT, N_PEEK, N_ACK, N_THANKS, N_SAY, N_HEAR };
+enum { N_ME = N_APP + 8, N_FRIEND, N_NAME, N_GIFT, N_PEEK, N_ACK, N_THANKS, N_SAY, N_HEAR, N_DEAL };
+
+/* The lane (server/shopkeep.py's CAST): who you can talk to in the Town. */
+#define NPC_N 4
+static const char *const NPC_ID[NPC_N] = { "tibbs", "pip", "bramble", "wren" };
+static const char *const NPC_NAME[NPC_N] = { "Tibbs", "Pip", "Bramble", "Wren" };
+static const char *const NPC_WHAT[NPC_N] = {
+  "junk shop: odd finds, for coins", "tinker: changes a thing, for spores",
+  "grower: evolves critters, for nectar", "carpenter: furniture to order, twigs" };
+static const char *const NPC_HELLO[NPC_N] = {
+  "Tibbs is behind the counter.", "Pip looks up from her bench, a spring in her teeth.",
+  "Bramble is watering something enormous.", "Wren is measuring a plank twice." };
 
 /* Talking to Tibbs, the shopkeeper (server/shopkeep.py): the conversation,
  * wrapped into rows when it arrives (never in paint). */
@@ -47,6 +63,8 @@ enum { N_ME = N_APP + 8, N_FRIEND, N_NAME, N_GIFT, N_PEEK, N_ACK, N_THANKS, N_SA
 #define TK_COLS 38
 #define TK_SAY  120
 static int tk_parse(void);
+static void fetch_deal(void);
+static int hear(void);
 static void start_input(int mode);
 static int key_input(int k, int max);
 static int TK_N, TK_PENDING;
@@ -74,6 +92,9 @@ typedef struct {
   char gift_name[JI_NAME + 1];
   /* mail */
   int mail_n, mail_sel, card_mail, tried_mail;
+  /* the Town: who is being talked to, where Esc goes, a deal waiting on its item */
+  int npc, tsel, talk_back, fetching;
+  JTx fx;
   /* sending from the friends list: who, then which of your things */
   int fsel, npk, psel, ptop;
   uint32_t pk[PK_MAX];
@@ -315,21 +336,36 @@ static void net_reply(int n) {
   if (n >= 0) NET[n] = 0;
   switch (was) {
   case N_PUB:
-    if (pub_reply(n)) start_mail();
+    if (pub_reply(n)) { if (G.fetching == 1) fetch_deal(); else start_mail(); }
     return;
   case N_SAY:                                       /* "pending": ask again shortly */
     net_status("");
-    if (n < 0) { failed("Tibbs", n); TK_PENDING = 0; return; }
-    if (refused("Tibbs")) { TK_PENDING = 0; return; }
-    if (str_starts(NET, "busy")) say("He is still talking");
+    if (n < 0) { failed(NPC_NAME[G.npc], n); TK_PENDING = 0; return; }
+    if (refused(NPC_NAME[G.npc])) { TK_PENDING = 0; return; }
+    if (str_starts(NET, "busy")) say("Still talking");
     TK_AGAIN = api->ticks_ms() + 3000;
     return;
   case N_HEAR:
     net_status("");
-    if (n < 0) { failed("Tibbs", n); TK_PENDING = 0; return; }
+    if (n < 0) { failed(NPC_NAME[G.npc], n); TK_PENDING = 0; return; }
     TK_PENDING = tk_parse();
     if (TK_PENDING) TK_AGAIN = api->ticks_ms() + 3000;
+    fetch_deal();
     return;
+  case N_DEAL: {
+    int len;
+    char m[44];
+    net_status("");
+    G.fetching = 0;
+    if (n < 0) { failed("A delivery", n); return; }
+    len = take_record(NET, "a delivery");
+    if (len > 0 && jtx_install(&G.fx, IO.raw, len, &IO.it, m, sizeof m) == 0) {
+      save();
+      say(m);
+      if (!TK_PENDING && hear() == 0) net_status("");   /* the deals after it */
+    }
+    return;
+  }
   case N_ME:
     net_status("");
     if (n < 0) { failed("Friends", n); return; }
@@ -485,39 +521,29 @@ static void tk_add(const char *s, int n, int who) {
   }
 }
 
-/* A deal's effect, once: "tx ID pay N" (coins to him), "get N" (coins from
- * him), "lose ITEM" (a thing handed over). Done in order, each id once --
- * J.txseen is in the save. */
+/* A deal's effect, once, in order (apps/jartx.h). One that brings an item
+ * stops the rest until the item is here: fetch_deal asks for it. */
 static void tk_tx(const char *p) {
-  const char *q = p + 3;
-  uint32_t id = str_uint(&q), n;
-  char what[8];
-  if (id <= J.txseen) return;
-  while (*q == ' ') q++;
-  tsv_field(q, 0, what, sizeof what);
-  {
-    char *c;
-    for (c = what; *c; c++) if (*c == ' ') *c = 0;
-  }
-  while (*q && *q != ' ') q++;
-  while (*q == ' ') q++;
-  n = str_uint(&q);
-  if (str_same(what, "pay")) {
-    J.coins = J.coins > n ? J.coins - n : 0;
-    api->fmt(U.msg, sizeof U.msg, "You paid Tibbs %u", (unsigned)n);
-  } else if (str_same(what, "get")) {
-    J.coins += n;
-    api->fmt(U.msg, sizeof U.msg, "Tibbs paid you %u", (unsigned)n);
-  } else if (str_same(what, "lose") && js_owns(&J, n)) {
-    char path[48];
-    js_disown(&J, n);
-    jst_item_path(api, n, path, sizeof path);
-    api->remove(path);
-    api->fmt(U.msg, sizeof U.msg, "Handed over to Tibbs");
-  }
+  JTx t;
+  int r;
+  if (G.fetching || jtx_parse(p, &t) != 0) return;
+  r = jtx_apply(&t, U.msg, sizeof U.msg);
+  if (r == JTX_FETCH) { api->mem_cpy(&G.fx, &t, sizeof t); G.fetching = 1; return; }
+  if (r != JTX_DONE) return;
   U.msg_until = api->ticks_ms() + 4000;
-  J.txseen = id;
   save();
+}
+
+/* The item a deal brings, if one is waiting and the line is free. */
+static void fetch_deal(void) {
+  char path[40];
+  if (G.fetching != 1 || U.net) return;
+  if (need_pub()) return;                           /* the key first; then here again */
+  api->fmt(path, sizeof path, "/jar/item?id=%u", (unsigned)G.fx.arg);
+  if (send(N_DEAL, "GET", path, 0) == 0) {
+    G.fetching = 2;
+    net_status(str_same(G.fx.op, "give") ? "collecting" : "fetching it back");
+  }
 }
 
 /* GET /jar/talk: "pending" | "ok" | "error WHY", then "day\tTEXT", "me\tTEXT"
@@ -548,22 +574,63 @@ static int tk_parse(void) {
 }
 
 static int hear(void) {
-  char path[40];
-  api->fmt(path, sizeof path, "/jar/talk?tx=%u", (unsigned)J.txseen);
+  char path[56];
+  if (G.fetching) G.fetching = 1;                   /* ask again for what was waiting */
+  api->fmt(path, sizeof path, "/jar/talk?who=%s&tx=%u", NPC_ID[G.npc], (unsigned)J.txseen);
   return send(N_HEAR, "GET", path, 0);
 }
 
-static void go_talk(void) {
+static void go_talk(int npc, int back) {
   G.view = V_TALK;
+  G.npc = npc;
+  G.talk_back = back;
+  TK_N = TK_PENDING = 0;
+  TK_AGAIN = 0;
+  G.fetching = 0;
   start_input(IN_TALK);
   if (!U.net && hear() == 0) net_status("knocking");
+}
+
+static void go_town(void) {
+  G.view = V_TOWN;
+  G.in = IN_NONE;
+}
+
+/* The Town: the lane's four, and what you have to pay them with. */
+static void paint_town(void) {
+  int i;
+  char b[48];
+  box(0, BAR, SW, BODY, C_BG);
+  for (i = 0; i < NPC_N; i++) {
+    int y = BAR + 3 + i * 22, on = i == G.tsel;
+    uint16_t bg = on ? C_PANEL : C_BG;
+    box(4, y, SW - 8, 21, bg);
+    text(10, y + 2, NPC_NAME[i], on ? C_GOLD : C_TEXT, bg);
+    text(10, y + 11, NPC_WHAT[i], C_DIM, bg);
+  }
+  api->fmt(b, sizeof b, "%u spores  %u nectar  %u twigs", (unsigned)J.res[JRS_SPORES],
+           (unsigned)J.res[JRS_NECTAR], (unsigned)J.res[JRS_TWIGS]);
+  text(8, SHT - BAR - 10, b, C_TRAIT, C_BG);
+}
+
+static int key_town(int k) {
+  switch (k) {
+  case CAPP_KEY_UP:   if (G.tsel > 0) G.tsel--; return 1;
+  case CAPP_KEY_DOWN: if (G.tsel < NPC_N - 1) G.tsel++; return 1;
+  case CAPP_KEY_ENTER: case 't': case 'T': go_talk(G.tsel, V_TOWN); return 1;
+  case CAPP_KEY_ESC: to_jar(); return 1;
+  }
+  return 1;
 }
 
 static void paint_talk(void) {
   int rows = 9, first = TK_N - rows, i, y;
   box(0, BAR, SW, BODY, C_BG);
-  if (!TK_N && !TK_PENDING)
-    wrapped(8, BAR + 8, "Tibbs is behind the counter. Say something: type, then Enter.", 37, 3, C_DIM, C_BG);
+  if (!TK_N && !TK_PENDING) {
+    char b[96];
+    api->fmt(b, sizeof b, "%s Say something: type, then Enter.", NPC_HELLO[G.npc]);
+    wrapped(8, BAR + 8, b, 37, 4, C_DIM, C_BG);
+  }
   if (TK_PENDING) first++;
   if (first < 0) first = 0;
   for (i = first, y = BAR + 2; i < TK_N; i++, y += 9) {
@@ -571,7 +638,11 @@ static void paint_talk(void) {
     if (TK_WHO[i] == 1) text(SW - 4 - slen(TK[i]) * 6, y, TK[i], c, C_BG);   /* you, on the right */
     else text(4, y, TK[i], c, C_BG);
   }
-  if (TK_PENDING) text(4, y, "Tibbs: ...", C_DIM, C_BG);
+  if (TK_PENDING) {
+    char b[24];
+    api->fmt(b, sizeof b, "%s: ...", NPC_NAME[G.npc]);
+    text(4, y, b, C_DIM, C_BG);
+  }
   box(2, SHT - BAR - 13, SW - 4, 12, C_PANEL);
   {
     int n = slen(G.input), from = n > 37 ? n - 37 : 0;   /* the end of what is typed */
@@ -581,17 +652,24 @@ static void paint_talk(void) {
 }
 
 static int key_talk(int k) {
-  if (k == CAPP_KEY_ESC) { to_jar(); return 1; }
+  if (k == CAPP_KEY_ESC) {
+    if (G.talk_back == V_TOWN) go_town();
+    else to_jar();
+    return 1;
+  }
   if (key_input(k, TK_SAY)) return 1;
   if (!G.inlen) return 1;
-  if (TK_PENDING || U.net) { say("He is still talking"); return 1; }
+  if (TK_PENDING || U.net) { say("Still talking"); return 1; }
   jst_clean(G.input);
   tk_add(G.input, G.inlen, 1);
   {
-    /* what you have first: with it he can strike a deal (a bribe, a trade) */
-    char body[TK_SAY + 24];
-    api->fmt(body, sizeof body, "coins %u\n%s", (unsigned)J.coins, G.input);
-    if (send(N_SAY, "POST", "/jar/talk", body) != 0) { say("Busy: try again"); return 1; }
+    /* what you have first: with it they can strike a deal (a bribe, a
+     * trade, a job) -- coins, the stores, the beds */
+    char body[TK_SAY + 160], path[32];
+    int n = jtx_have(body, (int)sizeof body - TK_SAY - 1);
+    api->fmt(body + n, sizeof body - (size_t)n, "%s", G.input);
+    api->fmt(path, sizeof path, "/jar/talk?who=%s", NPC_ID[G.npc]);
+    if (send(N_SAY, "POST", path, body) != 0) { say("Busy: try again"); return 1; }
   }
   TK_PENDING = 1;
   start_input(IN_TALK);
@@ -652,6 +730,7 @@ static void post_paint(void *st, CRect c) {
   static const char *const H_FRIENDS[] = { "^v", "pick", "Ent", "send gift", "A", "add", "Esc", "jar", 0 };
   static const char *const H_PICK[] = { "^v", "pick", "Ent", "send this", "Esc", "back", 0 };
   static const char *const H_TALK[] = { "Ent", "say it", "Esc", "leave", 0 };
+  static const char *const H_TOWN[] = { "^v", "pick", "Ent", "talk", "Esc", "jar", 0 };
   static const char *const H_INPUT[] = { "Ent", "ok", "Esc", "cancel", 0 };
   static const char *const H_GIFT[] = { "^v", "pick", "Ent", "next", "Esc", "back", 0 };
   static const char *const H_SURE[] = { "y", "send", "n", "the note", 0 };
@@ -670,7 +749,8 @@ static void post_paint(void *st, CRect c) {
     break;
   case V_MAIL:    paint_mail(); h = H_MAIL; where = "Mail"; break;
   case V_PICK:    paint_pick(); h = H_PICK; where = "Send a Gift"; break;
-  case V_TALK:    paint_talk(); h = H_TALK; where = "Tibbs"; break;
+  case V_TALK:    paint_talk(); h = H_TALK; where = NPC_NAME[G.npc]; break;
+  case V_TOWN:    paint_town(); h = H_TOWN; where = "The Town"; break;
   case V_CARD:
     paint_card(M[G.card_mail].from, M[G.card_mail].note);
     h = H_CARD;
@@ -730,7 +810,7 @@ static int key_friends(int k) {
   case 'n': case 'N': case 'e': case 'E': start_input(IN_NAME); return 1;
   case 'r': case 'R': fetch_me(); return 1;
   case 'm': case 'M': go_mail(); return 1;
-  case 't': case 'T': go_talk(); return 1;
+  case 't': case 'T': go_town(); return 1;
   case CAPP_KEY_ESC: to_jar(); return 1;
   }
   return 1;
@@ -826,6 +906,7 @@ static int post_key(void *st, uint8_t k) {
   case V_GIFT:    return key_gift(k);
   case V_PICK:    return key_pick(k);
   case V_TALK:    return key_talk(k);
+  case V_TOWN:    return key_town(k);
   case V_MAIL:    return key_mail(k);
   case V_CARD:    return key_card(k);
   }
@@ -843,6 +924,8 @@ static int post_tick(void *st, uint32_t now) {
   if (U.net) {
     int n = api->http_poll(NET, sizeof NET);
     if (n != CAPP_HTTP_PENDING) net_reply(n);
+  } else if (G.fetching == 1) {
+    fetch_deal();
   } else if (TK_AGAIN && (int32_t)(now - TK_AGAIN) >= 0) {
     TK_AGAIN = 0;                                   /* is he done talking? */
     if (G.view != V_TALK || hear() != 0) TK_PENDING = 0;
@@ -855,7 +938,8 @@ static int post_tick(void *st, uint32_t now) {
 
 /* ---- opening ---------------------------------------------------------------------------------- */
 
-/* The post on SCREEN: friends (the default), mail, talk (Tibbs), "gift ID".
+/* The post on SCREEN: friends (the default), mail, talk (Tibbs), town (the
+ * lane), "gift ID".
  * A screen of Jar Factory (apps/jar.c). */
 static void post_open(const char *s) {
   if (!s) s = "";
@@ -869,7 +953,8 @@ static void post_open(const char *s) {
   TK_N = TK_PENDING = 0;
   TK_AGAIN = 0;
   if (str_same(s, "mail")) go_mail();
-  else if (str_same(s, "talk")) go_talk();
+  else if (str_same(s, "talk")) go_talk(0, -1);
+  else if (str_same(s, "town")) go_town();
   else if (str_starts(s, "gift ")) {
     const char *p = s + 5;
     G.view = V_FRIENDS;

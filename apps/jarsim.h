@@ -180,16 +180,32 @@ static const char *const JS_SAYINGS[] = {
  * UTC seconds -- 0 for a plant that is grown (the starting beds, and every
  * bed before the garden existed), 1 for one planted with no clock, which
  * starts counting when a clock arrives. A young plant grows no berries. */
-typedef struct { int32_t grow; uint32_t at; uint8_t ready, claimed, type, young, mould; } JBed;
+typedef struct { int32_t grow; uint32_t at; uint8_t ready, claimed, type, young, mould, lv; } JBed;
 
-/* The garden (spec step 4): what can be planted, in the order the scene's
- * plant pictures are in. Each steers the daily stock its own way (the
- * companion app says how). */
-enum { JPL_BERRY = 0, JPL_FERN, JPL_SHROOM, JPL_FLOWER, JPL_CACTUS, JPL_KINDS };
+/* The garden: four plants, each making its own thing (2026-10-11). Berries
+ * are jam and coins, as before; reed makes twigs, mushrooms spores and
+ * flowers nectar, which the mosslings carry to the stores and the lane's
+ * people are paid in (server/town.py): Wren builds for twigs, Pip alters
+ * for spores, Bramble evolves for nectar. A bed's level (1-3, Bramble's
+ * work) makes it grow faster. Fern and cactus were plants once: a save's
+ * fern (1) is reed now, its cactus (4) reed too. */
+enum { JPL_BERRY = 0, JPL_REED, JPL_SHROOM, JPL_FLOWER, JPL_KINDS };
+enum { JRS_SPORES = 0, JRS_NECTAR, JRS_TWIGS, JRS_KINDS };
+#define JS_RES_MAX     999
+#define JS_BED_LV_MAX  3
 #define JS_MATURE_S    (3u * 86400u)   /* three real days to grow */
 #define JS_SHELF       4
-static JS_OPT const char *const JS_PLANT_NAME[JPL_KINDS] = { "berry", "fern", "mushroom", "flower", "cactus" };
-static JS_OPT const uint16_t JS_PLANT_COST[JPL_KINDS] = { 20, 20, 35, 35, 40 };
+static JS_OPT const char *const JS_PLANT_NAME[JPL_KINDS] = { "berry", "reed", "mushroom", "flower" };
+static JS_OPT const char *const JS_PLANT_SHORT[JPL_KINDS] = { "berry", "reed", "shroom", "flower" };
+static JS_OPT const uint16_t JS_PLANT_COST[JPL_KINDS] = { 20, 25, 30, 30 };
+/* What each plant makes: a store, or -1 for berries (jam). */
+static JS_OPT const int8_t JS_PLANT_RES[JPL_KINDS] = { -1, JRS_TWIGS, JRS_SPORES, JRS_NECTAR };
+static JS_OPT const char *const JS_RES_NAME[JRS_KINDS] = { "spores", "nectar", "twigs" };
+
+/* A saved plant type, as it is now. */
+static JS_OPT int js_plant_type(uint32_t ty) {
+  return ty == 4 ? JPL_REED : (int)(ty % JPL_KINDS);
+}
 
 typedef struct {
   int32_t x, tx;                       /* middle, sub-pixels */
@@ -269,6 +285,7 @@ typedef struct {
   uint32_t gseen;                      /* the last gift the jar announced */
   uint32_t txseen;                     /* the last of Tibbs's deals carried out (tx) */
   uint32_t patchseen;                  /* the last patch fetched (server/jarpatch.py) */
+  uint16_t res[JRS_KINDS];             /* the stores: spores, nectar, twigs */
 
   /* the factory */
   JBed   bed[JS_MAX_BEDS];
@@ -395,7 +412,7 @@ static JS_OPT int32_t js_rate_for(int nbeds, int nmoss, int nmach, int belt) {
 /* Only grown plants count: a bed replanted yesterday grows nothing yet. */
 static JS_OPT int32_t js_rate_ph(const Jar *j) {
   int i, n = 0;
-  for (i = 0; i < j->nbeds; i++) if (!j->bed[i].young) n++;
+  for (i = 0; i < j->nbeds; i++) if (!j->bed[i].young && j->bed[i].type == JPL_BERRY) n++;
   return n ? js_rate_for(n, j->nmoss, j->nmach, j->belt) : 0;
 }
 
@@ -435,7 +452,7 @@ static JS_OPT void js_settle_beds(Jar *j, uint32_t now) {
 /* Plant `type` in bed i (paid for by the caller). It starts young. */
 static JS_OPT void js_plant(Jar *j, int i, int type, uint32_t now) {
   JBed *b = &j->bed[i];
-  b->type = (uint8_t)(type % JPL_KINDS);
+  b->type = (uint8_t)js_plant_type((uint32_t)type);
   b->at = now ? now : 1;
   b->young = 1;
   b->ready = 0;
@@ -1282,8 +1299,38 @@ static JS_OPT int js_up_cost(const Jar *j, int k) {
 
 /* The rate an upgrade would give. */
 static JS_OPT int32_t js_rate_after(const Jar *j, int k) {
-  return js_rate_for(j->nbeds + (k == JU_BED), j->nmoss + (k == JU_MOSS),
-                     j->nmach + (k == JU_MACH), j->belt + (k == JU_BELT));
+  int i, n = 0;
+  for (i = 0; i < j->nbeds; i++) if (!j->bed[i].young && j->bed[i].type == JPL_BERRY) n++;
+  if (k == JU_BED && j->nbeds < JS_MAX_BEDS && j->bed[j->nbeds].type == JPL_BERRY) n++;
+  if (!n) return 0;
+  return js_rate_for(n, j->nmoss + (k == JU_MOSS), j->nmach + (k == JU_MACH), j->belt + (k == JU_BELT));
+}
+
+/* A bed's level, 1 to 3. */
+static JS_OPT int js_bed_lv(const JBed *b) { return b->lv > 1 ? b->lv : 1; }
+
+/* Something from the stores (n of resource r): 0, or -1 if there is not that much. */
+static JS_OPT int js_res_use(Jar *j, int r, uint32_t n) {
+  if (r < 0 || r >= JRS_KINDS || n > j->res[r]) return -1;
+  j->res[r] = (uint16_t)(j->res[r] - n);
+  return 0;
+}
+
+static JS_OPT void js_res_gain(Jar *j, int r, uint32_t n) {
+  uint32_t v;
+  if (r < 0 || r >= JRS_KINDS) return;
+  v = j->res[r] + n;
+  j->res[r] = (uint16_t)(v > JS_RES_MAX ? JS_RES_MAX : v);
+}
+
+/* Which store a name is ("spores", "nectar", "twigs"), or -1. */
+static JS_OPT int js_res_of(const char *s) {
+  int r, k;
+  for (r = 0; r < JRS_KINDS; r++) {
+    for (k = 0; JS_RES_NAME[r][k] && s[k] == JS_RES_NAME[r][k]; k++) {}
+    if (!JS_RES_NAME[r][k] && (s[k] == 0 || s[k] == ' ')) return r;
+  }
+  return -1;
 }
 
 static JS_OPT void js_new_moss(Jar *j, int k) {
@@ -1331,7 +1378,9 @@ static JS_OPT int js_buy(Jar *j, int k) {
 /* A new jar. `j` must be zeroed first (an app has no memset: the caller has
  * api->mem_set). */
 static JS_OPT void js_init(Jar *j, uint32_t seed) {
-  static const uint8_t TYPES[JS_MAX_BEDS] = { 0, 1, 2, 3, 4, 0 };
+  /* Two berry beds to start, so jam comes first; the next three make the
+   * lane's three things. */
+  static const uint8_t TYPES[JS_MAX_BEDS] = { JPL_BERRY, JPL_BERRY, JPL_REED, JPL_SHROOM, JPL_FLOWER, JPL_BERRY };
   int i;
   j->seed = seed | 1u;
   j->nbeds = 2;
@@ -1461,7 +1510,7 @@ static JS_OPT void js_step_beds(Jar *j) {
   for (i = 0; i < j->nbeds; i++) {
     JBed *b = &j->bed[i];
     if (b->ready || b->young || b->mould || j->puddle >= 20) continue;
-    b->grow += JS_STEP_MS;
+    b->grow += JS_STEP_MS * (js_bed_lv(b) + 1) / 2;   /* level 2 half as fast again, 3 twice */
     if (b->grow >= JS_GROW_MS) { b->grow = JS_GROW_MS; b->ready = 1; js_event(j, JE_BERRY, 0); }
   }
 }
@@ -1535,7 +1584,7 @@ static JS_OPT void js_step_moss(Jar *j, int k) {
       b->ready = 0;
       b->claimed = 0;
       b->grow = 0;
-      m->carry = 1;
+      m->carry = (uint8_t)(1 + b->type % JPL_KINDS);   /* 1 a berry, else what the plant makes */
       m->bed = -1;
       m->st = M_TO_VAT;
       m->tx = (int32_t)(JS_DROP_X - 3 * k) * JS_FX;
@@ -1544,6 +1593,15 @@ static JS_OPT void js_step_moss(Jar *j, int k) {
   case M_TO_VAT:
     if (!js_walk(&m->x, m->tx, spd, &m->face)) { moving = 1; break; }
     m->face = 0;
+    if (m->carry > 1) {                     /* not for the vat: into the stores */
+      js_res_gain(j, JS_PLANT_RES[(m->carry - 1) % JPL_KINDS], 1);
+      js_particle(j, JP_SPARKLE, m->x / JS_FX, JS_SOIL - 14);
+      m->carry = 0;
+      m->st = M_IDLE;
+      m->t = 20;
+      m->tx = m->x;
+      break;
+    }
     if (j->mach[0].st != 0 && js_need_fixer(j) && j->fixer[0] != k && j->fixer[1] != k) {
       js_add_fixer(j, k);                   /* the vat is stuck behind the jam: help */
       m->st = M_TO_FIX;
@@ -2178,6 +2236,10 @@ static JS_OPT int js_save(const Jar *j, char *buf, int cap) {
     n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, j->bed[i].type);
     n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, j->bed[i].at);
   }
+  n = js_put(buf, n, cap, "\nlevel");
+  for (i = 0; i < j->nbeds; i++) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, (uint32_t)js_bed_lv(&j->bed[i])); }
+  n = js_put(buf, n, cap, "\nres");
+  for (i = 0; i < JRS_KINDS; i++) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, j->res[i]); }
   n = js_put(buf, n, cap, "\nshelf");
   for (i = 0; i < JS_SHELF; i++) { n = js_put(buf, n, cap, " "); n = js_put_u(buf, n, cap, j->shelf[i]); }
   n = js_put(buf, n, cap, "\n");
@@ -2274,12 +2336,24 @@ static JS_OPT int js_load(Jar *j, const char *t) {
       while (js_more(p)) {
         uint32_t ty = js_num(&p), at = js_num(&p);
         if (i < JS_MAX_BEDS) {
-          j->bed[i].type = (uint8_t)(ty % JPL_KINDS);
+          j->bed[i].type = (uint8_t)js_plant_type(ty);
           j->bed[i].at = at;
           j->bed[i].young = (uint8_t)(at != 0);   /* js_settle_beds decides */
           if (at) { j->bed[i].ready = 0; j->bed[i].grow = 0; }
           i++;
         }
+      }
+    } else if (js_word_is(w, "level")) {
+      int i = 0;
+      while (js_more(p)) {
+        uint32_t v = js_num(&p);
+        if (i < JS_MAX_BEDS) j->bed[i++].lv = (uint8_t)js_clamp((int)v, 1, JS_BED_LV_MAX);
+      }
+    } else if (js_word_is(w, "res")) {
+      int i = 0;
+      while (js_more(p)) {
+        uint32_t v = js_num(&p);
+        if (i < JRS_KINDS) j->res[i++] = (uint16_t)(v > JS_RES_MAX ? JS_RES_MAX : v);
       }
     } else if (js_word_is(w, "shelf")) {
       int i = 0;

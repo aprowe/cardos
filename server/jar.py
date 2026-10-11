@@ -120,7 +120,7 @@ def pick_tier(rng, bribe=0):
 # Plants are sold as seed packets now and then, instead of steering the
 # stock (the owner: "i dont want the plants to influence the shop").
 SEED_CHANCE = 30              # percent of stocks with a seed packet
-SEED_PRICE = {"berry": 25, "fern": 25, "mushroom": 40, "flower": 40, "cactus": 50}
+SEED_PRICE = {"berry": 25, "reed": 25, "mushroom": 30, "flower": 30}   # apps/jarsim.h JS_PLANT_NAME
 SCRIPT_SRC_MAX = 1200         # a script's source, as Claude writes it
 STOCK_TTL = 3 * 86400
 FRIENDS_MAX = 64
@@ -654,6 +654,7 @@ def day_facts(date, tz):
 FLAVOURS = {
     "mushroom": ["odd", "glowing", "spooky"],
     "berry": ["sweet", "round", "food"],
+    "reed": ["woody", "handmade", "cosy"],
     "fern": ["soft", "sleepy", "cosy"],
     "flower": ["fancy", "dressed-up"],
     "cactus": ["spiky", "deserty", "tough"],
@@ -783,11 +784,11 @@ def item_schema(form=None):
                        "items": {"enum": list(jarvm.GROUPS["trait"])}}
         p["voice"] = {"enum": list(jarvm.GROUPS["sound"]) + ["none"]}
         s["required"] = s["required"] + ["traits"]
-        if form == "furniture":
-            p["surface"] = {"type": "integer", "minimum": 0, "maximum": 13}
-            s["required"] = s["required"] + ["surface"]
         if form == "part":
             p["frames"] = dict(p["frames"], minItems=2)
+    if form == "furniture":                             # Wren's, v2 or not
+        s["properties"]["surface"] = {"type": "integer", "minimum": 0, "maximum": 13}
+        s["required"] = s["required"] + ["surface"]
     return s
 
 
@@ -866,7 +867,7 @@ def prompt_for(brief, owned=(), avoid=(), kind=None, tier=None, form=None):
     ]
     if kind:
         lines.append("Make it %s." % KIND_WORDS[kind])
-    if form and jarvm.V2:
+    if form and (jarvm.V2 or form == "furniture"):
         lines.append(FORM_WORDS[form])
     if tier:
         lines.append("It will sell for %d coins. %s" % (tier[1], tier[3]))
@@ -1018,6 +1019,8 @@ def to_item(raw, item_id, made, tags, log=None, price=0, form=None):
     """A checked item (Claude's dict) -> the dict encode() takes."""
     e = enums()
     ext = {}
+    if form == "furniture":                             # Wren's furniture is furniture, v2 or not
+        ext.update(role=1, surface=max(0, min(13, int(raw.get("surface", 4)))))
     if jarvm.V2:
         tags = traits_tags(raw.get("traits")) or tags
         voice = raw.get("voice")
@@ -1048,7 +1051,8 @@ def to_item(raw, item_id, made, tags, log=None, price=0, form=None):
 
 
 def generate(chat, person, req, date, store=None, signer=None, now=None, log=None,
-             on_item=None, want=None, kind_at=0, briefs=None, limit=ask.DAILY, rng=None):
+             on_item=None, want=None, kind_at=0, briefs=None, limit=ask.DAILY, rng=None,
+             force_form=None):
     """New items for `person` (None: for the pool): [signed records]. One
     Claude call an item, each from a brief (the shopkeeper's, or loose sparks
     when there is none), its kind from KIND_PLAN starting at kind_at and its
@@ -1074,7 +1078,7 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
         taken = set(owned) | {n.strip().lower() for n in names}
         if tier is None:                               # chosen first; kept through a retry
             tier = pick_tier(rng, req.get("bribe", 0) if req.get("finds") else 0)
-            form = roll_form(kind, rng) if jarvm.V2 else None
+            form = force_form or (roll_form(kind, rng) if jarvm.V2 else None)
         try:
             got = ask.ask_shape(chat, prompt_for(briefs[k], req.get("owned", []), names, kind,
                                                  tier, form),
@@ -1657,10 +1661,20 @@ def pending_deal(person, store=None):
     return _json(store or kv.store(), "deal/" + person, None)
 
 
+def _who(args):
+    who = arg(args, "who") or "tibbs"
+    if who not in shopkeep.NPCS:
+        raise KVError("who= is one of %s" % ", ".join(shopkeep.NPCS))
+    return who
+
+
 @kv_route
 def post_talk(h, args):
-    """say something to Tibbs, the shopkeeper; his reply comes later (GET).
-    A first line "coins N" says what you have, and lets him deal."""
+    """say something to someone on the lane (who=tibbs|pip|bramble|wren);
+    the reply comes later (GET). Lines before the words -- "coins N",
+    "have spores=S nectar=N twigs=T", "beds berry1,..." -- say what you
+    have, and let them deal."""
+    from . import town
     try:
         body = h.body(1024).decode("utf-8", "replace")
     except ValueError as e:
@@ -1668,19 +1682,23 @@ def post_talk(h, args):
     if not _chat_ok(h):
         h.text("error this server runs without Claude\n", 503)
         return
-    coins = None
-    head, _, rest = body.partition("\n")
-    if head.startswith("coins ") and head[6:].strip().isdigit():
-        coins, body = int(head[6:].strip()), rest
+    who = _who(args)
+    coins, have, beds, body = town.parse_have(body)
     try:
         me = kv.me()
-        context = deal_context(me, coins) if coins is not None else ""
+        if who == "tibbs":
+            context = deal_context(me, coins) if coins is not None else ""
+            on_deal = (lambda p, d: make_deal(p, d, coins)) if context else None
+        else:
+            context = town.context(me, coins, have, beds) if have is not None else ""
+            on_deal = ((lambda p, d: town.make_deal(who, p, d, coins, have, beds, h.chat))
+                       if context else None)
         started = shopkeep.say(h.chat, me, body,
                                [f for f in friends_of(me) if mutual(me, f)], context=context,
-                               on_deal=(lambda p, d: make_deal(p, d, coins)) if context else None)
+                               on_deal=on_deal, who=who)
     except ValueError as e:
         raise KVError(str(e))
-    h.text("pending\n" if started else "busy he is still answering\n")
+    h.text("pending\n" if started else "busy still answering\n")
 
 
 @kv_route
@@ -1716,7 +1734,18 @@ def get_talk(h, args):
     """Tibbs: "pending", "ok" or "error WHY", then his line of the day and the
     talk; with tx=LAST, the deals' effects after LAST ("tx ID pay|get|lose N")"""
     raw = arg(args, "tx")
-    h.text(shopkeep.talk_text(kv.me(), tx_after=int(raw) if raw.isdigit() else None))
+    h.text(shopkeep.talk_text(kv.me(), tx_after=int(raw) if raw.isdigit() else None,
+                              who=_who(args)))
+
+
+@kv_route
+def get_tx(h, args):
+    """the deals' effects after=N: "tx ID OP ARG" lines -- the lane's jobs
+    finish while you are elsewhere"""
+    raw = arg(args, "after")
+    after = int(raw) if raw.isdigit() else 0
+    h.text("".join("tx %d %s %s\n" % (t["id"], t["op"], t["arg"])
+                   for t in shopkeep.txs(kv.me()) if t["id"] > after))
 
 
 @kv_route
@@ -1751,7 +1780,8 @@ def _day_text(cur):
     if cur.get("say"):
         out += "say %s\n" % cur["say"]
     if cur.get("seed"):
-        out += "seed %s %d\n" % (cur["seed"], SEED_PRICE[cur["seed"]])
+        name = {"fern": "reed", "cactus": "reed"}.get(cur["seed"], cur["seed"])   # old plants
+        out += "seed %s %d\n" % (name, SEED_PRICE.get(name, 25))
     return out + ("more\n" if cur["state"] == "pending" else "")
 
 
@@ -1775,7 +1805,19 @@ def get_day(h, args):
 
 @kv_route
 def get_item(h, args):
-    """one item of your stock, base64"""
+    """one item of your stock (i=N), or one of your things by id (id=N), base64"""
+    rid = arg(args, "id")
+    if rid:
+        if not rid.isdigit():
+            raise KVError("id= is an item id")
+        st = kv.store()
+        if st.get(NS, "own/%d" % int(rid)) != kv.me().encode():
+            raise NotFound("not one of yours: %s" % rid)
+        rec = st.get(NS, "rec/%d" % int(rid))
+        if rec is None:
+            raise NotFound("no item %s" % rid)
+        h.text(base64.b64encode(rec).decode() + "\n")
+        return
     raw = arg(args, "i")
     if not raw.isdigit():
         raise KVError("i= is an item number, from 0")
@@ -1872,6 +1914,7 @@ ROUTES = [
     ("GET", "/jar/sky", get_sky, "device_or_dash"),
     ("GET", "/jar/patches", get_patches, "device_or_dash"),
     ("GET", "/jar/events", get_events, "device_or_dash"),
+    ("GET", "/jar/tx", get_tx, "device_or_dash"),
     ("POST", "/jar/gift", post_gift, "device_or_dash"),
     ("POST", "/jar/thanks", post_thanks, "device_or_dash"),
 ]
