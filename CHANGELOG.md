@@ -11,6 +11,31 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.17.0 -- 2026-10-11
+
+App API 46: every app must be updated with the firmware (`update all`).
+
+- **Apps keep their constants in flash, and overlays** (API 46): app data is
+  .data + .bss + the largest overlay; const tables cost nothing. Jar Factory
+  went from 28.6 KB to 17.2 KB of its 28 KB.
+- **The living jar** -- items that do things and react to each other:
+  - a richer script language: fireworks (`burst`), sounds, `throw`, `eat`
+    berries and `drop` pellets, `signal`s between items, `seek` a trait,
+    a fog horn `on hour`, `on world`, `on new`, `on bumped`, traits read
+    with `has()`;
+  - items can be furniture (things stand on it), scenery, big, or have a
+    part that leaves and comes back (a birdhouse's bird);
+  - world events, good and bad: ants after the berries, a leak, a breeze, a
+    visitor, the lights going out, a bloom;
+  - chores that stop the jar until you come (a sulking snail, mould, a
+    puddle): `x` sees to them, so it does not run all night;
+  - a sound bank and a very sparse soundtrack (`b`: music and sounds,
+    sounds only, quiet); the screen stays on while the jar is open;
+  - when you buy something, items already in your jar may learn about it
+    (signed patches written by Claude), and each day brings its own named
+    events;
+  - deals with Tibbs in conversation are carried out on the device.
+
 ## v0.16.0 -- 2026-10-11
 
 - **Game Night** (Games): four tools for the table, each on its own.
