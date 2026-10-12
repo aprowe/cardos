@@ -17,8 +17,12 @@ lines over the plain HTTP it already speaks to this server.
     GET  /todo/lists               -> id <tab> title, a list a line
     POST /todo/lists               body: the title   -> the new list's id
     GET  /todo/tasks?list=ID       -> id <tab> 0|1 <tab> title   (1 is done)
-    POST /todo/task?list=ID        body: the title   -> the new task's id
-    PATCH /todo/task?list=ID&id=ID body: done=0|1 and/or title=..
+         &due=1 adds <tab> YYYY-MM-DD, or nothing after the tab: the due
+            date, which Todo uses as "claimed for that day". Asked for, so
+            a Todo from before it, reading three fields, is not handed four
+    POST /todo/task?list=ID[&due=YYYY-MM-DD]  body: the title -> its id
+    PATCH /todo/task?list=ID&id=ID body: done=0|1, title=.., due=YYYY-MM-DD
+                                   (due= with nothing clears it)
     DELETE /todo/task?list=ID&id=ID
 
 Calendar ids are short. Google's run to 200 characters (a recurring
@@ -348,11 +352,20 @@ def _list(args):
     return TASKS + "/lists/" + urllib.parse.quote(lid)
 
 
+def _due(day):
+    """YYYY-MM-DD as Google wants a due date. Google keeps only the date."""
+    if len(day) != 10 or day[4] != "-" or day[7] != "-" or \
+            not (day[:4] + day[5:7] + day[8:]).isdigit():
+        raise ValueError("due= is YYYY-MM-DD, not %r" % day)
+    return day + "T00:00:00.000Z"
+
+
 @_route
 def get_tasks(h, args):
-    """a list's tasks, id, done and title"""
+    """a list's tasks, id, done and title (and due date, with due=1)"""
+    want_due = _arg(args, "due") == "1"
     items = pages(_list(args) + "/tasks?showCompleted=true&showHidden=false&maxResults=100"
-                  "&fields=nextPageToken,items(id,title,status)")
+                  "&fields=nextPageToken,items(id,title,status%s)" % (",due" if want_due else ""))
     items = [t for t in items if t.get("id") and clean(t.get("title"))]
     # What the device can hold: max= tasks, the open ones first (they are what
     # the list is for), and titles cut at 60. Its reply buffer is sized to that.
@@ -360,8 +373,9 @@ def get_tasks(h, args):
     if cap > 0:
         items = ([t for t in items if t.get("status") != "completed"] +
                  [t for t in items if t.get("status") == "completed"])[:cap]
-    return "".join("%s\t%d\t%s\n" % (t["id"], 1 if t.get("status") == "completed" else 0,
-                                     clean(t.get("title"))[:60])
+    return "".join("%s\t%d\t%s%s\n" % (t["id"], 1 if t.get("status") == "completed" else 0,
+                                       clean(t.get("title"))[:60],
+                                       "\t" + (t.get("due") or "")[:10] if want_due else "")
                    for t in items)
 
 
@@ -371,7 +385,10 @@ def post_task(h, args):
     title = clean(h.body(1024).decode("utf-8", "replace"))
     if not title:
         raise ValueError("a task needs a title")
-    return "%s\n" % call("POST", _list(args) + "/tasks", {"title": title}).get("id", "")
+    body = {"title": title}
+    if _arg(args, "due"):
+        body["due"] = _due(_arg(args, "due"))
+    return "%s\n" % call("POST", _list(args) + "/tasks", body).get("id", "")
 
 
 @_route
@@ -384,8 +401,10 @@ def patch_task(h, args):
         body["status"] = "completed" if f["done"] == "1" else "needsAction"
     if f.get("title"):
         body["title"] = clean(f["title"])
+    if "due" in f:
+        body["due"] = _due(f["due"]) if f["due"] else None
     if not tid or not body:
-        raise ValueError("id= and done= or title= are needed")
+        raise ValueError("id= and done=, title= or due= are needed")
     call("PATCH", _list(args) + "/tasks/" + urllib.parse.quote(tid), body)
     return "ok\n"
 

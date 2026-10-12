@@ -133,19 +133,26 @@ void test_today_the_lists_line_replaces_the_old_one_and_keeps_the_rest(void) {
   CHECK(!strcmp(out, "# todo lists: A\nCalendar | calendar today\n"));
 }
 
-/* The first time, with no file: the four sections asked for, and the todo
- * one on the list Todo has open. */
-void test_today_first_page_uses_todos_current_list(void) {
-  int i;
+/* A sections file from before the agenda asks `todo show LIST`; it is
+ * rewritten once to `todo today LIST`, comments and all else untouched. */
+void test_today_todo_show_becomes_todo_today(void) {
+  char out[256];
   dopen();
-  for (i = 0; i < MAX_SECT; i++) memset(&D.sect[i], 0, sizeof D.sect[i]);
-  D.nsect = 0;
-  add_section("Calendar", "calendar", "today");
-  {
-    char list[40];
-    CHECK_EQ(current_list(list, sizeof list), 0);
-    CHECK(!strcmp(list, "Chores"));
-  }
+  CHECK_EQ(todo_show_to_today(
+    "# todo lists: Home, Chores\n"
+    "# To do | todo show Chores\n"
+    "Calendar | calendar today\n"
+    "To do    | todo show My Tasks\n"
+    "Shows | tv show times\n", out, sizeof out), 1);
+  CHECK(!strcmp(out,
+    "# todo lists: Home, Chores\n"
+    "# To do | todo show Chores\n"
+    "Calendar | calendar today\n"
+    "To do    | todo today My Tasks\n"
+    "Shows | tv show times\n"));
+  CHECK_EQ(todo_show_to_today("To do | todo today Chores", out, sizeof out), 0);
+  CHECK(!strcmp(out, "To do | todo today Chores"));
+  CHECK_EQ(todo_show_to_today("To do | todo show Chores\n", out, 10), -1);
 }
 
 /* e puts the todo lists in the sections file before Edit opens it, and does

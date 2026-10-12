@@ -30,6 +30,17 @@
  * way the calendar's agenda groups by day. It is read from the cache files,
  * so it costs one small array and no requests of its own.
  *
+ * CLAIMING. A task is claimed for a day by its due date: `c` sets today's
+ * -- tomorrow's after 6 pm -- and takes it off again; `+` and `-` move it a
+ * day; `w` takes any day typed -- today, tom, fri, +3, 10/15. The agenda is every open task due today or earlier, from every
+ * list: the top of the overview, and `todo today LIST`, which is what
+ * Today's page asks for. A claim not finished stays on it the next day,
+ * because yesterday is still "today or earlier". Nothing claimed anywhere,
+ * and the agenda is LIST's open tasks instead. Dates live at Google, so a
+ * date set on a phone is a claim here too. Pushing a tick sends only the
+ * tick: the date goes only when it was changed here (due_dirty), so a date
+ * set on a phone since the last pull is not undone by ticking.
+ *
  * The JSON is read by looking for field names rather than parsed. A real parser
  * is several kilobytes to extract three strings per item from a document this
  * regular, and the memory is better spent on the items themselves.
@@ -76,12 +87,13 @@
  * same problem; Todo simply never had it done. */
 /* Google Tasks through the server (server/google.py): it holds the login and
  * speaks HTTPS and JSON to Google, and answers in lines -- a list a line,
- * "id <tab> title"; a task a line, "id <tab> 0|1 <tab> title". Plain HTTP to
+ * "id <tab> title"; a task a line, "id <tab> 0|1 <tab> title <tab> due"
+ * (due=1 asks for the date; a server from before it sends three fields). Plain HTTP to
  * api->proxy(), which the kernel signs with the device's server token. This
  * app used to do the TLS and the JSON itself, and was the largest on the
  * device for it (2026-09-29). */
 #define LIST_URL  "%s/todo/lists"
-#define TASKS_URL "%s/todo/tasks?list=%s&max=40"   /* MAX_ITEMS */
+#define TASKS_URL "%s/todo/tasks?list=%s&max=40&due=1"   /* MAX_ITEMS */
 #define TASK_URL  "%s/todo/task?list=%s&id=%s"
 #define ADD_URL   "%s/todo/task?list=%s"
 /* A new list. fields= as everywhere here: the reply is what the buffer holds. */
@@ -124,6 +136,8 @@ typedef struct {
   int  done;
   int  dirty;               /* changed here, not yet pushed */
   int  deleted;             /* gone here, not yet gone at Google */
+  char due[11];             /* "2026-10-12", or empty: claimed for that day */
+  int  due_dirty;           /* the date changed here: the push sends it */
 } Item;
 
 typedef struct {
@@ -137,6 +151,7 @@ typedef struct {
   char title[TITLE_MAX + 1];
   unsigned char list;               /* index into lists[] */
   unsigned char head;               /* first row of that list: draw a heading */
+  unsigned char today;              /* in the Today group at the top */
 } OverRow;
 
 static const CardApi *api;
@@ -162,6 +177,8 @@ static struct {
   int   cmd_waiting;                /* a `sync` command wants to hear the end */
   int   cmd_newlist;                /* a `newlist` command wants to hear it */
   int   draft_list;                 /* the draft is a list's name, not a task */
+  int   draft_date;                 /* the draft is the highlighted task's date */
+  int   when_bad;                   /* the date typed was not one */
   char  newlist_name[NAME_MAX];     /* the one being made */
 
   OverRow over[OVER_MAX];
@@ -240,10 +257,148 @@ static void reply_id(char *out, int n) {
   out[i] = 0;
 }
 
+/* ---- days ----------------------------------------------------------------
+ *
+ * Due dates are "YYYY-MM-DD" strings, which compare in date order as they
+ * are; arithmetic (tomorrow, next Friday) goes through a day number. */
+
+/* Days since 1970-01-01, and back: Howard Hinnant's civil algorithms. */
+static long days_from_civil(int y, int m, int d) {
+  long era, yoe, doy, doe;
+  y -= m <= 2;
+  era = (y >= 0 ? y : y - 399) / 400;
+  yoe = y - era * 400;
+  doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + doe - 719468;
+}
+
+static void civil_from_days(long z, int *y, int *m, int *d) {
+  long era, doe, yoe, doy, mp;
+  z += 719468;
+  era = (z >= 0 ? z : z - 146096) / 146097;
+  doe = z - era * 146097;
+  yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  mp = (5 * doy + 2) / 153;
+  *d = (int)(doy - (153 * mp + 2) / 5 + 1);
+  *m = (int)(mp < 10 ? mp + 3 : mp - 9);
+  *y = (int)(yoe + era * 400 + (*m <= 2));
+}
+
+static void day_str(long z, char *out) {
+  int y, m, d;
+  civil_from_days(z, &y, &m, &d);
+  api->fmt(out, 11, "%04d-%02d-%02d", y, m, d);
+}
+
+/* A real date, as a day number; -1 if y-m-d is not one (2/30). */
+static long valid_day(int y, int m, int d) {
+  int y2, m2, d2;
+  long z;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return -1;
+  z = days_from_civil(y, m, d);
+  civil_from_days(z, &y2, &m2, &d2);
+  return (y2 == y && m2 == m && d2 == d) ? z : -1;
+}
+
+/* Today's day number, or -1 when the clock has never been set: then nothing
+ * can be said to be due, and nothing is claimed. */
+static long today_num(void) {
+  CappTime t;
+  api->now(&t);
+  if (!t.synced || t.year < 2000) return -1;
+  return days_from_civil(t.year, t.month, t.day);
+}
+
+/* "2026-10-12" read back; -1 if it is not that shape. */
+static long due_num(const char *s) {
+  int i;
+  for (i = 0; i < 10; i++)
+    if (i == 4 || i == 7 ? s[i] != '-' : (s[i] < '0' || s[i] > '9')) return -1;
+  if (s[10]) return -1;
+  return valid_day((s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0'),
+                   (s[5] - '0') * 10 + (s[6] - '0'), (s[8] - '0') * 10 + (s[9] - '0'));
+}
+
+/* Due on or before `cutoff` ("YYYY-MM-DD"): on the agenda that day. */
+static int due_by(const char *due, const char *cutoff) {
+  int i;
+  if (!due[0] || !cutoff[0]) return 0;
+  for (i = 0; i < 10; i++) if (due[i] != cutoff[i]) return due[i] < cutoff[i];
+  return 1;
+}
+
+static char lower_c(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+
+/* What `w` was told, as a date: today, tom(orrow), a weekday (two letters
+ * at least; the next one, today included), +N, M/D (this year, or next if
+ * that has gone), or YYYY-MM-DD. Nothing at all clears the date. 0 and out
+ * set ("" for none), or -1 if it is not a day this knows. */
+static int parse_when(const char *text, long today, char *out) {
+  static const char *const DAYS[] = { "sunday", "monday", "tuesday", "wednesday",
+                                      "thursday", "friday", "saturday" };
+  char w[16];
+  int n = 0, i, k, hit = -1, hits = 0;
+  long z = -1;
+  while (*text == ' ') text++;
+  while (text[n] && n < (int)sizeof w - 1) { w[n] = lower_c(text[n]); n++; }
+  while (n && w[n - 1] == ' ') n--;
+  w[n] = 0;
+  out[0] = 0;
+  if (!n) return 0;
+  if (!str_same(w, "today") && str_starts("today", w) && n >= 3) z = today;
+  else if (str_same(w, "today")) z = today;
+  else if (n >= 3 && str_starts("tomorrow", w)) z = today + 1;
+  else if (w[0] == '+') {
+    long v = 0;
+    for (i = 1; w[i] >= '0' && w[i] <= '9' && i < 5; i++) v = v * 10 + (w[i] - '0');
+    if (i == 1 || w[i]) return -1;
+    z = today + v;
+  } else if (w[0] >= 'a' && w[0] <= 'z') {
+    if (n < 2) return -1;
+    for (k = 0; k < 7; k++) if (str_starts(DAYS[k], w)) { hit = k; hits++; }
+    if (hits != 1) return -1;
+    k = (int)((today + 4) % 7);                  /* 1970-01-01 was a Thursday */
+    z = today + (hit - k + 7) % 7;
+  } else if (n == 10 && w[4] == '-') {
+    z = due_num(w);
+  } else {
+    int m = 0, d = 0, y, mm, dd;
+    for (i = 0; w[i] >= '0' && w[i] <= '9' && i < 2; i++) m = m * 10 + (w[i] - '0');
+    if (!i || w[i] != '/') return -1;
+    for (k = ++i; w[i] >= '0' && w[i] <= '9' && i - k < 2; i++) d = d * 10 + (w[i] - '0');
+    if (i == k || w[i]) return -1;
+    civil_from_days(today, &y, &mm, &dd);
+    z = valid_day(y, m, d);
+    if (z >= 0 && z < today) z = valid_day(y + 1, m, d);
+  }
+  if (z < 0) return -1;
+  day_str(z, out);
+  return 0;
+}
+
+/* A date that is not yet due, as short as it can be said: the weekday
+ * within the week, else 10/15. */
+static void short_day(const char *due, long today, char *out, int n) {
+  static const char *const WD[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+  long z = due_num(due);
+  int y, m, d;
+  if (z < 0) { out[0] = 0; return; }
+  if (today >= 0 && z > today && z - today < 7) {
+    api->fmt(out, (size_t)n, "%s", WD[(z + 4) % 7]);
+    return;
+  }
+  civil_from_days(z, &y, &m, &d);
+  api->fmt(out, (size_t)n, "%d/%d", m, d);
+}
+
 /* ---- the cache ----------------------------------------------------------
  *
  * One line per item: done, deleted and dirty flags, the id (or `-` for an
- * item that has never reached Google), then the title. The title is last
+ * item that has never reached Google), the due date as `@2026-10-12` or
+ * `@-` (with `!` after the @ while the date is unsent), then the title. A
+ * line from before dates has no @ word, and reads as no date. The title is last
  * because it is the only field that can contain a space. A deleted item is
  * kept: it is still waiting to be deleted at Google, and dropping it here
  * would bring it back on the next pull. */
@@ -262,12 +417,58 @@ static void cache_save(void) {
 
   if (safe_begin(&f, api, cache_path()) != 0) return;
   for (i = 0; i < T.n; i++) {
-    int n = api->fmt(line, sizeof line, "%d %d %d %s %s\n",
+    int n = api->fmt(line, sizeof line, "%d %d %d %s @%s%s %s\n",
                      T.item[i].done, T.item[i].deleted, T.item[i].dirty,
-                     T.item[i].id[0] ? T.item[i].id : "-", T.item[i].title);
+                     T.item[i].id[0] ? T.item[i].id : "-",
+                     T.item[i].due_dirty ? "!" : "",
+                     T.item[i].due[0] ? T.item[i].due : "-", T.item[i].title);
     safe_write(&f, line, (size_t)n);
   }
   safe_commit(&f);
+}
+
+/* One cache line into an item: 1, or 0 if it is not one. Shared by the list
+ * and the overview, so the format is read the same way in both places. */
+static int cache_line(const char *line, Item *it) {
+  int p, q = 0;
+  /* The three flags, each one digit and a space: the shape the saver
+   * writes, checked rather than assumed. */
+  if (line[0] < '0' || line[0] > '1' || line[1] != ' ') return 0;
+  if (line[2] < '0' || line[2] > '1' || line[3] != ' ') return 0;
+  if (line[4] < '0' || line[4] > '1' || line[5] != ' ') return 0;
+  api->mem_set(it, 0, sizeof *it);
+  it->done    = line[0] - '0';
+  it->deleted = line[2] - '0';
+  it->dirty   = line[4] - '0';
+  p = 6;
+  while (line[p] && line[p] != ' ' && q < ID_MAX - 1) it->id[q++] = line[p++];
+  it->id[q] = 0;
+  if (it->id[0] == '-' && !it->id[1]) it->id[0] = 0;
+  while (line[p] == ' ') p++;
+  /* The date word: @-, @2026-10-12, either with ! after the @. A title
+   * that happens to start with @ is not mistaken for one -- the word has
+   * to be exactly that shape and be followed by a space. */
+  if (line[p] == '@') {
+    int k = p + 1, bang = line[k] == '!';
+    if (bang) k++;
+    if (line[k] == '-' && line[k + 1] == ' ') {
+      it->due_dirty = bang;
+      p = k + 2;
+    } else {
+      char d[11];
+      int j;
+      for (j = 0; j < 10 && line[k + j]; j++) d[j] = line[k + j];
+      d[j] = 0;
+      if (j == 10 && line[k + 10] == ' ' && due_num(d) >= 0) {
+        api->fmt(it->due, sizeof it->due, "%s", d);
+        it->due_dirty = bang;
+        p = k + 11;
+      }
+    }
+    while (line[p] == ' ') p++;
+  }
+  api->fmt(it->title, sizeof it->title, "%s", line + p);
+  return it->title[0] != 0;
 }
 
 static void cache_load(void) {
@@ -287,25 +488,7 @@ static void cache_load(void) {
       }
       line[len] = 0;
       len = 0;
-      {
-        Item *it = &T.item[T.n];
-        int p = 0, q = 0;
-        /* The three flags, each one digit and a space: the shape the saver
-         * writes, checked rather than assumed. */
-        if (line[0] < '0' || line[0] > '1' || line[1] != ' ') continue;
-        if (line[2] < '0' || line[2] > '1' || line[3] != ' ') continue;
-        if (line[4] < '0' || line[4] > '1' || line[5] != ' ') continue;
-        it->done    = line[0] - '0';
-        it->deleted = line[2] - '0';
-        it->dirty   = line[4] - '0';
-        p = 6;
-        while (line[p] && line[p] != ' ' && q < ID_MAX - 1) it->id[q++] = line[p++];
-        it->id[q] = 0;
-        if (it->id[0] == '-' && !it->id[1]) it->id[0] = 0;
-        while (line[p] == ' ') p++;
-        api->fmt(it->title, sizeof it->title, "%s", line + p);
-        if (it->title[0]) T.n++;
-      }
+      if (cache_line(line, &T.item[T.n])) T.n++;
     }
   }
   api->close(fd);
@@ -497,21 +680,30 @@ static void newlist_done(int n) {
  * view answers is "what is there to do", and a finished task is not part of
  * it. Deleted ones too: they are on their way out.
  */
-static void over_add(int list, const char *title, int first) {
+static void over_add(int list, const char *title, int first, int today) {
   OverRow *r;
   if (T.nover >= OVER_MAX) { T.over_full = 1; return; }
   r = &T.over[T.nover++];
   api->fmt(r->title, sizeof r->title, "%s", title);
   r->list = (unsigned char)list;
   r->head = (unsigned char)(first ? 1 : 0);
+  r->today = (unsigned char)(today ? 1 : 0);
 }
 
-/* One list's open tasks, straight off the card. The parsing is cache_load's,
+/* What a row's heading says. */
+static const char *over_head(const OverRow *o) {
+  return o->today ? "Today" : T.lists[o->list].name;
+}
+
+/* One list's open tasks, straight off the card -- with `cutoff`, only those
+ * due by then, as Today rows. `*first` says whether the next row starts a
+ * group, and is cleared once one is added. The parsing is cache_load's,
  * deliberately: one format, read the same way in both places. */
-static void over_scan(int li) {
-  char buf[256], line[ID_MAX + TITLE_MAX + 16];
+static void over_scan_by(int li, const char *cutoff, int *first) {
+  char buf[256], line[ID_MAX + TITLE_MAX + 24];
   char path[ID_MAX + 16];
-  int fd, n, i, len = 0, first = 1;
+  Item it;
+  int fd, n, i, len = 0;
 
   api->fmt(path, sizeof path, CACHE_FMT, T.lists[li].id);
   fd = safe_open_read(api, path);
@@ -526,27 +718,45 @@ static void over_scan(int li) {
       }
       line[len] = 0;
       len = 0;
-      if (line[0] < '0' || line[0] > '1' || line[1] != ' ') continue;
-      if (line[2] < '0' || line[2] > '1' || line[3] != ' ') continue;
-      if (line[4] < '0' || line[4] > '1' || line[5] != ' ') continue;
-      if (line[0] == '1' || line[2] == '1') continue;    /* done, or going */
-      {
-        int p = 6;
-        while (line[p] && line[p] != ' ') p++;           /* past the id */
-        while (line[p] == ' ') p++;
-        if (!line[p]) continue;
-        over_add(li, line + p, first);
-        first = 0;
-      }
+      if (!cache_line(line, &it) || it.done || it.deleted) continue;   /* done, or going */
+      if (cutoff && !due_by(it.due, cutoff)) continue;
+      over_add(li, it.title, *first, cutoff != 0);
+      *first = 0;
     }
   }
   api->close(fd);
 }
 
+static void over_scan(int li) {
+  int first = 1;
+  over_scan_by(li, 0, &first);
+}
+
+/* Every open task due by `cutoff`, from every list, as Today rows: the list
+ * on screen from memory, the rest from their files. */
+static void over_claimed(const char *cutoff) {
+  int i, j, first = 1;
+  for (i = 0; i < T.nlists; i++) {
+    if (i == T.cur) {
+      for (j = 0; j < T.n; j++) {
+        if (T.item[j].done || T.item[j].deleted || !due_by(T.item[j].due, cutoff)) continue;
+        over_add(i, T.item[j].title, first, 1);
+        first = 0;
+      }
+    } else {
+      over_scan_by(i, cutoff, &first);
+    }
+  }
+}
+
 static void over_build(void) {
+  char today[11];
+  long z = today_num();
   int i;
   T.nover = 0;
   T.over_full = 0;
+  /* What is claimed, first: the agenda, then every list as it is. */
+  if (z >= 0) { day_str(z, today); over_claimed(today); }
   /* The list on screen is the live one: its array may hold edits that are
    * not in its file yet, so it is read from memory and the rest from disk. */
   for (i = 0; i < T.nlists; i++) {
@@ -554,7 +764,7 @@ static void over_build(void) {
       int j, first = 1;
       for (j = 0; j < T.n; j++) {
         if (T.item[j].done || T.item[j].deleted) continue;
-        over_add(i, T.item[j].title, first);
+        over_add(i, T.item[j].title, first, 0);
         first = 0;
       }
     } else {
@@ -648,27 +858,37 @@ static int start_push(const char *tok, int i) {
     return api->http_start("DELETE", url, 0, 0, tok, 15000);
   }
   if (!it->id[0]) {
-    api->fmt(url, sizeof url, ADD_URL, api->proxy(), T.list_id);
+    int o = api->fmt(url, sizeof url, ADD_URL, api->proxy(), T.list_id);
+    if (it->due[0]) api->fmt(url + o, sizeof url - (size_t)o, "&due=%s", it->due);
     api->fmt(body, sizeof body, "%s", it->title);
     return api->http_start("POST", url, body, "text/plain", tok, 15000);
   }
   api->fmt(url, sizeof url, TASK_URL, api->proxy(), T.list_id, it->id);
-  api->fmt(body, sizeof body, "done=%d", it->done ? 1 : 0);
+  /* The date only if it changed here: sent every time, a tick would undo a
+   * date set on a phone since the last pull. */
+  if (it->due_dirty)
+    api->fmt(body, sizeof body, "done=%d\ndue=%s", it->done ? 1 : 0, it->due);
+  else
+    api->fmt(body, sizeof body, "done=%d", it->done ? 1 : 0);
   return api->http_start("PATCH", url, body, "text/plain", tok, 15000);
 }
 
 static void absorb_tasks(void) {
-  char *p = T.reply, *f[3];
-  int count = 0;
+  char *p = T.reply, *f[4];
+  int count = 0, k;
 
-  /* "id <tab> 0|1 <tab> title", a task a line. */
-  while (count < MAX_ITEMS && reply_line(&p, f, 3) == 3) {
+  /* "id <tab> 0|1 <tab> title <tab> due", a task a line; three fields from
+   * a server that does not know dates. */
+  while (count < MAX_ITEMS && (k = reply_line(&p, f, 4)) >= 3) {
     Item *it = &T.item[count];
     api->fmt(it->id, ID_MAX, "%s", f[0]);
     api->fmt(it->title, TITLE_MAX + 1, "%s", f[2]);
     it->done = f[1][0] == '1';
     it->dirty = 0;
     it->deleted = 0;
+    it->due_dirty = 0;
+    it->due[0] = 0;
+    if (k == 4 && due_num(f[3]) >= 0) api->fmt(it->due, sizeof it->due, "%s", f[3]);
     if (it->title[0]) count++;
   }
   T.n = count;
@@ -693,19 +913,20 @@ static void absorb_tasks(void) {
  * survives in the file until then.
  */
 static int absorb_into(const char *list_id, int *count_out) {
-  char *p = T.reply, *f[3];
-  char path[ID_MAX + 16], line[ID_MAX + TITLE_MAX + 16];
+  char *p = T.reply, *f[4];
+  char path[ID_MAX + 16], line[ID_MAX + TITLE_MAX + 24];
   SafeFile sf;
-  int count = 0;
+  int count = 0, k;
 
   api->fmt(path, sizeof path, CACHE_FMT, list_id);
   if (safe_begin(&sf, api, path) != 0) return -1;
 
-  while (count < MAX_ITEMS && reply_line(&p, f, 3) == 3) {
+  while (count < MAX_ITEMS && (k = reply_line(&p, f, 4)) >= 3) {
     int n;
     if (!f[2][0]) continue;
-    n = api->fmt(line, sizeof line, "%d %d %d %s %.*s\n",
-                 f[1][0] == '1', 0, 0, f[0][0] ? f[0] : "-", TITLE_MAX, f[2]);
+    n = api->fmt(line, sizeof line, "%d %d %d %s @%s %.*s\n",
+                 f[1][0] == '1', 0, 0, f[0][0] ? f[0] : "-",
+                 k == 4 && due_num(f[3]) >= 0 ? f[3] : "-", TITLE_MAX, f[2]);
     safe_write(&sf, line, (size_t)n);
     count++;
   }
@@ -856,6 +1077,7 @@ static void sync_tick(void) {
         else {
           if (!it->id[0]) reply_id(it->id, ID_MAX);
           it->dirty = 0;
+          it->due_dirty = 0;
         }
       }
       cache_save();
@@ -934,6 +1156,63 @@ static void toggle(void) {
   say("ticked -- r syncs");
 }
 
+/* Item i's date, as a local edit the next sync pushes. */
+static void set_item_due(int i, const char *due) {
+  api->fmt(T.item[i].due, sizeof T.item[i].due, "%s", due);
+  T.item[i].due_dirty = 1;
+  T.item[i].dirty = 1;
+  cache_save();
+}
+
+/* `c`: claim the highlighted task -- for today, or after 6 pm for
+ * tomorrow, since by then that is the day being planned. Pressed on a task
+ * already due that day, it lets it go: one key both ways, like the tick. */
+#define CLAIM_EVENING 18
+
+static void claim_selected(void) {
+  char target[11];
+  CappTime t;
+  long z = today_num();
+  Item *it;
+  if (T.sel < 0 || T.sel >= T.n) return;
+  it = &T.item[T.sel];
+  if (it->deleted) return;
+  if (z < 0) { say("the clock is not set yet -- no today to claim for"); return; }
+  api->now(&t);
+  day_str(z + (t.hour >= CLAIM_EVENING), target);
+  if (str_same(it->due, target)) { set_item_due(T.sel, ""); say("unclaimed -- r syncs"); }
+  else {
+    set_item_due(T.sel, target);
+    say(t.hour >= CLAIM_EVENING ? "claimed for tomorrow -- r syncs" : "claimed for today -- r syncs");
+  }
+}
+
+/* `+` and `-`: the highlighted task's date a day later or earlier. A task
+ * with no date gets today's first. */
+static void shift_selected(int days) {
+  char due[11];
+  long z, today = today_num();
+  Item *it;
+  if (T.sel < 0 || T.sel >= T.n) return;
+  it = &T.item[T.sel];
+  if (it->deleted) return;
+  z = due_num(it->due);
+  if (z < 0) {
+    if (today < 0) { say("the clock is not set yet"); return; }
+    z = today;
+  } else {
+    z += days;
+  }
+  day_str(z, due);
+  set_item_due(T.sel, due);
+  {
+    char sd[8], msg[40];
+    short_day(due, today, sd, sizeof sd);
+    api->fmt(msg, sizeof msg, "due %s -- r syncs", z == today ? "today" : z == today + 1 ? "tomorrow" : sd);
+    say(msg);
+  }
+}
+
 /* A new task on top of the current list, saved and marked for the next
  * sync to push. What Add does with its draft and what the `add` command
  * does with its argument: one path, so the two cannot disagree. -1 if the
@@ -977,6 +1256,11 @@ static void add_draft(void) {
 static void paint_list(CRect c) {
   int rows = (c.h - ROW_H) / ROW_H;
   int top = 0, r;
+  char today[11];
+  long tz = today_num();
+
+  today[0] = 0;
+  if (tz >= 0) day_str(tz, today);
 
   if (T.sel >= rows) top = T.sel - rows + 1;
 
@@ -1013,6 +1297,19 @@ static void paint_list(CRect c) {
     if (T.item[i].deleted) {
       short w = (short)(api->str_len(T.item[i].title) * 6);
       api->fill(capp_rect(c.x + 14, y + 5, w, 1), CLR_DONE);
+    }
+
+    /* Claimed: a bar down the left edge, for today's agenda (due today or
+     * left over from before). A date still to come says which, at the right. */
+    if (T.item[i].due[0] && !T.item[i].done && !T.item[i].deleted) {
+      if (due_by(T.item[i].due, today))
+        api->fill(capp_rect(c.x, y + 1, 2, ROW_H - 2), CLR_WARN);
+      else {
+        char sd[8];
+        short_day(T.item[i].due, tz, sd, sizeof sd);
+        api->text((short)(c.x + c.w - 9 - (int)api->str_len(sd) * 6), (short)(y + 2), sd,
+                  CLR_DONE, bg);
+      }
     }
 
     /* A dot for anything the server has not seen yet. */
@@ -1055,8 +1352,8 @@ static void paint_all(CRect c) {
     uint16_t bg;
     if (o->head) {
       if (y + 2 * ROW_H > c.y + c.h - ROW_H) break;
-      api->text((short)(c.x + 2), (short)(y + 1),
-                T.lists[o->list].name, CLR_PEND, CLR_BG);
+      api->text((short)(c.x + 2), (short)(y + 1), over_head(o),
+                o->today ? CLR_WARN : CLR_PEND, CLR_BG);
       y += ROW_H;
     }
     bg = (r == T.osel) ? CLR_SEL : CLR_BG;
@@ -1064,6 +1361,13 @@ static void paint_all(CRect c) {
     api->fill(capp_rect(c.x, y, c.w, ROW_H), bg);
     api->frame(capp_rect(c.x + 8, y + 2, 7, 7), CLR_DONE);
     api->text((short)(c.x + 19), (short)(y + 2), o->title, CLR_TEXT, bg);
+    /* A Today row says which list it is from, where there is room. */
+    if (o->today) {
+      const char *ln = T.lists[o->list].name;
+      int lw = (int)api->str_len(ln) * 6;
+      if (19 + (int)api->str_len(o->title) * 6 + 8 + lw < c.w - 2)
+        api->text((short)(c.x + c.w - 4 - lw), (short)(y + 2), ln, CLR_DONE, bg);
+    }
     y += ROW_H;
   }
 
@@ -1104,8 +1408,17 @@ static void paint_add(CRect c) {
   int i;
 
   api->fill(c, CLR_BG);
-  api->text((short)(c.x + 6), (short)(c.y + 10),
-            T.draft_list ? "New list" : "New task", CLR_BARFG, CLR_BG);
+  if (T.draft_date && T.sel >= 0 && T.sel < T.n) {
+    char head[TITLE_MAX + 8];
+    api->fmt(head, sizeof head, "Due: %s", T.item[T.sel].title);
+    api->text((short)(c.x + 6), (short)(c.y + 10), head, CLR_BARFG, CLR_BG);
+    api->text((short)(c.x + 6), (short)(c.y + 46),
+              T.when_bad ? "not a day I know" : "today tom fri +3 10/15",
+              T.when_bad ? CLR_WARN : CLR_DONE, CLR_BG);
+  } else {
+    api->text((short)(c.x + 6), (short)(c.y + 10),
+              T.draft_list ? "New list" : "New task", CLR_BARFG, CLR_BG);
+  }
 
   api->fill(capp_rect(c.x + 5, c.y + 26, c.w - 10, 14), CLR_ROW);
   for (i = 0; i < T.draft_len; i++) shown[i] = T.draft[i];
@@ -1113,8 +1426,9 @@ static void paint_add(CRect c) {
   shown[T.draft_len + 1] = 0;
   api->text((short)(c.x + 8), (short)(c.y + 29), shown, CLR_TEXT, CLR_ROW);
 
-  footer_paint(api, c, T.draft_list ? "enter make it  esc cancel"
-                                    : "enter add  esc cancel");
+  footer_paint(api, c, T.draft_date ? "enter set  empty clears  esc cancel"
+                      : T.draft_list ? "enter make it  esc cancel"
+                                     : "enter add  esc cancel");
 }
 
 /* Everything this app can be asked to do, stated once.
@@ -1129,7 +1443,8 @@ static void paint_add(CRect c) {
  * menu, which is why an editor's save did nothing in a window. */
 enum { ACT_ADD = 1, ACT_TICK, ACT_DELETE, ACT_SYNC, ACT_LISTS, ACT_ALL,
        ACT_SAVE, ACT_CANCEL, ACT_OPEN, ACT_GOTO, ACT_PRINT,
-       ACT_DONE, ACT_LIST, ACT_NEWLIST, ACT_SHOW };
+       ACT_DONE, ACT_LIST, ACT_NEWLIST, ACT_SHOW,
+       ACT_CLAIM_SEL, ACT_WHEN, ACT_LATER, ACT_EARLIER, ACT_TODAY, ACT_TOMORROW, ACT_CLAIM, ACT_UNCLAIM };
 
 /* Commands as well as actions (CAPP_CMD_YES): what `do todo ...`, voice and
  * an AI can ask for, with no screen. `done` and `list` have no menu entry --
@@ -1161,6 +1476,20 @@ static const CappAction LIST_ACTIONS[] = {
     "the open tasks in the current list", 0, 0, CAPP_CMD_YES },
   { "show",   "Show",     0,      0,    ACT_SHOW,
     "the open tasks of any list, as boxes to tick on paper", P_LIST, 1, CAPP_CMD_YES },
+  { "mark",   "Claim for today", "Task", 0, ACT_CLAIM_SEL },
+  { "when",   "Due date...", "Task", 0, ACT_WHEN },
+  { "later",  "Due a day later", "Task", 0, ACT_LATER },
+  { "earlier", "Due a day earlier", "Task", 0, ACT_EARLIER },
+  { "today",  "Today",    0,      0,    ACT_TODAY,
+    "what is claimed for today (due today or before) in every list, as boxes; "
+    "if nothing is, the open tasks of the list named", P_LIST, 1, CAPP_CMD_YES },
+  { "tomorrow", "Tomorrow", 0,    0,    ACT_TOMORROW,
+    "the same as today, counting what is due tomorrow", P_LIST, 1, CAPP_CMD_YES },
+  { "claim",  "Claim",    0,      0,    ACT_CLAIM,
+    "claim the task whose title matches for today (its due date)", P_TITLE, 1, CAPP_CMD_YES },
+  { "unclaim", "Unclaim", 0,      0,    ACT_UNCLAIM,
+    "take today's claim (the due date) off the task whose title matches", P_TITLE, 1,
+    CAPP_CMD_YES },
 };
 
 /* The overview. Reading, and a way into the list a row belongs to. */
@@ -1249,7 +1578,7 @@ static void page_all(void) {
   at = page_line(at, "# ", "All lists");
   for (i = 0; i < T.nover; i++) {
     if (T.over[i].head)
-      at = page_line(at, "## ", T.lists[T.over[i].list].name);
+      at = page_line(at, "## ", over_head(&T.over[i]));
     at = page_line(at, "[ ] ", T.over[i].title);
   }
   if (T.over_full) at = page_line(at, "...", "");
@@ -1371,6 +1700,20 @@ static int do_action(int a) {
     use_add_menus();
     return 1;
   case ACT_TICK:   toggle(); return 1;
+  case ACT_CLAIM_SEL: claim_selected(); return 1;
+  case ACT_LATER:   shift_selected(1); return 1;
+  case ACT_EARLIER: shift_selected(-1); return 1;
+  case ACT_WHEN:
+    if (T.sel < 0 || T.sel >= T.n || T.item[T.sel].deleted) return 1;
+    /* The field starts with the date it has, to change or clear. */
+    api->fmt(T.draft, sizeof T.draft, "%s", T.item[T.sel].due);
+    T.draft_len = (int)api->str_len(T.draft);
+    T.draft_list = 0;
+    T.draft_date = 1;
+    T.when_bad = 0;
+    T.view = VIEW_ADD;
+    use_add_menus();
+    return 1;
   case ACT_DELETE: ask_delete(); return 1;
   case ACT_SYNC:   sync_begin(); return 1;
   case ACT_LISTS:
@@ -1398,7 +1741,19 @@ static int do_action(int a) {
     return 1;
   case ACT_PRINT:  print_page(); return 1;
   case ACT_SAVE:
-    if (T.draft_list) {
+    if (T.draft_date) {
+      char due[11];
+      long z = today_num();
+      if (z < 0) z = days_from_civil(2026, 1, 1);   /* no clock: only full dates mean much */
+      if (parse_when(T.draft, z, due) != 0) { T.when_bad = 1; return 1; }
+      if (T.sel >= 0 && T.sel < T.n) set_item_due(T.sel, due);
+      say(due[0] ? "dated -- r syncs" : "date cleared -- r syncs");
+      T.draft_date = 0;
+      T.when_bad = 0;
+      T.draft[0] = 0;
+      T.draft_len = 0;
+      T.view = VIEW_LIST;
+    } else if (T.draft_list) {
       /* The answer lands later, from sync_tick; the status says so now. */
       if (T.draft_len) start_newlist(T.draft);
       T.draft_list = 0;
@@ -1412,6 +1767,8 @@ static int do_action(int a) {
     return 1;
   case ACT_CANCEL:
     T.draft_list = 0;
+    T.draft_date = 0;
+    T.when_bad = 0;
     T.view = VIEW_LIST;
     use_list_menus();
     return 1;
@@ -1442,6 +1799,10 @@ static int key_list(unsigned char k) {
   case 'l': case 'L': return do_action(ACT_LISTS);
   case 'o': case 'O': return do_action(ACT_ALL);
   case 'p': case 'P': return do_action(ACT_PRINT);
+  case 'c': case 'C': return do_action(ACT_CLAIM_SEL);
+  case 'w': case 'W': return do_action(ACT_WHEN);
+  case '+': case '=': return do_action(ACT_LATER);
+  case '-': case '_': return do_action(ACT_EARLIER);
   case 'd': case 'D':
   case 0x7F:          return do_action(ACT_DELETE);
   default: return 0;
@@ -1462,7 +1823,8 @@ static int key_add(unsigned char k) {
   /* No quote or backslash: the title goes into a JSON body, and escaping two
    * characters properly is more code than refusing them is worth here. */
   if (k >= 32 && k < 127 && k != '"' && k != '\\' &&
-      T.draft_len < TITLE_MAX) {
+      T.draft_len < (T.draft_date ? 15 : TITLE_MAX)) {
+    T.when_bad = 0;
     T.draft[T.draft_len++] = (char)k;
     T.draft[T.draft_len] = 0;
     return 1;
@@ -1569,6 +1931,44 @@ static const char *list_name(void) {
   return T.cur >= 0 ? T.lists[T.cur].name : "the list";
 }
 
+/* A list by name: exactly, else the only one containing the words. -1 none,
+ * -2 more than one -- or, with `strict` 0, the one on screen for either, which
+ * is what the agenda falls back to. */
+static int find_list(const char *name, int strict) {
+  int i, li = -1, hits = 0;
+  for (i = 0; i < T.nlists; i++) if (same_ci(T.lists[i].name, name)) li = i;
+  if (li < 0)
+    for (i = 0; i < T.nlists; i++) if (str_contains(T.lists[i].name, name, 1)) { li = i; hits++; }
+  if (hits > 1) li = -2;
+  if (!strict && li < 0) li = T.cur;
+  return li;
+}
+
+/* A list's open tasks as "[ ] title" lines -- the print markup, since the
+ * Today app puts them straight on paper. The current one from memory (it may
+ * hold edits not yet in its file), any other from its cache, as the
+ * overview reads it. */
+static int show_list(int li, char *out, size_t n) {
+  size_t o = 0;
+  int i;
+  out[0] = 0;
+  if (li == T.cur) {
+    for (i = 0; i < T.n && o + 8 < n; i++) {
+      if (T.item[i].done || T.item[i].deleted) continue;
+      o += (size_t)api->fmt(out + o, n - o, "%s[ ] %s", o ? "\n" : "", T.item[i].title);
+    }
+  } else if (li >= 0) {
+    T.nover = 0;
+    T.over_full = 0;
+    over_scan(li);
+    for (i = 0; i < T.nover && o + 8 < n; i++)
+      o += (size_t)api->fmt(out + o, n - o, "%s[ ] %s", o ? "\n" : "", T.over[i].title);
+  }
+  if (!o) api->fmt(out, n, "nothing left to do%s%s", li >= 0 ? " in " : "",
+                   li >= 0 ? T.lists[li].name : "");
+  return 0;
+}
+
 /* The commands (see LIST_ACTIONS): the same functions the screen uses, with
  * arguments instead of a draft or a cursor. The OS has already checked the
  * count and the types. Everything here is local -- the card is the truth and
@@ -1624,31 +2024,53 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
                             i == T.cur ? "* " : "", T.lists[i].name);
     return 0;
 
+  case ACT_TODAY:
+  case ACT_TOMORROW: {
+    /* The agenda: every open task due by today (or tomorrow), from every
+     * list, with its list's name. None -- or no clock to say what "due"
+     * means -- and it is the named list's open tasks instead. */
+    char cutoff[11];
+    long z = today_num();
+    if (z >= 0) {
+      day_str(z + (action == ACT_TOMORROW), cutoff);
+      T.nover = 0;
+      T.over_full = 0;
+      over_claimed(cutoff);
+      for (i = 0; i < T.nover && o + 8 < n; i++)
+        o += (size_t)api->fmt(out + o, n - o, "%s[ ] %s (%s)", o ? "\n" : "",
+                              T.over[i].title, T.lists[T.over[i].list].name);
+      if (o) return 0;
+    }
+    return show_list(find_list(argv[0], 0), out, n);
+  }
+
+  case ACT_CLAIM:
+  case ACT_UNCLAIM: {
+    char today[11];
+    long z = today_num();
+    if (z < 0) { api->fmt(out, n, "the clock is not set yet"); return -1; }
+    day_str(z, today);
+    for (i = 0; i < T.n; i++) {
+      if (T.item[i].done || T.item[i].deleted) continue;
+      if (str_contains(T.item[i].title, argv[0], 1)) { hit = i; hits++; }
+    }
+    if (!hits) { api->fmt(out, n, "no open task in %s matches \"%s\"", list_name(), argv[0]); return -1; }
+    if (hits > 1) { api->fmt(out, n, "%d tasks match \"%s\"; say more of it", hits, argv[0]); return -1; }
+    set_item_due(hit, action == ACT_CLAIM ? today : "");
+    api->fmt(out, n, "%s \"%s\"", action == ACT_CLAIM ? "claimed for today:" : "unclaimed:",
+             T.item[hit].title);
+    return 0;
+  }
+
   case ACT_SHOW: {
     /* A list by name: exactly, else the only one containing the words. The
      * current one from memory (it may hold edits not yet in its file), any
      * other from its cache, as the overview reads it. "[ ] title" lines --
      * the print markup, since the Today app puts them straight on paper. */
-    int li = -1;
-    for (i = 0; i < T.nlists; i++) if (same_ci(T.lists[i].name, argv[0])) li = i;
-    if (li < 0)
-      for (i = 0; i < T.nlists; i++) if (str_contains(T.lists[i].name, argv[0], 1)) { li = i; hits++; }
-    if (hits > 1) { api->fmt(out, n, "%d lists match \"%s\"; say more", hits, argv[0]); return -1; }
+    int li = find_list(argv[0], 1);
+    if (li == -2) { api->fmt(out, n, "lists match \"%s\"; say more", argv[0]); return -1; }
     if (li < 0)   { api->fmt(out, n, "no list matches \"%s\"", argv[0]); return -1; }
-    if (li == T.cur) {
-      for (i = 0; i < T.n && o + 8 < n; i++) {
-        if (T.item[i].done || T.item[i].deleted) continue;
-        o += (size_t)api->fmt(out + o, n - o, "%s[ ] %s", o ? "\n" : "", T.item[i].title);
-      }
-    } else {
-      T.nover = 0;
-      T.over_full = 0;
-      over_scan(li);
-      for (i = 0; i < T.nover && o + 8 < n; i++)
-        o += (size_t)api->fmt(out + o, n - o, "%s[ ] %s", o ? "\n" : "", T.over[i].title);
-    }
-    if (!o) api->fmt(out, n, "nothing left to do in %s", T.lists[li].name);
-    return 0;
+    return show_list(li, out, n);
   }
 
   case ACT_NEWLIST:
@@ -1836,9 +2258,13 @@ const CappInfo capp_info = {
     0x36, 0x0C, 0x33, 0x0C, 0x31, 0x8C, 0x30, 0xCC,
     0x30, 0x6C, 0x3F, 0xFC, 0x00, 0x00, 0x00, 0x00 },
   "up/down\tmove\nenter, space\ttick it off\nn (or a)\tnew task\n"
+  "c\tclaim for today (after 6pm, tomorrow) / unclaim\n"
+  "+ -\tdue a day later / earlier\n"
+  "w\tdue date: today, tom, fri, +3, 10/15; empty clears\n"
   "d, del\tdelete (y yes, n no) / undo\nr (or s)\tsync every list\n"
   "left/right\tnext list\nl\tchoose a list\no\tall lists at once\n"
-  "p\tprint it\nesc\tback a level\n",
+  "p\tprint it\nesc\tback a level\n"
+  "\n`o` starts with Today: what is claimed, from every list.\n",
   LIST_ACTIONS,
   sizeof LIST_ACTIONS / sizeof LIST_ACTIONS[0],
 };

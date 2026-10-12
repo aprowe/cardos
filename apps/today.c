@@ -6,7 +6,7 @@
  * under headings. The sections are /config/today.txt, one a line:
  *
  *     Calendar | calendar today
- *     To do    | todo show Chores
+ *     To do    | todo today My Tasks
  *     Habits   | habits today
  *     Stocks   | stocks portfolio
  *
@@ -142,20 +142,6 @@ static int save_sections(void) {
   return safe_commit(&f);
 }
 
-/* The todo list Todo has open: the line `todo lists` marks with a star. */
-static int current_list(char *out, int n) {
-  char *answer = s_answer;
-  const char *p = answer;
-  if (api->run_command("todo", "lists", answer, ANSWER_MAX) != 0) return -1;
-  while (*p) {
-    const char *e = p;
-    while (*e && *e != '\n') e++;
-    if (p[0] == '*' && p[1] == ' ') { trim_copy(out, n, p + 2, (int)(e - p - 2)); return 0; }
-    p = *e ? e + 1 : e;
-  }
-  return -1;
-}
-
 /* "# todo lists: Home, Chores (open in Todo)" from Todo's answer, where the
  * open one is starred. A line in the script rather than a picker of its
  * own: the To do line is chosen by typing a name, beside the names. */
@@ -237,12 +223,68 @@ static int32_t config_size(void) {
   return api->stat && api->stat(CONFIG, &st) == 0 ? (int32_t)st.size : -1;
 }
 
+/* `todo show LIST` as `todo today LIST`, in the sections text: Todo's
+ * agenda (what is claimed, from every list; LIST when nothing is) took the
+ * To do section's place on 2026-10-12. Comments and every other line as they
+ * were. The number changed, or -1 if the result does not fit. */
+static int todo_show_to_today(const char *in, char *out, int n) {
+  const char *p = in;
+  int o = 0, changed = 0;
+  while (*p) {
+    const char *e = p, *at = 0, *q;
+    while (*e && *e != '\n') e++;
+    if (*p != '#') {
+      for (q = p; q < e && *q != '|'; q++) {}
+      if (q < e) {
+        q++;
+        while (q < e && *q == ' ') q++;
+        if (e - q > 10 && str_starts(q, "todo show ")) at = q + 5;   /* at "show" */
+      }
+    }
+    for (q = p; q < e; q++) {
+      if (q == at) {
+        const char *w = "today";
+        while (*w) { if (o >= n - 1) return -1; out[o++] = *w++; }
+        q += 3;                                      /* "show" is the four before */
+        changed++;
+        continue;
+      }
+      if (o >= n - 1) return -1;
+      out[o++] = *q;
+    }
+    if (*e) { if (o >= n - 1) return -1; out[o++] = '\n'; }
+    p = *e ? e + 1 : e;
+  }
+  out[o] = 0;
+  return changed;
+}
+
+/* Rewrites a sections file still asking `todo show`, once. Borrows the page. */
+static void migrate_config(void) {
+  SafeFile f;
+  int fd, n, len = 0;
+  fd = safe_open_read(api, CONFIG);
+  if (fd < 0) return;
+  while (len < PAGE_MAX / 2 - 1 && (n = api->read(fd, D.page + len, (size_t)(PAGE_MAX / 2 - 1 - len))) > 0)
+    len += n;
+  api->close(fd);
+  D.page[len] = 0;
+  if (todo_show_to_today(D.page, D.page + PAGE_MAX / 2, PAGE_MAX / 2) > 0 &&
+      safe_begin(&f, api, CONFIG) == 0) {
+    safe_line(&f, D.page + PAGE_MAX / 2);
+    safe_commit(&f);
+  }
+  D.page[0] = 0;
+  D.len = 0;
+}
+
 /* The page as it is on the card, or -- the first time -- the four sections
  * this was asked for, written out so they can be changed. */
 static void load_sections(void) {
-  char buf[256], line[HEAD_MAX + CMD_MAX + 24], list[40];
+  char buf[256], line[HEAD_MAX + CMD_MAX + 24];
   int fd, n, i, len = 0;
   D.nsect = 0;
+  migrate_config();
   D.cfg_size = config_size();
   fd = safe_open_read(api, CONFIG);
   if (fd >= 0) {
@@ -258,13 +300,8 @@ static void load_sections(void) {
     return;
   }
   add_section("Calendar", "calendar", "today");
-  if (current_list(list, sizeof list) == 0) {
-    char cmd[CMD_MAX];
-    api->fmt(cmd, sizeof cmd, "show %s", list);
-    add_section("To do", "todo", cmd);
-  } else {
-    add_section("To do", "todo", "list");
-  }
+  /* What is claimed for today in every list, or My Tasks when nothing is. */
+  add_section("To do", "todo", "today My Tasks");
   add_section("Habits", "habits", "today");
   add_section("Stocks", "stocks", "portfolio");
   add_section("Focus", "daily", "focus");

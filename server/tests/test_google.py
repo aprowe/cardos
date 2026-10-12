@@ -165,6 +165,32 @@ class Routes(unittest.TestCase):
         s, text = self.req("GET", "/todo/tasks?list=L1&max=2")
         self.assertEqual(text, "o1\t0\t%s\nd0\t1\tdone 0\n" % ("x" * 60))
 
+    def test_due_dates_only_when_asked(self):
+        self.g.tasks["L1"] = [{"id": "t1", "title": "Bins", "status": "needsAction",
+                               "due": "2026-10-12T00:00:00.000Z"},
+                              {"id": "t2", "title": "Milk", "status": "needsAction"}]
+        # An older Todo reads three fields: it is not given a fourth.
+        self.assertEqual(self.req("GET", "/todo/tasks?list=L1"),
+                         (200, "t1\t0\tBins\nt2\t0\tMilk\n"))
+        self.assertEqual(self.req("GET", "/todo/tasks?list=L1&due=1"),
+                         (200, "t1\t0\tBins\t2026-10-12\nt2\t0\tMilk\t\n"))
+        self.assertIn("due", [c for c in self.g.calls if c[0] == "GET"][-1][1])
+
+    def test_a_due_date_is_set_and_cleared(self):
+        self.assertEqual(self.req("PATCH", "/todo/task?list=L1&id=t1", "done=0\ndue=2026-10-12"),
+                         (200, "ok\n"))
+        self.assertEqual(self.g.calls[-1][2], {"status": "needsAction",
+                                               "due": "2026-10-12T00:00:00.000Z"})
+        self.req("PATCH", "/todo/task?list=L1&id=t1", "due=")
+        self.assertEqual(self.g.calls[-1][2], {"due": None})
+        self.assertEqual(self.req("PATCH", "/todo/task?list=L1&id=t1", "due=tuesday")[0], 400)
+
+    def test_a_new_task_can_bring_its_date(self):
+        self.assertEqual(self.req("POST", "/todo/task?list=L1&due=2026-10-13", "Milk"),
+                         (200, "t9\n"))
+        self.assertEqual(self.g.calls[-1][2], {"title": "Milk",
+                                               "due": "2026-10-13T00:00:00.000Z"})
+
     def test_googles_404_is_the_devices_404(self):
         s, text = self.req("PATCH", "/todo/task?list=L1&id=gone", "done=1")
         self.assertEqual(s, 404)

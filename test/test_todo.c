@@ -319,6 +319,7 @@ static struct {
   int    n, at;
   char   url[SCRIPT_MAX][200];
   char   method[SCRIPT_MAX][8];
+  char   body[SCRIPT_MAX][96];
   int    asked;
   int    pending;            /* a request is out and has not been collected */
 } S;
@@ -334,11 +335,12 @@ static void script_add(const char *reply, int code) {
 
 static int script_start(const char *m, const char *u, const char *b,
                         const char *ct, const char *tok, int ms) {
-  (void)b; (void)ct; (void)tok; (void)ms;
+  (void)ct; (void)tok; (void)ms;
   if (S.pending) return -1;              /* one at a time, as on the device */
   if (S.asked < SCRIPT_MAX) {
     snprintf(S.url[S.asked], sizeof S.url[0], "%s", u ? u : "");
     snprintf(S.method[S.asked], sizeof S.method[0], "%s", m ? m : "");
+    snprintf(S.body[S.asked], sizeof S.body[0], "%s", b ? b : "");
   }
   S.asked++;
   S.pending = 1;
@@ -1103,5 +1105,298 @@ void test_todo_a_stranded_cache_tmp_is_recovered(void) {
   CHECK_EQ(T.n, 1);
   CHECK(!strcmp(T.item[0].title, "Survives a cut"));
   CHECK(host_exists("/cache/todo/listA.cache"));
+  host_clean();
+}
+
+/* ---- claiming a task for a day --------------------------------------------
+ *
+ * A claim is a due date: `c` sets today's, `w` takes any day typed, and the
+ * agenda -- Today's page, `todo today`, the top of the overview -- is every
+ * open task due today or earlier, from every list. A claim not finished
+ * stays: yesterday is still "today or earlier". */
+
+/* Monday 12 October 2026. */
+static void set_today(int y, int m, int d) {
+  memset(&fakeapi_now, 0, sizeof fakeapi_now);
+  fakeapi_now.year = (uint16_t)y; fakeapi_now.month = (uint8_t)m;
+  fakeapi_now.day = (uint8_t)d; fakeapi_now.hour = 9; fakeapi_now.synced = 2;
+}
+
+static void no_clock(void) { memset(&fakeapi_now, 0, sizeof fakeapi_now); }
+
+static void set_due(int i, const char *due, int due_dirty) {
+  snprintf(T.item[i].due, sizeof T.item[i].due, "%s", due);
+  T.item[i].due_dirty = due_dirty;
+}
+
+void test_todo_cache_keeps_a_due_date_and_whether_it_is_unsent(void) {
+  use_fake_api();
+  add_item("a1", "Claimed and sent", 0, 0, 0);
+  set_due(0, "2026-10-12", 0);
+  add_item("a2", "Claimed here", 0, 1, 0);
+  set_due(1, "2026-10-13", 1);
+  add_item("a3", "@ starts this one", 0, 0, 0);
+  cache_save();
+
+  memset(&T, 0, sizeof T);
+  cache_load();
+  CHECK_EQ(T.n, 3);
+  CHECK(!strcmp(T.item[0].due, "2026-10-12") && !T.item[0].due_dirty);
+  CHECK(!strcmp(T.item[0].title, "Claimed and sent"));
+  CHECK(!strcmp(T.item[1].due, "2026-10-13") && T.item[1].due_dirty && T.item[1].dirty);
+  CHECK(!T.item[2].due[0]);
+  CHECK(!strcmp(T.item[2].title, "@ starts this one"));
+
+  /* A file written before dates: every line still reads, with none. */
+  host_write("/cache/todo/_.cache", "0 0 0 b1 Old line\n1 0 1 - Ticked offline\n");
+  cache_load();
+  CHECK_EQ(T.n, 2);
+  CHECK(!strcmp(T.item[0].title, "Old line") && !T.item[0].due[0]);
+  CHECK(!strcmp(T.item[1].title, "Ticked offline") && T.item[1].done && T.item[1].dirty);
+  host_clean();
+}
+
+void test_todo_a_pull_reads_the_due_date(void) {
+  use_fake_api();
+  snprintf(T.reply, sizeof T.reply, "%s",
+           "a1\t0\tBins\t2026-10-12\na2\t0\tMilk\t\na3\t1\tAn older server\n");
+  absorb_tasks();
+  CHECK_EQ(T.n, 3);
+  CHECK(!strcmp(T.item[0].due, "2026-10-12"));
+  CHECK(!T.item[1].due[0] && !strcmp(T.item[1].title, "Milk"));
+  CHECK(!T.item[2].due[0] && !strcmp(T.item[2].title, "An older server"));
+  CHECK(T.item[2].done);
+  host_clean();
+}
+
+void test_todo_c_claims_for_today_and_again_unclaims(void) {
+  use_fake_api();
+  set_today(2026, 10, 12);
+  add_item("a1", "Laundry", 0, 0, 0);
+  T.sel = 0;
+  CHECK_EQ(key_list('c'), 1);
+  CHECK(!strcmp(T.item[0].due, "2026-10-12"));
+  CHECK(T.item[0].dirty && T.item[0].due_dirty);
+  CHECK_EQ(key_list('c'), 1);
+  CHECK(!T.item[0].due[0]);
+
+  /* Left over from Saturday, or dated for later: c brings it to today. */
+  set_due(0, "2026-10-10", 0);
+  key_list('c');
+  CHECK(!strcmp(T.item[0].due, "2026-10-12"));
+  set_due(0, "2026-10-20", 0);
+  key_list('c');
+  CHECK(!strcmp(T.item[0].due, "2026-10-12"));
+  host_clean();
+}
+
+/* After 6 pm the day being planned is tomorrow. */
+void test_todo_c_in_the_evening_claims_for_tomorrow(void) {
+  use_fake_api();
+  set_today(2026, 10, 12);
+  fakeapi_now.hour = 18;
+  add_item("a1", "Laundry", 0, 0, 0);
+  T.sel = 0;
+  key_list('c');
+  CHECK(!strcmp(T.item[0].due, "2026-10-13"));
+  CHECK(strstr(T.status, "tomorrow") != NULL);
+  key_list('c');
+  CHECK(!T.item[0].due[0]);
+  /* Due today, pressed in the evening: moved on to tomorrow. */
+  set_due(0, "2026-10-12", 0);
+  key_list('c');
+  CHECK(!strcmp(T.item[0].due, "2026-10-13"));
+  host_clean();
+}
+
+void test_todo_plus_and_minus_move_the_date_a_day(void) {
+  use_fake_api();
+  set_today(2026, 10, 12);
+  add_item("a1", "Taxes", 0, 0, 0);
+  T.sel = 0;
+  key_list('+');                                /* no date yet: today first */
+  CHECK(!strcmp(T.item[0].due, "2026-10-12"));
+  key_list('=');                                /* + without shift */
+  CHECK(!strcmp(T.item[0].due, "2026-10-13"));
+  key_list('+');
+  CHECK(!strcmp(T.item[0].due, "2026-10-14"));
+  key_list('-'); key_list('-'); key_list('-');
+  CHECK(!strcmp(T.item[0].due, "2026-10-11"));
+  CHECK(T.item[0].dirty && T.item[0].due_dirty);
+  set_due(0, "2026-10-31", 0);                  /* across a month */
+  key_list('+');
+  CHECK(!strcmp(T.item[0].due, "2026-11-01"));
+  host_clean();
+}
+
+void test_todo_claiming_needs_the_clock(void) {
+  use_fake_api();
+  no_clock();
+  add_item("a1", "Laundry", 0, 0, 0);
+  T.sel = 0;
+  key_list('c');
+  CHECK(!T.item[0].due[0] && !T.item[0].dirty);
+  CHECK(strstr(T.status, "clock") != NULL);
+  host_clean();
+}
+
+void test_todo_when_understands_the_ways_to_say_a_day(void) {
+  char d[11];
+  long mon = days_from_civil(2026, 10, 12);      /* a Monday */
+  use_fake_api();
+  CHECK_EQ(parse_when("today", mon, d), 0);      CHECK(!strcmp(d, "2026-10-12"));
+  CHECK_EQ(parse_when("Tom", mon, d), 0);        CHECK(!strcmp(d, "2026-10-13"));
+  CHECK_EQ(parse_when("tomorrow", mon, d), 0);   CHECK(!strcmp(d, "2026-10-13"));
+  CHECK_EQ(parse_when("fri", mon, d), 0);        CHECK(!strcmp(d, "2026-10-16"));
+  CHECK_EQ(parse_when("monday", mon, d), 0);     CHECK(!strcmp(d, "2026-10-12"));
+  CHECK_EQ(parse_when("su", mon, d), 0);         CHECK(!strcmp(d, "2026-10-18"));
+  CHECK_EQ(parse_when("+3", mon, d), 0);         CHECK(!strcmp(d, "2026-10-15"));
+  CHECK_EQ(parse_when("10/15", mon, d), 0);      CHECK(!strcmp(d, "2026-10-15"));
+  CHECK_EQ(parse_when("1/5", mon, d), 0);        CHECK(!strcmp(d, "2027-01-05"));
+  CHECK_EQ(parse_when("2026-11-01", mon, d), 0); CHECK(!strcmp(d, "2026-11-01"));
+  CHECK_EQ(parse_when(" ", mon, d), 0);          CHECK(!d[0]);     /* clears it */
+  CHECK_EQ(parse_when("someday", mon, d), -1);
+  CHECK_EQ(parse_when("13/40", mon, d), -1);
+  CHECK_EQ(parse_when("2/30", mon, d), -1);
+  CHECK_EQ(parse_when("s", mon, d), -1);         /* sat or sun? */
+}
+
+void test_todo_w_sets_a_date_typed_in(void) {
+  use_fake_api();
+  set_today(2026, 10, 12);
+  add_item("a1", "Taxes", 0, 0, 0);
+  T.sel = 0;
+  CHECK_EQ(key_list('w'), 1);
+  CHECK_EQ(T.view, VIEW_ADD);
+  CHECK(T.draft_date);
+  key_add('f'); key_add('r'); key_add('i');
+  key_add(CAPP_KEY_ENTER);
+  CHECK_EQ(T.view, VIEW_LIST);
+  CHECK(!strcmp(T.item[0].due, "2026-10-16") && T.item[0].due_dirty);
+
+  /* Not a day: the field stays, with the date as it was. */
+  key_list('w');
+  key_add(CAPP_KEY_BACK);                       /* the field opens with 10/16 */
+  while (T.draft_len) key_add(CAPP_KEY_BACK);
+  key_add('x'); key_add('y');
+  key_add(CAPP_KEY_ENTER);
+  CHECK_EQ(T.view, VIEW_ADD);
+  CHECK(T.when_bad);
+  CHECK(!strcmp(T.item[0].due, "2026-10-16"));
+  key_add(CAPP_KEY_ESC);
+  CHECK_EQ(T.view, VIEW_LIST);
+  CHECK(!T.draft_date);
+  host_clean();
+}
+
+void test_todo_a_claim_is_pushed_with_its_date_and_a_tick_is_not(void) {
+  use_script_api();
+  snprintf(T.list_id, sizeof T.list_id, "%s", "listA");
+  add_item("a1", "Claimed", 0, 1, 0);
+  set_due(0, "2026-10-12", 1);
+  add_item("a2", "Ticked", 1, 1, 0);
+  set_due(1, "2026-10-01", 0);
+  add_item("", "New and claimed", 0, 1, 0);
+  set_due(2, "2026-10-12", 1);
+  add_item("a4", "Unclaimed", 0, 1, 0);
+  set_due(3, "", 1);
+
+  CHECK_EQ(start_push("", 0), 0);
+  CHECK(!strcmp(S.method[0], "PATCH"));
+  CHECK(!strcmp(S.body[0], "done=0\ndue=2026-10-12"));
+  S.pending = 0;
+  CHECK_EQ(start_push("", 1), 0);
+  CHECK(!strcmp(S.body[1], "done=1"));         /* a phone's date is not undone */
+  S.pending = 0;
+  CHECK_EQ(start_push("", 2), 0);
+  CHECK(!strcmp(S.method[2], "POST"));
+  CHECK(url_has(2, "&due=2026-10-12"));
+  S.pending = 0;
+  CHECK_EQ(start_push("", 3), 0);
+  CHECK(!strcmp(S.body[3], "done=0\ndue="));
+  host_clean();
+}
+
+/* Three lists: My Tasks on screen, Groceries and Work in their files. */
+static void agenda_lists(void) {
+  use_fake_api();
+  set_today(2026, 10, 12);
+  T.nlists = 3;
+  snprintf(T.lists[0].id, ID_MAX, "listA"); snprintf(T.lists[0].name, NAME_MAX, "My Tasks");
+  snprintf(T.lists[1].id, ID_MAX, "listB"); snprintf(T.lists[1].name, NAME_MAX, "Groceries");
+  snprintf(T.lists[2].id, ID_MAX, "listC"); snprintf(T.lists[2].name, NAME_MAX, "Work");
+  T.cur = 0;
+  snprintf(T.list_id, sizeof T.list_id, "listA");
+  add_item("a1", "Fix bike", 0, 0, 0);
+  set_due(0, "2026-10-12", 0);
+  add_item("a2", "Call mum", 0, 0, 0);
+  set_due(1, "2026-10-13", 0);
+  add_item("a3", "Plain", 0, 0, 0);
+  host_write("/cache/todo/listB.cache",
+             "0 0 0 b1 @2026-10-11 Eggs\n0 0 0 b2 @- Milk\n1 0 0 b3 @2026-10-01 Done one\n");
+  host_write("/cache/todo/listC.cache", "0 0 0 c1 Ship it\n");
+}
+
+void test_todo_today_gathers_claims_from_every_list(void) {
+  char out[256];
+  const char *argv[1] = { "My Tasks" };
+  agenda_lists();
+  CHECK_EQ(app_command(0, ACT_TODAY, 1, argv, out, sizeof out), 0);
+  CHECK(!strcmp(out, "[ ] Fix bike (My Tasks)\n[ ] Eggs (Groceries)"));
+  /* Tomorrow's page counts tomorrow too. */
+  CHECK_EQ(app_command(0, ACT_TOMORROW, 1, argv, out, sizeof out), 0);
+  CHECK(!strcmp(out, "[ ] Fix bike (My Tasks)\n[ ] Call mum (My Tasks)\n[ ] Eggs (Groceries)"));
+  host_clean();
+}
+
+void test_todo_today_with_nothing_claimed_is_the_named_list(void) {
+  char out[256];
+  const char *argv[1] = { "groceries" };
+  agenda_lists();
+  T.item[0].due[0] = 0;
+  host_write("/cache/todo/listB.cache", "0 0 0 b1 @- Eggs\n0 0 0 b2 @- Milk\n");
+  CHECK_EQ(app_command(0, ACT_TODAY, 1, argv, out, sizeof out), 0);
+  CHECK(!strcmp(out, "[ ] Eggs\n[ ] Milk"));
+
+  /* No clock, no way to know what is due: the list, not a guess. */
+  agenda_lists();
+  no_clock();
+  argv[0] = "My Tasks";
+  CHECK_EQ(app_command(0, ACT_TODAY, 1, argv, out, sizeof out), 0);
+  CHECK(!strcmp(out, "[ ] Fix bike\n[ ] Call mum\n[ ] Plain"));
+
+  /* A list that is not there: the one on screen. */
+  agenda_lists();
+  T.item[0].due[0] = 0;
+  host_write("/cache/todo/listB.cache", "0 0 0 b1 @- Eggs\n");
+  argv[0] = "Nope";
+  CHECK_EQ(app_command(0, ACT_TODAY, 1, argv, out, sizeof out), 0);
+  CHECK(!strcmp(out, "[ ] Fix bike\n[ ] Call mum\n[ ] Plain"));
+  host_clean();
+}
+
+void test_todo_the_overview_starts_with_today(void) {
+  agenda_lists();
+  over_build();
+  CHECK(T.nover >= 4);
+  CHECK(!strcmp(T.over[0].title, "Fix bike") && T.over[0].today && T.over[0].head);
+  CHECK(!strcmp(T.over[1].title, "Eggs") && T.over[1].today && !T.over[1].head);
+  CHECK_EQ(T.over[1].list, 1);                 /* enter goes to Groceries */
+  CHECK(!strcmp(T.over[2].title, "Fix bike") && !T.over[2].today && T.over[2].head);
+  host_clean();
+}
+
+void test_todo_claim_and_unclaim_by_name(void) {
+  char out[96];
+  const char *argv[1] = { "bike" };
+  agenda_lists();
+  T.item[0].due[0] = 0;
+  CHECK_EQ(app_command(0, ACT_CLAIM, 1, argv, out, sizeof out), 0);
+  CHECK(!strcmp(T.item[0].due, "2026-10-12") && T.item[0].dirty);
+  CHECK(strstr(out, "Fix bike") != NULL);
+  CHECK_EQ(app_command(0, ACT_UNCLAIM, 1, argv, out, sizeof out), 0);
+  CHECK(!T.item[0].due[0]);
+  argv[0] = "zzz";
+  CHECK_EQ(app_command(0, ACT_CLAIM, 1, argv, out, sizeof out), -1);
   host_clean();
 }
