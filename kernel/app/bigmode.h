@@ -26,6 +26,7 @@ typedef struct {
   void  *(*alloc)(size_t n);
   void   (*free)(void *p);
   size_t (*largest)(void);             /* the largest free block */
+  size_t (*total)(void);               /* all that is free */
 } BigHeap;
 
 void        bigmode_set_heap(const BigHeap *h);
@@ -43,8 +44,9 @@ int         bigmode_active(void);
 const void *bigmode_owner(void);
 int         bigmode_blocks(void);
 
-/* A block of n bytes for `caller`, only if it is the big app on screen and
- * the heap keeps BIG_RESERVE after it; NULL otherwise. */
+/* A block of n bytes for `caller`, only if it is the big app on screen, it
+ * fits the largest free piece, and BIG_RESERVE stays free in all after it;
+ * NULL otherwise. */
 void       *bigmode_alloc(const void *caller, size_t n);
 /* How much bigmode_alloc would give `caller` in one piece now; 0 if none. */
 size_t      bigmode_room(const void *caller);

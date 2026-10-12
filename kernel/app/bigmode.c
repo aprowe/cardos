@@ -57,10 +57,12 @@ const void *bigmode_owner(void) { return s_owner; }
 int bigmode_blocks(void) { return s_nblock; }
 
 size_t bigmode_room(const void *caller) {
-  size_t l;
+  size_t l, t;
   if (!s_heap || !caller || caller != s_owner || s_nblock == BIG_BLOCKS) return 0;
   l = s_heap->largest();
-  return l > BIG_RESERVE ? l - BIG_RESERVE : 0;
+  t = s_heap->total();
+  t = t > BIG_RESERVE ? t - BIG_RESERVE : 0;  /* the reserve, out of all that is free */
+  return l < t ? l : t;
 }
 
 void *bigmode_alloc(const void *caller, size_t n) {

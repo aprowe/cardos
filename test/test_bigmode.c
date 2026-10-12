@@ -9,20 +9,22 @@
 #include "kernel/app/bigmode.h"
 
 static int n_alloc, n_free, n_drop;
-static size_t largest;
+static size_t largest, total;
 
 static void *f_alloc(size_t n) { n_alloc++; return malloc(n); }
 static void f_free(void *p) { if (p) n_free++; free(p); }
 static size_t f_largest(void) { return largest; }
+static size_t f_total(void) { return total; }
 static void drop(void) { n_drop++; }
 
-static const BigHeap HEAP = { f_alloc, f_free, f_largest };
+static const BigHeap HEAP = { f_alloc, f_free, f_largest, f_total };
 
 static void reset(void) {
   bigmode_set_heap(&HEAP);
   bigmode_reset();                    /* frees what the last test left, then count */
   n_alloc = n_free = n_drop = 0;
   largest = 120 * 1024;
+  total = 200 * 1024;
 }
 
 static int A, B;                    /* two apps' identities */
@@ -44,13 +46,20 @@ void test_bigmode_only_the_big_app_on_screen_gets_memory(void) {
   CHECK_EQ(bigmode_blocks(), 1);
 }
 
+/* The reserve comes out of what is free in all, not out of the one largest
+ * piece: measured on an ADV, 68 KB free with the largest 31 KB said only
+ * 7 KB, when 31 KB could be had and 37 KB would still be left. */
 void test_bigmode_room_keeps_a_reserve(void) {
   reset();
   bigmode_enter(&A);
-  CHECK_EQ((int)bigmode_room(&A), (int)(largest - BIG_RESERVE));
-  CHECK(bigmode_alloc(&A, largest - BIG_RESERVE + 1) == NULL);   /* past the reserve */
-  CHECK(bigmode_alloc(&A, largest - BIG_RESERVE) != NULL);
-  largest = BIG_RESERVE / 2;
+  CHECK_EQ((int)bigmode_room(&A), (int)largest);              /* plenty left over */
+  largest = 31 * 1024; total = 68 * 1024;                     /* the ADV, measured */
+  CHECK_EQ((int)bigmode_room(&A), 31 * 1024);
+  largest = 31 * 1024; total = 40 * 1024;                     /* the reserve binds */
+  CHECK_EQ((int)bigmode_room(&A), (int)(total - BIG_RESERVE));
+  CHECK(bigmode_alloc(&A, total - BIG_RESERVE + 1) == NULL);  /* past the reserve */
+  CHECK(bigmode_alloc(&A, total - BIG_RESERVE) != NULL);
+  total = BIG_RESERVE / 2;
   CHECK_EQ((int)bigmode_room(&A), 0);
   CHECK(bigmode_alloc(&A, 16) == NULL);
 }

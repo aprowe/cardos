@@ -1402,6 +1402,7 @@ static int rest_ms(void) {
 static void *big_heap_alloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_8BIT); }
 static void big_heap_free(void *p) { heap_caps_free(p); }
 static size_t big_heap_largest(void) { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); }
+static size_t big_heap_total(void) { return heap_caps_get_free_size(MALLOC_CAP_8BIT); }
 
 void app_main(void) {
   size_t heap_at_boot;
@@ -1617,7 +1618,7 @@ void app_main(void) {
   {
     /* Big-app mode (kernel/app/bigmode.h): the heap it takes from, what it
      * lets go of on entering, and its blocks freed with the app. */
-    static const BigHeap heap = { big_heap_alloc, big_heap_free, big_heap_largest };
+    static const BigHeap heap = { big_heap_alloc, big_heap_free, big_heap_largest, big_heap_total };
     bigmode_set_heap(&heap);
     bigmode_on_enter(capprun_big_let_go);
     capprun_on_release(bigmode_release);
