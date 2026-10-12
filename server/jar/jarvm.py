@@ -24,7 +24,7 @@ import os
 import re
 
 DEF_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                        "apps", "jarvm.def")
+                        "apps", "jar", "jarvm.def")
 
 # ---- the table, from apps/jar/jarvm.def -----------------------------------------
 

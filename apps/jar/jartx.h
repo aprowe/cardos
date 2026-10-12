@@ -1,5 +1,5 @@
-/* Jar Factory: what the lane's deals do to the jar (server/town.py,
- * server/shopkeep.py).
+/* Jar Factory: what the lane's deals do to the jar (server/jar/town.py,
+ * server/jar/shopkeep.py).
  *
  * A deal struck in talk -- with Tibbs, Pip, Bramble or Wren -- reaches the
  * device as "tx ID OP ARG" lines, in the talk reply and from GET
@@ -16,14 +16,14 @@
  * The last two need the network: jtx_apply answers JTX_FETCH and leaves
  * txseen where it was, the caller fetches GET /jar/item?id=ITEM, checks
  * it against the server's key and calls jtx_install; a fetch that fails is
- * tried again with the next poll. Needs `api` and `J` (apps/jarui.h, or
- * apps/jar.c) and apps/jarstore.h.
+ * tried again with the next poll. Needs `api` and `J` (apps/jar/jarui.h, or
+ * apps/jar/jar.c) and apps/jar/jarstore.h.
  */
 #ifndef CARDOS_JARTX_H
 #define CARDOS_JARTX_H
 
 #include "apps/str.h"
-#include "apps/jarstore.h"
+#include "apps/jar/jarstore.h"
 
 #if defined(__GNUC__)
 #define JTX_OPT __attribute__((unused))

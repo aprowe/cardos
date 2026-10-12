@@ -1,7 +1,7 @@
 /* Kart: a race in the manner of SNES Super Mario Kart -- Mode 7 road,
  * billboard karts -- steered by tilting the Cardputer ADV.
  *
- * The game is apps/kart.h, and this is the app around it: the title, the
+ * The game is apps/kart/kart.h, and this is the app around it: the title, the
  * race, the results, the controls and the clock.
  *
  * STEERING. Tilt it like a wheel: the roll from how it was held when the
@@ -19,7 +19,7 @@
  * flickers.
  */
 #include "kernel/app/capp.h"
-#include "apps/kart.h"
+#include "apps/kart/kart.h"
 #include "apps/safefile.h"
 
 #define CONF     "/config/kart.txt"

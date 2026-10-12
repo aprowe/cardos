@@ -61,7 +61,7 @@ from ..kv import kv_route, KVError, NotAllowed, NotFound
 from ..routes import arg
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-HEADER = os.path.join(ROOT, "apps", "jaritem.h")
+HEADER = os.path.join(ROOT, "apps", "jar", "jaritem.h")
 
 NS = "srv/jar"
 MAKER = "Jar Works"

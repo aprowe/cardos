@@ -13,7 +13,7 @@
 #include "fakeapi.h"
 #include "jarfake.h"
 
-#include "apps/jarpost.h"           /* the post screen, standing alone */
+#include "apps/jar/jarpost.h"           /* the post screen, standing alone */
 
 #define T0 1800000000u
 

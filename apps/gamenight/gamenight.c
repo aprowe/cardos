@@ -3,7 +3,7 @@
  * Esc comes back to the menu, and a timer that is running keeps running
  * while the others are used -- the buzzer shows what is left of it.
  *
- * SCORE (apps/gn_score.h): players or teams across, rounds down, totals
+ * SCORE (apps/gamenight/gn_score.h): players or teams across, rounds down, totals
  * at the bottom, the leader in gold; any game scored in rounds, nothing
  * about any one game. Type a number in a cell -- minus too -- and Enter
  * goes on to the next player, then the next round. It does not follow
@@ -12,7 +12,7 @@
  * (Hearts). Up from the first round is the names' row, where e renames and
  * d removes a player. Kept in /var/gamenight/score.txt.
  *
- * DICE (apps/gn_dice.h): up/down how many (1-9), left/right how many sides
+ * DICE (apps/gamenight/gn_dice.h): up/down how many (1-9), left/right how many sides
  * (2, 4, 6, 8, 10, 12, 20, 100), e types any -- "3d6+2", "d%". Space or
  * Enter rolls, and so does a shake on a Cardputer ADV (its motion sensor).
  * 1-9 hold a die through the next roll (Yahtzee). A d6 shows its pips, a d2
@@ -38,8 +38,8 @@
 #include "apps/footer.h"
 #include "apps/confirm.h"
 #include "apps/safefile.h"
-#include "apps/gn_score.h"
-#include "apps/gn_dice.h"
+#include "apps/gamenight/gn_score.h"
+#include "apps/gamenight/gn_dice.h"
 
 static const CardApi *api;
 static const CappAudio *au;

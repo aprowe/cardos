@@ -15,8 +15,8 @@
  * against a heap whose biggest piece is often 27 KB. Quitting either comes
  * back here, and the jar starts again from its save. Nothing is made while
  * the jar is off screen -- not in the companions, not while shut: jam and
- * coins come only from this scene running. The world is apps/jarsim.h, the item record apps/jaritem.h, the
- * card apps/jarstore.h, the pictures apps/jar_art.h (tools/make_jar_art.py
+ * coins come only from this scene running. The world is apps/jar/jarsim.h, the item record apps/jar/jaritem.h, the
+ * card apps/jar/jarstore.h, the pictures apps/jar/jar_art.h (tools/make_jar_art.py
  * from tools/jar_art.txt). Host tests: test/test_jarsim.c,
  * test/test_jaritem.c, test/test_jarstore.c, test/test_jar.c (JAR_DUMP=dir
  * writes frames).
@@ -37,14 +37,14 @@
  *
  * ON THE CARD. /var/jar/jar.txt is the jar (js_save), saved on every
  * placement, before opening a companion and every five minutes;
- * /var/jar/items/ holds one record per owned item (apps/jarstore.h).
+ * /var/jar/items/ holds one record per owned item (apps/jar/jarstore.h).
  */
 
 #include "kernel/app/capp.h"
 #include "kernel/console/font6x8.h"
 #include "apps/str.h"
 #include "apps/datetime.h"
-#include "apps/jarstore.h"
+#include "apps/jar/jarstore.h"
 
 #define SW 240
 #define SHT 135
@@ -75,11 +75,11 @@ enum { Q_IDLE = 0, Q_LEN, Q_PEEK, Q_THANKS, Q_ACK, Q_SKY, Q_PATCH, Q_EVENTS, Q_T
 
 static const CardApi *api;
 static Jar J;
-#include "apps/jartx.h"
+#include "apps/jar/jartx.h"
 
 /* The strip, and the same memory for the card and the network, which never
  * happen while a strip is being drawn -- and for the shop and post screens'
- * buffers (apps/jarui.h), which are only in use while the scene is not. */
+ * buffers (apps/jar/jarui.h), which are only in use while the scene is not. */
 static union {
   uint16_t strip[SW * SH];
   JIo io;
@@ -119,7 +119,7 @@ static struct {
   /* the menu: big tiles in place of seven squeezed words */
   int menu, msel;
   int lit[4];                           /* the light on everything: towards r g b, by a/256 */
-  JTx fx;                               /* a deal waiting on its item (apps/jartx.h) */
+  JTx fx;                               /* a deal waiting on its item (apps/jar/jartx.h) */
 } G;
 
 /* The real sky (GET /jar/sky): kept across the shop and the post, which
@@ -384,7 +384,7 @@ static void background(void) {
 static const uint16_t CAPS[4] = { CAPP_RGB(0x9a, 0xa0, 0xaa), CAPP_RGB(0xc8, 0x42, 0x3a),
                                   CAPP_RGB(0x4a, 0x7a, 0xc8), CAPP_RGB(0xff, 0xd1, 0x66) };
 
-/* The ledges at the back (apps/jarsim.h, "Levels"), drawn before anything
+/* The ledges at the back (apps/jar/jarsim.h, "Levels"), drawn before anything
  * stands in front of them. 1: a wooden ruler on a stack of bottle caps (the
  * climb) and three cotton reels. 2: a lolly stick on a tower of matchboxes
  * (the climb), its far end hung from the lid on a thread. */
@@ -556,7 +556,7 @@ static void item_at(int i, int *x, int *y) {
   const JPlaced *p = &J.placed[i];
   int bob = 0, ph = p->phase & 255;
   /* an old floater bobs and an old swayer swings; with parts of its own,
-   * the idle does that (apps/jarlive.h, lv_pose) */
+   * the idle does that (apps/jar/jarlive.h, lv_pose) */
   if (!p->given && (p->move == JM_FLOATS || p->move == JM_SWAYS)) bob = (ph < 128 ? ph : 255 - ph) * 7 / 128 - 3;
   *x = p->x / JS_FX - 8;
   if (p->kind == JK_HANGING) { *y = JS_LID + p->home_y; *x += bob / 2; }
@@ -565,7 +565,7 @@ static void item_at(int i, int *x, int *y) {
 }
 
 static void save(void);
-#include "apps/jarlive.h"
+#include "apps/jar/jarlive.h"
 
 static void items(void) {
   int i;
@@ -1389,7 +1389,7 @@ static uint32_t thanks(int n) {
 
 static void clock_minute(void);
 
-/* "sky WORD TAG", "rise MIN", "set MIN" (server/jar.py sky_text). */
+/* "sky WORD TAG", "rise MIN", "set MIN" (server/jar/__init__.py sky_text). */
 static void sky_reply(void) {
   const char *p, *q;
   int w = -1, r = 0, s = 0;
@@ -1516,7 +1516,7 @@ static void post_reply(int n) {
   }
 }
 
-/* ---- the lane's deals (apps/jartx.h) ------------------------------------------ */
+/* ---- the lane's deals (apps/jar/jartx.h) ------------------------------------------ */
 
 /* The deals done since J.txseen: carried out, up to one that brings an
  * item (1: G.fx is it). */
@@ -1774,7 +1774,7 @@ static void scene_start(void) {
 #define net_reply shop_net_reply
 #define key_card  shop_key_card
 #define V_CARD    SHOP_V_CARD
-#include "apps/jarshop.h"
+#include "apps/jar/jarshop.h"
 #undef G
 #undef S
 #undef NS
@@ -1786,7 +1786,7 @@ static void scene_start(void) {
 #define key_card  post_key_card
 #define V_CARD    POST_V_CARD
 #define post_tick post_screen_tick      /* the scene has a post_tick of its own */
-#include "apps/jarpost.h"
+#include "apps/jar/jarpost.h"
 #undef post_tick
 #undef G
 #undef M

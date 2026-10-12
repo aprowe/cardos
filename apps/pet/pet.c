@@ -1,6 +1,6 @@
 /* Pet: a virtual pet, after the egg-shaped keyrings of 1996.
  *
- * It lives in wall-clock time (apps/petsim.h): closed, it still gets
+ * It lives in wall-clock time (apps/pet/petsim.h): closed, it still gets
  * hungry, bored, tired and messy, and opening the app catches up on the
  * hours you were away. Feed it, give it a snack, play the which-way game,
  * put the lights out when it is tired, clean up after it and give it
@@ -24,7 +24,7 @@
 #include "apps/safefile.h"
 #include "apps/footer.h"
 #include "apps/confirm.h"
-#include "apps/petsim.h"
+#include "apps/pet/petsim.h"
 
 static const CardApi *api;
 

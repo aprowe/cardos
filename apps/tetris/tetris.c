@@ -1,5 +1,5 @@
 /* Tetris. The pieces, their rotations and kicks, and the scoring and speed
- * tables are apps/tetris_data.h; this is the game around them -- the board,
+ * tables are apps/tetris/tetris_data.h; this is the game around them -- the board,
  * gravity, the title, pause and game-over screens, and the best score.
  *
  * No hidden rows above the board: a piece spawns with its box's top row at
@@ -16,7 +16,7 @@
 
 #include "kernel/app/capp.h"
 #include "apps/str.h"
-#include "apps/tetris_data.h"
+#include "apps/tetris/tetris_data.h"
 #include "apps/safefile.h"
 
 static const CardApi *api;

@@ -3,8 +3,8 @@
  *
  * A script is bytecode, at most JI_SCRIPT_MAX (256) bytes, carried in an
  * item's record. The server compiles it from the readable language
- * (server/jarvm.py) and runs the same machine to test it; the device only
- * ever sees the bytes. The instructions are apps/jarvm.def, which both sides
+ * (server/jar/jarvm.py) and runs the same machine to test it; the device only
+ * ever sees the bytes. The instructions are apps/jar/jarvm.def, which both sides
  * read -- this file builds its tables from it.
  *
  * THE LAYOUT
@@ -32,7 +32,7 @@
  *             of range: stopped, nothing more is done
  *   JV_IGNORE not a script this machine knows (format, entries): ignored
  * Limit and fault are where the spec's "? bubble, recipe until the next
- * event" comes from; that is the caller's (apps/jarsim.h, js_item_event).
+ * event" comes from; that is the caller's (apps/jar/jarsim.h, js_item_event).
  *
  * jv_check walks a whole script before it is used -- every entry on an
  * instruction, every instruction known, every operand in range, every jump
@@ -47,7 +47,7 @@
 #define CARDOS_JARVM_H
 
 #include <stdint.h>
-#include "apps/jaritem.h"
+#include "apps/jar/jaritem.h"
 
 #if defined(__GNUC__)
 #define JV_OPT __attribute__((unused))
@@ -69,7 +69,7 @@ enum { JV_DONE = 0, JV_NONE = 1, JV_LIMIT = -1, JV_FAULT = -2, JV_IGNORE = -3 };
 #define JV_SENSE(v, n, e, d)
 #define JV_NAME(g, n, v, e)
 enum {
-#include "apps/jarvm.def"
+#include "apps/jar/jarvm.def"
   JV_NOPS
 };
 #undef JV_OP
@@ -81,14 +81,14 @@ enum {
 #define JV_ACTION(v, n, e, a, d) + 1
 #define JV_SENSE(v, n, e, d)
 enum { JV_NACTIONS = 0
-#include "apps/jarvm.def"
+#include "apps/jar/jarvm.def"
 };
 #undef JV_ACTION
 #undef JV_SENSE
 #define JV_ACTION(v, n, e, a, d)
 #define JV_SENSE(v, n, e, d) + 1
 enum { JV_NSENSES = 0
-#include "apps/jarvm.def"
+#include "apps/jar/jarvm.def"
 };
 #undef JV_OP
 #undef JV_EVENT
@@ -103,7 +103,7 @@ enum { JV_NSENSES = 0
 #define JV_SENSE(v, n, e, d)
 #define JV_NAME(g, n, v, e)
 static JV_OPT const uint8_t JV_INFO[JV_NOPS] = {
-#include "apps/jarvm.def"
+#include "apps/jar/jarvm.def"
 };
 #undef JV_OP
 #undef JV_EVENT

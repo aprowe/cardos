@@ -20,7 +20,7 @@ static int jar_test_open(const char *app, const char *args);
 #define JAR_TEST_OPEN(a, b) do { if (jar_test_open((a), (b))) return 0; } while (0)
 #define capp_info jar_capp_info
 #define capp_main jar_capp_main
-#include "apps/jar.c"
+#include "apps/jar/jar.c"
 #undef capp_info
 #undef capp_main
 

@@ -1,13 +1,13 @@
-/* Jar Factory's script machine on the host: apps/jarvm.h, its table
- * (apps/jarvm.def) against the enums the jar uses, the Python machine's
+/* Jar Factory's script machine on the host: apps/jar/jarvm.h, its table
+ * (apps/jar/jarvm.def) against the enums the jar uses, the Python machine's
  * traces replayed (test/fixtures/jarvm_*, written by
- * tools/make_jarvm_fixtures.py), and the hook in apps/jarsim.h. */
+ * tools/make_jarvm_fixtures.py), and the hook in apps/jar/jarsim.h. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "tinytest.h"
-#include "apps/jarsim.h"
+#include "apps/jar/jarsim.h"
 
 /* ---- a small world for the machine alone --------------------------------- */
 
@@ -92,7 +92,7 @@ void test_jarvm_table_matches_the_jar(void) {
 #define JV_ACTION(v, n, e, a, d) CHECK_EQ(v, e);
 #define JV_SENSE(v, n, e, d) CHECK_EQ(v, e);
 #define JV_NAME(g, n, v, e) CHECK_EQ(v, e);
-#include "apps/jarvm.def"
+#include "apps/jar/jarvm.def"
 #undef JV_OP
 #undef JV_EVENT
 #undef JV_ACTION
@@ -347,7 +347,7 @@ void test_jarvm_agrees_with_the_python_machine(void) {
   CHECK(count >= 15);
 }
 
-/* ---- the hook in apps/jarsim.h ------------------------------------------- */
+/* ---- the hook in apps/jar/jarsim.h ------------------------------------------- */
 
 static Jar J;
 

@@ -1,11 +1,11 @@
 /* Jar Post -- Jar Factory's friends, gifts and mail.
  *
- * A screen of Jar Factory (apps/jar.c), opened with post_open(SCREEN):
+ * A screen of Jar Factory (apps/jar/jar.c), opened with post_open(SCREEN):
  * friends, mail, or "gift ID" (from Jar Shop's item card). Esc at a top
  * screen, or fn-`, goes back to the jar. What it shares with Jar Shop
- * (apps/jarshop.c) is apps/jarui.h; the files are apps/jarstore.h's.
+ * (apps/jarshop.c) is apps/jar/jarui.h; the files are apps/jar/jarstore.h's.
  *
- * THE SERVER (spec step 6; server/jar.py), one request at a time, never
+ * THE SERVER (spec step 6; server/jar/__init__.py), one request at a time, never
  * blocking, the device's own token on each:
  *   GET  /jar/me                  "code CODE", "name NAME", and a
  *                                 "friend NAME\tDISPLAY\tLAST_SEEN\tmutual|waiting"
@@ -27,14 +27,14 @@
  *                                 left on the server.
  *   POST /jar/thanks?to=NAME&id=ID  T on a gift: a heart on their jar.
  *   POST /jar/talk?who=NPC        what you say to someone on the lane, after
- *                                 what you have (apps/jartx.h, jtx_have);
+ *                                 what you have (apps/jar/jartx.h, jtx_have);
  *   GET  /jar/talk?who=NPC&tx=N   the conversation, and the deals' effects
  *   POST /jar/deal?who=NPC        "yes" or "no" to the offer the talk shows
  *                                 ("offer\tWORDS"): nothing is paid or
  *                                 handed over before the player says yes
  *   GET  /jar/jobs                "job WHO SECONDS WHAT": what each is making
  *   GET  /jar/item?id=ID          an item a deal changed or made: the Town
- *                                 (server/town.py; V_TOWN lists the lane)
+ *                                 (server/jar/town.py; V_TOWN lists the lane)
  * Offline, sending and collecting say so and nothing changes.
  *
  * Host tests: test/test_jarpost.c (JAR_DUMP=dir writes its screens).
@@ -43,14 +43,14 @@
 #ifndef CARDOS_JARPOST_H
 #define CARDOS_JARPOST_H
 
-#include "apps/jarui.h"
+#include "apps/jar/jarui.h"
 
 enum { V_FRIENDS = 0, V_GIFT, V_MAIL, V_CARD, V_PICK, V_TALK, V_TOWN };
 #define PK_MAX 64
 enum { IN_NONE = 0, IN_CODE, IN_NAME, IN_NOTE, IN_TALK };
 enum { N_ME = N_APP + 8, N_FRIEND, N_NAME, N_GIFT, N_PEEK, N_ACK, N_THANKS, N_SAY, N_HEAR, N_DEAL, N_ANSWER, N_JOBS };
 
-/* The lane (server/shopkeep.py's CAST): who you can talk to in the Town. */
+/* The lane (server/jar/shopkeep.py's CAST): who you can talk to in the Town. */
 #define NPC_N 4
 static const char *const NPC_ID[NPC_N] = { "tibbs", "pip", "bramble", "wren" };
 static const char *const NPC_NAME[NPC_N] = { "Tibbs", "Pip", "Bramble", "Wren" };
@@ -61,7 +61,7 @@ static const char *const NPC_HELLO[NPC_N] = {
   "Tibbs is behind the counter.", "Pip looks up from her bench, a spring in her teeth.",
   "Bramble is watering something enormous.", "Wren is measuring a plank twice." };
 
-/* Talking to Tibbs, the shopkeeper (server/shopkeep.py): the conversation,
+/* Talking to Tibbs, the shopkeeper (server/jar/shopkeep.py): the conversation,
  * wrapped into rows when it arrives (never in paint). */
 #define TK_ROWS 28
 #define TK_COLS 38
@@ -564,7 +564,7 @@ static void tk_add(const char *s, int n, int who) {
   }
 }
 
-/* A deal's effect, once, in order (apps/jartx.h). One that brings an item
+/* A deal's effect, once, in order (apps/jar/jartx.h). One that brings an item
  * stops the rest until the item is here: fetch_deal asks for it. */
 static void tk_tx(const char *p) {
   JTx t;
@@ -1022,7 +1022,7 @@ static int post_tick(void *st, uint32_t now) {
 
 /* The post on SCREEN: friends (the default), mail, talk (Tibbs), town (the
  * lane), "gift ID".
- * A screen of Jar Factory (apps/jar.c). */
+ * A screen of Jar Factory (apps/jar/jar.c). */
 static void post_open(const char *s) {
   if (!s) s = "";
   api->mem_set(&G, 0, sizeof G);

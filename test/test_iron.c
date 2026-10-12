@@ -14,7 +14,7 @@
 
 #define capp_info iron_capp_info
 #define capp_main iron_capp_main
-#include "apps/iron.c"
+#include "apps/iron/iron.c"
 #undef capp_info
 #undef capp_main
 

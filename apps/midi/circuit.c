@@ -1,7 +1,7 @@
 /* Circuit: beats for a Novation Circuit, written by Claude from a prompt and
  * played into it through the MIDI converter.
  *
- * It is the MIDI app built again with CIRCUIT defined (apps/midi.c says
+ * It is the MIDI app built again with CIRCUIT defined (apps/midi/midi.c says
  * what changes): the same songs, roll, preview and player, but Claude is
  * told the Circuit's eight tracks --
  *
@@ -14,7 +14,7 @@
  * block (CAPP_BIG), not the arena.
  */
 #define CIRCUIT 1
-#include "apps/midi.c"
+#include "apps/midi/midi.c"
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,

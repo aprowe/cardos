@@ -1,11 +1,11 @@
-/* Jar Factory on the card: what apps/jar.c (the jar) and its companions,
+/* Jar Factory on the card: what apps/jar/jar.c (the jar) and its companions,
  * apps/jarshop.c (the shop, the garden, the shelf) and apps/jarpost.c
  * (friends, gifts, mail), all read and write. The jar saves before it opens
  * a companion and starts afresh from the save when it comes back, so no two
  * of them hold the jar at once.
  *
- *   /var/jar/jar.txt        the jar: apps/jarsim.h's js_save text
- *   /var/jar/items/ID.itm   one record per owned item (apps/jaritem.h)
+ *   /var/jar/jar.txt        the jar: apps/jar/jarsim.h's js_save text
+ *   /var/jar/items/ID.itm   one record per owned item (apps/jar/jaritem.h)
  *   /var/jar/stock.txt      the day's stock: date, tags, ids, prices, sold
  *   /var/jar/stock/G_K.itm  its records, as the server signed them
  *   /var/jar/mail.txt       gifts: who, the note, opened, thanked
@@ -24,8 +24,8 @@
 
 #include "kernel/app/capp.h"
 #include "apps/safefile.h"
-#include "apps/jarsim.h"
-#include "apps/jar_art.h"
+#include "apps/jar/jarsim.h"
+#include "apps/jar/jar_art.h"
 
 #if defined(__GNUC__)
 #define JST_OPT __attribute__((unused))
@@ -303,7 +303,7 @@ static JST_OPT int jst_stock_read(const CardApi *api, const JStock *s, int k, JI
 
 /* ---- letting go of a thing (sell, trash) ---------------------------------------- */
 
-#define JST_JARX CAPP_VAR "/jar/jar%d.txt"     /* an extra jar's file (apps/jar.c) */
+#define JST_JARX CAPP_VAR "/jar/jar%d.txt"     /* an extra jar's file (apps/jar/jar.c) */
 
 /* `id` out of everything on this card: My Stuff, its file, the shelf, the
  * factory's places, every extra jar's file, a pending "put in the jar".

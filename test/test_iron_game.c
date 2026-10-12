@@ -1,9 +1,9 @@
-/* Iron's game (apps/iron_game.h), played without a screen. */
+/* Iron's game (apps/iron/iron_game.h), played without a screen. */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include "tinytest.h"
-#include "apps/iron_game.h"
+#include "apps/iron/iron_game.h"
 
 static Iron G;
 

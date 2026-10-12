@@ -1,5 +1,5 @@
 /* Kart: the game, without the device -- the track, the karts, the race and
- * the picture. apps/kart.c is the app around it (screens, tilt, timing,
+ * the picture. apps/kart/kart.c is the app around it (screens, tilt, timing,
  * blitting); test/test_kart.c drives it on the PC, and KART_DUMP=dir there
  * writes frames to look at.
  *
@@ -28,7 +28,7 @@
 #define KART_H
 
 #include <stdint.h>
-#include "apps/kart_data.h"
+#include "apps/kart/kart_data.h"
 #include "kernel/console/font6x8.h"
 
 #ifndef K_RGB

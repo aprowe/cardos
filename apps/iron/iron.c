@@ -2,7 +2,7 @@
  * the clock runs out, without scorching them.
  *
  * The game itself -- the garment, the iron, the press, the scoring and the
- * levels -- is apps/iron_game.h: portable, no API, host-testable. This file is
+ * levels -- is apps/iron/iron_game.h: portable, no API, host-testable. This file is
  * the app around it: the screens, the keys, the clock, the drawing and the
  * feel.
  *
@@ -93,7 +93,7 @@
 #include "apps/confirm.h"
 #include "apps/safefile.h"
 #include "apps/footer.h"
-#include "apps/iron_game.h"
+#include "apps/iron/iron_game.h"
 
 static const CardApi *api;
 static const CappAudio *au;

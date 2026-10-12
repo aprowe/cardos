@@ -1,6 +1,6 @@
-/* The pet's life on the host: apps/petsim.h. */
+/* The pet's life on the host: apps/pet/petsim.h. */
 #include "tinytest.h"
-#include "apps/petsim.h"
+#include "apps/pet/petsim.h"
 
 #define T0 1800000000u
 

@@ -1,6 +1,6 @@
 /* Tetris's tables: the seven pieces' four rotations, their wall kicks, where
  * they spawn, and how scoring and speed move with level. No screen, no API,
- * no libc, no logic -- apps/tetris.c is the game.
+ * no libc, no logic -- apps/tetris/tetris.c is the game.
  *
  * A piece's four rotation states are each a 4x4 grid, bit (row*4+col), row 0
  * at the top, bit set where the piece fills that cell -- the same box every
@@ -15,7 +15,7 @@
  *
  * The rotation state is just 0..3, clockwise from spawn (TT_SPAWN is state
  * 0; the others are never named, only ever reached by +1/-1 mod 4, which is
- * all apps/tetris.c ever does with one). The kick tables are the standard
+ * all apps/tetris/tetris.c ever does with one). The kick tables are the standard
  * rotation system's, converted from its y-up convention to this file's: row
  * grows downward, so a kick's dy here is the negative of the spec's. Each
  * rotation attempt is tried as (dx, dy) from the table in order, indexed by

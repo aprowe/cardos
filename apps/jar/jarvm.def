@@ -1,6 +1,6 @@
 /* Jar Factory's script machine: THE instruction table, and the words of the
- * script language. One source of truth -- apps/jarvm.h includes this file
- * with the macros defined to build its tables, and server/jarvm.py reads the
+ * script language. One source of truth -- apps/jar/jarvm.h includes this file
+ * with the macros defined to build its tables, and server/jar/jarvm.py reads the
  * same lines at import (it parses them; nobody retypes them). Change a line
  * here and both machines change together; the cross-check fixtures
  * (tools/make_jarvm_fixtures.py, test/test_jarvm.c) say if they stop

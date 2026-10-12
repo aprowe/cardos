@@ -24,7 +24,7 @@
 
 #include "kernel/app/capp.h"
 #include "kernel/console/font6x8.h"
-#include "apps/jaritem.h"
+#include "apps/jar/jaritem.h"
 #include "apps/b64.h"
 
 /* ---- the screen ---------------------------------------------------------------- */

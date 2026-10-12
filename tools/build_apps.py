@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the CardOS app binaries (.capp) and the blob header that embeds them.
 
-Each app in apps/*.c is compiled on its own and linked complete at address 0
+Each app in apps/*.c (or apps/DIR/*.c, see app_sources) is compiled on its own and linked complete at address 0
 with the relocations retained (-q), which is what lets the on-device loader be
 a hundred lines instead of a thousand: the only fixups left in the output are
 absolute R_XTENSA_32 entries, and applying one is adding the load address.
@@ -699,13 +699,36 @@ def check_slots(napps):
             % (napps, limit, napps + SLOT_SPARE))
 
 
+def app_sources(apps_dir=APPS):
+    """Every app's source. An app is apps/NAME.c, or -- when it has files of
+    its own beside its shared headers -- apps/DIR/NAME.c: every .c directly
+    in a folder of apps/ is an app (apps/midi holds MIDI and Circuit). One
+    level only. The .capp is NAME.capp either way, so moving an app into a
+    folder changes nothing on the card; two sources with one NAME are refused."""
+    srcs = []
+    for f in sorted(os.listdir(apps_dir)):
+        p = os.path.join(apps_dir, f)
+        if f.endswith(".c") and os.path.isfile(p):
+            srcs.append(p)
+        elif os.path.isdir(p):
+            srcs.extend(os.path.join(p, g) for g in sorted(os.listdir(p))
+                        if g.endswith(".c") and os.path.isfile(os.path.join(p, g)))
+    seen = {}
+    for s in srcs:
+        name = os.path.splitext(os.path.basename(s))[0]
+        if name in seen:
+            raise SystemExit("two apps called %s: %s and %s" % (
+                name, os.path.relpath(seen[name], ROOT), os.path.relpath(s, ROOT)))
+        seen[name] = s
+    return sorted(srcs, key=lambda s: os.path.basename(s))
+
+
 def main():
     if not os.path.exists(GCC):
         raise SystemExit("no Xtensa toolchain at " + TOOLCHAIN)
     os.makedirs(OUT, exist_ok=True)
 
-    srcs = sorted(os.path.join(APPS, f) for f in os.listdir(APPS)
-                  if f.endswith(".c"))
+    srcs = app_sources()
     if not srcs:
         raise SystemExit("no apps in " + APPS)
 

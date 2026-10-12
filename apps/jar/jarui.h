@@ -5,7 +5,7 @@
  * daily stock) and Jar Post (apps/jarpost.c: friends, gifts, mail) are the
  * screens that used to be inside the jar. One app holding them and the scene
  * was a 44.5 KB load, against a heap whose biggest free piece is often
- * 27 KB, so the jar (apps/jar.c) keeps the scene and Decorate and opens these
+ * 27 KB, so the jar (apps/jar/jar.c) keeps the scene and Decorate and opens these
  * with api->run(APP, SCREEN) after saving; each loads the save, works on it,
  * saves it, and goes back to the jar (Esc at its top, or fn-`), which starts
  * afresh from the save. Neither runs the factory: JS_KEEP_ONLY leaves out
@@ -27,7 +27,7 @@
 #include "apps/confirm.h"
 #include "apps/datetime.h"
 #include "apps/b64.h"
-#include "apps/jarstore.h"
+#include "apps/jar/jarstore.h"
 
 #if defined(__GNUC__)
 #define JU_OPT __attribute__((unused))
@@ -54,7 +54,7 @@
 enum { N_IDLE = 0, N_PUB, N_APP };
 
 /* In Jar Factory itself (JAR_ONE_APP) the world and these buffers are the
- * jar's: apps/jar.c defines api and J and maps IO, TEXT, NET and PB into
+ * jar's: apps/jar/jar.c defines api and J and maps IO, TEXT, NET and PB into
  * the memory its scene draws in, which is idle while a screen is up. */
 #ifndef JAR_ONE_APP
 static const CardApi *api;
@@ -66,7 +66,7 @@ static char NET[2048];                  /* a request's body, its reply, a signed
 #define PB_N (32 * 8)                   /* a picture, eight rows at a time */
 
 /* Another screen or app: within Jar Factory a screen of it (jar_open in
- * apps/jar.c), otherwise the app by name. */
+ * apps/jar/jar.c), otherwise the app by name. */
 static JU_OPT int ui_run(const char *app, const char *args) {
 #ifdef JAR_ONE_APP
   return jar_open(app, args);
@@ -97,7 +97,7 @@ typedef struct {
 } UiState;
 
 /* The screens' state. In Jar Factory itself it lives in the scene's item
- * memory, idle while a screen is up (apps/jar.c, screen_bind), because the
+ * memory, idle while a screen is up (apps/jar/jar.c, screen_bind), because the
  * three of them do not fit one app's 28 KB otherwise; standing alone (the
  * host tests) it is ordinary statics. */
 #ifdef JAR_ONE_APP
@@ -455,6 +455,6 @@ static JU_OPT int take_record(const char *p, const char *what) {
   return n;
 }
 
-#include "apps/jartx.h"
+#include "apps/jar/jartx.h"
 
 #endif /* CARDOS_JARUI_H */

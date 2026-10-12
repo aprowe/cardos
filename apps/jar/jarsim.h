@@ -1,6 +1,6 @@
 /* Jar Factory's world, apart from the screen: the factory in the jar, its
  * coins, its upgrades, the items placed in it and what they do. Header-only
- * and libc-free, like apps/petsim.h, so apps/jar.c and the host tests
+ * and libc-free, like apps/pet/petsim.h, so apps/jar/jar.c and the host tests
  * (test/test_jarsim.c) share one copy. The design is
  * docs/superpowers/specs/2026-10-09-jar-factory-design.md.
  *
@@ -31,8 +31,8 @@
 #define CARDOS_JARSIM_H
 
 #include <stdint.h>
-#include "apps/jaritem.h"
-#include "apps/jarvm.h"
+#include "apps/jar/jaritem.h"
+#include "apps/jar/jarvm.h"
 
 #if defined(__GNUC__)
 #define JS_OPT __attribute__((unused))
@@ -133,7 +133,7 @@ static const int16_t JS_MACH_X[JS_MAX_MACH] = { 108, 132, 154, 170 };
 
 /* What the critters like (an item's tags, as bits). */
 /* Traits: what an item is, from its record's tag field ("shiny,noisy"), as
- * bits -- the same numbers as apps/jarvm.def's trait names, which scripts
+ * bits -- the same numbers as apps/jar/jarvm.def's trait names, which scripts
  * read with has(). Older items' words map onto them (js_tags). */
 enum { JT_FOOD = 0, JT_SHINY, JT_FRAGILE, JT_NOISY, JT_COSY, JT_LIGHT, JT_WET, JT_MUSIC,
        JT_WILD, JT_SWEET, JT_SPOOKY, JT_SOFT, JT_BIG, JT_CLOCKWORK, JT_PLANT, JT_SLEEPY,
@@ -142,7 +142,7 @@ enum { JT_FOOD = 0, JT_SHINY, JT_FRAGILE, JT_NOISY, JT_COSY, JT_LIGHT, JT_WET, J
 #define JS_MOSS_LIKES  (JT_BIT(JT_COSY) | JT_BIT(JT_SOFT) | JT_BIT(JT_SWEET) | JT_BIT(JT_LIGHT))
 #define JS_SNAIL_LIKES (JT_BIT(JT_SLEEPY) | JT_BIT(JT_SPOOKY) | JT_BIT(JT_FOOD) | JT_BIT(JT_PLANT))
 
-/* World events (apps/jarvm.def's world names), chores, sounds. */
+/* World events (apps/jar/jarvm.def's world names), chores, sounds. */
 enum { JWD_NONE = 0, JWD_ANTS, JWD_LEAK, JWD_BREEZE, JWD_VISITOR, JWD_DARK, JWD_BLOOM,
        JWD_KINDS };
 #define JC_SULK    1                   /* the snail will not go out */
@@ -194,7 +194,7 @@ typedef struct { int32_t grow; uint32_t at; uint8_t ready, claimed, type, young,
 /* The garden: four plants, each making its own thing (2026-10-11). Berries
  * are jam and coins, as before; reed makes twigs, mushrooms spores and
  * flowers nectar, which the mosslings carry to the stores and the lane's
- * people are paid in (server/town.py): Wren builds for twigs, Pip alters
+ * people are paid in (server/jar/town.py): Wren builds for twigs, Pip alters
  * for spores, Bramble evolves for nectar. A bed's level (1-3, Bramble's
  * work) makes it grow faster. Fern and cactus were plants once: a save's
  * fern (1) is reed now, its cactus (4) reed too. */
@@ -297,7 +297,7 @@ typedef struct {
   uint32_t decor;                      /* an item the companion asked to place */
   uint32_t gseen;                      /* the last gift the jar announced */
   uint32_t txseen;                     /* the last of Tibbs's deals carried out (tx) */
-  uint32_t patchseen;                  /* the last patch fetched (server/jarpatch.py) */
+  uint32_t patchseen;                  /* the last patch fetched (server/jar/jarpatch.py) */
   /* Sold back (to the pool) and trashed (gone for good), not yet told to the
    * server: sent with the next poll (POST /jar/release), then cleared. */
 #define JS_RELQ 8
@@ -359,7 +359,7 @@ typedef struct {
   uint8_t  ant_st[JS_ANTS], ant_bed[JS_ANTS];   /* 0 none, 1 marching in, 2 carrying off, 3 fleeing */
   int16_t  pel_x[JS_PELLETS];
   uint16_t pel_t[JS_PELLETS];          /* steps left; 0 none */
-  uint8_t  weather;                    /* JWX_* (apps/jarvm.def), 0 unknown */
+  uint8_t  weather;                    /* JWX_* (apps/jar/jarvm.def), 0 unknown */
   uint32_t steps, seed, epoch;         /* epoch: now, for senses; 0 unknown */
 } Jar;
 
@@ -1171,7 +1171,7 @@ static JS_OPT uint32_t js_vm_rnd(void *c) { return js_rnd(((JsVm *)c)->j); }
 /* Run code at spool[off], len bytes, as item i, for an event. */
 static JS_OPT int js_run_code(Jar *j, int i, int off, int len, int ev, int arg);
 
-/* Run item i's script for an event: a JV_* result (apps/jarvm.h). */
+/* Run item i's script for an event: a JV_* result (apps/jar/jarvm.h). */
 static JS_OPT int js_script(Jar *j, int i, int ev, int arg) {
   return js_run_code(j, i, j->placed[i].soff, j->placed[i].slen, ev, arg);
 }
@@ -1519,7 +1519,7 @@ static JS_OPT void js_set_minute(Jar *j, int minute) {
   }
 }
 
-/* The real weather outside (apps/jar.c asks the server), JWX_* or 0; a
+/* The real weather outside (apps/jar/jar.c asks the server), JWX_* or 0; a
  * change is an event. */
 static JS_OPT void js_set_weather(Jar *j, int w) {
   if (w == j->weather) return;

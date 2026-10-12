@@ -1,7 +1,7 @@
 """Songs for the MIDI sequencer, written by Claude.
 
-The device's MIDI app (apps/midi.c) plays a small text format -- notes at
-beats, controller changes and ramps, a tempo, a loop -- that apps/midiseq.h
+The device's MIDI app (apps/midi/midi.c) plays a small text format -- notes at
+beats, controller changes and ramps, a tempo, a loop -- that apps/midi/midiseq.h
 parses. Asked "the first section of Fur Elise", Claude writes one. It is a
 minute's work, so it is three short calls, as chat is: POST the request and
 get an id, GET until the song is there.
@@ -65,7 +65,7 @@ loop
 ```
 """
 
-# The Circuit app (apps/circuit.c) plays the same format into a Novation
+# The Circuit app (apps/midi/circuit.c) plays the same format into a Novation
 # Circuit, whose tracks are fixed instruments. What each channel is, is the
 # owner's setup; the device can send a track to another channel or note
 # (/config/circuit.txt), so songs are always written to these eight.
@@ -99,7 +99,7 @@ _jobs = jobs.Table(1800)       # id -> (state, song or why); gone half an hour a
 
 
 def check(song, kit=None):
-    """(line, why) for the first thing apps/midiseq.h would refuse, or None.
+    """(line, why) for the first thing apps/midi/midiseq.h would refuse, or None.
     A Circuit song also keeps to its eight channels and leaves the sounds
     alone."""
     for i, raw in enumerate(song.splitlines(), 1):

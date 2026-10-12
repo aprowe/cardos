@@ -1,4 +1,4 @@
-/* Jar Factory on the card: apps/jarstore.h, and the parts of apps/jarsim.h
+/* Jar Factory on the card: apps/jar/jarstore.h, and the parts of apps/jar/jarsim.h
  * the companion apps lean on -- the garden, the shelf, the save's new lines
  * and an app that keeps the jar without placing anything. */
 #include <stdio.h>
@@ -7,7 +7,7 @@
 #include "tinytest.h"
 #include "fakeapi.h"
 #include "jarfake.h"
-#include "apps/jarstore.h"
+#include "apps/jar/jarstore.h"
 
 #define T0 1800000000u
 

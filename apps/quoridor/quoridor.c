@@ -6,7 +6,7 @@
  * game. Each side checks the other's move with the same rules, so a board
  * that disagrees is said, not played on.
  *
- * The rules and the computer are apps/quoridor.h; this is the title screen,
+ * The rules and the computer are apps/quoridor/quoridor.h; this is the title screen,
  * the board and the keys. Blue starts at the bottom going up, red at the top
  * coming down; each player's goal row is tinted in their colour, and each
  * wall is drawn in the colour of whoever laid it. A turn is a step or a wall.
@@ -26,7 +26,7 @@
  */
 #include "kernel/app/capp.h"
 #include "apps/str.h"
-#include "apps/quoridor.h"
+#include "apps/quoridor/quoridor.h"
 #include "apps/footer.h"
 
 static const CardApi *api;

@@ -1,5 +1,5 @@
 /* Songs as text, into MIDI messages with times. No screen, no API, no libc:
- * apps/midi.c plays what this makes, test/test_midiseq.c checks it, and the
+ * apps/midi/midi.c plays what this makes, test/test_midiseq.c checks it, and the
  * server's prompt (server/midi.py) teaches Claude to write it.
  *
  *   # Fur Elise, opening       the first # line is the title

@@ -1,12 +1,12 @@
 /* Jar Shop -- Jar Factory's shop, My Stuff, upgrades and garden.
  *
- * A screen of Jar Factory (apps/jar.c), opened with shop_open(SCREEN): shop,
+ * A screen of Jar Factory (apps/jar/jar.c), opened with shop_open(SCREEN): shop,
  * stuff, decor (My Stuff, picking something to put in the jar), up, garden.
  * Esc at a top screen, or fn-`, goes back to the jar. What it shares
- * with Jar Post (apps/jarpost.c) is apps/jarui.h; the files are
- * apps/jarstore.h's.
+ * with Jar Post (apps/jarpost.c) is apps/jar/jarui.h; the files are
+ * apps/jar/jarstore.h's.
  *
- * THE DAILY STOCK (spec step 5; server/jar.py). When the shop opens and its
+ * THE DAILY STOCK (spec step 5; server/jar/__init__.py). When the shop opens and its
  * stock is not today's (UTC), it asks in the background, one request at a
  * time, never blocking:
  *   POST /jar/day   "garden mushroom=N,berry=N,reed=N,flower=N"
@@ -35,7 +35,7 @@
 #ifndef CARDOS_JARSHOP_H
 #define CARDOS_JARSHOP_H
 
-#include "apps/jarui.h"
+#include "apps/jar/jarui.h"
 
 #define C_SOIL CAPP_RGB(0x4a, 0x34, 0x24)
 
@@ -46,7 +46,7 @@ enum { N_DAY_POST = N_APP, N_DAY_POLL, N_ITEM };
 typedef struct {
   JStock s;                                               /* the stock on show */
   JStock ns;                                              /* the day's batch, arriving */
-  /* Tibbs's line of the day (server/shopkeep.py). Talking to him is Jar
+  /* Tibbs's line of the day (server/jar/shopkeep.py). Talking to him is Jar
    * Post's ("talk"); t opens it. */
   char say[144];
   struct {
@@ -168,7 +168,7 @@ static void open_card(uint32_t id, int back) {
 
 /* ---- the daily stock ---------------------------------------------------------------- */
 
-#define RESTOCK_S 14400u        /* a new stock every 4 hours (server/jar.py RESTOCK_S) */
+#define RESTOCK_S 14400u        /* a new stock every 4 hours (server/jar/__init__.py RESTOCK_S) */
 static uint32_t today(void) { return api->epoch() / RESTOCK_S; }
 static int today_gen(void) { return 2 + (int)(today() % 250u); }
 
@@ -1056,7 +1056,7 @@ static int shop_tick(void *st, uint32_t now) {
 /* ---- opening ------------------------------------------------------------------------------ */
 
 /* The shop on SCREEN: shop (the default), stuff, decor, up, garden ("shelf",
- * which is gone, is My Stuff). A screen of Jar Factory (apps/jar.c), which
+ * which is gone, is My Stuff). A screen of Jar Factory (apps/jar/jar.c), which
  * routes its paint, keys and ticks here while it is on. */
 /* Tibbs's line, shown whole over the shop if it is one not shown before. */
 static void say_fresh(void) {

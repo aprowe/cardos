@@ -10,7 +10,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 
 
 def load():
-    with open(os.path.join(ROOT, "apps", "jarvm.def"), encoding="utf-8") as f:
+    with open(os.path.join(ROOT, "apps", "jar", "jarvm.def"), encoding="utf-8") as f:
         base = f.read()
     with open(os.path.join(HERE, "lab_ext.def"), encoding="utf-8") as f:
         ext = f.read()

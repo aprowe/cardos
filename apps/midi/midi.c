@@ -1,7 +1,7 @@
 /* MIDI: a sequencer for a Grove-to-MIDI converter, its songs written by
  * Claude or by hand.
  *
- * A song is a text file in /songs (NAME.song), in the format apps/midiseq.h
+ * A song is a text file in /songs (NAME.song), in the format apps/midi/midiseq.h
  * reads: notes at beats with lengths and velocities, chords, controller
  * changes and ramps, pitch bends, a tempo, a loop. `n` asks Claude for one
  * ("write the first section of Fur Elise") through the server
@@ -29,7 +29,7 @@
  * and the choice is kept in /config/midi.txt. `t` plays an arpeggio, to
  * find out which.
  */
-/* Circuit (apps/circuit.c) is this file built again with CIRCUIT defined:
+/* Circuit (apps/midi/circuit.c) is this file built again with CIRCUIT defined:
  * a beat for a Novation Circuit's eight tracks, asked of Claude with the
  * instruments named (server/midi.py, kit=circuit), its own folder and
  * colours, drums heard as drums, a lane per track, and a map from track to
@@ -43,7 +43,7 @@
 #endif
 #include "kernel/app/capp.h"
 #include "apps/str.h"
-#include "apps/midiseq.h"
+#include "apps/midi/midiseq.h"
 #include "apps/footer.h"
 #include "apps/confirm.h"
 #include "apps/safefile.h"

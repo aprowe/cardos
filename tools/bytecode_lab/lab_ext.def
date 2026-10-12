@@ -1,4 +1,4 @@
-/* Lab-only extensions to apps/jarvm.def: what a motion-primitive version of
+/* Lab-only extensions to apps/jar/jarvm.def: what a motion-primitive version of
  * the language (the "extended imperative" candidate) would add. Appended to
  * the real table by labvm.py; never read by the server or the device. */
 JV_EVENT(14, stopped, JE_STOPPED, none, "its body came to rest: a roll ran out, a fall landed")

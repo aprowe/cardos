@@ -10,7 +10,7 @@ measured.
             a random perch (or home), lands, maybe says something
 
 Designs:
-  today     the language as it is (apps/jarvm.def). It has no momentum, no
+  today     the language as it is (apps/jar/jarvm.def). It has no momentum, no
             arcs, no perches: these are the closest it can come, noted.
   extended  today's language + motion primitives (lab_ext.def: body, push,
             swoop, wobble, anim; events stopped, landed, perched, hit),

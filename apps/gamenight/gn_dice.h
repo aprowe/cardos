@@ -1,4 +1,4 @@
-/* Game Night's dice (apps/gamenight.c): N dice of S sides plus or minus M,
+/* Game Night's dice (apps/gamenight/gamenight.c): N dice of S sides plus or minus M,
  * written the way players write it -- "2d6", "d20", "3d6+2", "d%" (a d100),
  * "1d4-1" -- rolled with the dice a player chose to hold kept as they were
  * (Yahtzee). A d2 is a coin.

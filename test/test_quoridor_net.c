@@ -1,4 +1,4 @@
-/* Quoridor across two devices, on the host: the real app (apps/quoridor.c)
+/* Quoridor across two devices, on the host: the real app (apps/quoridor/quoridor.c)
  * on one side, a LinkProto driven by the test on the other, and a fake
  * radio between them -- so the lobby, the invitation, the moves going
  * across and a partner leaving all run through the real protocol. */
@@ -12,7 +12,7 @@
 
 #define capp_info quoridor_capp_info
 #define capp_main quoridor_capp_main
-#include "apps/quoridor.c"
+#include "apps/quoridor/quoridor.c"
 
 /* ---- the air: this device (0) and the other (1) ---- */
 

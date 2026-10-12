@@ -13,7 +13,7 @@
 #include "fakeapi.h"
 #include "jarfake.h"
 
-#include "apps/jarshop.h"           /* the shop screen, standing alone */
+#include "apps/jar/jarshop.h"           /* the shop screen, standing alone */
 
 #define T0 1800000000u                 /* 2027-01-15 08:00 UTC */
 

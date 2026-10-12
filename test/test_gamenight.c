@@ -10,7 +10,7 @@
 
 #define capp_info gn_capp_info
 #define capp_main gn_capp_main
-#include "apps/gamenight.c"
+#include "apps/gamenight/gamenight.c"
 #undef capp_info
 #undef capp_main
 

@@ -1,4 +1,4 @@
-/* Game Night's scoreboard (apps/gamenight.c): players across, rounds down, a
+/* Game Night's scoreboard (apps/gamenight/gamenight.c): players across, rounds down, a
  * total under each column. For any game that is scored in rounds -- Hearts,
  * Oh Hell, Taboo, darts -- so it knows nothing about any of them: a cell is
  * a number someone typed, a total is a sum, and the leader is the highest

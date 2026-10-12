@@ -46,7 +46,7 @@
  *   211     1  part: 1 if the last frame is a part that leaves and comes back
  *              (a birdhouse's bird); 0 none
  *   212     2  the part's home: x, y from the item's middle, px, signed
- *   214     1  voice: its sound (1..14, apps/jarvm.def's sound names), 0 none
+ *   214     1  voice: its sound (1..14, apps/jar/jarvm.def's sound names), 0 none
  *   215     1  travel: how it gets about -- none crawl hop slide float fly (JTV_*)
  *   216     1  idle: what it does in place -- none sway bob wobble spin pulse
  *              flicker blink (JID_*)
@@ -71,7 +71,7 @@
  * unsafe to draw or store -- lengths that disagree, no frames, more than four
  * -- is refused.
  *
- * Header-only and libc-free, like apps/petsim.h, so apps/jar.c and the host
+ * Header-only and libc-free, like apps/pet/petsim.h, so apps/jar/jar.c and the host
  * tests (test/test_jaritem.c) share one copy, and so the server can be
  * checked against the same layout.
  */
@@ -405,7 +405,7 @@ static JI_OPT int jitem_decode(JItem *it, const uint8_t *in, int n) {
  * its eight memory slots (136..151, which scripts write, so a gift must
  * verify whatever they hold) zeroed, and its total length (offset 2) less
  * the signature; then everything after the signature. Fixed with
- * server/jar.py (2026-10-09). The signature itself is at
+ * server/jar/__init__.py (2026-10-09). The signature itself is at
  * [hdr, hdr + in[204]). The message's length, or -1 if `in` is not a record
  * whose lengths agree or the message does not fit in `cap`. */
 static JI_OPT int ji_signed_message(const uint8_t *in, int n, uint8_t *out, int cap) {

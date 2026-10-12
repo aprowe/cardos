@@ -1,4 +1,4 @@
-/* The game in Iron (apps/iron.c): a garment on a board of cells, each with a
+/* The game in Iron (apps/iron/iron.c): a garment on a board of cells, each with a
  * wrinkle and a scorch, and an iron that presses a 5x3 patch of them flat.
  * Portable and API-free, so the host suite plays it (test/test_iron_game.c);
  * the app owns the screens, the drawing and the feel.
