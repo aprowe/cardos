@@ -20,6 +20,9 @@ void desktop_init(void);
 /* The app that has the keyboard: the fullscreen one, or the focused window's,
  * or NULL. For the agent's `action` tool, which acts on whatever is in front. */
 const AppDef *desktop_focused_app(void);
+/* What the fn-h panel shows over the desktop; src/main.c opens it. */
+void desktop_help(const char **app_title, const char **app_keys,
+                  const char **os_title, const char **os_keys);
 
 /* Paint whatever is currently damaged. Cheap when nothing is. */
 void desktop_flush(void);

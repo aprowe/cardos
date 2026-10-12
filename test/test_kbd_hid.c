@@ -270,6 +270,8 @@ void test_opt_space_is_the_app_search_chord_on_both_keyboards(void) {
   CHECK_EQ(kbd_hid_translate(0x2C, KBD_MOD_LALT), KBD_KEY_APP_SEARCH);
   CHECK_EQ(kbd_hid_translate(0x2C, KBD_MOD_RALT), KBD_KEY_APP_SEARCH);
   CHECK_EQ(KBD_KEY_APP_SEARCH, KEY_APP_SEARCH);
+  CHECK_EQ(kbd_hid_translate(0x2C, KBD_MOD_LGUI), KBD_KEY_ACTIONS);
+  CHECK_EQ(KBD_KEY_ACTIONS, KEY_ACTIONS);
   /* Space alone still types a space. */
   CHECK_EQ(kbd_hid_translate(0x2C, 0), ' ');
   CHECK(KEY_APP_SEARCH != KEY_UP && KEY_APP_SEARCH != KEY_DOWN);

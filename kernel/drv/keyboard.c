@@ -306,6 +306,7 @@ static uint8_t translate(int x, int y) {
     case '`': c = (char)KEY_QUIT;  break;
     case '-': c = (char)KEY_VOL_DOWN; break;
     case '=': c = (char)KEY_VOL_UP;   break;
+    case ' ': c = (char)KEY_ACTIONS;  break;   /* fn-space: the palette */
     default:
       if (base >= 'a' && base <= 'z') c = (char)KEY_FN_LETTER(base);
       break;

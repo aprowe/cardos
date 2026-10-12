@@ -51,6 +51,7 @@ uint8_t kbd_hid_translate(uint8_t usage, uint8_t mods) {
   /* Alt-space: the app search, before the opt branch below turns space
    * into nothing at all (it is not a letter or a digit). */
   if (opt && usage == 0x2C) return KBD_KEY_APP_SEARCH;
+  if (fn && usage == 0x2C) return KBD_KEY_ACTIONS;   /* gui-space: the palette */
   /* The volume: fn (the GUI key) with - or =, as on the Cardputer, and the
    * volume keys a keyboard may have. 0x85/0x86 are keyboard.h's codes. */
   if ((fn && usage == 0x2D) || usage == 0x81) return 0x85;

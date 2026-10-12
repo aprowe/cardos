@@ -23,6 +23,7 @@ file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
   ${ROOT}/kernel/net/linkproto.c  # link.c is the ESP-NOW radio around it
   ${ROOT}/kernel/ui/iconorder.c   # icons.c is the card around it
   ${ROOT}/kernel/ui/appsearch.c   # the launcher draws it
+  ${ROOT}/kernel/ui/helpmodel.c   # help.c draws the fn-h panel and the palette
   ${ROOT}/kernel/input/mouse.c ${ROOT}/kernel/input/kbd_hid.c ${ROOT}/kernel/input/keyrepeat.c
   ${ROOT}/kernel/sys/input.c ${ROOT}/kernel/sys/rpc.c   # text in, commands in
   ${ROOT}/kernel/sys/hotkeys.c ${ROOT}/kernel/sys/chatlog.c ${ROOT}/kernel/sys/conf.c

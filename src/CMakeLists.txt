@@ -33,6 +33,7 @@ idf_component_register(
     "../kernel/ui/icons.c"
     "../kernel/ui/iconorder.c"
     "../kernel/ui/appsearch.c"
+    "../kernel/ui/helpmodel.c"
     "../kernel/ui/pins.c"
     "../kernel/ui/launchui.c"
     "../kernel/ui/apphost.c"

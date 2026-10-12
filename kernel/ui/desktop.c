@@ -71,7 +71,6 @@ static int s_leave_for_console;
 
 /* The fn-h key list, drawn over the compositor's output like the start
  * menu. Closing it repaints, because nothing below it knows it was there. */
-static int s_help;
 
 /* ------------------------------------------------------------- icons ---- */
 
@@ -676,6 +675,7 @@ static void paint_fullscreen(void) {
 }
 
 void desktop_flush(void) {
+  if (overlay_active()) return;                /* fn-h or fn-space is over it */
   /* The file picker is over everything, windowed or not, until it answers.
    * A full repaint asked for underneath it (help closing, say) repaints the
    * panel; the windows come back when it goes. */
@@ -1068,27 +1068,29 @@ static void nudge(int16_t dx, int16_t dy) {
   wm_move(f, (int16_t)(r.x + dx), (int16_t)(r.y + dy));
 }
 
+/* What fn-h shows here (src/main.c opens the panel): the app with focus,
+ * or the picker over it, and the desktop's own keys. */
+void desktop_help(const char **app_title, const char **app_keys,
+                  const char **os_title, const char **os_keys) {
+  const AppDef *a = s_full ? s_full : (wm_focus() != WIN_NONE ? app_of(wm_focus()) : NULL);
+  *os_title = "Desktop";
+  if (picker_active()) {
+    *app_title = "Files";
+    *app_keys = picker_help();
+  } else {
+    *app_title = a ? a->name : NULL;
+    *app_keys = a ? a->help : NULL;
+  }
+  *os_keys = s_full
+    ? "Over an app\nescape\tback a level, inside the app\nfn-b\tmenu bar, by keyboard\n"
+      "fn-`\tleave fullscreen (or opt-backspace)\nfn-f\twindowed\n"
+    : "On the desktop\narrows\tmove between icons\nenter\topen the selected icon\n"
+      "tab\twindows, then the desktop\nescape\tout of a folder or menu\n"
+      "Windows\nfn-s\tstart menu\nfn-f\tfullscreen / window\nfn-`\tclose window (or opt-backspace)\n"
+      "fn-w\tclose window\nfn-m\tminimise\nfn-k\tkeyboard mouse\n";
+}
+
 int desktop_key(uint8_t key) {
-  if (s_help) {
-    s_help = 0;
-    desktop_repaint();
-    return 0;
-  }
-  if (key == KEY_HELP) {
-    const AppDef *a = s_full ? s_full
-                    : (wm_focus() != WIN_NONE ? app_of(wm_focus()) : NULL);
-    s_help = 1;
-    if (picker_active()) {
-      help_paint("Files", picker_help(), "fn-`\tcancel and leave the app\nfn-h\tclose this\n");
-      return 0;
-    }
-    help_paint(a ? a->name : "Desktop", a ? a->help : NULL,
-               s_full
-               ? "escape\tback a level, inside the app\nfn-b\tmenu bar, by keyboard\n"
-                 "fn-`\tleave fullscreen (or opt-backspace)\nfn-f\twindowed\nfn-h\tclose this\n"
-               : "arrows\tmove between icons\nenter\topen the selected icon\ntab\twindows, then the desktop\nfn-s\tstart menu\nfn-f\tfullscreen / window\nfn-`\tclose window (or opt-backspace)\nfn-w\tclose window\nfn-m\tminimise\nfn-k\tkeyboard mouse\nfn-p\tprint (apps that can)\nescape\tout of a folder or menu\nopt-3\tthe console\nfn-h\tclose this\n");
-    return 0;
-  }
 
   /* The file picker has every key while it is up, except the ones that
    * leave the app -- those close it on the way out and fall through. */

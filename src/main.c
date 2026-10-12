@@ -898,10 +898,109 @@ static void hist_walk(int delta) {
  * them to whatever had focus, and an editor would eat opt-3 as a character.
  *
  * Returns 1 if the key was one of these and has been dealt with. */
-/* The shortcut list, over whatever is on screen. Drawn with the same panel
- * every app's ctrl-h uses, so there is one thing that looks like help. Any key
- * closes it, and the shell underneath repaints. */
-static int s_opt_help;
+static const AppDef *ops_running_app(void);
+static void repaint_shells(void);
+static void dispatch_key(uint8_t k);
+
+/* fn-h: one panel over every shell, in three tabs -- the app's keys, the
+ * shell's own, and these, which work anywhere (kernel/ui/help.h). Built
+ * each time it opens, so the owner's opt-letter hotkeys are current. */
+static const char *shortcut_keys(void) {
+  static char buf[1400];
+  size_t n;
+  char c;
+  int any = 0;
+  n = (size_t)snprintf(buf, sizeof buf,
+    "Anywhere\n"
+    "fn-h\tthis panel\n"
+    "fn-space\tthe actions of the app on screen\n"
+    "opt-space\tfind an app by name\n"
+    "fn-`\tleave the app (or opt-backspace)\n"
+    "fn-n\tnotifications\n"
+    "fn-p\tprint, in apps that can\n"
+    "fn-b\tthe menu bar, by keyboard\n"
+    "Screen and sound\n"
+    "fn-l\tlock\n"
+    "fn-o\tscreen off, black\n"
+    "fn-c\tscreen off, dim clock\n"
+    "opt-0 / 9\tbacklight full / down a step\n"
+    "fn-= / -\tlouder / quieter (or opt-8 / 7)\n"
+    "Shells\n"
+    "opt-1\tthe launcher\n"
+    "opt-2\tthe desktop\n"
+    "opt-3\tthe console\n"
+    "Connections\n"
+    "opt-w\treconnect WiFi\n"
+    "opt-b\treconnect Bluetooth\n"
+    "ctrl-opt-u\tupdate everything\n"
+    "Your hotkeys\n");
+  for (c = 'a'; c <= 'z' && n < sizeof buf - 48; c++) {
+    const char *name = hotkey_get(c);
+    if (!name) continue;
+    n += (size_t)snprintf(buf + n, sizeof buf - n, "opt-%c\t%s\n", c, name);
+    any = 1;
+  }
+  if (!any) snprintf(buf + n, sizeof buf - n, "k\tin the launcher, binds opt-letter to an app\n");
+  return buf;
+}
+
+static void open_help(int tab) {
+  const char *at = NULL, *ak = NULL, *ot = "Console", *ok =
+    "The console\ntab\tcomplete a command or a path\nup / down\tearlier lines\n"
+    "help\tevery command\nfn-`\tthe launcher (or opt-backspace)\n";
+  if (ui_shell() == UI_LAUNCHER) launchui_help(&at, &ak, &ot, &ok);
+  else if (ui_shell() == UI_DESKTOP) desktop_help(&at, &ak, &ot, &ok);
+  help_open(tab, at, ak, ot, ok, shortcut_keys());
+}
+
+/* fn-space: every action the app on screen offers in a menu or by a chord,
+ * then the OS's own, found by typing. */
+static void open_palette(void) {
+  const AppDef *a = ops_running_app();
+  Palette *p = palette_begin(a ? a->name : (ui_shell() == UI_DESKTOP ? "Desktop" :
+                                            ui_shell() == UI_LAUNCHER ? "Launcher" : "Console"));
+  static const struct { const char *label; uint8_t key; } OS[] = {
+    { "Find an app",        KEY_APP_SEARCH },
+    { "Notifications",      KEY_FN_LETTER('n') },
+    { "Keys and shortcuts", KEY_HELP },
+    { "Lock",               KEY_FN_LETTER('l') },
+    { "Screen off",         KEY_FN_LETTER('o') },
+    { "Dim clock",          KEY_FN_LETTER('c') },
+    { "Launcher",           KEY_OPT_DIGIT(1) },
+    { "Console",            KEY_OPT_DIGIT(3) },
+    { "Reconnect WiFi",     KEY_OPT_LETTER('w') },
+    { "Update everything",  KEY_UPDATE_ALL },
+  };
+  int i, n = 0;
+  char chord[12];
+  if (a) {
+    const CappAction *t = capprun_actions(a, &n);
+    for (i = 0; t && i < n; i++) {
+      if (!t[i].label || (!t[i].menu && !t[i].key)) continue;   /* a command, not a GUI action */
+      pal_chord(t[i].key, chord, sizeof chord);
+      pal_add(p, PAL_APP, t[i].label, chord, t[i].menu ? t[i].menu : "", t[i].id, 0);
+    }
+    pal_add(p, PAL_OS, "Close the app", "fn-`", "OS", "", KEY_QUIT);
+  }
+  for (i = 0; i < (int)(sizeof OS / sizeof OS[0]); i++) {
+    if (OS[i].key == KEY_APP_SEARCH) snprintf(chord, sizeof chord, "opt-space");
+    else if (OS[i].key == KEY_HELP) snprintf(chord, sizeof chord, "fn-h");
+    else if (OS[i].key == KEY_UPDATE_ALL) snprintf(chord, sizeof chord, "ctrl-opt-u");
+    else if (OS[i].key >= KEY_OPT_DIGIT(0) && OS[i].key <= KEY_OPT_DIGIT(9))
+      snprintf(chord, sizeof chord, "opt-%d", OS[i].key - KEY_OPT_DIGIT(0));
+    else pal_chord(OS[i].key, chord, sizeof chord);
+    pal_add(p, PAL_OS, OS[i].label, chord, "OS", "", OS[i].key);
+  }
+  palette_show();
+}
+
+/* Whatever was under a panel that has just closed, painted again. */
+static void overlay_closed(void) {
+  if (ui_shell() == UI_DESKTOP) desktop_repaint();
+  else if (ui_shell() == UI_LAUNCHER) launchui_repaint();
+  else { con_clear(); prompt(); }
+}
+
 
 /* opt-space from the console or the desktop takes the screen to show the
  * app search, same as fn-` does to reach the launcher -- this remembers
@@ -913,11 +1012,6 @@ static int s_opt_help;
  * carousel itself would leave it. */
 static int s_search_from = -1;
 
-static void show_opt_help(void) {
-  s_opt_help = 1;
-  help_paint("Shortcuts", "opt-1\tlauncher\nopt-2\tdesktop\nopt-3\tconsole\nopt-0\tbacklight to full\nopt-9\tbacklight down a step\nopt-8\tlouder\nopt-7\tquieter\nfn-o\tscreen off, black\nfn-c\tscreen off, dim clock\nfn-n\tnotifications\nopt-t\ttodo\nopt-s\tstocks\nopt-e\tedit\nopt-m\tmines\nopt-b\treconnect bluetooth\nopt-w\treconnect wifi\n",
-             "fn-h\tthe keys of whatever is running\nany key\tclose this\n");
-}
 
 /* ---- what voice and the shells are allowed to do to each other ----------
  *
@@ -1031,18 +1125,37 @@ static int lock_key(uint8_t k) {
 }
 
 static int global_key(uint8_t k) {
-  /* The panel is above everything, so it gets the key first. */
-  if (s_opt_help) {
-    s_opt_help = 0;
-    if (ui_shell() == UI_DESKTOP) desktop_repaint();
-    else if (ui_shell() == UI_LAUNCHER) launchui_repaint();
-    else { con_clear(); prompt(); }
+  /* The panels are above everything, so they get the key first. */
+  if (help_active()) {
+    if (!help_key(k)) overlay_closed();
+    return 1;
+  }
+  if (palette_active()) {
+    const PalEntry *e;
+    int r = palette_key(k, &e);
+    if (r == PAL_OPEN) return 1;
+    overlay_closed();
+    if (r == PAL_CHOSEN && e) {
+      if (e->kind == PAL_APP) {
+        const AppDef *a = ops_running_app();
+        if (a) capprun_action_invoke(a, e->id);
+        repaint_shells();
+      } else {
+        dispatch_key(e->key);              /* as if its chord were pressed */
+      }
+    }
     return 1;
   }
 
   switch (k) {
-  case KEY_OPT_LETTER('h'):
-    show_opt_help();
+  case KEY_HELP:
+    open_help(HELP_APP);
+    return 1;
+  case KEY_OPT_LETTER('h'):                    /* the old way to the shortcuts */
+    open_help(HELP_SHORT);
+    return 1;
+  case KEY_ACTIONS:
+    open_palette();
     return 1;
   case KEY_FN_LETTER('n'):                     /* the notification centre */
     notify_center_open();

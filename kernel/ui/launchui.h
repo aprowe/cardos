@@ -54,6 +54,10 @@ void launchui_note(const char *text);
  * is what Escape does everywhere else in this shell. */
 int launchui_run(const char *name, const char *args);
 
+/* What the fn-h panel shows over the launcher; src/main.c opens it. */
+void launchui_help(const char **app_title, const char **app_keys,
+                   const char **os_title, const char **os_keys);
+
 /* Settings > System > Open last app: at boot, the app that was open when the
  * power went is opened again (src/main.c; Backspace held at power-on, safe
  * mode, or a crash skips it). launchui_resume is 0 if it opened one. */

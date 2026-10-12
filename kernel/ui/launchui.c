@@ -86,7 +86,6 @@ static int            s_app_dirty;
  * the surround outside a smaller app's rect. Never a white fill of the app's
  * rect first -- that was the white frame between the carousel and the app. */
 static int            s_app_how;
-static int            s_help;         /* the key list is over everything */
 static int            s_binding;      /* k was pressed: the next letter binds */
 static int            s_pointer_on;   /* a mouse has moved: there is a cursor */
 
@@ -491,39 +490,27 @@ static void paint_app(int asked) {
 /* The shell's own keys, appended under the app's. Two lists rather than one so
  * an app cannot accidentally claim a key the shell owns. */
 static const char *shell_keys(void) {
-  static char buf[512];
-  char c;
-  size_t n;
+  if (s_app) return "Over an app\nescape\tback a level, inside the app\nfn-b\tmenu bar, by keyboard\n"
+                    "fn-`\tleave the app (or opt-backspace)\n";
+  return "The row\narrows\tmove along the row\nenter\topen\nspace\tsearch: type a name, enter opens\n"
+         "k\tbind opt-letter to this app\nr\treload the app list\nd\tswitch to the desktop\n"
+         "escape\tout of a folder\nfn-`\tout of a folder, or the console (or opt-backspace)\n";
+}
 
-  if (s_app) return "escape\tback a level, inside the app\nfn-b\tmenu bar, by keyboard\n"
-                    "fn-`\tleave the app (or opt-backspace)\nfn-h\tclose this\n";
-
-  /* The bindings are listed here rather than on a screen of their own: the
-   * key list is where someone looks to find out what opt-p does. */
-  snprintf(buf, sizeof buf,
-           "arrows\tmove along the row\nenter\topen\nspace\tsearch: type a name, enter opens\n"
-           "k\tbind opt-letter to this app\n"
-           "r\treload the app list\nd\tswitch to the desktop\n"
-           "escape\tout of a folder\nfn-`\tout of a folder, or the console (or opt-backspace)\nfn-h\tclose this\n");
-  n = strlen(buf);
-  for (c = 'a'; c <= 'z' && n < sizeof buf - 40; c++) {
-    const char *name = hotkey_get(c);
-    if (!name) continue;
-    n += (size_t)snprintf(buf + n, sizeof buf - n, "opt-%c\t%s\n", c, name);
-  }
-  return buf;
+/* What fn-h shows here (src/main.c opens the panel). With no app open the
+ * app tab is empty and the panel opens on the launcher's own keys. */
+void launchui_help(const char **app_title, const char **app_keys,
+                   const char **os_title, const char **os_keys) {
+  *os_title = "Launcher";
+  *os_keys = shell_keys();
+  if (picker_active()) { *app_title = "Files"; *app_keys = picker_help(); return; }
+  *app_title = s_app ? s_app->name : NULL;
+  *app_keys = s_app ? s_app->help : NULL;
 }
 
 static void flush(void) {
-  if (s_help) {
-    if (picker_active())
-      help_paint("Files", picker_help(), "fn-`\tcancel and leave the app\nfn-h\tclose this\n");
-    else
-      /* With no app open these are the launcher's keys, whatever icon is
-       * highlighted: titled with that icon's name, the panel read as the
-       * app's own keys -- and listed none. */
-      help_paint(s_app ? s_app->name : "Launcher",
-                 s_app ? s_app->help : NULL, shell_keys());
+  if (overlay_active()) {             /* fn-h or fn-space is over everything */
+    if (s_app) s_app_dirty = 1;
     return;
   }
   /* The picker over an app: it owns the screen until it answers, and the
@@ -595,7 +582,7 @@ const AppDef *launchui_running(void) { return s_app; }
 void launchui_damage(Rect r) {
   if (!s_app) { s_dirty = 1; flush(); return; }
   /* Help and the picker are over the app, and are repainted whole. */
-  if (s_help || picker_active()) { s_app_dirty = 1; flush(); return; }
+  if (overlay_active() || picker_active()) { s_app_dirty = 1; flush(); return; }
   s_extra = s_has_extra ? rect_union(s_extra, r) : r;
   s_has_extra = 1;
   flush();
@@ -1143,14 +1130,6 @@ int launchui_key(uint8_t key) {
   /* The key list is over everything, so it gets the key first: fn-h closes
    * it and so does anything else, because a panel you have to dismiss with
    * one specific key is a panel you fight. */
-  if (s_help) {
-    s_help = 0;
-    if (s_app) { s_app_dirty = 1; s_app_how |= AH_FULL | AH_SURROUND; }
-    else s_dirty = 1;
-    flush();
-    return 0;
-  }
-  if (key == KEY_HELP) { s_help = 1; flush(); return 0; }
   /* The window modifier, in a shell whose windows are the whole screen:
    * closing the app is the only frame operation there is. */
   if (key == KEY_FN_LETTER('w') && s_app) { quit_app(); return 0; }
@@ -1302,7 +1281,7 @@ void launchui_tick(uint32_t ms) {
   s_now_ms = ms;
 
   if (s_has_next) run_next();
-  if (s_anim && !s_app && !s_search && !s_help && !picker_active()) anim_step(ms);
+  if (s_anim && !s_app && !s_search && !overlay_active() && !picker_active()) anim_step(ms);
 
   /* An app that animates gets every pass, not every second: a game at one
    * frame a second is a slideshow. It runs before the once-a-second work

@@ -38,6 +38,8 @@
 /* Alt (Opt) and space: the app search, from wherever. See KEY_APP_SEARCH
  * in kernel/drv/keyboard.h. */
 #define KBD_KEY_APP_SEARCH 0x88
+/* Fn (GUI) and space: the action palette. See KEY_ACTIONS. */
+#define KBD_KEY_ACTIONS    0x89
 
 /* Must match KEY_OPT_DIGIT / KEY_OPT_LETTER in kernel/drv/keyboard.h. Repeated
  * because this module is portable and that one is device code; the test is

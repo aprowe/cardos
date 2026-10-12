@@ -657,6 +657,19 @@ the one way out: of an app in the launcher,
 of a fullscreen app or a focused window on the desktop, and of the launcher to
 the console. From the console the same key goes back to the launcher (2026-10-01). `CAPP_KEY_ESC` in `capp.h` is the constant an app matches.
 
+**fn-h is one panel, and fn-space is the palette** (2026-10-12).
+`kernel/ui/helpmodel.c` (host-tested) is the state; `kernel/ui/help.c`
+paints both over the whole screen; `src/main.c` opens them before any
+shell sees the key. fn-h has three tabs: the app's keys (its help and
+action chords, or the picker's), the shell's own (`launchui_help`,
+`desktop_help`, the console's), and Shortcuts -- the global chords and the
+owner's opt-letter hotkeys (opt-h opens on that tab). Left/right or 1-3
+change tab, up/down scroll, Esc closes. fn-space (`KEY_ACTIONS`, 0x89; gui-
+space over Bluetooth) lists the app's actions that have a menu or a chord,
+then the OS's, filtered by typing like the launcher's search; Enter runs one
+(`capprun_action_invoke`, or the OS entry's chord through `dispatch_key`).
+While either is up the shells do not paint (`overlay_active()`).
+
 **The help panel is fn-h, and for a while it was nothing at all.** Help moved
 off ctrl-h because ctrl-h is 0x08, the byte Backspace sends. The header and
 the shells were updated; the key code was not, so both drivers emitted the

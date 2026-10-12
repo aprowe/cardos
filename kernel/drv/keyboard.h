@@ -86,6 +86,10 @@
  * survive being typed into a text field too. */
 #define KEY_APP_SEARCH 0x88
 
+/* Fn and space: the action palette -- every action of the app on screen,
+ * and the OS's, found by typing (kernel/ui/helpmodel.h). */
+#define KEY_ACTIONS    0x89
+
 #define KEY_UP        0x80   /* the ; , . / keys double as arrows under Fn */
 #define KEY_DOWN      0x81
 #define KEY_LEFT      0x82
