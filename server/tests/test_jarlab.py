@@ -1,4 +1,4 @@
-"""server/jarlab.py: Jar Lab, the bench for item generation and behaviour.
+"""server/jar/jarlab.py: Jar Lab, the bench for item generation and behaviour.
 
     python -m server.tests.test_jarlab
 
@@ -19,7 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 from http.server import ThreadingHTTPServer
-from server import accounts, app, ask, dash, jar, jarlab, jarvm, kv, people, sign
+from server import accounts, app, ask, dash, jar, kv, people, sign
+from server.jar import jarlab, jarvm
 from server import chat as chatmod
 
 PASSWORD = "dash-password"

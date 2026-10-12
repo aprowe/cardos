@@ -6,7 +6,7 @@ with Claude stubbed.
 python -m unittest server.tests.test_jarstages
 """
 import json
-from server import jarstages
+from server.jar import jarstages
 import os
 import random
 import re
@@ -21,7 +21,8 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-from server import ask, jar, jarvm, kv, shopkeep, sign                     # noqa: E402
+from server import ask, jar, kv, sign
+from server.jar import jarvm, shopkeep                     # noqa: E402
 from server.tests.test_jar import (FIXTURES, raw_item, sprite, test_pub,   # noqa: E402
                                    test_signer)
 
@@ -182,7 +183,7 @@ class Checks(unittest.TestCase):
             self.assertEqual(jar.motion_rules("restless", kind)["travel"], ("none",))
         self.assertEqual(jar.check_item(motion_raw("ambles", "crawl", "bob"), activity="ambles"),
                          [])
-        from server import jarstages
+        from server.jar import jarstages
         s = jarstages.fitter_schema("floor", None, "restless")
         self.assertEqual(s["properties"]["travel"]["enum"], ["none"])
         self.assertNotIn("none", s["properties"]["idle"]["enum"])
@@ -406,7 +407,7 @@ class Stages(unittest.TestCase):
 
     def test_the_fitter_is_held_to_the_activity_row(self):
         for activity in jar.MOTION_RULES:
-            from server import jarstages
+            from server.jar import jarstages
             s = jarstages.fitter_schema("critter", None, activity)
             self.assertEqual(s["properties"]["travel"]["enum"],
                              list(jar.MOTION_RULES[activity]["travel"]))
@@ -418,7 +419,7 @@ class Stages(unittest.TestCase):
         self.assertIn("brass thimble", self.stub.prompts["dm"][2])     # told the earlier ones
 
     def test_a_still_thing_may_do_nothing(self):
-        from server import jarstages
+        from server.jar import jarstages
         st = kv.store()
         self.stub.queue["behaviour"] = [{"habits": [], "script": ""}]
         raw, concept, sheet = jarstages.make_find(None, "alex", "floor", jar.TIERS[0][:1] +
@@ -428,7 +429,7 @@ class Stages(unittest.TestCase):
         self.assertEqual((raw["travel"], raw["movement"]), ("none", "sits"))
 
     def test_a_reacting_thing_that_does_nothing_is_sent_back_then_dropped(self):
-        from server import jarstages
+        from server.jar import jarstages
         st = kv.store()
         nothing = {"habits": [], "script": ""}
         self.stub.queue["behaviour"] = [nothing, nothing]
@@ -440,7 +441,7 @@ class Stages(unittest.TestCase):
         self.assertEqual(len(self.stub.prompts["artist"]), 1)          # the art was fine
 
     def test_a_refusal_goes_back_to_the_stage_at_fault(self):
-        from server import jarstages
+        from server.jar import jarstages
         st = kv.store()
         blank = ["0" * 16] * 16
         self.stub.queue["artist"] = [{"palette": raw_item()["palette"], "frames": [blank]}]

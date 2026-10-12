@@ -1,10 +1,10 @@
-/* Jar Factory's item record on the host: apps/jaritem.h. The round trip, the
+/* Jar Factory's item record on the host: apps/jar/jaritem.h. The round trip, the
  * size limits, and how forgiving the reader is (and is not). */
 #include <stdio.h>
 #include <string.h>
 
 #include "tinytest.h"
-#include "apps/jaritem.h"
+#include "apps/jar/jaritem.h"
 
 static void fill_item(JItem *it, int frames) {
   int i, k;
@@ -229,7 +229,7 @@ void test_jaritem_signed_message_is_the_record_without_its_signature(void) {
   CHECK_EQ(ji_signed_message(with, n1, msg, n0 - 1), -1);
 }
 
-/* The server's own example, when server/jar.py's tests have written it:
+/* The server's own example, when server/jar/__init__.py's tests have written it:
  * test/fixtures/jar_item_signed.bin and the message it signed. Skipped
  * (with a line saying so) when the fixtures are not in this tree. */
 void test_jaritem_signed_message_matches_the_servers_fixture(void) {

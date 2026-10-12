@@ -126,7 +126,10 @@ def may_write(state_dir, root, user, path, claim=False):
         if r != main:
             if app_owner != user:
                 return False, "make apps/%s.c first: %s is part of that app" % (s, r)
-        elif app_owner not in (None, user) or os.path.exists(os.path.join(root, main)):
+        elif (app_owner not in (None, user) or os.path.exists(os.path.join(root, main))
+              or os.path.isdir(os.path.join(root, "apps", s))):
+            # apps/NAME/ is an app with a folder of its own (apps/jar):
+            # apps/NAME.c beside it would be a second app of that name.
             return False, "there is already an app called %s" % s
         if claim:
             files[r] = user

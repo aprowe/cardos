@@ -149,5 +149,38 @@ class Overlays(unittest.TestCase):
             build_apps.check_overlays(secs, "fake")
 
 
+class Sources(unittest.TestCase):
+    """Which files are apps: apps/NAME.c, and every .c in a folder of apps/."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def put(self, rel):
+        p = os.path.join(self.tmp, *rel.split("/"))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as f:
+            f.write("")
+
+    def names(self):
+        return [os.path.relpath(s, self.tmp).replace(os.sep, "/")
+                for s in build_apps.app_sources(self.tmp)]
+
+    def test_flat_and_foldered_apps_in_name_order(self):
+        for rel in ("timer.c", "str.h", "jar/jar.c", "jar/jarsim.h",
+                    "midi/midi.c", "midi/circuit.c", "icons/jar.txt", "capp.ld"):
+            self.put(rel)
+        self.assertEqual(self.names(), ["midi/circuit.c", "jar/jar.c",
+                                        "midi/midi.c", "timer.c"])
+
+    def test_two_apps_with_one_name_are_refused(self):
+        self.put("kart.c")
+        self.put("kart/kart.c")
+        with self.assertRaises(SystemExit):
+            build_apps.app_sources(self.tmp)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

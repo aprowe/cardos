@@ -12,7 +12,7 @@
 
 #define capp_info circuit_capp_info
 #define capp_main circuit_capp_main
-#include "apps/circuit.c"
+#include "apps/midi/circuit.c"
 #undef capp_info
 #undef capp_main
 

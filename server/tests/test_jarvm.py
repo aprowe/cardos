@@ -1,5 +1,5 @@
-"""Jar Factory's scripts on the server: server/jarvm.py -- the table read
-from apps/jarvm.def, the compiler and its errors, the machine, and the
+"""Jar Factory's scripts on the server: server/jar/jarvm.py -- the table read
+from apps/jar/jarvm.def, the compiler and its errors, the machine, and the
 simulated day. The C machine is held to the same traces by
 test/test_jarvm.c, from the fixtures checked here to be current."""
 
@@ -8,7 +8,7 @@ import os
 import tempfile
 import unittest
 
-from server import jarvm as V
+from server.jar import jarvm as V
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 E, A, S, OP = V.EVENTS, V.ACTIONS, V.SENSES, V.OP

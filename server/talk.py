@@ -13,7 +13,7 @@ conversation can touch the repository -- it is Claude with no tools, unlike
                                               then the words | "error why"
     GET  /talk/doc?s=ID                    -> the latest revision
 
-`kind` is `song` for MIDI's songs (apps/midiseq.h), whose revisions are
+`kind` is `song` for MIDI's songs (apps/midi/midiseq.h), whose revisions are
 checked like server/midi.py's and sent back to be mended once; anything
 else is text.
 

@@ -429,7 +429,7 @@ function paintStage(card, keepText){
   if (!q('.schema').hidden) q('.schema').textContent = JSON.stringify(ctx.schema || {}, null, 1);
   if (card === 'behaviour') $('behNote').innerHTML = S.variant === 'js3'
     ? 'Writes <b>Jarscript 3</b> from <code>tools/jarsandbox/jarscript3.md</code> (the same file the sandbox shows), so the find comes alive in the sandbox. The record keeps only the motion parts; the script is checked with the sandbox\'s compiler under node.'
-    : 'Writes <b>today\'s language</b> (server/jarvm.py) as the server does. Sent to the sandbox, the find moves by its motion parts and its poke habits.';
+    : 'Writes <b>today\'s language</b> (server/jar/jarvm.py) as the server does. Sent to the sandbox, the find moves by its motion parts and its poke habits.';
   paintOut(card);
 }
 

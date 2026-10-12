@@ -15,7 +15,7 @@
 
 /* Plain RGB565 here, so a dump can be read back as colour. */
 #define K_RGB(r, g, b) ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
-#include "apps/kart.h"
+#include "apps/kart/kart.h"
 
 static uint16_t FRAME[K_H][K_W];
 

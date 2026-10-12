@@ -63,6 +63,14 @@ class Fence(unittest.TestCase):
         self.assertIn("britney", fence.fence_prompt(self.state, "britney"))
         self.assertIn("chess", fence.fence_prompt(self.state, "britney"))
 
+    def test_an_app_with_a_folder_is_taken(self):
+        os.makedirs(os.path.join(self.root, "apps", "kart"))
+        self.put("apps/kart/kart.c", "owner's kart\n")
+        self.assertFalse(self.may("apps/kart.c"))           # a second kart
+        self.assertFalse(self.may("apps/kart_track.h"))
+        self.assertFalse(self.may("apps/kart/kart.c"))
+        self.assertFalse(self.may("apps/kart/kart_more.h"))
+
     def test_after_the_turn_everything_outside_goes_back(self):
         self.assertTrue(self.may("apps/chess.c"))
         self.put("apps/chess.c", "her game\n")

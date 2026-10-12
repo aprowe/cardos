@@ -1,5 +1,5 @@
 """The corpus: every Jar script this lab can find, compiled by the real
-compiler (server/jarvm.py, language v2).
+compiler (server/jar/jarvm.py, language v2).
 
 Sources:
   local   string literals in the repo's tests, fixture maker, Jar Lab and the
@@ -21,11 +21,11 @@ os.environ.setdefault("CARDOS_JAR_V2", "1")
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, ROOT)
-from server import jarvm as V  # noqa: E402
+from server.jar import jarvm as V  # noqa: E402
 
 LOCAL_FILES = ["server/tests/test_jarvm.py", "server/tests/test_jar.py",
                "server/tests/test_jarlab.py", "server/tests/test_jarstages.py",
-               "server/jarlab.py", "tools/make_jarvm_fixtures.py"]
+               "server/jar/jarlab.py", "tools/make_jarvm_fixtures.py"]
 
 
 def _strings(path):

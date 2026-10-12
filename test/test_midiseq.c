@@ -1,7 +1,7 @@
-/* Songs as text into MIDI: apps/midiseq.h. */
+/* Songs as text into MIDI: apps/midi/midiseq.h. */
 #include <string.h>
 #include "tinytest.h"
-#include "apps/midiseq.h"
+#include "apps/midi/midiseq.h"
 
 static MsSong S;
 

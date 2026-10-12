@@ -1,4 +1,4 @@
-"""Put Tibbs's past into his history (server/shopkeep.py, "his memory").
+"""Put Tibbs's past into his history (server/jar/shopkeep.py, "his memory").
 
 Before 2026-10-11 the only record of what he said was his Claude Code
 session's own transcript. Run once on the server, as the account that runs
@@ -19,7 +19,8 @@ import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from server import kv, shopkeep  # noqa: E402
+from server import kv
+from server.jar import shopkeep  # noqa: E402
 
 
 def text_of(content):

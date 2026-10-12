@@ -1,7 +1,7 @@
 # Jar items made in stages, and things that keep still — design
 
 Approved in conversation with alex, 2026-10-11. Replaces the one-call item
-generation in `server/jar.py` (`generate`) with a pipeline of narrow agents,
+generation in `server/jar/__init__.py` (`generate`) with a pipeline of narrow agents,
 and gives items motion built from parts instead of one movement word.
 
 ## The problem
@@ -16,7 +16,7 @@ zone. Two causes, both in the generator rather than the device:
 - **Movement is required, and the easy answer is to walk.** `item_schema`
   requires `movement`, `speed` and `zone` for every item, and the prompt's
   main list of actions is hop, walk and float. `JM_SITS` exists in
-  `apps/jaritem.h`, but the model almost never picks it.
+  `apps/jar/jaritem.h`, but the model almost never picks it.
 
 The five movement values (sits, hops, wanders, sways, floats) are also too
 narrow. A lantern should flicker, a jellyfish pulse, a reed sway in place,
@@ -59,7 +59,7 @@ combine -> check_item -> script simulator -> seal -> store  (as today)
 - **tier**: `pick_tier`, unchanged, and still setting each stage's effort;
 - **form**: `roll_form` (furniture, scenery, part, big, none), unchanged;
 - **activity** (new): `still` 35%, `reacts` 30%, `ambles` 25%, `restless`
-  10%. The table is `ACTIVITIES` in `server/jar.py`, beside `FORMS`.
+  10%. The table is `ACTIVITIES` in `server/jar/__init__.py`, beside `FORMS`.
 
 `shopkeep.spark` and `shopkeep.loose_brief` are no longer used by the
 pipeline.
@@ -152,7 +152,7 @@ say how:
 | ambles | any | any | slow |
 | restless | any but none | any but none | medium or fast |
 
-**In the record** (`apps/jaritem.h`, the longer header, bytes 215-223 are
+**In the record** (`apps/jar/jaritem.h`, the longer header, bytes 215-223 are
 zero today):
 - 215 `travel`, 216 `idle`, 217 `liveliness`. Zero is none / none / calm, so
   every existing item reads as it does now.
@@ -166,7 +166,7 @@ zero today):
   travel hop, wanders is crawl, sways is idle sway, floats is travel float,
   sits is none.
 
-**On the device** (`apps/jarsim.h` and `apps/jarlive.h`; a `jar.capp`
+**On the device** (`apps/jar/jarsim.h` and `apps/jar/jarlive.h`; a `jar.capp`
 update, no OS change, no API bump):
 - `travel` drives how the sim moves a thing between places. Crawl and slide
   stay on the ground, hop arcs, float and fly leave it.
@@ -248,7 +248,7 @@ places. The old prompts were tuned this way, and the new ones need the same.
 
 ## Who builds it
 
-`server/jar.py`, `server/shopkeep.py` and the Jar headers are being changed
+`server/jar/__init__.py`, `server/jar/shopkeep.py` and the Jar headers are being changed
 by another session (cardos-78) as this is written. Implementation should be
 done by that session, or after its work is committed, in this worktree's
 branch (`jar-item-pipeline`).
@@ -257,7 +257,7 @@ branch (`jar-item-pipeline`).
 
 Test-first, in this order; each step is a failing test, then the code.
 
-1. **Rolls and rules** (`server/jar.py`): `ACTIVITIES` and `roll_activity`
+1. **Rolls and rules** (`server/jar/__init__.py`): `ACTIVITIES` and `roll_activity`
    beside `FORMS`; the motion vocabularies (`TRAVELS`, `IDLES`, `LIVELY`)
    and `MOTION_RULES` (the table in section 2); `move_fallback(travel, idle)`
    for byte 72. Tests: proportions over many draws; the fallback table.
@@ -269,11 +269,11 @@ Test-first, in this order; each step is a failing test, then the code.
    habit and no script handler is refused. The checks are split by stage
    (text and motion: fitter; frames: artist; habits and script: behaviour)
    so a refusal can be routed.
-4. **Tibbs's search** (`server/shopkeep.py`): the stock turn returns
+4. **Tibbs's search** (`server/jar/shopkeep.py`): the stock turn returns
    `search` instead of briefs when staged, asks for somewhere new given his
    last few (`tibbs/searches`), keeps the commission, and gives no sparks or
    chance events. With no answer, the search is empty and the log says so.
-5. **The stages** (`server/jarstages.py`, new; the DM's prompt is one
+5. **The stages** (`server/jar/jarstages.py`, new; the DM's prompt is one
    function there, `dm_prompt`, with its world paragraph beside it, so DM
    strategy can be added in one place): DM, fitter, artist, behaviour, each
    with its own schema; what each prompt must and must not contain is

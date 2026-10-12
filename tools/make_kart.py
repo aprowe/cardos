@@ -1,11 +1,11 @@
 """Kart's tables: the track, the sprites, the sines.
 
-    python tools/make_kart.py            writes apps/kart_data.h
+    python tools/make_kart.py            writes apps/kart/kart_data.h
     python tools/make_kart.py --show x.png   and a picture of the track
 
 The track is a loop of control points through a 1024x1024 world; a
 Catmull-Rom spline through them is cut into NWP waypoints an even distance
-apart. The device paints the road from those (apps/kart.h, k_build), and
+apart. The device paints the road from those (apps/kart/kart.h, k_build), and
 the karts follow them: they are the racing line, the lap counter and the
 order of the race. The checks here refuse a track whose road would run into
 itself.
@@ -19,7 +19,7 @@ import sys
 import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, "apps", "kart_data.h")
+OUT = os.path.join(ROOT, "apps", "kart", "kart_data.h")
 
 NWP = 256            # waypoints round the loop
 ROAD_R = 30          # road half-width in texels (the device paints this)

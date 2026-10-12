@@ -1908,7 +1908,7 @@ git commit -m "Build budget: data fits the arena; only RAM-code apps have a code
 Ask alex before Step 1. It is the one-time full flash that changes the partition table.
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-10-09-xip-app-code-design.md` (Measurements), `CLAUDE.md` (a paragraph), possibly `apps/kart.c`, `apps/pinball.c`, `apps/noodle.c`, `apps/calc.c` (the flag)
+- Modify: `docs/superpowers/specs/2026-10-09-xip-app-code-design.md` (Measurements), `CLAUDE.md` (a paragraph), possibly `apps/kart/kart.c`, `apps/pinball.c`, `apps/noodle.c`, `apps/calc.c` (the flag)
 
 - [ ] **Step 1: Full flash with the new table**
 
@@ -1934,7 +1934,7 @@ Then `python tools/cardctl.py sh "mem"`. Expect `arena 28672 free` and `appcode 
 
 - [ ] **Step 6: Measurements (added at approval).** Repeat Task 1 Steps 2–3 exactly on this firmware, and fill the `xip` rows of the spec's Measurements table.
 
-- [ ] **Step 7: Hot loops.** In `apps/pinball.c`, `apps/noodle.c` and `apps/kart.c` (and Calc's graph redraw), add a temporary counter in `tick`. Count the ticks that return 1 (repaints) over 5 s with `api->ticks_ms()`, and `api->log` the rate. Do not commit this. Run each app for 15 s from flash, then with `CAPP_CODE_IN_RAM` added to its `capp_info` flags (rebuild, `put` it). Record both rates. **Set the flag permanently only where flash is more than 10% slower.** Remove the counters. Put the numbers in the spec under Measurements.
+- [ ] **Step 7: Hot loops.** In `apps/pinball.c`, `apps/noodle.c` and `apps/kart/kart.c` (and Calc's graph redraw), add a temporary counter in `tick`. Count the ticks that return 1 (repaints) over 5 s with `api->ticks_ms()`, and `api->log` the rate. Do not commit this. Run each app for 15 s from flash, then with `CAPP_CODE_IN_RAM` added to its `capp_info` flags (rebuild, `put` it). Record both rates. **Set the flag permanently only where flash is more than 10% slower.** Remove the counters. Put the numbers in the spec under Measurements.
 
 - [ ] **Step 8: Power pull.** Ask alex to do this physically. `xip wipe`, `open forklift`, and pull the power while "preparing" shows. After boot, `xip` should show no forklift entry or a `dead` one, and `open forklift` should write again and run.
 

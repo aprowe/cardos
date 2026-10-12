@@ -1,4 +1,4 @@
-# Jar Factory's art: tools/make_jar_art.py turns this into apps/jar_art.h.
+# Jar Factory's art: tools/make_jar_art.py turns this into apps/jar/jar_art.h.
 #
 # sprite NAME W H, then `pal` (letter=#rrggbb, up to seven; '.' is clear),
 # then one or more `frame` blocks of H rows of W letters, then `end`.
@@ -8,9 +8,9 @@
 #   recipe MOVEMENT SPEED ZONE    sits|hops|wanders|sways|floats,
 #                                 slow|medium|fast,
 #                                 garden|works|dock|water|high|anywhere
-#   habit EVENT[:ARG] ACTION[:ARG]   up to three (apps/jaritem.h)
+#   habit EVENT[:ARG] ACTION[:ARG]   up to three (apps/jar/jaritem.h)
 #   bubble "..."                  up to four of 12
-#   tags a,b                      what critters like (apps/jarsim.h)
+#   tags a,b                      what critters like (apps/jar/jarsim.h)
 #   price N                       0: one of the four the jar starts with
 
 # ---- the workers ----------------------------------------------------------

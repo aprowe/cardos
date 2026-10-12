@@ -6,7 +6,7 @@ varied items -- asked of Claude through the claude CLI, one call per batch.
 
 --rich drops the 12-line rule and asks for the most elaborate behaviour the
 language allows (to see what fills 256 bytes). The scripts are compiled by
-server/jarvm.py; only the ones that compile are kept. Nothing on the server
+server/jar/jarvm.py; only the ones that compile are kept. Nothing on the server
 or the droplet is touched.
 """
 import argparse
@@ -19,7 +19,7 @@ import sys
 os.environ.setdefault("CARDOS_JAR_V2", "1")
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
-from server import jarvm  # noqa: E402
+from server.jar import jarvm  # noqa: E402
 
 KINDS = ["critter (walks about)", "decor on the floor", "a hanging thing", "a floating thing",
          "furniture", "a plant"]

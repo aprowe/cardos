@@ -1684,7 +1684,7 @@ function renderDevice(){
   }).join('');
   $('pane-device').innerHTML = `
 <h3>What this would take on the Cardputer</h3>
-<p>The jar runs on an ESP32-S3 with no PSRAM; the Jar app's data lives in a 28 KB arena with only a few hundred bytes to spare. Today's item scripts (<code>apps/jarvm.def</code>) are handlers only: at most 256 bytes of bytecode, 64 instructions per handler run, 8 memory slots, and motion is canned (<code>walk</code>, <code>hop</code>, <code>fly</code>, <code>seek</code>) — C code decides the path. Everything here was designed so it <em>could</em> run there, but most of it is new.</p>
+<p>The jar runs on an ESP32-S3 with no PSRAM; the Jar app's data lives in a 28 KB arena with only a few hundred bytes to spare. Today's item scripts (<code>apps/jar/jarvm.def</code>) are handlers only: at most 256 bytes of bytecode, 64 instructions per handler run, 8 memory slots, and motion is canned (<code>walk</code>, <code>hop</code>, <code>fly</code>, <code>seek</code>) — C code decides the path. Everything here was designed so it <em>could</em> run there, but most of it is new.</p>
 <div class="tw"><table><tr><th>item now in the jar</th><th>bytecode</th><th>sprite (3 bpp)</th><th>runtime state</th><th>record (224 header + 64 sig + code + frames)</th></tr>${rows || '<tr><td colspan="5">no items</td></tr>'}</table></div>
 <h3>What the device VM would need</h3>
 <ul>

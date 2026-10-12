@@ -1,6 +1,6 @@
-/* Quoridor's rules and computer player: apps/quoridor.h. */
+/* Quoridor's rules and computer player: apps/quoridor/quoridor.h. */
 #include "tinytest.h"
-#include "apps/quoridor.h"
+#include "apps/quoridor/quoridor.h"
 
 static QMove step(int r, int c) { QMove m; m.wall = 0; m.vert = 0; m.r = (int8_t)r; m.c = (int8_t)c; return m; }
 static QMove wall(int r, int c, int vert) { QMove m; m.wall = 1; m.vert = (int8_t)vert; m.r = (int8_t)r; m.c = (int8_t)c; return m; }

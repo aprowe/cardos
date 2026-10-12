@@ -1,11 +1,11 @@
-﻿/* Jar Factory's world on the host: apps/jarsim.h. Where coins come from,
+﻿/* Jar Factory's world on the host: apps/jar/jarsim.h. Where coins come from,
  * that time away makes nothing, upgrades, items and their habits, the save. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "tinytest.h"
-#include "apps/jarsim.h"
+#include "apps/jar/jarsim.h"
 
 #define T0 1800000000u
 

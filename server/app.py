@@ -27,7 +27,8 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 
-from . import accounts, agent, ask, chat, m5hub, daily, dash, dashapi, files, google, jar, jarlab, kv, midi, msg, music, notes, people, photos, shots, sign, talk, toggl, tz, updates, voice, wiki
+from . import accounts, agent, ask, chat, m5hub, daily, dash, dashapi, files, google, jar, kv, midi, msg, music, notes, people, photos, shots, sign, talk, toggl, tz, updates, voice, wiki
+from .jar import jarlab
 from .chat import ROOT as ROOT_DIR
 
 

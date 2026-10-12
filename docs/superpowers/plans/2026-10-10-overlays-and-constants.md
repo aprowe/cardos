@@ -2802,7 +2802,7 @@ Expected: `99-0.bin` is gone.
 
 - [ ] **Step 8: Stale constants through the data view (Review Focus 3).**
   1. `open jar`, `key quit`. The constants have been read through the data view and are cached.
-  2. Change the first line of Jar's help text (`capp_info.help` in `apps/jar.c`, a string literal and so a constant). Run `python tools/build_apps.py`, then `cardctl put build/apps/jar.capp /apps/Games/jar.capp`.
+  2. Change the first line of Jar's help text (`capp_info.help` in `apps/jar/jar.c`, a string literal and so a constant). Run `python tools/build_apps.py`, then `cardctl put build/apps/jar.capp /apps/Games/jar.capp`.
   3. `sh "xip wipe"`, then `open jar`. The entry is rewritten at offset 0, the same flash the old constants were read from. Press `key hex:e7` (fn-h, `KEY_HELP`). Then `shot help.png`, which must show the **new** line.
   4. Revert the change, rebuild, `put` the original back, and do one more `open jar` (a new entry).
 

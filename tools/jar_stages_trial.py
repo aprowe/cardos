@@ -26,7 +26,8 @@ def main():
     args = ap.parse_args()
     state = tempfile.mkdtemp(prefix="jartrial-")
     os.environ["CARDOS_STATE"] = state                  # before the server modules read it
-    from server import jar, jarstages, kv, shopkeep
+    from server import jar, kv
+    from server.jar import jarstages, shopkeep
     from server.chat import ChatService
     chat = ChatService(claude=args.claude_cli) if args.claude_cli else ChatService()
     report = {"state": state, "v2": jar.jarvm.V2, "stocks": []}

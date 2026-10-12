@@ -7,7 +7,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 os.environ.setdefault("CARDOS_JAR_V2", "1")
-from server import jarvm as V  # noqa: E402
+from server.jar import jarvm as V  # noqa: E402
 
 OPS = V.OPS
 OPNAME = {o.code: o.name for o in OPS}

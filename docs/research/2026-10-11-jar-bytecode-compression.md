@@ -43,7 +43,7 @@ permitted, so I built the corpus three ways:
 | claude-short | 160 | Claude asked with the real `LANGUAGE_GUIDE_V2` and the generation prompt's "at most 12 lines" rule, in 4 batches of 40 varied items (`gen_corpus.py`) |
 | claude-rich | 40 | the same, but asked for the most elaborate behaviour the language allows |
 
-All were compiled by the real compiler (`server/jarvm.py`, language v2).
+All were compiled by the real compiler (`server/jar/jarvm.py`, language v2).
 
 ### Sizes in today's format 1
 
@@ -360,7 +360,7 @@ signature still covers everything except the signature and the memory slots.
 
 ### Concrete next step
 
-Port `dense.lower` + `dense.layout` + `dense.run2` to C in `apps/jarvm.h`, as
+Port `dense.lower` + `dense.layout` + `dense.run2` to C in `apps/jar/jarvm.h`, as
 `jv_transcode(f1, n, out)` and format-2 cases in `jv_run`/`jv_check`.
 
 Then:
