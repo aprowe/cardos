@@ -11,6 +11,22 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.23.0 -- 2026-10-11
+
+Jar Factory (`update apps`) and the server.
+
+- **Sell or trash.** In My Stuff (or a thing's card), s sells it back to
+  Tibbs for a quarter of its price and d trashes it for good; both ask
+  first. It leaves every jar, and the server is told with the next poll:
+  sold goes back to the pool, trashed never comes back.
+- **Nothing at a time of day.** `on hour N` is now `on chime N`: every N
+  minutes the jar is open, 15 at most. World events come every 5-15
+  minutes, and the day's named events play one after another, 5-15
+  minutes apart, while the jar is open.
+- **Poke is something you do.** The arrows mark a thing (a gold caret),
+  Space pokes it.
+- **Tibbs's line is shown whole** when it is new; l reads it again.
+
 ## v0.22.0 -- 2026-10-11
 
 Firmware and every app: API 47 (`update all`).
