@@ -441,6 +441,25 @@ ICONS = {
         ".....KKKKKK.....",
         "................",
     ],
+    # Wikipedia: the white puzzle globe, grey seams, a black W across it.
+    "Wikipedia": [
+        ".....KKKKKK.....",
+        "...KKWWGWWWKK...",
+        "..KWWWWGWWWWWK..",
+        ".KWWWWGGGWWWWWK.",
+        ".KWGGWWWWWGGWWK.",
+        "KWKWWWWWWWWWKWWK",
+        "KWKWWWKKWWWWKWGK",
+        "KWWKWWKKWWWKWWGK",
+        "KGWKWKWWKWWKWWWK",
+        "KGWKWKWWKWKWWWWK",
+        "KWWWKWWWWKWWGGWK",
+        ".KWWKWWWWKWWWWK.",
+        ".KWGWWWGGWWWWWK.",
+        "..KWWWGWWWWGWK..",
+        "...KKWWWWWWKK...",
+        ".....KKKKKK.....",
+    ],
     # A yellow note page, lines on it, the corner turned.
     "Notes": [
         "................",

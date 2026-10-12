@@ -530,6 +530,22 @@ open and after an action. Both of an app's HTTP calls now carry the
 device's token to its own server (`own_bearer` in cardapi.c); before, only
 `http_start` did, and a command using the blocking `http` was refused.
 
+**Wikipedia** (2026-10-12). `apps/wiki.c` (Net) searches and reads it;
+`server/wiki.py` does the HTTPS and JSON (with a Wikimedia-style
+User-Agent) and answers in lines: `/wiki/search?q=` a result a line
+(`title<TAB>description`), `/wiki/page?title=&page=N` a header
+`page<TAB>N<TAB>TOTAL<TAB>title` then plain ASCII, a paragraph a line,
+`## `/`### ` headings, the See also / References sections gone, cut
+between paragraphs into pages of at most 5 KB (the app's buffer is 6 KB);
+`/wiki/random`, `/wiki/summary?q=` (searched, then the lead paragraph) and
+`/wiki/featured`; `lang=xx` on all; ten minutes of cache. The app is a
+search box (wants text, so voice types into it; Enter on nothing is a
+random article), results, and a reader wrapped in ui13/ui13b that fetches
+the next page when you scroll past the end and the one before (landing at
+its end) when you scroll above the top; `r` random, `p`/fn-p prints the
+page loaded. Commands `summary TOPIC`, `featured` (for Today) and `open
+TOPIC`. Data 16.7 KB. Tests: `test/test_wiki.c`, `server/tests/test_wiki.py`.
+
 **The Bluetooth radio comes down after a print** unless Bluetooth is set
 to start at boot (`bt_radio_down`, run on cardos-bg after the job). Before,
 one print left 67 KB held for the uptime, and Todo could not load beside it.

@@ -52,6 +52,7 @@ todo      Plan
 toggl     Plan
 update    System
 web       Net
+wiki      Net
 tetris    Games
 iron      Games
 gamenight Games
