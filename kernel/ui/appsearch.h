@@ -19,4 +19,27 @@ int appsearch_score(const char *name, const char *query);
  * Returns how many. */
 int appsearch_rank(const char *const *names, int n, const char *query, int *out, int max);
 
+/* What was opened lately, newest first, and what is open now -- the
+ * launcher's /config/recent.txt. An empty search lists these first; and
+ * with Settings > Open last app on, boot reopens `running`. */
+#define RECENT_MAX  8
+#define RECENT_NAME 24
+
+typedef struct {
+  char name[RECENT_MAX][RECENT_NAME];
+  int  n;
+  char running[RECENT_NAME];      /* "" when the row is on screen */
+} Recents;
+
+void recents_opened(Recents *r, const char *name);   /* to the front, once; and running */
+void recents_closed(Recents *r);                      /* nothing running */
+/* The file: "@ NAME" for what is running, then a name a line, newest first. */
+void recents_parse(Recents *r, const char *text);
+int  recents_format(const Recents *r, char *out, int n);
+
+/* appsearch_rank, but an empty query puts the recent ones first, newest
+ * first, then the rest in their order. `r` may be NULL. */
+int appsearch_rank_recent(const char *const *names, int n, const char *query,
+                          const Recents *r, int *out, int max);
+
 #endif /* CARDOS_APPSEARCH_H */

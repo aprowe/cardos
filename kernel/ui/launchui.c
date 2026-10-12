@@ -40,6 +40,8 @@
 #include "kernel/drv/display.h"
 #include "kernel/sys/blip.h"
 #include "kernel/sys/notify.h"
+#include "kernel/sys/prefs.h"
+#include "kernel/fs/fs.h"
 
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
@@ -112,11 +114,62 @@ static void start_app(int slot, const char *name, const char *args) {
 }
 
 /* The search (Space): what has been typed, and the best matches for it as
- * flat icon indices. */
-#define HITS 6
+ * flat icon indices -- every one, scrolled through (s_htop). */
+#define HITS 64
 static int  s_search;
 static char s_q[24];
-static int  s_hit[HITS], s_nhit, s_hsel;
+static int  s_hit[HITS], s_nhit, s_hsel, s_htop;
+
+/* What was opened lately, and what is open now (appsearch.h), kept in
+ * RECENT_FILE: an empty search lists them first, and boot can reopen the
+ * one that was open (Settings > System > Open last app). */
+#define RECENT_FILE "/config/recent.txt"
+static Recents s_recent;
+static char    s_recent_saved[RECENT_MAX * (RECENT_NAME + 1) + RECENT_NAME + 4];
+static int     s_recent_loaded;
+
+static void recent_load(void) {
+  char buf[sizeof s_recent_saved];
+  int fd, n = 0;
+  if (s_recent_loaded) return;
+  s_recent_loaded = 1;
+  memset(&s_recent, 0, sizeof s_recent);
+  if ((fd = fs_open(RECENT_FILE, FS_O_READ)) < 0) return;
+  n = fs_read(fd, buf, sizeof buf - 1);
+  fs_close(fd);
+  if (n <= 0) return;
+  buf[n] = 0;
+  recents_parse(&s_recent, buf);
+  snprintf(s_recent_saved, sizeof s_recent_saved, "%s", buf);
+}
+
+/* Written only when it reads differently: a card write per app opened. */
+static void recent_save(void) {
+  char buf[sizeof s_recent_saved];
+  int fd, n = recents_format(&s_recent, buf, sizeof buf);
+  if (!strcmp(buf, s_recent_saved) || !fs_mounted()) return;
+  if ((fd = fs_open(RECENT_FILE, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC)) < 0) return;
+  fs_write(fd, buf, (size_t)n);
+  fs_close(fd);
+  memcpy(s_recent_saved, buf, sizeof buf);
+}
+
+static void recent_opened(const char *name) { recent_load(); recents_opened(&s_recent, name); recent_save(); }
+static void recent_closed(void) { recent_load(); recents_closed(&s_recent); recent_save(); }
+
+int  launchui_resume_on(void) { return prefs_get_u16("boot_last", 0) != 0; }
+void launchui_set_resume(int on) { prefs_set_u16("boot_last", on ? 1 : 0); prefs_mirror(); }
+
+/* At boot, with the setting on: the app that was open when the power went,
+ * opened again. 0 if it did. */
+int launchui_resume(void) {
+  char name[RECENT_NAME];
+  if (!launchui_resume_on()) return -1;
+  recent_load();
+  if (!s_recent.running[0]) return -1;
+  snprintf(name, sizeof name, "%s", s_recent.running);
+  return launchui_run(name, NULL);
+}
 
 static void paint_search(void);   /* with the rest of the search, below */
 
@@ -567,6 +620,7 @@ static void leave_app_ex(int show) {
   s_app = NULL;
   s_note[0] = 0;
   s_dirty = 1;
+  recent_closed();
   if (show) flush();
 }
 
@@ -705,6 +759,7 @@ static void launch_with(int i, const char *args) {
   s_app_rect = app_rect(a);
   s_app_how = AH_FULL | AH_SURROUND | AH_OPENED;
   s_app_dirty = 1;
+  recent_opened(a->name);
   flush();
 }
 
@@ -737,10 +792,16 @@ static void search_update(void) {
       flat[n++] = f;
     }
   }
-  s_nhit = appsearch_rank(names, n, s_q, got, HITS);
+  recent_load();
+  s_nhit = appsearch_rank_recent(names, n, s_q, &s_recent, got, HITS);
   for (i = 0; i < s_nhit; i++) s_hit[i] = flat[got[i]];
   s_hsel = 0;
+  s_htop = 0;
 }
+
+#define SEARCH_ROW 17
+#define SEARCH_Y   (BAR_H + 26)
+static int search_rows(void) { return (DISPLAY_H - SEARCH_Y) / SEARCH_ROW; }
 
 static void search_open(void) {
   s_search = 1;
@@ -759,7 +820,7 @@ static void paint_search(void) {
 }
 
 static void paint_search_body(void) {
-  int i, y = BAR_H + 26;
+  int i, y = SEARCH_Y, rows = search_rows();
   char line[32];
   draw_rect(R(0, BAR_H, DISPLAY_W, DISPLAY_H - BAR_H), C_DESKTOP);
   draw_rect(R(8, BAR_H + 5, DISPLAY_W - 16, 16), C_TITLE);
@@ -769,7 +830,14 @@ static void paint_search_body(void) {
     draw_text(14, y + 4, "no app called that", C_DESK_DIM, C_DESKTOP);
     return;
   }
-  for (i = 0; i < s_nhit; i++, y += 17) {
+  if (s_hsel < s_htop) s_htop = s_hsel;
+  if (s_hsel >= s_htop + rows) s_htop = s_hsel - rows + 1;
+  /* More above or below: a mark at the right of the field. */
+  if (s_htop > 0 || s_htop + rows < s_nhit) {
+    snprintf(line, sizeof line, "%d/%d", s_hsel + 1, s_nhit);
+    draw_text((int16_t)(DISPLAY_W - 14 - draw_text_width(line)), BAR_H + 9, line, C_DESK_DIM, C_TITLE);
+  }
+  for (i = s_htop; i < s_nhit && i < s_htop + rows; i++, y += SEARCH_ROW) {
     const Icon *ic = icon_at(s_hit[i]);
     const Icon *in = ic && ic->parent >= 0 ? icon_at(ic->parent) : NULL;
     uint16_t bg = i == s_hsel ? C_TITLE : C_DESKTOP;
@@ -787,8 +855,10 @@ static void paint_search_body(void) {
 static int search_key(uint8_t key) {
   int n = (int)strlen(s_q);
   if (key == KEY_ESC || key == KEY_QUIT) s_search = 0;
-  else if (key == KEY_UP) { if (s_hsel > 0) s_hsel--; }
-  else if (key == KEY_DOWN) { if (s_hsel + 1 < s_nhit) s_hsel++; }
+  else if (key == KEY_UP) { if (s_hsel > 0) s_hsel--; else if (s_nhit) s_hsel = s_nhit - 1; }
+  else if (key == KEY_DOWN) { if (s_hsel + 1 < s_nhit) s_hsel++; else s_hsel = 0; }
+  else if (key == KEY_LEFT) { s_hsel -= search_rows(); if (s_hsel < 0) s_hsel = 0; }
+  else if (key == KEY_RIGHT) { s_hsel += search_rows(); if (s_hsel >= s_nhit) s_hsel = s_nhit ? s_nhit - 1 : 0; }
   else if (key == KEY_ENTER) {
     if (s_nhit) {
       int f = s_hit[s_hsel];
@@ -897,6 +967,7 @@ static void host(const AppDef *a) {
   s_app_rect = app_rect(a);
   s_app_how = AH_FULL | AH_SURROUND | AH_OPENED;
   s_app_dirty = 1;
+  if (a) recent_opened(a->name);
   flush();
 }
 

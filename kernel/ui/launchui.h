@@ -54,6 +54,13 @@ void launchui_note(const char *text);
  * is what Escape does everywhere else in this shell. */
 int launchui_run(const char *name, const char *args);
 
+/* Settings > System > Open last app: at boot, the app that was open when the
+ * power went is opened again (src/main.c; Backspace held at power-on, safe
+ * mode, or a crash skips it). launchui_resume is 0 if it opened one. */
+int  launchui_resume_on(void);
+void launchui_set_resume(int on);
+int  launchui_resume(void);
+
 /* Is the app that is running taking typed text right now? */
 int launchui_wants_text(void);
 /* The button on top, to the app on screen (CappUi.button). */

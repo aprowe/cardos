@@ -24,6 +24,7 @@
 #include "kernel/app/capprun.h"
 #include "kernel/app/capp.h"
 #include "kernel/fs/fs.h"
+#include "kernel/ui/launchui.h"
 #include "kernel/net/wifi.h"
 
 #include "esp_system.h"
@@ -281,6 +282,13 @@ static void act_keysnd(SettingsState *st) {
   snprintf(st->note, sizeof st->note, blip_keys_on() ? "a click for every key" : "keys are quiet");
 }
 
+static void v_resume(char *b, size_t n) { snprintf(b, n, "%s", launchui_resume_on() ? "on" : "off"); }
+static void act_resume(SettingsState *st) {
+  launchui_set_resume(!launchui_resume_on());
+  snprintf(st->note, sizeof st->note, launchui_resume_on()
+           ? "boots into the app left open (hold Bksp: not)" : "boots to the launcher");
+}
+
 static void v_nchat(char *b, size_t n) { snprintf(b, n, "%s", notify_chat_on() ? "on" : "off"); }
 static void act_nchat(SettingsState *st) {
   notify_set_chat(!notify_chat_on());
@@ -334,7 +342,8 @@ static const Row ROWS[] = {
 
   { "Notifications", "Chat",       v_nchat,  act_nchat,      1 },
 
-  { "System",    "Memory",       v_ram,    NULL,           0 },
+  { "System",    "Open last app", v_resume, act_resume,    1 },
+  { NULL,        "Memory",       v_ram,    NULL,           0 },
   { NULL,        "Forget all",   NULL,     act_forget,     0 },
   { NULL,        "Restart",      NULL,     act_reboot,     0 },
 };

@@ -100,6 +100,7 @@ static int      s_len;
 /* Booted with escape held: no saved setting has been applied, no radio has
  * been started, and the console has the screen. See app_main. */
 static int      s_safe_mode;
+static int s_no_resume;      /* Backspace held at power-on */
 
 static void prompt(void) {
   con_set_color(COLOR_AMBER);
@@ -1514,6 +1515,9 @@ void app_main(void) {
   if (keyboard_held('d', 60)) usbdisk_run();
 
   s_safe_mode = keyboard_held(KEY_ESC, 60);
+  /* Backspace held: boot to the launcher even with Settings > Open last
+   * app on -- the way out of an app that will not let the device start. */
+  s_no_resume = keyboard_held(KEY_BACKSPACE, 60);
   if (s_safe_mode) {
     display_set_brightness_now(100);
     con_set_color(COLOR_AMBER);
@@ -1659,7 +1663,18 @@ void app_main(void) {
   else switch (ui_saved_shell()) {
   case UI_DESKTOP:  go(UI_DESKTOP, 1); break;
   case UI_NONE:     go(UI_NONE, 0); break;
-  default:          go(UI_LAUNCHER, 1); break;
+  default:
+    go(UI_LAUNCHER, 1);
+    /* The app that was open when the power went, if asked for -- not after
+     * a crash, which may have been that app. */
+    {
+      esp_reset_reason_t rr = esp_reset_reason();
+      int crashed = rr == ESP_RST_PANIC || rr == ESP_RST_INT_WDT || rr == ESP_RST_TASK_WDT ||
+                    rr == ESP_RST_WDT || rr == ESP_RST_BROWNOUT;
+      if (!s_safe_mode && !s_no_resume && !crashed && fs_mounted() && launchui_resume() == 0)
+        applogf("boot", "reopened the last app");
+    }
+    break;
   }
   if (!s_safe_mode) blip(BLIP_BOOT);
 
