@@ -387,6 +387,18 @@ tested): `n BEAT NOTE LEN [VEL]`, chords, `cc`, `ramp`, `bend`, `prog`,
 checked against the format and a mistake goes back to Claude once. The
 app's song buffers are sized to keep its data under 28 KB.
 
+**Circuit: beats for a Novation Circuit** (2026-10-12, `apps/circuit.c`,
+Make). It is `apps/midi.c` built again with `CIRCUIT` defined -- one
+source, two apps. Claude is asked with the kit (`/midi/compose?kit=circuit`,
+`server/midi.py` CIRCUIT): channels 1-8 are kick, snare, hat, crash/fx,
+keys, bass, misc, samples, no `prog`, and the check refuses channels past 8.
+`/config/circuit.txt` sends each track to the channel (and a drum to the
+note) the Circuit really listens on, so songs never change for a setup.
+Beats in /circuit; the preview plays drums as synthesised hits; the roll is
+a lane a track. A beat is dense (1536 events), so the song is a big-mode
+block (`CAPP_BIG`), not the arena. `c` there asks the composer for a change
+(it knows the tracks; the talk would not), `u` undoes -- in MIDI too.
+
 **Talking to Claude about a document** (2026-10-06). `claude [-k song]
 PATH` opens the Claude app about one file instead of the device agent:
 `server/talk.py` takes the document, Claude answers there with no tools,

@@ -35,6 +35,12 @@ class Check(unittest.TestCase):
         self.assertEqual(midi.check("tempo 42.5\nn 0 C4 1\n")[0], 1)
         self.assertEqual(midi.check("ch 17\nn 0 C4 1\n")[0], 1)
 
+    def test_a_circuit_song_keeps_to_its_tracks(self):
+        self.assertIsNone(midi.check("ch 1\nn 0 C4 0.25 110\nch 6\nn 0 C2 1\n", "circuit"))
+        self.assertEqual(midi.check("ch 9\nn 0 C4 1\n", "circuit")[0], 1)
+        self.assertEqual(midi.check("ch 5\nprog 4\nn 0 C4 1\n", "circuit")[0], 2)
+        self.assertIsNone(midi.check("ch 9\nprog 4\nn 0 C4 1\n"))     # MIDI's own songs may
+
     def test_the_song_comes_out_of_its_fence(self):
         self.assertEqual(midi.extract("Here:\n```song\nn 0 C4 1\n```\nenjoy"), "n 0 C4 1\n")
 
@@ -96,6 +102,15 @@ class Compose(unittest.TestCase):
         self.assertEqual(out, "ok\n" + GOOD)
         self.assertIn("Change it: make it louder", self.asks[0])
         self.assertIn("n 0.5 E4,G4", self.asks[0])
+
+    def test_a_circuit_beat_is_asked_with_its_instruments(self):
+        s, jid = self.req("POST", "/midi/compose?kit=circuit", b"a dusty boom bap beat")
+        self.assertEqual(s, 200)
+        s, out = self.wait(jid.strip())
+        self.assertEqual(out, "ok\n" + GOOD)
+        self.assertIn("ch 3  hi-hat", self.asks[0])
+        self.assertIn("Write: a dusty boom bap beat", self.asks[0])
+        self.assertEqual(self.req("POST", "/midi/compose?kit=tb303", b"acid")[0], 400)
 
     def test_nothing_asked_is_refused(self):
         self.assertEqual(self.req("POST", "/midi/compose", b"   ")[0], 400)

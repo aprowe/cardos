@@ -30,6 +30,7 @@ ide       Make
 level     Make
 memo      Make
 midi      Make
+circuit   Make
 music     Make
 mines     Games
 noodle    Games

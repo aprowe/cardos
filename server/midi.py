@@ -8,6 +8,8 @@ get an id, GET until the song is there.
 
     POST /midi/compose          body: what to write -> id
                                 or: what to change, a line ---song---, the song
+    POST /midi/compose?kit=circuit   the same, for the Circuit app: a beat for
+                                a Novation Circuit's eight tracks (CIRCUIT)
     GET  /midi/compose?id=ID    -> "pending" | "ok" then the song | "error why"
 
 What comes back is checked by check() below, a reading of the same format
@@ -63,14 +65,43 @@ loop
 ```
 """
 
+# The Circuit app (apps/circuit.c) plays the same format into a Novation
+# Circuit, whose tracks are fixed instruments. What each channel is, is the
+# owner's setup; the device can send a track to another channel or note
+# (/config/circuit.txt), so songs are always written to these eight.
+CIRCUIT = r"""
+This song is for a Novation Circuit groovebox: a beat, played live into it.
+Its eight tracks are fixed instruments, one MIDI channel each. Use ONLY these
+channels, each for what it is:
+  ch 1  kick drum         one-shot: always note C4, VEL is the accent
+  ch 2  snare / clap      one-shot: always note C4
+  ch 3  hi-hat            one-shot: always note C4; short LEN (0.1) is closed, louder offbeats swing it
+  ch 4  crash / special   one-shot effects, risers, crashes: always note C4, sparing
+  ch 5  keys              chords and melodies (C3..C6)
+  ch 6  bass              bass line, one note at a time (C1..C3)
+  ch 7  misc instrument   lead, arp, pad or counter-melody (C3..C6)
+  ch 8  samples           sliced samples or vocal chops: notes C4..B4 pick the slice
+Write `ch N` before each track's notes. Never use prog (the sounds are chosen on
+the Circuit). cc is allowed for the melodic tracks (5-7): 74 filter cutoff,
+71 resonance -- use ramp for filter sweeps. Write a whole song, not one bar:
+an intro, a groove, a break or drop, and a return -- 32 beats (8 bars of 4/4)
+is usual, 64 at most -- at a tempo fitting the style, and end with `loop`. Drums are where the
+style lives: write real patterns with ghost notes and fills at phrase ends,
+not just four on the floor unless asked. At most 650 notes in all: the
+device holds no more."""
+
+KITS = {"circuit": CIRCUIT}
+
 COMMANDS = {"tempo", "ch", "prog", "n", "cc", "ramp", "bend", "loop"}
 _PITCH = re.compile(r"^(?:\d{1,3}|[A-Ga-g][#b]?-?\d)$")
 _BEAT = re.compile(r"^\d+(?:\.\d+)?(?:/\d+)?$")
 _jobs = jobs.Table(1800)       # id -> (state, song or why); gone half an hour after
 
 
-def check(song):
-    """(line, why) for the first thing apps/midiseq.h would refuse, or None."""
+def check(song, kit=None):
+    """(line, why) for the first thing apps/midiseq.h would refuse, or None.
+    A Circuit song also keeps to its eight channels and leaves the sounds
+    alone."""
     for i, raw in enumerate(song.splitlines(), 1):
         line = raw.split(";", 1)[0].strip()
         if not line or line.startswith("#"):
@@ -93,6 +124,10 @@ def check(song):
             return i, "tempo is a whole number of beats a minute, 20..400"
         elif cmd == "ch" and not (w[1].isdigit() and 1 <= int(w[1]) <= 16):
             return i, "ch is 1..16"
+        elif kit == "circuit" and cmd == "ch" and int(w[1]) > 8:
+            return i, "the Circuit has tracks on channels 1..8 only"
+        elif kit == "circuit" and cmd == "prog":
+            return i, "no prog: the Circuit's sounds are chosen on the Circuit"
     if "\nn " not in "\n" + song:
         return 1, "no notes at all"
     return None
@@ -111,30 +146,32 @@ def _claude(chat, prompt):
 SONG_MARK = "---song---"
 
 
-def compose(chat, request):
+def compose(chat, request, kit=None):
     """The song for `request`, checked, with one chance to mend it. A request
-    with a song after SONG_MARK is a change to that song."""
+    with a song after SONG_MARK is a change to that song. `kit` names an
+    instrument the song is for (KITS), whose rules go with the format."""
+    fmt = FORMAT + KITS.get(kit, "")
     if SONG_MARK in request:
         ask, old = request.split(SONG_MARK, 1)
-        prompt = (FORMAT + "\nHere is a song:\n```song\n" + old.strip() + "\n```\n"
+        prompt = (fmt + "\nHere is a song:\n```song\n" + old.strip() + "\n```\n"
                   "Change it: " + ask.strip() + "\nKeep everything not asked about the same, "
                   "and return the whole song.")
     else:
-        prompt = FORMAT + "\nWrite: " + request
+        prompt = fmt + "\nWrite: " + request
     song = extract(_claude(chat, prompt))
-    bad = check(song)
+    bad = check(song, kit)
     if bad:
-        song = extract(_claude(chat, FORMAT + "\nThis song has a mistake on line %d (%s). "
+        song = extract(_claude(chat, fmt + "\nThis song has a mistake on line %d (%s). "
                                "Return the whole song corrected.\n```song\n%s```" % (bad[0], bad[1], song)))
-        bad = check(song)
+        bad = check(song, kit)
         if bad:
             raise RuntimeError("line %d: %s" % bad)
     return song
 
 
-def _run(jid, chat, request):
+def _run(jid, chat, request, kit=None):
     try:
-        song = compose(chat, request)
+        song = compose(chat, request, kit)
         result = ("ok", song)
     except Exception as e:                      # Claude, the check
         result = ("error", str(e))
@@ -148,9 +185,13 @@ def post_compose(h, path, args):
     if not request:
         h.text("error what should it write?\n", 400)
         return
+    kit = (args.get("kit") or [""])[0] or None
+    if kit and kit not in KITS:
+        h.text("error no kit called %s\n" % kit, 400)
+        return
     jid = secrets.token_hex(5)
     _jobs.put(jid, ("pending", ""))
-    threading.Thread(target=_run, args=(jid, h.chat, request), daemon=True).start()
+    threading.Thread(target=_run, args=(jid, h.chat, request, kit), daemon=True).start()
     h.text(jid + "\n")
 
 

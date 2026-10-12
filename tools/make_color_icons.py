@@ -68,6 +68,27 @@ ICONS = {
         "................",
     ],
 
+    # Circuit: a charcoal body and its pads in the tracks' colours --
+    # drums warm, synths violet and green, the MIDI tracks cool, one lit.
+    "Circuit": [
+        "KKKKKKKKKKKKKKKK",
+        "KDDDDDDDDDDDDDDK",
+        "KDooDrrDyyDyyDDK",
+        "KDooDrrDyyDyyDDK",
+        "KDDDDDDDDDDDDDDK",
+        "KDooDrrDWWDyyDDK",
+        "KDooDrrDWWDyyDDK",
+        "KDDDDDDDDDDDDDDK",
+        "KDppDppDggDggDDK",
+        "KDppDppDggDggDDK",
+        "KDDDDDDDDDDDDDDK",
+        "KDttDttDbbDbbDDK",
+        "KDttDttDbbDbbDDK",
+        "KDDDDDDDDDDDDDDK",
+        "KDDDDDDDDDDDDDDK",
+        "KKKKKKKKKKKKKKKK",
+    ],
+
     # Two quavers on a beam, amber: the player's accent colour.
     "Music": [
         "................",
