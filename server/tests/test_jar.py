@@ -1,4 +1,4 @@
-"""server/jar.py: Jar Factory's stock, friends and gifts.
+"""server/jar/__init__.py: Jar Factory's stock, friends and gifts.
 
     python -m server.tests.test_jar
     python -m server.tests.test_jar --fixtures    rewrite test/fixtures/jar_*.bin
@@ -29,7 +29,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 from http.server import ThreadingHTTPServer
-from server import accounts, app, ask, jar, jarvm, kv, people, shopkeep, sign
+from server import accounts, app, ask, jar, kv, people, sign
+from server.jar import jarvm, shopkeep
 from server import chat as chatmod
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -110,7 +111,7 @@ def stage_of(schema):
 
 
 def stage_answer(stage, schema, n):
-    """What a well-behaved stage of server/jarstages.py would say."""
+    """What a well-behaved stage of server/jar/jarstages.py would say."""
     p = schema["properties"]
     if stage == "dm":
         return {"concept": "A small odd thing found by the canal, dented and humming. (%d)" % n}
@@ -220,7 +221,7 @@ class FakeTibbs:
 
 
 def header_table():
-    """The layout table in apps/jaritem.h's opening comment: [(off, size, field)]."""
+    """The layout table in apps/jar/jaritem.h's opening comment: [(off, size, field)]."""
     with open(jar.HEADER, encoding="utf-8") as f:
         src = f.read()
     rows = []
@@ -368,7 +369,7 @@ class Signing(unittest.TestCase):
         # Step 7: a script that compiles and lives through its simulated day
         # goes into the record; one that does not is dropped and the item
         # ships on its recipe.
-        from server import jarvm
+        from server.jar import jarvm
         good = raw_item("Hummer", script="on poke: say 1; hop\nend\non time night: glow on\nend")
         rec = jar.encode(jar.to_item(good, 101, 1791504000, "cosy"))
         code = jar.decode(rec)["script"]
@@ -589,12 +590,12 @@ class Seeding(unittest.TestCase):
 class VersionTwo(unittest.TestCase):
 
     def setUp(self):
-        p = mock.patch("server.jarvm.V2", True)
+        p = mock.patch("server.jar.jarvm.V2", True)
         p.start()
         self.addCleanup(p.stop)
 
     def test_off_by_default_nothing_newer_is_asked_for(self):
-        with mock.patch("server.jarvm.V2", False):
+        with mock.patch("server.jar.jarvm.V2", False):
             s = jar.item_schema()
             self.assertNotIn("traits", s["properties"])
             whens = s["properties"]["habits"]["items"]["properties"]["when"]["enum"]
@@ -697,7 +698,7 @@ class Release(unittest.TestCase):
 
 
 class Town(unittest.TestCase):
-    """Pip, Bramble and Wren: their deals and their jobs (server/town.py)."""
+    """Pip, Bramble and Wren: their deals and their jobs (server/jar/town.py)."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp()
@@ -725,7 +726,7 @@ class Town(unittest.TestCase):
         return st
 
     def test_what_the_device_says_it_has(self):
-        from server import town
+        from server.jar import town
         coins, have, beds, words = town.parse_have(
             "coins 40\nhave spores=3 nectar=1 twigs=12 gold=9\nbeds berry1,reed2,shroom3\nhello there")
         self.assertEqual((coins, have, beds, words),
@@ -737,7 +738,7 @@ class Town(unittest.TestCase):
         self.assertIn("2: reed, level 2", ctx)
 
     def test_pip_alters_an_item_in_place(self):
-        from server import town
+        from server.jar import town
         st = self.own(501)
         before = st.get(jar.NS, "rec/501")
         deal = {"spend": {"spores": 12}, "modify": {"item": 501, "how": "make it glow"}}
@@ -765,7 +766,7 @@ class Town(unittest.TestCase):
         self.assertIn("make it glow", shopkeep._get(st, "wren/events", [])[-1])
 
     def test_what_cannot_be_done_is_refused(self):
-        from server import town
+        from server.jar import town
         st = self.own(502, "Lamp", "floor")
         self.assertIn("only 1 spores", town.make_deal(
             "pip", "alex", {"spend": {"spores": 12}, "modify": {"item": 502, "how": "x"}},
@@ -785,7 +786,7 @@ class Town(unittest.TestCase):
         self.assertEqual(shopkeep.txs("alex", st), [])          # nothing taken for any of it
 
     def test_bramble_grows_a_bed_and_evolves_a_critter(self):
-        from server import town
+        from server.jar import town
         st = self.own(503, "Newt", "critter")
         grow = {"spend": {"nectar": 15}, "grow": {"bed": 2}}
         beds = [("berry", 1), ("flower", 1)]
@@ -803,7 +804,7 @@ class Town(unittest.TestCase):
         self.assertIn("next form", self.stub.calls[-1][1])
 
     def test_wren_builds_to_order(self):
-        from server import town
+        from server.jar import town
         st = kv.store()
         self.assertIsNone(town.make_deal("wren", "alex",
                                          {"spend": {"twigs": 25}, "build": {"what": "a two-tier shelf"}},
@@ -819,7 +820,7 @@ class Town(unittest.TestCase):
         self.assertIn("two-tier shelf", self.stub.stages["dm"][-1])   # the DM's material
 
     def test_a_job_that_fails_gives_the_resources_back(self):
-        from server import town
+        from server.jar import town
         st = self.own(504)
         self.stub.batches = [ValueError("no"), ValueError("no"), ValueError("no")]
         town.make_deal("pip", "alex", {"spend": {"spores": 3}, "modify": {"item": 504, "how": "x"}},
@@ -831,12 +832,12 @@ class Town(unittest.TestCase):
 
 
 class Events(unittest.TestCase):
-    """The jar's day, written (server/jarevents.py)."""
+    """The jar's day, written (server/jar/jarevents.py)."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         os.environ["CARDOS_STATE"] = self.dir
-        p = mock.patch("server.jarvm.V2", True)
+        p = mock.patch("server.jar.jarvm.V2", True)
         p.start()
         self.addCleanup(p.stop)
 
@@ -846,7 +847,7 @@ class Events(unittest.TestCase):
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def test_the_dice_are_the_codes_and_the_words_are_claudes(self):
-        from server import jarevents
+        from server.jar import jarevents
         plan = jarevents.roll("20261011", "alex")
         self.assertEqual(plan, jarevents.roll("20261011", "alex"))   # the same all day
         self.assertTrue(3 <= len(plan) <= 6)
@@ -872,20 +873,20 @@ class Events(unittest.TestCase):
         self.assertIn("they marched", shopkeep._get(kv.store(), "tibbs/events", [])[-1])
 
     def test_without_claude_the_titles_are_plain(self):
-        from server import jarevents
+        from server.jar import jarevents
         evs = jarevents.make(None, "sam", "20261011")
         self.assertTrue(all(e["title"] == jarevents.PLAIN[e["kind"]] for e in evs))
-        with mock.patch("server.jarvm.V2", False):
+        with mock.patch("server.jar.jarvm.V2", False):
             self.assertEqual(jarevents.answer(None, "kit", "20261012"), "")
 
 
 class Patches(unittest.TestCase):
-    """Items in a jar learning about a newcomer (server/jarpatch.py)."""
+    """Items in a jar learning about a newcomer (server/jar/jarpatch.py)."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         os.environ["CARDOS_STATE"] = self.dir
-        p = mock.patch("server.jarvm.V2", True)
+        p = mock.patch("server.jar.jarvm.V2", True)
         p.start()
         self.addCleanup(p.stop)
 
@@ -900,7 +901,7 @@ class Patches(unittest.TestCase):
         st.put(jar.NS, "own/%d" % item_id, owner.encode())
 
     def test_a_newcomer_is_noticed_and_the_patch_is_signed(self):
-        from server import jarpatch
+        from server.jar import jarpatch
         st = kv.store()
         self.put(st, 501, "Owl", "shiny")
         self.put(st, 502, "Frog", "wet")
@@ -933,7 +934,7 @@ class Patches(unittest.TestCase):
         self.assertIn("sweet tooth", shopkeep._get(st, "tibbs/events", [])[-1])
 
     def test_the_coin_and_v1(self):
-        from server import jarpatch
+        from server.jar import jarpatch
         st = kv.store()
         self.put(st, 501, "Owl", "shiny")
         self.put(st, 600, "Cake", "food")
@@ -941,7 +942,7 @@ class Patches(unittest.TestCase):
         rng.randrange = lambda n: n - 1                    # the coin: not noticed
         with mock.patch("server.ask.ask_shape", lambda *a, **k: self.fail("asked")):
             self.assertEqual(jarpatch.make(None, "alex", [600], [501, 600], st, rng=rng), 0)
-        with mock.patch("server.jarvm.V2", False):
+        with mock.patch("server.jar.jarvm.V2", False):
             self.assertFalse(jarpatch.start(object(), "alex", [600], [501], st))
 
     def test_injar_is_read(self):
@@ -956,7 +957,7 @@ class Shopkeeper(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         os.environ["CARDOS_STATE"] = self.dir
         self.tibbs = FakeTibbs()
-        p = mock.patch("server.shopkeep._ask", self.tibbs)
+        p = mock.patch("server.jar.shopkeep._ask", self.tibbs)
         p.start()
         self.addCleanup(p.stop)
 
@@ -1003,7 +1004,7 @@ class Shopkeeper(unittest.TestCase):
         self.assertEqual([r["person"] for r in shopkeep.history(3)], ["alex", "sam", "kit"])
 
     def test_a_long_session_is_replaced_by_a_seeded_one(self):
-        with mock.patch("server.shopkeep.ROTATE_AT", 3):
+        with mock.patch("server.jar.shopkeep.ROTATE_AT", 3):
             for i in range(3):
                 shopkeep.turn(None, "turn %d" % i, "alex")
             self.assertEqual(self.tibbs.sessions, [None, "s1", "s1"])
@@ -1024,7 +1025,7 @@ class Shopkeeper(unittest.TestCase):
             return json.dumps({"shop": "Two regulars.", "players": {
                 "alex": "Likes spoons.", "sam": "Alex's sister."}})
 
-        with mock.patch("server.shopkeep._note_ask", note):
+        with mock.patch("server.jar.shopkeep._note_ask", note):
             self.assertTrue(shopkeep.update_notebook(None))
             self.assertFalse(shopkeep.update_notebook(None))         # nothing new since
         self.assertIn("I like spoons", asked[0])
@@ -1033,7 +1034,7 @@ class Shopkeeper(unittest.TestCase):
         self.assertEqual(nb["shop"], "Two regulars.")
         # a bad answer keeps the old notebook
         shopkeep.turn(None, "anything new?", "alex")
-        with mock.patch("server.shopkeep._note_ask", lambda c, p: "not json"):
+        with mock.patch("server.jar.shopkeep._note_ask", lambda c, p: "not json"):
             self.assertFalse(shopkeep.update_notebook(None))
         self.assertEqual(shopkeep.notebook()["players"]["sam"], "Alex's sister.")
         # and a fresh session opens with it
@@ -1041,8 +1042,8 @@ class Shopkeeper(unittest.TestCase):
 
     def test_the_notebook_is_kept_every_so_many_turns(self):
         ran = []
-        with mock.patch("server.shopkeep.NOTE_EVERY", 2), \
-                mock.patch("server.shopkeep.update_notebook", lambda c, s, *w: ran.append(1)):
+        with mock.patch("server.jar.shopkeep.NOTE_EVERY", 2), \
+                mock.patch("server.jar.shopkeep.update_notebook", lambda c, s, *w: ran.append(1)):
             shopkeep.turn(object(), "a", "alex")
             self.assertEqual(ran, [])
             shopkeep.turn(object(), "b", "alex")
@@ -1141,7 +1142,7 @@ class Routes(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.tibbs = FakeTibbs()
-        p = mock.patch("server.shopkeep._ask", self.tibbs)
+        p = mock.patch("server.jar.shopkeep._ask", self.tibbs)
         p.start()
         self.addCleanup(p.stop)
         jar.seed_pool(None, 12)                             # a pool to choose from

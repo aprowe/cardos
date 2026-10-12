@@ -1,4 +1,4 @@
-"""Prompt Lab: the staged item pipeline (server/jarstages.py) on a bench, with
+"""Prompt Lab: the staged item pipeline (server/jar/jarstages.py) on a bench, with
 a behaviour writer for Jarscript 3 (tools/jarsandbox) beside today's.
 
 serve.py is the HTTP side; this is everything else, importable by the tests.
@@ -55,7 +55,8 @@ STATE, REAL_STATE = _scratch_state()                    # before any server impo
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from server import ask, jar, jarlab, jarstages, jarvm, shopkeep, wire   # noqa: E402
+from server import ask, jar, wire
+from server.jar import jarlab, jarstages, jarvm, shopkeep   # noqa: E402
 from server import chat as chatmod                                # noqa: E402
 
 STAGES = ("tibbs", "dm", "fitter", "artist", "behaviour", "behaviour_js3")
@@ -1334,7 +1335,7 @@ def defaults(inputs=None, v2=None):
             stages[s] = {"error": "%s: %s" % (type(e).__name__, e)}
     return {"stages": stages, "dice": dice(), "dry": CFG.dry, "model": CFG.model,
             "v2": CFG.v2, "node": bool(CFG.node), "state": STATE,
-            "variants": {"jarvm": "today's language (server/jarvm.py)",
+            "variants": {"jarvm": "today's language (server/jar/jarvm.py)",
                          "js3": "Jarscript 3 (tools/jarsandbox)"},
             "efforts": ["low", "medium", "high", "xhigh", "max"],
             "drop_if_empty": sorted(DROP_IF_EMPTY), "batch_max": BATCH_MAX}

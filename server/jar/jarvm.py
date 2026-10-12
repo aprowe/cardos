@@ -4,8 +4,8 @@ the simulated day a script must survive before it is delivered.
 The design is docs/superpowers/specs/2026-10-09-jar-factory-design.md
 ("Item behaviour", and "Scripts: the language" at the end). In short:
 
-* The instruction table is apps/jarvm.def, read here at import -- the same
-  lines apps/jarvm.h builds the device's tables from. Nothing is retyped.
+* The instruction table is apps/jar/jarvm.def, read here at import -- the same
+  lines apps/jar/jarvm.h builds the device's tables from. Nothing is retyped.
 * `compile_script(source)` turns the readable language into bytecode, at
   most 256 bytes, or raises ScriptError naming the line and what was
   expected, so a generator can hand the message back and try again.
@@ -23,10 +23,10 @@ The design is docs/superpowers/specs/2026-10-09-jar-factory-design.md
 import os
 import re
 
-DEF_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+DEF_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                         "apps", "jarvm.def")
 
-# ---- the table, from apps/jarvm.def -----------------------------------------
+# ---- the table, from apps/jar/jarvm.def -----------------------------------------
 
 _OP_RE = re.compile(r'^JV_OP\(\s*(\d+)\s*,\s*(\w+)\s*,\s*(\d)\s*,\s*(\d)\s*,\s*(\d)\s*,'
                     r'\s*"([^"]*)"\s*\)\s*$')
@@ -171,7 +171,7 @@ def _code0(s):
 
 
 def check(s):
-    """apps/jarvm.h's jv_check: 0, or IGNORE."""
+    """apps/jar/jarvm.h's jv_check: 0, or IGNORE."""
     s = bytes(s)
     n, c = len(s), _code0(s)
     if c < 0:
@@ -238,7 +238,7 @@ class Io:
 
 
 def run(s, ev, arg, mem, io):
-    """apps/jarvm.h's jv_run, exactly. Returns (result, steps); `mem` (a list
+    """apps/jar/jarvm.h's jv_run, exactly. Returns (result, steps); `mem` (a list
     of 8 ints) is changed in place."""
     s = bytes(s)
     n, c = len(s), _code0(s)
@@ -887,7 +887,7 @@ def compile_script(src, nbub=None, nframes=None, v2=None):
 # ---- the simulated day ------------------------------------------------------
 
 def xorshift(seed):
-    """The jar's random numbers (js_rnd in apps/jarsim.h)."""
+    """The jar's random numbers (js_rnd in apps/jar/jarsim.h)."""
     state = [seed & 0xFFFFFFFF]
 
     def rnd():
@@ -934,7 +934,7 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
 
     `trace`, if given, is called once for every handler that ran, with a
     dict: hour, tick, event, arg, result, steps, actions [(word, arg)] and
-    x afterwards -- Jar Lab's timeline (server/jarlab.py). It changes
+    x afterwards -- Jar Lab's timeline (server/jar/jarlab.py). It changes
     nothing about the day."""
     rep = DayReport()
     if check(script) != 0:

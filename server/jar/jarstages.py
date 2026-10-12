@@ -22,7 +22,8 @@ import re
 import threading
 import time
 
-from . import ask, jar, jarvm, kv, shopkeep
+from .. import ask, jar, kv
+from . import jarvm, shopkeep
 
 CONCEPT_LEN = 700
 LOOK_LEN = 400
@@ -573,7 +574,7 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
     return records
 
 
-# ---- a remake: Pip's alterations, Bramble's evolutions (server/town.py) -----------
+# ---- a remake: Pip's alterations, Bramble's evolutions (server/jar/town.py) -----------
 
 def _activity_of(it):
     """An item's activity, read back from its record (for an item made
@@ -589,7 +590,7 @@ def remake(chat, person, item_id, how, verb, store=None, log=None):
     """The item made again through the fitter, the artist and the behaviour
     writer: its concept (or its name and line) and what was asked for, its
     kind, form, activity and price kept, the artist shown the old picture.
-    (name, sealed record), not stored -- server/town.py hands it over at
+    (name, sealed record), not stored -- server/jar/town.py hands it over at
     its time."""
     st = store or kv.store()
     old = jar.decode(st.get(jar.NS, "rec/%d" % item_id))

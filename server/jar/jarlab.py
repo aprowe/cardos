@@ -1,10 +1,10 @@
 """Jar Lab: Jar Factory's item generation and behaviour, on a bench.
 
-A page for the owner (server/jarlab.html, at /dash/jarlab) and its API: see
+A page for the owner (server/jar/jarlab.html, at /dash/jarlab) and its API: see
 the exact prompt an item is made from, edit it, send it to Claude (or to a
 stub, offline), and see what came back -- checked, compiled, given its
 simulated day, packed into a record and drawn -- without any of it reaching
-a shop. It is the generation path of server/jar.py taken apart, using jar's
+a shop. It is the generation path of server/jar/__init__.py taken apart, using jar's
 own functions (prompt_for, batch_schema, check_item, to_item, encode,
 decode) and jarvm's (compile_script, disassemble, simulate_day), so what the
 lab shows is what the shop would do.
@@ -53,7 +53,8 @@ import threading
 import time
 import traceback
 
-from . import accounts, ask, dash, jar, jarvm, shopkeep
+from .. import accounts, ask, dash, jar
+from . import jarvm, shopkeep
 
 PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jarlab.html")
 BODY_MAX = 512 * 1024
@@ -581,7 +582,7 @@ def delete_experiment(name):
 def _api(fn):
     """fn(h, args) behind the cookie ("dash" in the route) and an admin."""
     def wrapped(h, path, args):
-        from . import app
+        from .. import app
         if not app.dash_configured(h):
             h.json({"error": app.DASH_UNCONFIGURED}, 503)
             return
@@ -613,7 +614,7 @@ def _arg(args, name, default=None):
 
 def get_page(h, path, args):
     """Jar Lab (browser, cookie, the owner)"""
-    from . import app
+    from .. import app
     if not app.dash_configured(h) or not dash.logged_in(h):
         h.redirect("/dash")
         return

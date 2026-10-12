@@ -1,5 +1,5 @@
 """The lane's trades: what Pip, Bramble and Wren do when a deal is struck in
-talk (server/shopkeep.py has the people; server/jar.py the items).
+talk (server/jar/shopkeep.py has the people; server/jar/__init__.py the items).
 
 A device that talks says what it has, lines before the words:
     coins N
@@ -25,7 +25,8 @@ import sys
 import threading
 import time
 
-from . import ask, jar, jarvm, kv, shopkeep, wire
+from .. import ask, jar, kv, wire
+from . import jarvm, shopkeep
 
 RES_MAX = 99
 HOW_LEN = 160
@@ -225,7 +226,7 @@ def _job(chat, who, person, kind, arg, how, verb, st, spent=0):
 
 
 def remake(chat, person, item_id, how, verb, store=None):
-    """The item made again (server/jarstages.py remake): same id, a new
+    """The item made again (server/jar/jarstages.py remake): same id, a new
     signed record, its memory reset. (name, record), not stored."""
     from . import jarstages
     return jarstages.remake(chat, person, item_id, how, verb, store)

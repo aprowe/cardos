@@ -27,7 +27,7 @@ as "since you last spoke...".
 A turn is either talk -- a player says something at the counter, and he
 answers in his own words -- or a stock: a player's shop needs filling, and he
 greets them, picks things for them from the shared pool and says where he
-went searching today; server/jarstages.py's DM invents the new finds from
+went searching today; server/jar/jarstages.py's DM invents the new finds from
 that (2026-10-11: no sparks or random words any more).
 
 Variety is the code's job, not the model's (the owner: "AI tends to over
@@ -42,8 +42,8 @@ import random
 import threading
 import time
 
-from . import ask, kv, wire
-from . import chat as _chat
+from .. import ask, kv, wire
+from .. import chat as _chat
 
 NS = "srv/jar"
 MODEL = os.environ.get("CARDOS_TIBBS_MODEL") or "claude-opus-5-5"
@@ -107,7 +107,7 @@ SYSTEM = CHARACTER + (
 # logs like tibbs." Each is one Claude Code session with the same memory as
 # his (history, notebook, seeded fresh sessions), in CARDOS_STATE/<who>.
 # Their deals are struck in talk, as his are, and carried out by
-# server/town.py.
+# server/jar/town.py.
 
 LANE = ("The lane: Tibbs's junk shop (buys nothing, sells odd finds for coins); Pip "
         "Cogsworth's tinker's bench (alters a thing you own -- new look, new trick -- for "
@@ -449,7 +449,7 @@ def turn(chat, text, user, store=None, effort=TALK_EFFORT, limit=ask.DAILY, kind
 def display(person):
     """How Tibbs knows a player: their display name, else their account name."""
     try:
-        from . import people
+        from .. import people
         for name, disp, _ in people.listing():
             if name == person:
                 return disp or person
@@ -666,7 +666,7 @@ def stock_schema(n_pick, n_new):
 def stock_prompt(person, pool, n_pick, n_new, asked, friends=(), commission=None, bribe=0,
                  searches=()):
     """His turn for a stock: his picks and greeting, and where he went
-    searching today -- the one thing the DM (server/jarstages.py) is given to
+    searching today -- the one thing the DM (server/jar/jarstages.py) is given to
     invent from.
     No sparks and no chance events: the place is his, and he is shown his
     last few so he goes somewhere new."""

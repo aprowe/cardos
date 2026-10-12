@@ -22,7 +22,8 @@ import random
 import sys
 import threading
 
-from . import ask, jarvm, kv, shopkeep, wire
+from .. import ask, kv, wire
+from . import jarvm, shopkeep
 
 NS = "srv/jar"
 EVENTS_A_DAY = (3, 6)

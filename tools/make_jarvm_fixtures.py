@@ -3,9 +3,9 @@
 
 Each fixture is a script (test/fixtures/jarvm_NAME.bin, the bytecode) and a
 run (test/fixtures/jarvm_NAME.txt): the world it runs in, a list of events,
-and -- after a line "--" -- the trace the Python machine (server/jarvm.py)
+and -- after a line "--" -- the trace the Python machine (server/jar/jarvm.py)
 produced for them. test/test_jarvm.c replays every fixture named in
-test/fixtures/jarvm_list.txt through the C machine (apps/jarvm.h) and needs
+test/fixtures/jarvm_list.txt through the C machine (apps/jar/jarvm.h) and needs
 the same trace, byte for byte.
 
 The .txt, before "--":
@@ -19,7 +19,7 @@ After it, the trace:
     ret R S         the run's result and its step count
     mem A B ... H   the memory after that run
 
-Run it after changing apps/jarvm.def, the machine, or the compiler:
+Run it after changing apps/jar/jarvm.def, the machine, or the compiler:
     python tools/make_jarvm_fixtures.py
 """
 import os
@@ -28,7 +28,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from server import jarvm as V  # noqa: E402
+from server.jar import jarvm as V  # noqa: E402
 
 OUT = os.path.join(ROOT, "test", "fixtures")
 

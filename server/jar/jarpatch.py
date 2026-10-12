@@ -22,7 +22,7 @@ The signature (server/sign.py's key) covers PATCH_MAGIC, ITEM and NEW
 patch is the server's before it runs it. Each person's last PATCH_KEPT are
 kept; a newer patch for an item replaces the older on the device.
 
-Only with language v2 (server/jarvm.py V2): a patch is v2 bytecode.
+Only with language v2 (server/jar/jarvm.py V2): a patch is v2 bytecode.
 """
 import base64
 import json
@@ -30,7 +30,8 @@ import random
 import sys
 import threading
 
-from . import ask, jarvm, kv, shopkeep, sign
+from .. import ask, kv, sign
+from . import jarvm, shopkeep
 
 NS = "srv/jar"
 PATCH_MAGIC = b"JARPATCH1"
@@ -143,7 +144,7 @@ def make(chat, person, new_ids, injar, store=None, rng=None, decode=None, signer
     st = store or kv.store()
     rng = rng or random.Random()
     if decode is None:
-        from .jar import decode
+        from . import decode
     made = 0
     for new_id in new_ids:
         if rng.randrange(100) >= PATCH_CHANCE:

@@ -17,7 +17,7 @@ Asking Claude goes through ask.ask_shape, signing through sign.sign, the
 inbox is the store's own queues (jar.gifts, jar.thanks) read with /q/peek
 and /q/ack, and names and last-seen come from server/people.py.
 
-The item record is apps/jaritem.h's, byte for byte: encode() and decode()
+The item record is apps/jar/jaritem.h's, byte for byte: encode() and decode()
 below mirror jitem_encode and jitem_decode, and the enums (kinds,
 movements, events, actions, ...) are read out of that header rather than
 typed twice. A signed record is the unsigned one with the signature put in
@@ -55,11 +55,12 @@ import time
 import urllib.request
 
 from . import shopkeep
-from . import accounts, ask, kv, people, sign, wire, jarvm, jarpatch, jarevents
-from .kv import kv_route, KVError, NotAllowed, NotFound
-from .routes import arg
+from .. import accounts, ask, kv, people, sign, wire
+from . import jarvm, jarpatch, jarevents
+from ..kv import kv_route, KVError, NotAllowed, NotFound
+from ..routes import arg
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HEADER = os.path.join(ROOT, "apps", "jaritem.h")
 
 NS = "srv/jar"
@@ -126,7 +127,7 @@ CODE_LEN = 6
 GIFTS_Q = "jar.gifts"
 THANKS_Q = "jar.thanks"
 
-# ---- the record (apps/jaritem.h) -----------------------------------------------------
+# ---- the record (apps/jar/jaritem.h) -----------------------------------------------------
 
 VERSION = 1
 HDR = 208
@@ -168,7 +169,7 @@ _enums = None
 
 def enums(path=HEADER):
     """{"kinds": {"floor": 0, ...}, "moves", "speeds", "zones", "events",
-    "near", "actions", "particles"}, read from apps/jaritem.h's enums so
+    "near", "actions", "particles"}, read from apps/jar/jaritem.h's enums so
     the server and the device cannot disagree about a number."""
     global _enums
     if _enums is not None and path == HEADER:
@@ -614,7 +615,7 @@ def sky_for(tz, now=None):
 
 
 def sky_text(s):
-    """The device's lines: "sky WORD TAG" (TAG from apps/jarvm.def's weather
+    """The device's lines: "sky WORD TAG" (TAG from apps/jar/jarvm.def's weather
     names, 0 unknown), "rise MIN", "set MIN", "temp C", "cloud PCT"."""
     if not s:
         return "sky none 0\n"
@@ -780,7 +781,7 @@ def item_schema(form=None, motion=False):
             "frames": {"type": "array", "minItems": 1, "maxItems": MAX_FRAMES, "items": {
                 "type": "array", "minItems": 16, "maxItems": 16, "items": {
                     "type": "string", "pattern": "^[0-7]{16}$"}}},
-            # Phase 2 (step 7): an optional behaviour script in server/jarvm.py's
+            # Phase 2 (step 7): an optional behaviour script in server/jar/jarvm.py's
             # language, compiled and given a simulated day before it ships.
             "script": {"type": "string", "maxLength": SCRIPT_SRC_MAX},
         },
@@ -832,7 +833,7 @@ GAME = (
     "the jars out. Its shop sells cute collectible things the player places in the jar.")
 
 
-# ---- what an item is (language v2: server/jarvm.py V2) ----------------------
+# ---- what an item is (language v2: server/jar/jarvm.py V2) ----------------------
 #
 # The code rolls an item's form, as it rolls its kind and its price: the
 # model latches on to whatever it was last asked for (the owner: "AI tends to
@@ -869,13 +870,13 @@ def roll_form(kind, rng):
     return None
 
 
-# ---- how much a thing moves, and how (the staged pipeline: server/jarstages.py) ------
+# ---- how much a thing moves, and how (the staged pipeline: server/jar/jarstages.py) ------
 #
 # Nearly every item came out a critter walking its zone: one call did
 # everything and movement was required. Now the code rolls how much a thing
 # moves (most keep still or wait to be poked), and the fitter picks how from
 # three parts, inside the activity's row of MOTION_RULES. The record keeps
-# the parts in bytes 215-217 (apps/jaritem.h), and byte 72 the nearest old
+# the parts in bytes 215-217 (apps/jar/jaritem.h), and byte 72 the nearest old
 # movement for a Jar that knows only 208 bytes.
 ACTIVITIES = (("still", 35), ("reacts", 30), ("ambles", 25), ("restless", 10))
 TRAVELS = ("none", "crawl", "hop", "slide", "float", "fly")        # byte 215
@@ -921,7 +922,7 @@ def move_fallback(travel, idle):
 
 
 def prompt_for(brief, owned=(), avoid=(), kind=None, tier=None, form=None):
-    """The prompt for one item, from the shopkeeper's brief (server/shopkeep.py)."""
+    """The prompt for one item, from the shopkeeper's brief (server/jar/shopkeep.py)."""
     e = enums()
     lines = [
         GAME,
@@ -1166,7 +1167,7 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
              on_item=None, want=None, kind_at=0, search="", rng=None, force_form=None):
     """New items for `person` (None: for the pool): [signed records], made in
     stages from `search` -- where Tibbs went looking, or a job's description
-    (server/jarstages.py: a DM, a fitter, an artist and a behaviour writer).
+    (server/jar/jarstages.py: a DM, a fitter, an artist and a behaviour writer).
     Each record is sealed, kept (rec/ID) and handed to on_item(k, record) as
     it passes. Fewer than asked for is fewer, not a failure; raises when
     nothing came of it."""
@@ -1458,7 +1459,7 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
                 shopkeep.note("%s bought %s." % (who, _item_note(st.get(NS, "rec/%d" % i))), st)
         if req.get("jar"):
             shopkeep.note("In %s's jar now: %s." % (who, ", ".join(req["jar"])), st)
-        # What is in the jar may learn about what was just bought (server/jarpatch.py).
+        # What is in the jar may learn about what was just bought (server/jar/jarpatch.py).
         jarpatch.start(chat, person, sorted(bought), req.get("injar", []), st)
         held = [i for i in req.get("held", []) if i in prev and i not in bought][:MAX_HELD]
         passed = [i for i in prev if i not in bought and i not in held]
@@ -2113,7 +2114,7 @@ def main(argv=None):
     """python -m server.jar seed N [--claude-cli PATH]: N new items straight
     into the pool (CARDOS_STATE is the store, as for the server)."""
     import argparse
-    from .chat import ChatService
+    from ..chat import ChatService
     ap = argparse.ArgumentParser(prog="python -m server.jar")
     ap.add_argument("what", choices=["seed", "pool"])
     ap.add_argument("n", type=int, nargs="?", default=20)
@@ -2127,7 +2128,3 @@ def main(argv=None):
         return
     chat = ChatService(claude=args.claude_cli) if args.claude_cli else ChatService()
     seed_pool(chat, args.n, log=lambda s: print(s, flush=True))
-
-
-if __name__ == "__main__":
-    main()
