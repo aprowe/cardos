@@ -37,3 +37,7 @@ managed_components/
 
 # Claude Code agent worktrees: temporary, never part of the tree
 .claude/worktrees/
+
+# The prompt lab's saved experiments (tools/promptlab/serve.py): local, not source.
+tools/promptlab/experiments/
+.playwright-mcp/
