@@ -285,6 +285,8 @@ def release_due(person, store=None, now=None):
             return 0
         _set_held(person, [j for j in lst if j not in due], st)
     for j in due:
+        if j["op"] == "remake" and st.get(jar.NS, "own/%d" % j["arg"]) != person.encode():
+            continue                                    # sold or trashed meanwhile: dropped
         if j["rec"]:
             st.put(jar.NS, "rec/%d" % j["arg"], base64.b64decode(j["rec"]))
         shopkeep.tx_add(person, j["op"], j["arg"], st)

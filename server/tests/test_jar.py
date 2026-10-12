@@ -661,6 +661,39 @@ class VersionTwo(unittest.TestCase):
         self.assertEqual(jar.traits_tags(["Food", "food"]), "food")
 
 
+class Release(unittest.TestCase):
+    """Things let go of on a device: sold back to the pool, or trashed for good."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        os.environ["CARDOS_STATE"] = self.dir
+
+    def tearDown(self):
+        kv.close_all()
+        os.environ.pop("CARDOS_STATE", None)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def own(self, i, who=b"alex"):
+        st = kv.store()
+        st.put(jar.NS, "rec/%d" % i, jar.encode(jar.to_item(raw_item("T%d" % i), i, 0, "")))
+        st.put(jar.NS, "own/%d" % i, who)
+        return st
+
+    def test_sold_goes_back_to_the_pool_and_trashed_is_gone(self):
+        st = self.own(501)
+        self.own(502)
+        self.own(503, b"sam")                              # not alex's
+        self.assertEqual(jar.release("alex", [501, 503], [502, 503], st), (1, 1))
+        self.assertIn(501, jar.pool_ids(st))               # someone else may find it
+        self.assertIsNone(st.get(jar.NS, "own/501"))
+        self.assertIsNone(st.get(jar.NS, "rec/502"))       # gone for good
+        self.assertEqual(st.get(jar.NS, "own/502"), jar.TRASHED)
+        self.assertNotIn(502, jar.pool_ids(st))
+        self.assertEqual(st.get(jar.NS, "own/503"), b"sam")
+        jar.to_pool([502], "alex", st)                     # nothing brings it back
+        self.assertNotIn(502, jar.pool_ids(st))
+
+
 class Town(unittest.TestCase):
     """Pip, Bramble and Wren: their deals and their jobs (server/town.py)."""
 

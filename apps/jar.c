@@ -70,7 +70,7 @@
 #define C_PINK   CAPP_RGB(0xff, 0x8f, 0xab)
 
 enum { V_JAR = 0, V_DECOR };
-enum { Q_IDLE = 0, Q_LEN, Q_PEEK, Q_THANKS, Q_ACK, Q_SKY, Q_PATCH, Q_EVENTS, Q_TX, Q_ITEM };   /* the post, the sky, ... */
+enum { Q_IDLE = 0, Q_LEN, Q_PEEK, Q_THANKS, Q_ACK, Q_SKY, Q_PATCH, Q_EVENTS, Q_TX, Q_ITEM, Q_REL };   /* the post, the sky, ... */
 #define SKY_EVERY_MS (30u * 60u * 1000u) /* how often to ask after the real sky */
 
 static const CardApi *api;
@@ -1280,6 +1280,12 @@ static void q_start(int what, const char *method, const char *path) {
   if (api->http_start(method, u, 0, 0, 0, 15000) == 0) G.q = what;
 }
 
+static void q_start_body(int what, const char *path, const char *body) {
+  char u[160];
+  api->fmt(u, sizeof u, "%s%s", api->proxy(), path);
+  if (api->http_start("POST", u, body, "text/plain", 0, 15000) == 0) G.q = what;
+}
+
 /* A parcel from `from` floats down to the dock; the critters look up. */
 static void parcel_arrives(const char *from) {
   int k;
@@ -1367,7 +1373,7 @@ static void post_reply(int n) {
     tx_ask();
     return;
   }
-  if (n < 0 && (was == Q_TX || was == Q_ITEM)) {
+  if (n < 0 && (was == Q_TX || was == Q_ITEM || was == Q_REL)) {
     q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");
     return;
   }
@@ -1400,6 +1406,14 @@ static void post_reply(int n) {
   case Q_EVENTS:
     lv_events_reply(SCR.text);
     tx_ask();
+    return;
+  case Q_REL:
+    if (str_starts(SCR.text, "ok")) {               /* told: the queues go */
+      J.nsell = J.ntrash = 0;
+      save();
+    }
+    if (J.nsell || J.ntrash) q_start(Q_LEN, "GET", "/q/len?q=jar.gifts");   /* again next poll */
+    else tx_ask();
     return;
   case Q_TX:
     if (tx_lines(SCR.text)) {                       /* one brings an item: fetch it first */
@@ -1499,6 +1513,16 @@ static int tx_item(int n) {
 
 static void tx_ask(void) {
   char path[40];
+  if (J.nsell || J.ntrash) {            /* what was sold or trashed, first */
+    static char body[JS_RELQ * 2 * 18];
+    int i, n = 0;
+    for (i = 0; i < J.nsell; i++)
+      n += api->fmt(body + n, sizeof body - (size_t)n, "sell %u\n", (unsigned)J.sellq[i]);
+    for (i = 0; i < J.ntrash; i++)
+      n += api->fmt(body + n, sizeof body - (size_t)n, "trash %u\n", (unsigned)J.trashq[i]);
+    q_start_body(Q_REL, "/jar/release", body);
+    return;
+  }
   api->fmt(path, sizeof path, "/jar/tx?after=%u", (unsigned)J.txseen);
   q_start(Q_TX, "GET", path);
 }

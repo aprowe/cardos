@@ -504,6 +504,8 @@ void test_jarshop_paying_tibbs(void);
 void test_jarshop_a_paid_ask_waits_for_a_busy_slot(void);
 void test_jarshop_tibbs_and_no_seed_packets(void);
 void test_jarshop_g_buys_and_goes_to_send_a_gift(void);
+void test_jarshop_sell_and_trash(void);
+void test_jarshop_tibbs_says_it_all(void);
 void test_jarsim_every_coin_is_a_jar_that_left(void);
 void test_jarsim_starts_at_about_three_a_minute(void);
 void test_jarsim_time_away_makes_nothing(void);
@@ -1604,6 +1606,8 @@ int main(void) {
   RUN(test_jarshop_a_paid_ask_waits_for_a_busy_slot);
   RUN(test_jarshop_tibbs_and_no_seed_packets);
   RUN(test_jarshop_g_buys_and_goes_to_send_a_gift);
+  RUN(test_jarshop_sell_and_trash);
+  RUN(test_jarshop_tibbs_says_it_all);
   printf("-- jarsim --\n");
   RUN(test_jarsim_every_coin_is_a_jar_that_left);
   RUN(test_jarsim_starts_at_about_three_a_minute);

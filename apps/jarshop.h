@@ -53,8 +53,12 @@ typedef struct {
   int view, back, pick, slot, sel, top, ntile;
   int up_sel, bed, plant, asking;
   /* sure? before anything is paid (the owner, 2026-10-11): 1 buy the stock
-   * item, 2 buy it and gift it, 3 the upgrade */
+   * item, 2 buy it and gift it, 3 the upgrade, 4 sell a thing of yours back,
+   * 5 trash it for good */
   int buying;
+  int saying;                    /* Tibbs's whole line, over the shop, until a key */
+  uint32_t letting;              /* the thing being sold or trashed */
+  int let_value;
   Tile tile[8];
   int k, nitems, polls, tried, again;
   /* The server makes a stock one item at a time and says "more" until it is
@@ -82,6 +86,15 @@ static ShopMem SHOP_MEM;
 #define S     SHOP_MEM.s
 #define NS    SHOP_MEM.ns
 #define SAY   SHOP_MEM.say
+#define JST_SAY_SEEN CAPP_VAR "/jar/say.seen"   /* the line last shown whole */
+
+static uint32_t say_hash(const char *s) {        /* FNV-1a */
+  uint32_t h = 2166136261u;
+  while (*s) h = (h ^ (uint8_t)*s++) * 16777619u;
+  return h;
+}
+
+static void say_fresh(void);
 #define G     SHOP_MEM.g
 
 #define RESTOCK_COST 40        /* r: a new stock now */
@@ -372,6 +385,7 @@ static int day_reply(void) {
       SAY[i] = 0;
       jst_clean(SAY);
       jst_put(api, JST_SAY, SAY, i);
+      if (G.view == V_STOCK) say_fresh();          /* a new line, while the shop is open */
     } else if (str_starts(p, "more")) G.more = 1;
     else if (str_starts(p, "deal")) G.deal = 1;     /* agreed at the counter: a fresh stock */
   }
@@ -535,7 +549,8 @@ static void paint_grid(void) {
     box(4, BAR + 76, 118, 31, C_PANEL);
     if (SAY[0]) {                                         /* Tibbs, as far as it fits: t for all */
       text(7, BAR + 78, "Tibbs:", C_GOLD, C_PANEL);
-      wrapped(7, BAR + 87, SAY, 19, 2, C_DIM, C_PANEL);
+      wrapped(7, BAR + 87, SAY, 19, 1, C_DIM, C_PANEL);
+      text(7, BAR + 97, slen(SAY) > 19 ? "l: read it all" : "", C_TRAIT, C_PANEL);
     } else {
       text(7, BAR + 78, S.date[0] ? "Tibbs's shop" : "The hand-made stock", C_TRAIT, C_PANEL);
       wrapped(7, BAR + 87, "t to talk to him", 19, 2, C_DIM, C_PANEL);
@@ -661,9 +676,10 @@ static void shop_paint(void *st, CRect c) {
   static const char *const H_STOCK[] = { "Ent", "buy", "Spc", "hold", "T", "Tibbs", "Tab", "stuff", 0 };
   static const char *const H_ASK[] = { "Ent", "go on", "Esc", "never mind", 0 };
   static const char *const H_SURE[] = { "y", "pay him", "n", "not now", 0 };
-  static const char *const H_STUFF[] = { "Ent", "open", "G", "gift", "Tab", "shop", "Esc", "jar", 0 };
+  static const char *const H_STUFF[] = { "Ent", "open", "G", "gift", "S", "sell", "D", "trash", 0 };
   static const char *const H_PICK[] = { "Ent", "choose", "Esc", "back", 0 };
-  static const char *const H_CARD[] = { "Ent", "in jar", "G", "gift", "Esc", "back", 0 };
+  static const char *const H_CARD[] = { "Ent", "in jar", "G", "gift", "S", "sell", "D", "trash", 0 };
+  static const char *const H_CARD2[] = { "Ent", "in jar", "G", "gift", "Esc", "back", 0 };
   static const char *const H_UP[] = { "^v", "pick", "Ent", "build", "Esc", "jar", 0 };
   static const char *const H_GARDEN[] = { "<>", "bed", "Ent", "plant", "T", "town", "Esc", "jar", 0 };
   static const char *const H_PLANT[] = { "^v", "pick", "Ent", "plant", "Esc", "back", 0 };
@@ -684,10 +700,18 @@ static void shop_paint(void *st, CRect c) {
     break;
   case V_STUFF:  paint_grid(); h = G.pick ? H_PICK : H_STUFF;
                  where = G.pick == P_DECOR ? "Add to the jar" : "My Stuff"; break;
-  case V_CARD:   paint_card(0, 0); h = H_CARD; where = "Item"; break;
+  case V_CARD:   paint_card(0, 0); h = G.back == V_STUFF ? H_CARD : H_CARD2; where = "Item"; break;
   case V_UP:     paint_up(); h = H_UP; where = "Upgrades"; break;
   case V_GARDEN: paint_garden(); h = H_GARDEN; where = "Garden"; break;
   case V_PLANT:  paint_plant(); h = H_PLANT; where = "Garden"; break;
+  }
+  if (G.saying && SAY[0]) {                         /* his line, whole */
+    static const char *const H_SAID[] = { "any key", "back to the shop", 0 };
+    box(6, BAR + 6, SW - 12, BODY - 12, C_BG);
+    outline(6, BAR + 6, SW - 12, BODY - 12, C_GOLD);
+    text(12, BAR + 11, "Tibbs says:", C_GOLD, C_BG);
+    wrapped(12, BAR + 23, SAY, 36, 7, C_TEXT, C_BG);
+    h = H_SAID;
   }
   if (G.buying) {
     static const char *const H_BUY[] = { "y", "yes", "n", "no", 0 };
@@ -696,6 +720,10 @@ static void shop_paint(void *st, CRect c) {
     if (G.buying == 3)
       api->fmt(q, sizeof q, "%s for %d coins? Ready in %s.", UP_NAME[G.up_sel],
                js_up_cost(&J, G.up_sel), jtx_dur(js_build_s(&J, G.up_sel)));
+    else if (G.buying == 4)
+      api->fmt(q, sizeof q, "Sell %s back to Tibbs for %d coins?", U.name, G.let_value);
+    else if (G.buying == 5)
+      api->fmt(q, sizeof q, "Trash %s? It is gone for good.", U.name);
     else api->fmt(q, sizeof q, "Buy %s for %u coins%s?", U.name, (unsigned)S.price[G.sel],
                   G.buying == 2 ? ", as a gift" : "");
     box(14, BAR + 28, SW - 28, 40, C_BG);              /* the question: nothing is paid before y */
@@ -764,7 +792,10 @@ static void gift(uint32_t id) {
   if (ui_run("Jar Post", a) != 0) say("No Jar Post app");
 }
 
+static int ask_let_go(int k);
+
 static int key_grid(int k) {
+  if (stuff_mode() && ask_let_go(k)) return 1;
   switch (k) {
   case CAPP_KEY_LEFT:  grid_move(-1); return 1;
   case CAPP_KEY_RIGHT: grid_move(1); return 1;
@@ -804,8 +835,44 @@ static int key_grid(int k) {
   return 1;
 }
 
+/* s / d on one of your things: sell it back for a quarter, or trash it. */
+static int ask_let_go(int k) {
+  if (!U.card.ok || G.pick) return 0;
+  if (k == 's' || k == 'S') {
+    if (jst_item_read(api, U.card.id, &IO) < 0) return 1;
+    G.let_value = jst_sell_value(&IO.it);
+    if (!G.let_value) { say("Nobody will pay for that one"); return 1; }
+    G.letting = U.card.id;
+    G.buying = 4;
+    return 1;
+  }
+  if (k == 'd' || k == 'D' || k == 0x7F) {
+    G.letting = U.card.id;
+    G.buying = 5;
+    return 1;
+  }
+  return 0;
+}
+
+/* Sold or trashed (confirmed): out of everything here, coins for a sale,
+ * and the server told with the next poll. */
+static void do_let_go(int sell) {
+  char m[48];
+  jst_let_go(api, &J, G.letting, sell, TEXT, sizeof TEXT);
+  if (sell) {
+    J.coins += (uint32_t)G.let_value;
+    api->fmt(m, sizeof m, "Sold back for %d coins", G.let_value);
+  } else api->fmt(m, sizeof m, "Gone for good");
+  save();
+  say(m);
+  if (G.view == V_CARD) G.view = G.back;
+  if (G.sel >= J.nowned && G.sel) G.sel--;
+  load_page();
+}
+
 static int key_card(int k) {
   if (card_key(k)) return 1;
+  if (G.back == V_STUFF && ask_let_go(k)) return 1;
   if (k == 'g' || k == 'G') { gift(U.card.id); return 1; }
   if (k == CAPP_KEY_ESC) {
     G.view = G.back;
@@ -889,12 +956,18 @@ static int shop_key(void *st, uint8_t k) {
   (void)st;
   U.dirty = 1;
   if (U.msg[0]) U.msg[0] = 0;
+  if (G.saying) { G.saying = 0; return 1; }       /* read: any key closes it */
+  if ((k == 'l' || k == 'L') && G.view == V_STOCK && SAY[0] && !G.pay && !G.buying) {
+    G.saying = 1;
+    return 1;
+  }
   if (G.buying) {
     int a = confirm_key(api, k), what = G.buying;
     if (a == CONFIRM_WAIT) return 1;
     G.buying = 0;
     if (a != CONFIRM_YES) return 1;
     if (what == 3) { do_upgrade(); return 1; }
+    if (what == 4 || what == 5) { do_let_go(what == 4); return 1; }
     {
       uint32_t id = buy();
       if (id && what == 2) gift(id);
@@ -985,6 +1058,16 @@ static int shop_tick(void *st, uint32_t now) {
 /* The shop on SCREEN: shop (the default), stuff, decor, up, garden ("shelf",
  * which is gone, is My Stuff). A screen of Jar Factory (apps/jar.c), which
  * routes its paint, keys and ticks here while it is on. */
+/* Tibbs's line, shown whole over the shop if it is one not shown before. */
+static void say_fresh(void) {
+  char seen[12], now[12];
+  if (!SAY[0]) return;
+  api->fmt(now, sizeof now, "%u", (unsigned)say_hash(SAY));
+  if (jst_get(api, JST_SAY_SEEN, seen, sizeof seen) > 0 && str_same(seen, now)) return;
+  G.saying = 1;
+  jst_put(api, JST_SAY_SEEN, now, slen(now));
+}
+
 static void shop_open(const char *s) {
   if (!s) s = "";
   api->mem_set(&G, 0, sizeof G);
@@ -992,6 +1075,7 @@ static void shop_open(const char *s) {
   if (ui_load()) return;
   if (jst_get(api, JST_SAY, SAY, sizeof SAY) < 0) SAY[0] = 0;
   jst_clean(SAY);
+  if (!s[0] || str_same(s, "shop")) say_fresh();  /* a line not read yet: whole, once */
   if (J.build_k && !js_settle_build(&J, U.now)) save();   /* an upgrade finished while away */
   if (str_same(s, "stuff")) go_stuff(P_BROWSE);
   else if (str_same(s, "decor")) go_stuff(P_DECOR);

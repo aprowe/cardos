@@ -298,6 +298,11 @@ typedef struct {
   uint32_t gseen;                      /* the last gift the jar announced */
   uint32_t txseen;                     /* the last of Tibbs's deals carried out (tx) */
   uint32_t patchseen;                  /* the last patch fetched (server/jarpatch.py) */
+  /* Sold back (to the pool) and trashed (gone for good), not yet told to the
+   * server: sent with the next poll (POST /jar/release), then cleared. */
+#define JS_RELQ 8
+  uint32_t sellq[JS_RELQ], trashq[JS_RELQ];
+  uint8_t  nsell, ntrash;
   uint16_t res[JRS_KINDS];             /* the stores: spores, nectar, twigs */
   uint8_t  njars, jar_at;              /* extra jars bought; the one on screen (0 the factory) */
   uint32_t away_acc;                   /* jar-ms of pay owed while away, toward the next jar */
@@ -2342,6 +2347,16 @@ static JS_OPT int js_save(const Jar *j, char *buf, int cap) {
   JS_KV("gseen", j->gseen);
   if (j->txseen) JS_KV("txseen", j->txseen);
   if (j->patchseen) JS_KV("patchseen", j->patchseen);
+  if (j->nsell) {
+    n = js_put(buf, n, cap, "sellq");
+    for (i = 0; i < j->nsell; i++) n = js_put3(buf, n, cap, " ", j->sellq[i], "");
+    n = js_put(buf, n, cap, "\n");
+  }
+  if (j->ntrash) {
+    n = js_put(buf, n, cap, "trashq");
+    for (i = 0; i < j->ntrash; i++) n = js_put3(buf, n, cap, " ", j->trashq[i], "");
+    n = js_put(buf, n, cap, "\n");
+  }
   if (j->njars) {
     n = js_put3(buf, n, cap, "jars ", j->njars, " ");
     n = js_put3(buf, n, cap, "", j->jar_at, "\n");
@@ -2466,6 +2481,12 @@ static JS_OPT int js_load(Jar *j, const char *t) {
     else if (js_word_is(w, "gseen")) j->gseen = js_num(&p);
     else if (js_word_is(w, "txseen")) j->txseen = js_num(&p);
     else if (js_word_is(w, "patchseen")) j->patchseen = js_num(&p);
+    else if (js_word_is(w, "sellq")) {
+      while (js_more(p)) { uint32_t v = js_num(&p); if (j->nsell < JS_RELQ) j->sellq[j->nsell++] = v; }
+    }
+    else if (js_word_is(w, "trashq")) {
+      while (js_more(p)) { uint32_t v = js_num(&p); if (j->ntrash < JS_RELQ) j->trashq[j->ntrash++] = v; }
+    }
     else if (js_word_is(w, "jars")) {
       j->njars = (uint8_t)js_clamp((int)js_num(&p), 0, JS_MAX_JARS);
       j->jar_at = (uint8_t)js_clamp((int)js_num(&p), 0, j->njars);

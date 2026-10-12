@@ -712,3 +712,80 @@ void test_jarshop_g_buys_and_goes_to_send_a_gift(void) {
   CHECK(strcmp(RAN, "Jar Post") == 0);
   CHECK(strcmp(RAN_ARGS, "gift 9000") == 0);
 }
+
+
+/* Letting go (2026-10-11): s sells a thing back for a quarter of its price,
+ * d trashes it for good; both ask first; either takes it out of everything
+ * on the card -- My Stuff, its file, the factory's places, an extra jar's
+ * file -- and queues it for the server. A built-in sells for nothing. */
+void test_jarshop_sell_and_trash(void) {
+  static JItem it;
+  static uint8_t raw[JI_MAX];
+  int n, i;
+  card(100);
+  launch("stuff");
+  /* two of the server's things: 7001 (priced 200) and 7002, 7002 in an extra jar */
+  for (i = 0; i < 2; i++) {
+    jf_item(&it, 7001 + (uint32_t)i, i ? "Tin Kite" : "Moth Lamp", "");
+    it.price5 = 40;
+    n = jf_signed(&it, raw, 1);
+    jst_put(&A, i ? "/var/jar/items/7002.itm" : "/var/jar/items/7001.itm", raw, n);
+    js_own(&J, it.id);
+  }
+  J.njars = 1;
+  J.want[J.nwant].id = 7001; J.want[J.nwant].x = 90; J.nwant++;     /* 7001 in the factory */
+  fakefs_put("/var/jar/jar2.txt", "jarx 1\nplace 5 30 0\nplace 7002 40 0\n");
+  save();
+  launch("stuff");
+  for (i = 0; i < 8 && U.card.id != 7001; i++) key(CAPP_KEY_RIGHT);
+  CHECK_EQ(U.card.id, 7001);
+  key('s');                                          /* sure? */
+  CHECK_EQ(G.buying, 4);
+  CHECK_EQ(G.let_value, 50);
+  shot("s20_sell");
+  key('n');
+  CHECK(js_owns(&J, 7001));
+  key('s');
+  key('y');
+  CHECK(!js_owns(&J, 7001));
+  CHECK_EQ((int)J.coins, 150);                       /* a quarter of 200 */
+  CHECK(!fakefs_exists("/var/jar/items/7001.itm"));
+  CHECK(strstr(saved(), "place 7001") == 0);         /* out of the factory */
+  CHECK(strstr(saved(), "sellq 7001") != 0);         /* told with the next poll */
+  /* trash the one in jar 2 */
+  launch("stuff");
+  for (i = 0; i < 8 && U.card.id != 7002; i++) key(CAPP_KEY_RIGHT);
+  CHECK_EQ(U.card.id, 7002);
+  key('d');
+  CHECK_EQ(G.buying, 5);
+  shot("s21_trash");
+  key('y');
+  CHECK(!js_owns(&J, 7002));
+  CHECK(strstr(fakefs_get("/var/jar/jar2.txt"), "7002") == 0);
+  CHECK(strstr(fakefs_get("/var/jar/jar2.txt"), "place 5 30 0") != 0);   /* the rest stays */
+  CHECK(strstr(saved(), "trashq 7002") != 0);
+  /* a built-in: nobody pays for it */
+  launch("stuff");
+  CHECK(U.card.id < 100);
+  key('s');
+  CHECK_EQ(G.buying, 0);
+  CHECK(strstr(U.msg, "Nobody") != 0);
+}
+
+/* Tibbs's line, whole: shown over the shop once when it is new, l again. */
+void test_jarshop_tibbs_says_it_all(void) {
+  const char *line = "Went to the rail yard at dawn and came back with a crate of brass "
+                     "birds, a lamp that hums, and a story about a goat I will tell you later.";
+  card(100);
+  fakefs_put("/var/jar/say.txt", line);
+  launch("shop");
+  CHECK(G.saying);
+  shot("s22_tibbs_says");
+  key('x');                                          /* any key */
+  CHECK(!G.saying);
+  CHECK_EQ(G.view, V_STOCK);
+  launch("shop");                                    /* seen: not again */
+  CHECK(!G.saying);
+  key('l');
+  CHECK(G.saying);
+}

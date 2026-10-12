@@ -1831,6 +1831,52 @@ def post_deal(h, args):
     h.text("ok\n")
 
 
+TRASHED = b"~trash"           # own/ID of a thing trashed: nobody's, and never the pool's
+
+
+def release(person, sold=(), trashed=(), store=None):
+    """Things a person let go of on their device: sold back (into the pool,
+    for someone else to find) or trashed (gone for good: the record and its
+    concept deleted, own/ID a tombstone, out of the pool). Only their own.
+    (sold, trashed) counts done."""
+    st = store or kv.store()
+    me = person.encode()
+    with _day_lock:
+        mine = [i for i in sold if st.get(NS, "own/%d" % i) == me]
+        to_pool(mine, person, st)
+        gone = 0
+        pool = set(pool_ids(st))
+        for i in trashed:
+            if st.get(NS, "own/%d" % i) != me:
+                continue
+            st.put(NS, "own/%d" % i, TRASHED)
+            st.delete(NS, "rec/%d" % i)
+            st.delete(NS, "concept/%d" % i)
+            pool.discard(i)
+            gone += 1
+        _set_pool(st, pool)
+    if mine or gone:
+        sys.stderr.write("jar: %s: sold back %s, trashed %d\n" % (person, mine, gone))
+    return len(mine), gone
+
+
+@kv_route
+def post_release(h, args):
+    """what the device let go of: "sell ID" and "trash ID" lines -> "ok S T"
+    (how many of each were theirs and done)"""
+    try:
+        body = h.body(1024).decode("utf-8", "replace")
+    except ValueError as e:
+        raise kv.TooBig(str(e))
+    sold, trashed = [], []
+    for line in body.splitlines():
+        op, _, rest = line.strip().partition(" ")
+        if rest.strip().isdigit() and op in ("sell", "trash"):
+            (sold if op == "sell" else trashed).append(int(rest))
+    s, t = release(kv.me(), sold[:16], trashed[:16])
+    h.text("ok %d %d\n" % (s, t))
+
+
 @kv_route
 def get_jobs(h, args):
     """what the lane is making you: "job WHO SECONDS_LEFT WHAT" lines"""
@@ -2057,6 +2103,7 @@ ROUTES = [
     ("GET", "/jar/tx", get_tx, "device_or_dash"),
     ("POST", "/jar/deal", post_deal, "device_or_dash"),
     ("GET", "/jar/jobs", get_jobs, "device_or_dash"),
+    ("POST", "/jar/release", post_release, "device_or_dash"),
     ("POST", "/jar/gift", post_gift, "device_or_dash"),
     ("POST", "/jar/thanks", post_thanks, "device_or_dash"),
 ]

@@ -301,6 +301,61 @@ static JST_OPT int jst_stock_read(const CardApi *api, const JStock *s, int k, JI
   return jst_read_rec(api, p, io);
 }
 
+/* ---- letting go of a thing (sell, trash) ---------------------------------------- */
+
+#define JST_JARX CAPP_VAR "/jar/jar%d.txt"     /* an extra jar's file (apps/jar.c) */
+
+/* `id` out of everything on this card: My Stuff, its file, the shelf, the
+ * factory's places, every extra jar's file, a pending "put in the jar".
+ * j is the jar as the companion loaded it (the factory's places are its want
+ * lines). text is scratch. Then queued for the server: sold back to the pool
+ * (sell), or gone for good (!sell). A thing the server never made (a
+ * built-in, id under 100) needs no telling. */
+static JST_OPT void jst_let_go(const CardApi *api, Jar *j, uint32_t id, int sell, char *text,
+                               int cap) {
+  char p[48];
+  int i, k;
+  js_disown(j, id);
+  jst_item_path(api, id, p, sizeof p);
+  api->remove(p);
+  for (i = 0; i < JS_SHELF; i++) if (j->shelf[i] == id) j->shelf[i] = 0;
+  if (j->decor == id) j->decor = 0;
+  for (i = 0; i < j->nwant; i++)
+    if (j->want[i].id == id) {
+      for (k = i; k + 1 < j->nwant; k++) j->want[k] = j->want[k + 1];
+      j->nwant--;
+      i--;
+    }
+  for (k = 1; k <= j->njars; k++) {                /* its place lines go */
+    int n, out = 0;
+    const char *q;
+    api->fmt(p, sizeof p, JST_JARX, k + 1);
+    n = jst_get(api, p, text, cap);
+    if (n <= 0) continue;
+    for (q = text; *q; ) {
+      const char *e = q, *r = q + 6;
+      uint32_t lid = 0;
+      while (*e && *e != '\n') e++;
+      if (*e) e++;
+      if (q[0] == 'p' && q[1] == 'l' && q[5] == ' ') while (*r >= '0' && *r <= '9') lid = lid * 10 + (uint32_t)(*r++ - '0');
+      if (lid != id) {                             /* kept: copied down in place */
+        while (q < e) text[out++] = *q++;
+      }
+      q = e;
+    }
+    text[out] = 0;
+    jst_put(api, p, text, out);
+  }
+  if (id < 100) return;                            /* built in: the server never had it */
+  if (sell && j->nsell < JS_RELQ) j->sellq[j->nsell++] = id;
+  if (!sell && j->ntrash < JS_RELQ) j->trashq[j->ntrash++] = id;
+}
+
+/* What selling a thing back fetches: a quarter of its price, 0 for one with none. */
+static JST_OPT int jst_sell_value(const JItem *it) {
+  return it->price5 ? it->price5 * 5 / 4 : 0;
+}
+
 /* ---- mail ----------------------------------------------------------------------- */
 
 #define JST_MAIL_MAX 16
