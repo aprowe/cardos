@@ -1116,7 +1116,10 @@ def _guide(v2=True):
                 "count": "on %s: / on %s N:" % (word, word)}.get(
             filt, "on %s: / on %s %s:" % (word, word, "|".join(GROUPS.get(filt, {}))))
         evs.append("  %-34s %s" % (form, doc))
-    sens = ["  %-10s %s" % (word, doc) for _n, word, doc in _SENSES if v2 or _n < V1_SENSES]
+    # The hour stays a sense for the device, but is not offered: nothing in
+    # the jar happens at a time of day (the owner, 2026-10-11).
+    sens = ["  %-10s %s" % (word, doc) for _n, word, doc in _SENSES
+            if (v2 or _n < V1_SENSES) and word != "hour"]
     if v2:
         names = ("; world events " + ", ".join(GROUPS["world"]) + "; sounds " +
                  ", ".join(GROUPS["sound"]) + "; traits " + ", ".join(GROUPS["trait"]) + ".")

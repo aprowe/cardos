@@ -98,6 +98,11 @@ static struct {
   uint32_t msg_until;
   uint32_t last_ms, acc, last_key, last_paint, last_save, last_min, frames, bar_ms;
   uint32_t open_ms;                     /* toward the next minute of the jar being open */
+  /* poking: the arrows mark a thing, Space pokes it (the owner: "poke needs
+   * to be an actual action that you do") */
+  int psel;                             /* the marked thing + 1; 0 none */
+  uint32_t psel_until;                  /* the marker shows until then */
+  int psel_vis;                         /* ... as tick last saw it (paint reads no clock) */
   int bars, menu_dirty, asked;
   int sky[6];                           /* top and bottom of the background, r g b */
   uint32_t hash[NSTRIP];
@@ -705,6 +710,15 @@ static void scene(void) {
     lv_world();
   }
   items();
+  if (G.psel_vis && G.psel && G.psel <= J.nplaced) {   /* the marked thing: a gold caret */
+    int x, y, r;
+    item_at(G.psel - 1, &x, &y);
+    for (r = 0; r < 4; r++) {                     /* outlined, so it reads over anything */
+      fill(x + 8 - (3 - r) - 1, y - 9 + r, 3 + 2 * (3 - r), 1, C_BG);
+      fill(x + 8 - (3 - r), y - 9 + r, 1 + 2 * (3 - r), 1, C_GOLD);
+    }
+    fill(x + 7, y - 5, 3, 1, C_BG);
+  }
   if (!J.jar_at) workers();
   lv_parts();
   parachute();
@@ -835,7 +849,7 @@ static void bars(void) {
       static const char *const H_MENU[] = { "<>^v", "choose", "Ent", "open", "Esc", "close", 0 };
       hints(by, H_MENU);
     } else if (G.view == V_JAR) {
-      static const char *const H_JAR[] = { "Ent", "menu", "Z", "zoom", 0 };
+      static const char *const H_JAR[] = { "Ent", "menu", "<>", "mark", "Spc", "poke", "Z", "zoom", 0 };
       hints(by, H_JAR);
     }
     else hints(by, !G.dmove ? H_DSEL : J.placed[G.dsel].kind == JK_HANGING ? H_DMOVE :
@@ -1109,7 +1123,7 @@ static void decor_select(int i) {
     ji_copy(G.dline, SCR.io.it.line, sizeof G.dline);
     ji_copy(G.dname, SCR.io.it.name, sizeof G.dname);
   }
-  js_item_event(&J, G.dsel, JE_POKE, 0);        /* the player picked it */
+  /* picked to move, not poked: a poke is Space on a thing in the jar */
 }
 
 /* Put item `id` in the jar and start moving it. */
@@ -1209,6 +1223,45 @@ static int key_decor(int k) {
 
 /* ---- keys ------------------------------------------------------------------- */
 
+/* The next thing along from the marked one (or the middle), by where it is
+ * on screen: dir 1 right, -1 left, wrapping round. Its index + 1, 0 none. */
+static int poke_next(int dir) {
+  int i, best = -1, wrap = -1, from = G.psel ? J.placed[G.psel - 1].x / JS_FX : 120;
+  for (i = 0; i < J.nplaced; i++) {
+    int x = J.placed[i].x / JS_FX;
+    if (i == G.psel - 1) continue;
+    if (dir > 0 ? x >= from : x <= from) {
+      if (best < 0 || (dir > 0 ? x < J.placed[best].x / JS_FX : x > J.placed[best].x / JS_FX))
+        best = i;
+    }
+    if (wrap < 0 || (dir > 0 ? x < J.placed[wrap].x / JS_FX : x > J.placed[wrap].x / JS_FX))
+      wrap = i;
+  }
+  if (best < 0) best = wrap;
+  return best < 0 ? 0 : best + 1;
+}
+
+static int poke_key(int k, uint32_t now) {
+  if (!J.nplaced) { G.psel = 0; return 0; }
+  if (G.psel > J.nplaced) G.psel = 0;
+  if (k == CAPP_KEY_LEFT || k == CAPP_KEY_RIGHT) {
+    G.psel = poke_next(k == CAPP_KEY_RIGHT ? 1 : -1);
+    G.psel_until = now + 5000;
+    return 1;
+  }
+  if (k == ' ') {
+    int x, y;
+    if (!G.psel) G.psel = poke_next(1);
+    if (!G.psel) return 1;
+    G.psel_until = now + 5000;
+    js_item_event(&J, G.psel - 1, JE_POKE, 0);        /* the player poked it */
+    item_at(G.psel - 1, &x, &y);
+    js_particle(&J, JP_SPARKLE, x + 8, y);
+    return 1;
+  }
+  return 0;
+}
+
 static int scene_key(void *st, unsigned char k) {
   uint32_t now = api->ticks_ms();
   (void)st;
@@ -1231,6 +1284,9 @@ static int scene_key(void *st, unsigned char k) {
   }
   /* x (the chores) and b (the sound) are harmless: they work bars or no bars */
   if (G.view == V_JAR && !G.menu && lv_key(k)) { G.last_key = now; return 1; }
+  /* Poking: the arrows mark a thing, Space pokes it -- bars or no bars, since
+   * it is the jar you are looking at. */
+  if (G.view == V_JAR && !G.menu && poke_key(k, now)) { G.last_key = now; return 1; }
   /* Bars hidden: a key brings them back and does nothing else. */
   if (G.view == V_JAR && G.bars > 0) { G.last_key = now; return 1; }
   G.last_key = now;
@@ -1505,7 +1561,7 @@ static int tx_item(int n) {
     js_unplace(&J, k);
     k = js_place(&J, &SCR.io.it, x, y);
     if (k >= 0 && lv) js_set_level(&J, k, lv);
-    if (k >= 0) js_item_event(&J, k, JE_POKE, 0);
+
   }
   say(m);
   save();
@@ -1587,6 +1643,10 @@ static int scene_tick(void *st, uint32_t now) {
   if (dt > 250) dt = 250;
   G.acc += dt;
   while (G.acc >= JS_STEP_MS && steps < 10) { js_step(&J); post_step(); G.acc -= JS_STEP_MS; steps++; }
+  {
+    int vis = G.psel && (int32_t)(now - G.psel_until) < 0;
+    if (vis != G.psel_vis) { G.psel_vis = vis; G.menu_dirty = 1; }
+  }
   G.open_ms += dt;
   if (G.open_ms >= 60000u) {            /* a minute open: chimes, and the day's events in turn */
     G.open_ms -= 60000u;
@@ -1670,6 +1730,7 @@ const CappInfo capp_info = {
     0x4E, 0x02, 0x44, 0x22, 0x44, 0x72, 0x44, 0x22,
     0x7F, 0xFE, 0x40, 0x02, 0x40, 0x02, 0x3F, 0xFC },
   "Enter\tthe menu; S shop, I My Stuff, P garden\n"
+  "< > Spc\tmark a thing, poke it\n"
   "T\tthe Town: Tibbs, Pip, Bramble, Wren\n"
   "F M U\tfriends, mail, upgrades\n"
   "D\tdecorate; ^v moves onto a ledge\n"

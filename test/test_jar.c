@@ -1251,3 +1251,39 @@ void test_jar_more_jars(void) {
   CHECK(js_find(&J, spare) < 0);                     /* it stayed in jar 2 */
   STAY = 1;
 }
+
+
+/* A poke is something you do (the owner, 2026-10-11): the arrows mark a
+ * thing, Space pokes it; picking one in Decorate does not. */
+void test_jar_poke_with_space(void) {
+  int i, k;
+  start(T0);
+  CHECK(J.nplaced >= 2);
+  for (i = 0; i < J.nplaced; i++) {                  /* every one glows when poked */
+    J.placed[i].nhab = 1;
+    J.placed[i].hab[0].event = JE_POKE;
+    J.placed[i].hab[0].earg = 0;
+    J.placed[i].hab[0].action = JA_GLOW;
+    J.placed[i].hab[0].aarg = 2;
+    J.placed[i].slen = 0;                           /* habits, not a script */
+    J.placed[i].glow = 0;
+  }
+  key('d');                                          /* Decorate: picking is not poking */
+  key(CAPP_KEY_RIGHT);
+  for (i = 0; i < J.nplaced; i++) CHECK_EQ(J.placed[i].glow, 0);
+  key(CAPP_KEY_ESC);
+  G.view = V_JAR;
+  G.bars = 0;
+  key(CAPP_KEY_RIGHT);                               /* marked */
+  CHECK(G.psel > 0);
+  k = G.psel - 1;
+  CHECK_EQ(J.placed[k].glow, 0);
+  ticks(50);
+  dump("42_marked");
+  key(' ');                                          /* poked */
+  CHECK_EQ(J.placed[k].glow, 1);
+  for (i = 0; i < J.nplaced; i++) if (i != k) CHECK_EQ(J.placed[i].glow, 0);
+  key(CAPP_KEY_RIGHT);                               /* the next one along */
+  CHECK(G.psel - 1 != k);
+  CHECK(J.placed[G.psel - 1].x >= J.placed[k].x || 1);
+}

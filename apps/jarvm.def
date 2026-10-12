@@ -50,7 +50,7 @@ JV_OP(26, BIT,    0, 2, 1, "pop k, pop a, push bit k of a (0 when k is outside 0
  *   below. Nothing happens at a time of day (the owner, 2026-10-11: "you will
  *   never catch it"): the longest wait is a quarter of an hour. */
 JV_EVENT(0, tick,    JE_TICK,    every,  "4 times a second; `on tick every N:` runs every Nth tick")
-JV_EVENT(1, poke,    JE_POKE,    none,   "the player selects the item")
+JV_EVENT(1, poke,    JE_POKE,    none,   "the player pokes it: marks it with the arrows and presses Space")
 JV_EVENT(2, near,    JE_NEAR,    near,   "something comes within 16 px; `on near snail:` narrows it")
 JV_EVENT(3, shipped, JE_SHIPPED, none,   "a jar leaves through the cork door")
 JV_EVENT(4, jam,     JE_JAM,     jam,    "the belt jams or is fixed; `on jam fixed:` narrows it")

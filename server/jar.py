@@ -946,7 +946,7 @@ def prompt_for(brief, owned=(), avoid=(), kind=None, tier=None, form=None):
         "- name: up to 12 characters; line: a one-line description, up to 32, playful.",
         "- movement (how it moves), speed, zone (where it likes to be).",
         "- habits: up to 3 'when this, do that' pairs. when: tick (when_arg = every N "
-        "quarter-seconds, at least 4), poke (the player selects it), near (when_arg: %s), "
+        "quarter-seconds, at least 4), poke (the player pokes it with Space), near (when_arg: %s), "
         "shipped (a jar leaves), jam (when_arg 0 either, 1 the belt jams, 2 it is fixed), "
         "gift (a parcel arrives), time (when_arg 0 any, 1 dawn, 2 day, 3 dusk, 4 night), "
         "weather. do: hop (do_arg height in pixels 1-24), walk (do_arg zone: %s), float, "

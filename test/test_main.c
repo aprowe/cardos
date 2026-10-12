@@ -459,6 +459,7 @@ void test_jar_flicker_gives_way_and_a_hanging_bob_swings(void);
 void test_jar_liveliness_sets_pace_and_size(void);
 void test_jar_idles_draw(void);
 void test_jar_more_jars(void);
+void test_jar_poke_with_space(void);
 void test_jaritem_pixels_pack_three_bits(void);
 void test_jaritem_round_trip(void);
 void test_jaritem_size_limits(void);
@@ -1558,6 +1559,7 @@ int main(void) {
   RUN(test_jar_liveliness_sets_pace_and_size);
   RUN(test_jar_idles_draw);
   RUN(test_jar_more_jars);
+  RUN(test_jar_poke_with_space);
   printf("-- jaritem --\n");
   RUN(test_jaritem_pixels_pack_three_bits);
   RUN(test_jaritem_round_trip);
