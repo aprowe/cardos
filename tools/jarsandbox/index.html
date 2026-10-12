@@ -200,6 +200,7 @@ details.bc pre{max-height:300px;overflow:auto;background:var(--code-bg);border:1
         <option value="bird">Bird alone (rim and ground only)</option>
         <option value="tree">Tree alone</option>
         <option value="empty">Empty jar</option>
+        <optgroup label="Scenarios" id="scenarioOpts"></optgroup>
       </select>
       <button class="btn" id="newItem">New item</button>
       <button class="btn" id="exportBtn">Export / import</button>
@@ -351,6 +352,12 @@ details.bc pre{max-height:300px;overflow:auto;background:var(--code-bg);border:1
 </div>
 
 <script src="jarscript3.js"></script>
+<script>window.SCENARIOS = {};</script>
+<!-- Hand-built scenarios: each file sets SCENARIOS.KEY = {title, about, items: [defs]} -->
+<script src="scenarios/castle.js"></script>
+<script src="scenarios/branch.js"></script>
+<script src="scenarios/mug.js"></script>
+<script src="scenarios/pond.js"></script>
 <script>
 'use strict';
 /* ============================================================
@@ -1595,13 +1602,23 @@ const DEF = {
 };
 const EXAMPLES = {all:['tree','fence','rolly','bird'], rolly:['rolly'], treebird:['tree','bird'], bird:['bird'], tree:['tree'], empty:[]};
 
+/* Scenarios (scenarios/*.js): a missing or broken file just leaves its entry out. */
+for (const [k, s] of Object.entries(window.SCENARIOS || {})){
+  const o = document.createElement('option'); o.value = 'sc:' + k;
+  o.textContent = s.title + ' (' + s.items.length + ' things)'; $('scenarioOpts').appendChild(o);
+}
+function exampleDefs(name){
+  if (name && name.startsWith('sc:')) return JSON.parse(JSON.stringify(SCENARIOS[name.slice(3)].items));
+  return (EXAMPLES[name] || EXAMPLES.all).map(k => DEF[k]());
+}
+
 let pendingExample = null;
 $('examples').onchange = e => {
   const v = e.target.value; e.target.value = ''; if (!v) return;
   pendingExample = v; $('confirmText').textContent = `Load “${e.target.querySelector(`option[value="${v}"]`).textContent}”? It replaces everything in the jar (export first to keep it).`;
   $('confirmBar').hidden = false;
 };
-$('confirmYes').onclick = () => { $('confirmBar').hidden = true; if (pendingExample){ loadDefs(EXAMPLES[pendingExample].map(k => DEF[k]())); log(null, 'example loaded', 'warn'); save(); } pendingExample = null; };
+$('confirmYes').onclick = () => { $('confirmBar').hidden = true; if (pendingExample){ loadDefs(validDefs({items:exampleDefs(pendingExample)})); log(null, 'example loaded', 'warn'); save(); } pendingExample = null; };
 $('confirmNo').onclick = () => { $('confirmBar').hidden = true; pendingExample = null; };
 $('newItem').onclick = () => { const d = DEF.blank(); d.name = 'Blob ' + (world.items.length + 1); d.start.x = 30 + Math.floor(rnd()*180); const it = makeItem(d); world.items.push(it); select(it); showTab('script'); save(); };
 
@@ -1734,7 +1751,8 @@ function sandboxAdd(def, opts){
 window.jarSandbox = {
   add: sandboxAdd,
   load: defs => { loadDefs(validDefs({items:defs})); save(); return world.items.length; },
-  example: name => { loadDefs((EXAMPLES[name] || EXAMPLES.all).map(k => DEF[k]())); save(); return world.items.length; },
+  example: name => { loadDefs(validDefs({items:exampleDefs(name)})); save(); return world.items.length; },
+  scenarios: () => Object.keys(window.SCENARIOS || {}),
   items: () => world.items.map(defOf),
   errors: () => world.items.filter(it => it.err || it.errored).map(it => ({name:it.name, err:it.err})),
   reset: resetAll,

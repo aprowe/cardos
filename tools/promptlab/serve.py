@@ -56,6 +56,10 @@ STATIC = {
     "/jarsandbox/jarscript3.md": (os.path.join(lab.SANDBOX, "jarscript3.md"),
                                   "text/markdown; charset=utf-8"),
 }
+# The sandbox's hand-built scenarios, one file each (tools/jarsandbox/scenarios).
+for _name in ("castle", "branch", "mug", "pond"):
+    STATIC["/jarsandbox/scenarios/%s.js" % _name] = (
+        os.path.join(lab.SANDBOX, "scenarios", _name + ".js"), "text/javascript; charset=utf-8")
 
 
 def _job_view(job, full=True):
