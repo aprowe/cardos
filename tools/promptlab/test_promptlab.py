@@ -118,7 +118,21 @@ class Api(unittest.TestCase):
         c = lab.stage_ctx("dm", self.inputs())
         self.assertIn("{{search}}", c["template"])
         self.assertEqual(c["default"], lab.jarstages.dm_prompt(
-            self.inputs()["search"], "reacts", "everyday", []))
+            self.inputs()["search"], "reacts", "everyday", [], "critter", None, "",
+            [lab.describe(c) for c in lab.default_residents()], ""))
+
+    def test_residents_are_read_from_their_scripts(self):
+        tree, fence, rolly, bird = lab.default_residents()
+        self.assertEqual((tree["perches"], tree["solid"]), (5, True))
+        self.assertEqual((tree["sends"], tree["hears"]), (["startle"], ["landed"]))
+        self.assertEqual(rolly["notices"], ["bird"])
+        self.assertEqual(bird["visits"], ["tree", "fence", "rim"])
+        self.assertEqual((bird["sends"], bird["hears"]), (["landed"], ["startle"]))
+        c = lab.stage_ctx("behaviour_js3", dict(self.inputs(), rolls=dict(
+            self.inputs()["rolls"], tie="naps on the Sapling")))
+        self.assertIn("answers signal landed", c["default"])
+        self.assertIn("Its story with them: it naps on the Sapling.", c["default"])
+        self.assertIn("on signal startle:", c["default"])         # the worked examples
 
     def test_roll_matches_generate(self):
         r = self.post("/api/roll", {"seed": 1234, "k": 2, "v2": True})
@@ -208,7 +222,8 @@ class Api(unittest.TestCase):
         # no override: exactly the server's prompt
         out = self.post("/api/run_find", {"inputs": self.inputs(), "wait": True})["result"]
         self.assertEqual(out["stages"]["dm"]["prompt"], lab.jarstages.dm_prompt(
-            self.inputs()["search"], "reacts", "everyday", []))
+            self.inputs()["search"], "reacts", "everyday", [], "critter", None, "",
+            [lab.describe(c) for c in lab.default_residents()], ""))
 
     def test_run_stage_and_missing_placeholders(self):
         out = self.post("/api/run_stage", {"stage": "dm", "inputs": self.inputs(),

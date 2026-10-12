@@ -220,6 +220,8 @@ details>summary{cursor:pointer;color:var(--muted);font-size:13px}
             <label class="field">N <input type="number" id="bN" value="4" min="1" max="12" style="width:56px"></label>
             <label class="field"><input type="checkbox" id="bPar"> parallel</label>
             <label class="field"><input type="checkbox" id="bTibbs"> ask Tibbs</label>
+            <label class="field" title="one after another; each find joins the jar the next one is made for (Jarscript 3)"><input type="checkbox" id="bGrow" checked> grow one jar</label>
+            <button class="btn small" id="bJar" disabled>Whole jar to sandbox</button>
             <button class="btn small primary" id="bRun">Run batch</button>
           </div>
         </div>
@@ -602,7 +604,7 @@ function cardHtml(c, i){
   const r = c.rolls || {};
   return `<div class="card ${c.dropped ? 'dropped' : ''}"><div class="top2"><canvas id="bc-${i}"></canvas><div><div class="nm">${esc(c.name)}</div><div class="ln">${esc(c.line || c.dropped || '')}</div></div></div>
     <div class="tags"><span class="badge">${esc(r.tier)}</span><span class="badge">${esc(r.kind)}</span>${r.form ? `<span class="badge">${esc(r.form)}</span>` : ''}<span class="badge">${esc(r.activity)}</span>${c.travel ? `<span class="badge">${esc(c.travel)}/${esc(c.idle)}</span>` : ''}${c.redo && c.redo.length ? `<span class="badge stale">redo ${esc(c.redo.join(','))}</span>` : ''}</div>
-    <div class="cc">${esc(c.concept)}</div>
+    ${c.tie ? `<div class="ln">tie: it ${esc(c.tie)}</div>` : ''}<div class="cc">${esc(c.concept)}</div>${c.notes ? `<div class="ln">${esc(c.notes)}</div>` : ''}
     <div class="row"><button class="btn small" data-send="${i}" ${c.sandbox ? '' : 'disabled'}>Send</button><button class="btn small" data-open="${i}">Into the stages</button></div></div>`;
 }
 let batchJob = null, batchCards = [];
@@ -619,16 +621,23 @@ $('cards').addEventListener('click', e => {
 async function runBatch(){
   $('bRun').disabled = true; $('cards').innerHTML = ''; batchJob = null;
   try {
-    const j = await runJob('/api/batch', Object.assign(common(), {n:+$('bN').value || 4, parallel:$('bPar').checked, ask_tibbs:$('bTibbs').checked,
+    const j = await runJob('/api/batch', Object.assign(common(), {n:+$('bN').value || 4, parallel:$('bPar').checked, ask_tibbs:$('bTibbs').checked, grow:$('bGrow').checked,
       inputs:inputs(), overrides:S.overrides, variant:S.variant, kind_at:+$('r-k').value || 0}),
       j => { $('bStatus').textContent = (j.progress || []).slice(-2).join('\n'); if (j.partial && j.partial.length !== batchCards.length) paintCards(j.partial); });
     batchJob = j.result; paintCards(j.result.cards);
+    $('bJar').disabled = !j.result.cards.some(c => c.sandbox);
     const kinds = {}; j.result.cards.forEach(c => { const a = c.rolls.activity; kinds[a] = (kinds[a] || 0) + 1; });
     $('bStatus').textContent = `${j.result.cards.filter(c => !c.dropped).length} of ${j.result.n} came through in ${j.result.secs}s · search: ${j.result.search ? j.result.search.slice(0, 120) : '(none)'} · ${Object.entries(kinds).map(([k, v]) => v + ' ' + k).join(', ')}`;
   } catch (e){ $('bStatus').textContent = 'batch failed: ' + e.message; }
   $('bRun').disabled = false;
 }
 $('bRun').onclick = runBatch;
+$('bJar').onclick = () => {          /* the four examples, then every find the batch grew */
+  const sb = sandboxApi(); if (!sb){ $('sbNote').textContent = 'The sandbox has not loaded yet.'; return; }
+  sb.example('all'); const errs = [];
+  for (const c of batchCards) if (c.sandbox){ const r = sb.add(c.sandbox, {replace:true}); if (r.err) errs.push(c.name + ': ' + r.err.msg); }
+  $('sbNote').textContent = `The whole jar: the four examples and ${batchCards.filter(c => c.sandbox).length} finds.` + (errs.length ? ' Did not compile: ' + errs.join('; ') : '');
+};
 
 /* ---------- history ---------- */
 async function refreshHistory(){
@@ -641,7 +650,7 @@ $('hist').addEventListener('click', async e => {
   const b = e.target.closest('[data-h]'); if (!b) return;
   const j = await api('/api/history?id=' + encodeURIComponent(b.dataset.h)); const r = j.result; if (!r) return;
   if (j.kind === 'find') loadFind(r);
-  else if (j.kind === 'batch'){ batchJob = r; paintCards(r.cards); $('bStatus').textContent = 'from history: ' + r.label; }
+  else if (j.kind === 'batch'){ batchJob = r; paintCards(r.cards); $('bJar').disabled = !r.cards.some(c => c.sandbox); $('bStatus').textContent = 'from history: ' + r.label; }
   else if (r.stage){ applyStageResult(r.stage, r); syncInputs(); paintAll(); }
 });
 $('histRefresh').onclick = refreshHistory;
@@ -699,7 +708,7 @@ $('expList').onchange = async e => {
     S.out = x.outputs || {}; S.model = x.model || ''; $('model').value = S.model; S.v2 = !!x.v2; $('v2').checked = S.v2;
     setVariant(x.variant || 'jarvm', true); if (x.rolls) setRolls(x.rolls); $('expName').value = x.name;
     $('taken').value = (S.inputs.taken || []).join(', ');
-    syncInputs(); if (x.lastFind) paintCheck(x.lastFind); if (x.batch){ batchJob = null; paintCards(x.batch.cards || []); }
+    syncInputs(); if (x.lastFind) paintCheck(x.lastFind); if (x.batch){ batchJob = null; paintCards(x.batch.cards || []); $('bJar').disabled = !(x.batch.cards || []).some(c => c.sandbox); }
     await refreshPrompts(); $('runStatus').textContent = `loaded ${x.name} (saved ${x.saved})`;
   } catch (err){ $('runStatus').textContent = 'load: ' + err.message; }
 };

@@ -829,7 +829,7 @@ GAME = (
     "Jar Factory is a cosy idle game on a tiny 240x135 screen: a glass jar with a "
     "little jam factory built from human junk (thimbles, matchboxes, bottle caps, "
     "twigs), mossy plants, worker critters called mosslings and a snail who carries "
-    "the jars out. Its shop sells odd collectible things the player places in the jar.")
+    "the jars out. Its shop sells cute collectible things the player places in the jar.")
 
 
 # ---- what an item is (language v2: server/jarvm.py V2) ----------------------

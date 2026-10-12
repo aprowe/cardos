@@ -41,9 +41,74 @@ class Drop(Exception):
 # is told is built here, in dm_prompt, from DM_WORLD and the find's few facts.
 
 DM_WORLD = (
-    "Somewhere there is a glass jar with a tiny world inside it: small creatures and small "
-    "objects living among moss, pebbles and odd bits of human junk. A junk-shop keeper called "
-    "Tibbs goes out searching for things for that world and sells what he finds.")
+    "On a windowsill there is a cosy glass terrarium: moss, pebbles, little plants and tiny "
+    "critters. What goes in it is what people love putting in terrariums and aquariums -- "
+    "ornaments, driftwood, little houses and castles -- and small everyday things that are "
+    "huge at a critter's size: to a beetle a mug is a tower and a teacup a pond. A shopkeeper "
+    "called Tibbs goes out finding things for it and sells them.")
+
+# What the find is for, in the DM's words -- the slot the code rolled. Without
+# it the DM invented "a thing" and the fitter had to call a key furniture
+# (2026-10-11: "imagine a cute terrarium ... a mini castle from an aquarium
+# that's a big shelf, a plant branch critters can climb on, a mug").
+SLOT_WORDS = {
+    "critter": "a small living creature that will live in the terrarium and wander about it: "
+               "a bug, snail, frog, newt, mouse, tiny bird, or a little creature all its own. "
+               "Cute, with a face you would love.",
+    "furniture": "something the critters climb, perch and sit on: a landmark of the terrarium "
+                 "with a top, ledges or branches -- a decoration, a piece of nature, or an "
+                 "everyday thing that is enormous at their size.",
+    "scenery": "a big backdrop piece that stands behind everything and gives the terrarium "
+               "its look.",
+    "part": "something with a little part that leaves it and comes home again (as a hive has "
+            "its bee).",
+    "floor": "a small ornament that stands on the soil.",
+    "hanging": "something that hangs from the lid.",
+}
+
+# Where this find turned up: rolled by the code, one a find, so the haul is
+# varied by dice rather than by the model (which latches on). Tibbs's search
+# is the day's story; this is the one thing the DM must start from.
+SOURCES = (
+    "the aquarium aisle of a pet shop", "a garden centre's greenhouse", "a dollhouse maker's "
+    "workshop", "the back of a kitchen cupboard", "a walk in the woods after rain",
+    "a beach at low tide", "a child's toy box", "a bakery's window", "a craft fair stall",
+    "the edge of a pond", "a seaside gift shop", "grandma's mantelpiece", "a florist's bucket",
+    "a tea shop", "a model village", "a bonsai nursery", "a museum gift shop", "a snowy garden",
+    "a market of second-hand china", "a cactus house", "a fishing village", "a fairground",
+    "a sewing basket", "a mossy stone wall", "a hobby shop's train shelf", "an old orchard",
+    "a Japanese garden", "a lighthouse keeper's shed", "a sweet shop", "a riverbank",
+)
+
+
+# How a new find belongs with someone already in the jar: the code picks the
+# resident and the verb, the DM makes it a story. Without one every find was
+# its own island; the sandbox's tree, wren and pill bug were good because each
+# lived off the others (the bird lands, the tree rustles, the bug hides).
+RELATIONS = (
+    "perches on", "hides from", "naps on", "follows", "is startled by", "tends", "plays with",
+    "shelters", "is woken by", "collects what falls from", "sings to", "chases",
+    "keeps watch over", "climbs", "warms", "copies", "wakes up", "races", "tidies up after",
+    "shares a snack with", "is shy of", "shows off to", "rides on", "lights the way for",
+    "gets tangled in", "answers", "cheers on", "hums along with", "leaves gifts for",
+    "is jealous of", "guards", "sweeps under",
+)
+TIE_CHANCE = 0.8              # the rest belong to nobody in particular, which is fine too
+
+
+def roll_tie(rng, names):
+    """'naps on the Sapling', or '' (no residents, or the coin said no)."""
+    if not names or rng.random() >= TIE_CHANCE:
+        return ""
+    return "%s the %s" % (rng.choice(RELATIONS), rng.choice(list(names)))
+
+
+def slot_of(kind, form):
+    return SLOT_WORDS[form if form in ("furniture", "scenery", "part") else kind]
+
+
+def roll_source(rng):
+    return rng.choice(SOURCES)
 
 ACTIVITY_WORDS = {
     "still": "It keeps completely still -- an object, a fixture or a sleeper.",
@@ -58,25 +123,35 @@ TIER_WORDS = {
 }
 
 
-def dm_prompt(search, activity, tier_name, earlier=()):
+def dm_prompt(search, activity, tier_name, earlier=(), kind="floor", form=None, source="",
+              residents=(), tie=""):
     """Everything the DM is told about one find. It never sees the item
-    format, the enums, the player, their jar or the script language."""
+    format, the enums, the player or the script language; `residents` are
+    one-line descriptions of what already lives in the jar."""
     lines = ["You invent things. " + DM_WORLD, ""]
     if search:
-        lines.append("Tibbs says where he went searching today:\n\"%s\"" % search)
-    else:
-        lines.append("Tibbs has not said where he went today; imagine somewhere yourself.")
+        lines.append("Tibbs's day, in his words:\n\"%s\"" % search)
+    if residents:
+        lines += ["", "Already living in the terrarium:"] + ["- %s" % r for r in residents]
     lines += [
         "",
-        "Invent one thing he found there: %s. %s" % (TIER_WORDS[tier_name],
-                                                     ACTIVITY_WORDS[activity]),
+        "Invent one thing for the terrarium: %s" % slot_of(kind, form),
+        "It is %s. %s" % (TIER_WORDS[tier_name], ACTIVITY_WORDS[activity]),
     ]
+    if source:
+        lines.append("He found it at %s -- let that shape what it is." % source)
+    if tie:
+        lines.append("Make it belong with what is there: it %s. Say how they get along -- one "
+                     "small moment that happens between them, again and again." % tie)
+    elif residents:
+        lines.append("It may get along with what is there, or keep to itself.")
     if earlier:
         lines.append("Already found today, so not these, nor anything like them: %s."
                      % " / ".join(earlier))
     lines += [
-        "Write about 80 words: what it is, how it looks, where it came from, and one "
-        "surprising detail. Make it its own thing, specific and a little strange.",
+        "Write about 60 words: what it is and how it looks, and one delightful detail. It must "
+        "be something you would recognise at a glance in a tiny picture: one clear shape, "
+        "cute and cosy rather than odd. A real kind of thing, made charming -- not a riddle.",
         "Keep it friendly for all ages.",
     ]
     return "\n".join(lines)
@@ -335,14 +410,15 @@ def _script_error(raw, form):
 
 
 def make_find(chat, person, kind, tier, form, activity, search, earlier, taken, st, log=None,
-              concept=None, base=None):
+              concept=None, base=None, source=""):
     """One find through the stages: (raw, concept, sheet). Drop if it comes
     to nothing. With a `concept` the DM is skipped (a remake: the old idea
     and what was asked for), and `base` is the old picture for the artist."""
     say = log or (lambda s: None)
     if concept is None:
         try:
-            concept = _ask(chat, dm_prompt(search, activity, tier[0], earlier), dm_schema(),
+            concept = _ask(chat, dm_prompt(search, activity, tier[0], earlier, kind, form,
+                                           source), dm_schema(),
                            person, tier[2], st)["concept"].strip()
         except Exception as e:                          # noqa: BLE001 - the find is dropped
             raise Drop("DM: %s" % e)
@@ -464,10 +540,11 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
         activity = jar.roll_activity(rng)
         if form in ("scenery", "furniture") and activity in ("ambles", "restless"):
             activity = "still"                          # a backdrop or a shelf does not wander
+        source = roll_source(rng)
         taken = set(owned) | {n.strip().lower() for n in names}
         try:
             raw, concept, sheet = make_find(chat, person, kind, tier, form, activity, search,
-                                            concepts, taken, st, log)
+                                            concepts, taken, st, log, source=source)
         except Drop as e:
             fails += 1
             last = e

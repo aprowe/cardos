@@ -6,6 +6,7 @@ with Claude stubbed.
 python -m unittest server.tests.test_jarstages
 """
 import json
+from server import jarstages
 import os
 import random
 import re
@@ -385,8 +386,11 @@ class Stages(unittest.TestCase):
         dm = self.stub.prompts["dm"][0]
         self.assertIn("old canal locks", dm)
         for word in ("Moth Lamp", "palette", "frames", "16x16", "script", "habits", "zone",
-                     "critter", "hanging", "alex"):
+                     "floor decor", "travel", "liveliness", "alex"):
             self.assertNotIn(word, dm)
+        # told the slot in plain words, and where the code says it turned up
+        self.assertIn("Invent one thing for the terrarium:", dm)
+        self.assertTrue(any(s in dm for s in jarstages.SOURCES), dm)
         fit = self.stub.prompts["fitter"][0]
         self.assertIn("thimble", fit)                       # the concept
         self.assertNotIn("palette", fit)
@@ -467,7 +471,8 @@ class Stages(unittest.TestCase):
 
     def test_no_search_says_so_and_goes_on(self):
         self.gen(search="")
-        self.assertIn("has not said where he went", self.stub.prompts["dm"][0])
+        self.assertNotIn("Tibbs's day", self.stub.prompts["dm"][0])
+        self.assertIn("He found it at", self.stub.prompts["dm"][0])
         self.assertTrue(any("no search" in s for s in self.logs), self.logs)
 
     def test_a_stock_is_made_from_his_search(self):

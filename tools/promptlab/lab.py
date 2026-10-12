@@ -137,8 +137,10 @@ def roll(seed=None, k=0, bribe=0, v2=None, kind=None):
     activity = jar.roll_activity(rng)
     if form in ("scenery", "furniture") and activity in ("ambles", "restless"):
         activity = "still"
+    source = jarstages.roll_source(rng)
     return {"seed": seed, "k": k, "kind": kind, "tier": tier[0], "price": tier[1],
-            "effort": tier[2], "form": form or "", "activity": activity, "v2": v2}
+            "effort": tier[2], "form": form or "", "activity": activity, "v2": v2,
+            "source": source}
 
 
 def _rolls_seq(n, seed, kind_at=0, bribe=0, v2=None):
@@ -153,7 +155,8 @@ def _rolls_seq(n, seed, kind_at=0, bribe=0, v2=None):
         activity = jar.roll_activity(rng)
         if form in ("scenery", "furniture") and activity in ("ambles", "restless"):
             activity = "still"
-        out.append({"seed": seed, "k": kind_at + k, "kind": kind, "tier": tier[0],
+        source = jarstages.roll_source(rng)
+        out.append({"source": source, "seed": seed, "k": kind_at + k, "kind": kind, "tier": tier[0],
                     "price": tier[1], "effort": tier[2], "form": form or "",
                     "activity": activity, "v2": v2})
     return out
@@ -256,14 +259,25 @@ Its frames are named {{frame_names}} (f1 is how it usually looks; any others are
 
 {{activity_rule}}
 
-The jar it lives in already holds a tree (traits tree, plant; birds perch on it), a fence (traits fence, furniture: a solid top with perches), a rolling pill bug (traits bug, critter, roller) and a wren (traits bird, flyer) that flies between perches and the jar's rim. React to them by trait if it suits the thing -- never by name.
+The jar it lives in already holds:
+{{jar}}
+{{tie}}
 
-- script: the whole script, at most 40 lines. Begin with its traits line. The first state is where it starts. Timed things (wait, move, walk, hop, play ... once) only in a state's body; a handler runs within one tick, so it may only set things, say, emit, sway, shake, signal or go to a state. Close every block with end.
+Make it part of the jar's life, as the two examples at the end are:
+- A body that keeps living: states whose bodies take time and loop, with pick, random and chance, so it never does exactly the same thing twice. Even a still thing answers when something happens: it rustles, glows, rings, emits.
+- At least one link with the jar above, by trait and never by name: go to their perches (move to perch TRAIT), stand on their tops, listen for the signals they send (on signal NAME), send the ones they listen for, or notice them coming (on near TRAIT).
+- Something for others: if it has a top, a branch, a roof, a rim or a hollow, declare solid and perch points; and when something happens to it (a visitor lands, it is poked, it wakes), send a signal saying so -- a new signal name is fine, later things will learn to answer it.
+- Poke does something worth seeing.
+
+- script: the whole script, at most 50 lines. Begin with its traits line. The first state is where it starts. Timed things (wait, move, walk, hop, play ... once) only in a state's body; a handler runs within one tick, so it may only set things, say, emit, sway, shake, signal or go to a state. Close every block with end.
 - notes: one line on what you made it do.
 Keep it small and charming, friendly for all ages.
 
 The language:
-{{reference}}"""
+{{reference}}
+
+Two scripts from the jar, to show the kind of life wanted -- not to copy:
+{{examples}}"""
 
 JS3_RULE = {
     "still": "It keeps still: a state that shows f1 (an idle may cycle frames, sway or shake gently "
@@ -328,7 +342,116 @@ def js3_values(sheet, kind, form, activity):
         "traits_line": ("Its traits (others react to these): %s." % ", ".join(traits)) if traits else "",
         "form_line": form_line, "activity_rule": JS3_RULE[activity],
         "reference": js3_reference(),
+        "jar": "", "tie": "", "examples": js3_examples(),
     }
+
+
+# ---- the jar a find joins ----------------------------------------------------------
+#
+# Each resident is described to the DM and the behaviour writer by what its
+# script really offers -- perches, a top, the signals it sends and hears, what
+# it notices -- read from the script by code, so a later find can answer an
+# earlier one. The four sandbox examples are the jar a run starts from.
+
+SANDBOX_HTML = os.path.join(SANDBOX, "index.html")
+RESIDENT_KEYS = ("tree", "fence", "rolly", "bird")
+RESIDENT_ABOUT = {"tree": ("Sapling", "a young tree; birds perch in it"),
+                  "fence": ("Fence", "a little wooden fence"),
+                  "rolly": ("Rolly Polly", "a pill bug that rolls up into a ball"),
+                  "bird": ("Wren", "a wren that swoops between perches")}
+
+
+def sandbox_scripts():
+    """The example scripts in tools/jarsandbox/index.html, by key."""
+    with open(SANDBOX_HTML, encoding="utf-8") as f:
+        t = f.read()
+    blk = t[t.index("const SCRIPTS = {"):t.index("const PALS")]
+    return {m.group(1): m.group(2) for m in
+            re.finditer(r"^(\w+): `(.*?)`,?[ \t]*$", blk, re.S | re.M)}
+
+
+def contract(name, line, script):
+    """What a script offers the jar, read from the script."""
+    c = {"name": name, "line": line, "traits": [], "perches": 0, "solid": False,
+         "sends": [], "hears": [], "notices": [], "visits": [], "events": []}
+
+    def add(k, v):
+        if v not in c[k]:
+            c[k].append(v)
+    for raw in (script or "").split("\n"):
+        s = raw.split("#", 1)[0].strip()
+        if s.startswith("traits "):
+            c["traits"] = [x.strip() for x in s[7:].split(",") if x.strip()]
+        elif s.startswith("perch "):
+            c["perches"] += 1
+        elif s.startswith("solid "):
+            c["solid"] = True
+        m = re.match(r"on signal (\w+)", s)
+        if m:
+            add("hears", m.group(1))
+        m = re.match(r"on near (\w+)", s)
+        if m:
+            add("notices", m.group(1))
+        m = re.match(r"on (poke|bump|hit|land)\b", s)
+        if m:
+            add("events", m.group(1))
+        body = re.sub(r"^on signal \w+", "", s)
+        for m in re.finditer(r"\bsignal (\w+)", body):
+            add("sends", m.group(1))
+        for m in re.finditer(r"move to perch (\w+)", s):
+            add("visits", m.group(1))
+    return c
+
+
+def describe(c):
+    """One line for the DM: name, what it is, its traits."""
+    return "%s: %s" % (c["name"], c["line"])
+
+
+def describe_full(c):
+    """One line for the behaviour writer: what it offers and answers."""
+    bits = []
+    if c["perches"] or c["solid"]:
+        bits.append("offers %s" % " and ".join(
+            ([("%d perch%s" % (c["perches"], "es" if c["perches"] > 1 else ""))]
+             if c["perches"] else []) + (["a solid top"] if c["solid"] else [])))
+    if c["visits"]:
+        bits.append("flies to the perches of %s" % ", ".join(c["visits"]))
+    if c["sends"]:
+        bits.append("sends signal %s" % ", ".join(c["sends"]))
+    if c["hears"]:
+        bits.append("answers signal %s" % ", ".join(c["hears"]))
+    if c["notices"]:
+        bits.append("notices things with trait %s" % ", ".join(c["notices"]))
+    if c["events"]:
+        bits.append("reacts to %s" % ", ".join(c["events"]))
+    return "- %s, %s (traits %s): %s." % (c["name"], c["line"], ", ".join(c["traits"]) or "none",
+                                          "; ".join(bits) or "keeps to itself")
+
+
+_RESIDENTS = None
+
+
+def default_residents():
+    global _RESIDENTS
+    if _RESIDENTS is None:
+        sc = sandbox_scripts()
+        _RESIDENTS = [contract(RESIDENT_ABOUT[k][0], RESIDENT_ABOUT[k][1], sc[k])
+                      for k in RESIDENT_KEYS]
+    return [dict(c) for c in _RESIDENTS]
+
+
+def js3_examples():
+    sc = sandbox_scripts()
+    return "\n".join("```\n%s```" % sc[k] for k in ("tree", "bird"))
+
+
+def jar_values(inp):
+    """The {{jar}} and {{tie}} a find's behaviour is written against."""
+    res = inp["jar"]
+    tie = inp["rolls"].get("tie") or ""
+    return {"jar": "\n".join(describe_full(c) for c in res) or "- nothing yet",
+            "tie": ("Its story with them: it %s." % tie) if tie else ""}
 
 
 def _norm_inputs(inp):
@@ -338,6 +461,9 @@ def _norm_inputs(inp):
     r.setdefault("tier", "everyday")
     r.setdefault("activity", "still")
     r["form"] = r.get("form") or None
+    r["source"] = r.get("source") or ""
+    r["tie"] = r.get("tie") or ""
+    inp["jar"] = default_residents() if inp.get("jar") is None else list(inp["jar"])
     if r["kind"] not in jar.KIND_WORDS:
         raise ValueError("no kind %r" % r["kind"])
     if r["form"] and r["form"] not in jar.FORM_WORDS:
@@ -381,8 +507,12 @@ def stage_ctx(stage, inp, v2=None):
             schema = shopkeep.stock_schema(0, n_new)
             ctx.update(system=shopkeep.SYSTEM, append_schema=False, effort=shopkeep.STOCK_EFFORT)
         elif stage == "dm":
-            prompt = jarstages.dm_prompt(inp["search"], activity, tier[0], inp["earlier"])
+            residents = [describe(c) for c in inp["jar"]]
+            prompt = jarstages.dm_prompt(inp["search"], activity, tier[0], inp["earlier"],
+                                         kind, form, r["source"], residents, r["tie"])
             values = {"search": inp["search"], "earlier": " / ".join(inp["earlier"]),
+                      "tie": r["tie"], "residents": "\n".join("- %s" % x for x in residents),
+                      "slot_words": jarstages.slot_of(kind, form), "source": r["source"],
                       "tier_words": jarstages.TIER_WORDS[tier[0]],
                       "activity_words": jarstages.ACTIVITY_WORDS[activity],
                       "dm_world": jarstages.DM_WORLD}
@@ -435,6 +565,7 @@ def stage_ctx(stage, inp, v2=None):
                 schema = jarstages.behaviour_schema()
             else:
                 values = js3_values(sheet, kind, form, activity)
+                values.update(jar_values(inp))
                 prompt, _ = render(JS3_TEMPLATE, values)
                 schema = js3_schema()
         else:
@@ -1110,9 +1241,17 @@ def run_batch(spec, progress=None, partial=None):
     out["search"] = base["search"]
     names, concepts = [], []
     parallel = bool(spec.get("parallel"))
+    grow = bool(spec.get("grow")) and not parallel
+    residents = list(base["jar"])
+    tie_rng = random.Random(seed * 7919 + 1)            # apart from the stock's dice
+    out["grow"] = grow
 
     def one(k, earlier, taken):
-        inp = dict(base, rolls=rolls[k], earlier=earlier, taken=taken, concept="", sheet=None)
+        rk = dict(rolls[k])
+        if grow or not rk.get("tie"):
+            rk["tie"] = jarstages.roll_tie(tie_rng, [c["name"] for c in residents])
+        inp = dict(base, rolls=rk, earlier=earlier, taken=taken, concept="", sheet=None,
+                   jar=list(residents))
         sub = dict(spec, inputs=inp, ask_tibbs=False)
         res = run_find(sub, (lambda s, k=k: progress("find %d: %s" % (k + 1, s))) if progress else None)
         res["index"] = k
@@ -1139,10 +1278,15 @@ def run_batch(spec, progress=None, partial=None):
             if not res["dropped"]:
                 names.append(res["raw"]["name"])
                 concepts.append(jarstages._short(res["concept"]))
+                sb = res.get("sandbox") or {}
+                if grow and sb.get("script_source") == "js3":
+                    residents.append(contract(res["raw"]["name"], res["raw"]["line"],
+                                              sb["script"]))
             if partial is not None:
                 partial.append(_card(res))
     out["finds"] = results
     out["cards"] = [_card(x) for x in results]
+    out["residents"] = residents
     out["secs"] = round(time.time() - t0, 2)
     out["label"] = "batch of %d: %s" % (n, ", ".join(c["name"] for c in out["cards"]))
     return out
@@ -1157,7 +1301,8 @@ def _card(res):
             "liveliness": raw.get("liveliness"), "palette": raw.get("palette"),
             "frames": raw.get("frames"), "bubbles": raw.get("bubbles"),
             "redo": [x["stage"] for x in res.get("redo", [])],
-            "sandbox": res.get("sandbox"), "secs": res.get("secs")}
+            "sandbox": res.get("sandbox"), "secs": res.get("secs"),
+            "tie": res["rolls"].get("tie", ""), "notes": (res.get("behaviour") or {}).get("notes", "")}
 
 
 def tibbs(spec):
