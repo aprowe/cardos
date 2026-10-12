@@ -336,8 +336,9 @@ class GuideTest(unittest.TestCase):
     def test_the_guide_names_every_word(self):
         g = V.LANGUAGE_GUIDE_V2
         for word in list(A) + list(S) + list(E) + list(V.GROUPS["trait"]) + list(V.GROUPS["sound"]):
-            if word != "nothing":
+            if word not in ("nothing", "hour"):         # the hour is not offered (no times of day)
                 self.assertIn(word, g)
+        self.assertNotIn("the hour of the day", g)
         self.assertLess(len(g), 7000)
         v1 = V.LANGUAGE_GUIDE_V1
         for word in ("burst", "throw", "on chime", "has(", "neartraits"):
