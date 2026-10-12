@@ -380,15 +380,15 @@ which one depends on the converter, so the app asks (`g` swaps, kept in
 plays a whole song of time-stamped messages on time and loops, because the
 shell's loop stalls when it paints. Stopping ends every sounding note and
 sends all-notes-off; the port closes with the app that opened it.
-`api->midi` (API 38). Songs are text in /songs (`apps/midiseq.h`, host-
+`api->midi` (API 38). Songs are text in /songs (`apps/midi/midiseq.h`, host-
 tested): `n BEAT NOTE LEN [VEL]`, chords, `cc`, `ramp`, `bend`, `prog`,
 `ch`, `tempo`, `loop`, beats as decimals or fractions, integer ticks inside.
 `n` in the app asks Claude (`server/midi.py`, POST then poll); the reply is
 checked against the format and a mistake goes back to Claude once. The
 app's song buffers are sized to keep its data under 28 KB.
 
-**Circuit: beats for a Novation Circuit** (2026-10-12, `apps/circuit.c`,
-Make). It is `apps/midi.c` built again with `CIRCUIT` defined -- one
+**Circuit: beats for a Novation Circuit** (2026-10-12, `apps/midi/circuit.c`,
+Make). It is `apps/midi/midi.c` built again with `CIRCUIT` defined -- one
 source, two apps. Claude is asked with the kit (`/midi/compose?kit=circuit`,
 `server/midi.py` CIRCUIT): channels 1-8 are kick, snare, hat, crash/fx,
 keys, bass, misc, samples, no `prog`, and the check refuses channels past 8.
@@ -438,17 +438,17 @@ mic, sharing a lock with the WAV player (`speaker_play_pcm`); Settings >
 Sound turns UI sounds and key clicks off (`ui_snd`, `key_snd` prefs).
 Apps cannot ask for one yet (no API).
 
-**Kart is SNES Mario Kart on the Cardputer** (2026-10-06, `apps/kart.c`,
+**Kart is SNES Mario Kart on the Cardputer** (2026-10-06, `apps/kart/kart.c`,
 Games). Mode 7 floor -- each row below the horizon a line across a
 128x128-cell map (4 bits a cell, painted at start from 256 waypoints in
-`apps/kart_data.h`, which `tools/make_kart.py` makes from a spline and
+`apps/kart/kart_data.h`, which `tools/make_kart.py` makes from a spline and
 refuses if the road runs into itself) -- and billboard sprites for karts
 (four sides and mirrors), item boxes, bananas, coins and trees. Six karts,
 three laps, mushrooms and bananas, coins for top speed, CPU karts on the
 racing line with a rubber band. Steered by tilt (roll from the pose at the
 start; lean back to brake; `x` swaps the axis, `i` flips it, in
 /config/kart.txt with the best time), arrows on the original. The game is
-`apps/kart.h`, host-tested in `test/test_kart.c`; `KART_DUMP=dir` writes
+`apps/kart/kart.h`, host-tested in `test/test_kart.c`; `KART_DUMP=dir` writes
 frames. Drawn in 15-row strips in paint, physics in 16 ms steps in tick.
 
 **More than one person on the server** (2026-10-06, branch `accounts`).
@@ -1051,7 +1051,7 @@ CARDOS_STATE/sign_key.pem must never be regenerated). The wire format is in
 signatures with `api->sig_verify` (API 44).
 
 **Jar Factory is one app again** (2026-10-10, API 45). The shop and the post
-are screens of `apps/jar.c`: `apps/jarshop.h` and `apps/jarpost.h` (each still
+are screens of `apps/jar/jar.c`: `apps/jar/jarshop.h` and `apps/jar/jarpost.h` (each still
 compiles alone for its host tests) are included with their clashing names
 renamed, and `jar_open` switches screens. Two things make it fit:
 - **Code** runs from flash (XIP, the `appcode` partition), so the 50 KB of
@@ -1069,17 +1069,17 @@ are composed by the OS. A device whose partition table predates `appcode`
 (updated only over the air) loads app code into RAM, where 50 KB will not
 fit: it needs one full USB flash.
 
-**Jar Factory** (2026-10-09, `apps/jar.c`, Games): an idle
+**Jar Factory** (2026-10-09, `apps/jar/jar.c`, Games): an idle
 terrarium jam factory with AI-made collectible items, the owner's spec in
 `docs/superpowers/specs/2026-10-09-jar-factory-design.md` (all seven build
-steps). The world and items are portable headers (`apps/jarsim.h`,
-`apps/jaritem.h` -- the item record, under 1 KB, the server's packer mirrors
-it byte for byte), host-tested. `server/jar.py` makes each person's daily
+steps). The world and items are portable headers (`apps/jar/jarsim.h`,
+`apps/jar/jaritem.h` -- the item record, under 1 KB, the server's packer mirrors
+it byte for byte), host-tested. `server/jar/__init__.py` makes each person's daily
 stock with Claude from their garden, shelf and the day (8 items, sprites
 included, checked, signed), keeps the ownership ledger, friends and gifts on
 the store. Items run recipes (habits) or, in phase 2, bytecode scripts:
-`apps/jarvm.def` is the one instruction table, read by the device machine
-(`apps/jarvm.h`) and by `server/jarvm.py` (compiler, the same machine, a
+`apps/jar/jarvm.def` is the one instruction table, read by the device machine
+(`apps/jar/jarvm.h`) and by `server/jar/jarvm.py` (compiler, the same machine, a
 simulated day); test fixtures pin that both machines agree. The signature
 covers the record minus its signature and its 8 memory slots (scripts write
 those).
@@ -1091,28 +1091,28 @@ their corner), draws rain, snow and lightning, and fires `on weather rainy:`.
 
 **The living jar** (2026-10-11, branch `jar-living` until API 46 is on
 main; design in docs/superpowers/specs/2026-10-11-jar-living-world-design.md).
-- **Language v2** (apps/jarvm.def, both machines, cross-checked fixtures):
+- **Language v2** (apps/jar/jarvm.def, both machines, cross-checked fixtures):
   `on hour/signal/world/new/berry/bumped`; `sound`, `burst`, `throw`, `eat`,
   `drop`, `signal`, `seek`, `fly`/`home`, `boost`, `nudge`, `shake`; senses
   incl. `traits`/`neartraits`/`newtraits` read with `has(X, TRAIT)` (a BIT op).
   Traits are the record's tag field, sixteen words; scripts react to traits,
   never names. A name must mean one number (water was a zone and a trait).
-- **Gated:** server/jarvm.py makes and accepts only v1 until
+- **Gated:** server/jar/jarvm.py makes and accepts only v1 until
   `CARDOS_JAR_V2=1` -- a device needs a jar.capp built with v2. Turn it on in
   /etc/cardos/env after jar-living reaches devices.
-- **The sim** (apps/jarsim.h): world events (ants, leak, breeze, visitor,
+- **The sim** (apps/jar/jarsim.h): world events (ants, leak, breeze, visitor,
   dark, bloom) every 20-60 min; chores that stop production until the player
   comes (snail sulks, mould, puddle; js_chores/js_fix, saved); furniture
   (js_put_on, rides along, a fifth number on "place"); scenery; parts.
   Coins are still only jars that left: a visitor leaves jars on the dock.
 - **The record's longer header** (224 bytes, still version 1): role, scale,
   surface, part, part home, voice. Things keep 208 byte for byte.
-- **The scene** (apps/jarlive.h): drawing for all of it, a sound bank and a
+- **The scene** (apps/jar/jarlive.h): drawing for all of it, a sound bank and a
   sparse soundtrack (apps/synth.h, b cycles), x for chores, keep_awake.
-- **AI on the fly:** patches (server/jarpatch.py) -- a few handlers for an
+- **AI on the fly:** patches (server/jar/jarpatch.py) -- a few handlers for an
   item in the jar about a newcomer's traits, signed, fetched with the post,
   run for events the item's own script leaves; the day's events
-  (server/jarevents.py) -- times and kinds rolled by the code, named by Claude.
+  (server/jar/jarevents.py) -- times and kinds rolled by the code, named by Claude.
 - **Deals in talk:** `coins N` before the words; `DEAL:` lines; `tx` effects
   done once (txseen); a commission comes as a `deal` line on /jar/day.
 - **Tibbs's memory:** CARDOS_STATE/tibbs/history (every exchange), a
@@ -1123,7 +1123,7 @@ main; design in docs/superpowers/specs/2026-10-11-jar-living-world-design.md).
 new; a paid commission is 8 new. The older note below says 4.
 
 **A shop's stock is 4 items, from a shared pool** (2026-10-10). Every item
-ever made goes into one pool (`server/jar.py`, "the pool"), and `own/ID` is
+ever made goes into one pool (`server/jar/__init__.py`, "the pool"), and `own/ID` is
 where an item is: absent means the pool; a name means that person's shop or
 things. That keeps every item unique. A stock is:
 - what the person holds (Space in the shop, 4 at most);
@@ -1137,7 +1137,7 @@ request; the rest goes back to the pool then. The shop checks `/jar/day`
 quietly on every open, so it picks up a stock it missed. `python -m
 server.jar seed N` adds N items to the pool, counted against nobody.
 
-**The shop is a person: Tibbs** (2026-10-10, `server/shopkeep.py`). There
+**The shop is a person: Tibbs** (2026-10-10, `server/jar/shopkeep.py`). There
 are no tags any more. The shelf, the garden and the season used to steer
 the stock, and a request for industrial scrap on an autumn day came out a
 jack-o'-lantern with a gear in it. Now each new stock begins with Tibbs's
@@ -1161,7 +1161,7 @@ Change the prompts with care: they were tuned against real output.
 
 **Items are made in stages** (2026-10-11, v0.20.0, spec
 docs/superpowers/specs/2026-10-11-jar-item-pipeline-design.md). The only
-path: `jar.generate(search=)` -> `server/jarstages.py`. Per find the code
+path: `jar.generate(search=)` -> `server/jar/jarstages.py`. Per find the code
 rolls kind, tier, form and activity (`jar.ACTIVITIES`); the DM writes a
 concept from Tibbs's search (`dm_prompt` is the one place to grow its
 strategy); the fitter writes the sheet inside `jar.motion_rules(activity,
@@ -1188,7 +1188,7 @@ save writes only those while away), `js_step` skips the factory and
 jar.c switches; `jar_of` keeps a thing in one jar at a time.
 
 **Jar Lab: the bench for prompts and behaviour** (2026-10-11,
-`server/jarlab.py`, `server/jarlab.html`). At `/dash/jarlab` (under /dash
+`server/jar/jarlab.py`, `server/jar/jarlab.html`). At `/dash/jarlab` (under /dash
 because the cookie's Path is /dash; `/jarlab` redirects), the dashboard's
 cookie and an admin only. Pick kind, tier, price, form, brief (Sparks and
 Roll use the code's own dice), see the exact `jar.prompt_for` text and
@@ -1208,18 +1208,18 @@ pure calls (never across a Claude call). `server/tests/test_jarlab.py`.
 **The Town: four plants, three resources, three more people** (2026-10-11,
 v0.18.0). The owner asked for fewer plant kinds, each making its own thing,
 and neighbours for Tibbs who are paid in them:
-- **Plants** (`apps/jarsim.h`, `JPL_*`): berry (jam, coins, as before), reed
+- **Plants** (`apps/jar/jarsim.h`, `JPL_*`): berry (jam, coins, as before), reed
   (twigs), mushroom (spores), flower (nectar). Mosslings carry the non-berry
   produce to `J.res[]`, saved as `res S N T`; a bed's level 1-3 (`level`
   line) makes it grow 1x, 1.5x, 2x. Old saves' fern and cactus are reed.
   Only berry beds count in `js_rate_ph`.
-- **People** (`server/shopkeep.py`, `CAST`): everything there takes `who`
+- **People** (`server/jar/shopkeep.py`, `CAST`): everything there takes `who`
   (tibbs default) -- one Claude Code session each, the same history,
   notebook and seeding as Tibbs's, in CARDOS_STATE/<who>. `town_note` tells
   the others what happened. Pip alters a thing (spores), Bramble evolves a
   critter or grows a bed (nectar), Wren builds furniture (twigs).
-- **Deals** (`server/town.py`): the device sends `coins`, `have` and `beds`
-  lines before the words (`jtx_have` in `apps/jartx.h`); a `DEAL:` line is
+- **Deals** (`server/jar/town.py`): the device sends `coins`, `have` and `beds`
+  lines before the words (`jtx_have` in `apps/jar/jartx.h`); a `DEAL:` line is
   checked against them and becomes tx lines in the shared queue
   (`use<res>`, `gain<res>` on a failed job, `bedup K`, `remake ID`, `give
   ID`). Alteration is the old item and the request shown to Claude, made
@@ -1237,7 +1237,7 @@ and neighbours for Tibbs who are paid in them:
   (`js_buy_at`, `build K AT` in the save, `js_settle_build`).
   Resource beds ripen in `JS_RES_GROW_MS` (4 min at level 1).
 - **On the device**: Jar Post's Town (`V_TOWN`, `post_open("town")`) lists
-  the four and talks with `?who=`; `apps/jartx.h` carries out tx lines for
+  the four and talks with `?who=`; `apps/jar/jartx.h` carries out tx lines for
   the talk screen and for the scene, which asks `GET /jar/tx?after=` after
   the patches and events. A `remake`/`give` stops the queue until the item
   (`GET /jar/item?id=`) is fetched and its signature checks; a remade item
@@ -1341,6 +1341,23 @@ hardware-specific. What it cost to learn:
   without it the app is a blank page. The folder also reaches the `/update` manifest, so a first install
   lands in it rather than at the top level, which is where every app Build
   made used to end up.
+
+- **An app with several files of its own lives in a folder** (2026-10-12):
+  `apps/jar/`, `apps/kart/`, `apps/midi/` (MIDI and Circuit), `apps/iron/`,
+  `apps/gamenight/`, `apps/quoridor/`, `apps/tetris/`, `apps/pet/`.
+  `tools/build_apps.py` (`app_sources`) builds every `.c` directly in `apps/`
+  and every `.c` one folder down; the `.capp` is named by the file, not the
+  folder (`apps/jar/jar.c` is still `jar.capp`), so `folders.txt`, the icons,
+  the card and the manifest are unchanged, and two sources with one name are
+  refused. Includes are from the repo root (`#include "apps/jar/jarsim.h"`);
+  headers more than one app uses (`str.h`, `footer.h`, `synth.h`, `b64.h`,
+  ...) stay in `apps/`. A one-file app stays `apps/NAME.c`, which is all a
+  fenced Build may make (`server/fence.py` refuses `apps/NAME.c` beside an
+  `apps/NAME/`). On the server Jar is the package `server/jar/`:
+  `__init__.py` is what `server/jar.py` was, with `jarvm`, `jarstages`,
+  `jarlab` (and `jarlab.html`), `jarpatch`, `jarevents`, `shopkeep` and
+  `town` beside it (`from server.jar import shopkeep`); routes, URLs and
+  state are as they were, and `python -m server.jar seed N` still works.
 
 - **Every app speaks the same keys** (2026-10-02). A letter means one
   thing everywhere, so a key learned in one app works in the next:

@@ -355,8 +355,8 @@ Taken with the owner:
 
 How it fits CardOS:
 
-- A `.capp` in Games, `apps/jar.c` with its logic in portable headers
-  (`apps/jarsim.h` for the factory and items, `apps/jaritem.h` for the item
+- A `.capp` in Games, `apps/jar/jar.c` with its logic in portable headers
+  (`apps/jar/jarsim.h` for the factory and items, `apps/jar/jaritem.h` for the item
   record), host-tested like Forklift and Pet.
 - App data must stay under the build's 28 KB budget (`tools/build_apps.py`
   enforces it): owned items live on the card, only placed items' frames are in
@@ -370,7 +370,7 @@ How it fits CardOS:
 
 ## Server (steps 5 and 6), 2026-10-09
 
-`server/jar.py`, on the general store (`docs/superpowers/specs/
+`server/jar/__init__.py`, on the general store (`docs/superpowers/specs/
 2026-10-09-server-store-design.md`): its data is in `srv/jar`, which a
 device may read and never write; Claude is asked through `ask.ask_shape`,
 records are signed with `sign.sign`, names and last seen come from
@@ -479,7 +479,7 @@ Per person per UTC day, in a thread:
    Anything unreachable is skipped quietly.
 3. **Asking.** One `ask_shape` call for all 8 (9 on a full-moon day or a
    season's first day: the last is the special one), against a strict schema
-   built from `apps/jaritem.h`'s enums (parsed from the header, not
+   built from `apps/jar/jaritem.h`'s enums (parsed from the header, not
    retyped): name <= 12, line <= 32, kind, movement, speed, zone, up to 3
    habits `{when, when_arg, do, do_arg}`, up to 4 bubbles <= 12, 8 `#rrggbb`
    colours (slot 0 transparent), 1-4 frames of 16 strings of 16 digits 0-7.
@@ -515,7 +515,7 @@ is still too long costs a round, and the retries ask for four at a time.
 Nothing new to install: `cryptography` (already needed by `/sign/pubkey`)
 and outbound HTTPS to `api.open-meteo.com` (weather is skipped without it).
 The repository must be there (it is: Build runs in it), because the enums
-are read from `apps/jaritem.h` at run time. `CARDOS_STATE/sign_key.pem` is
+are read from `apps/jar/jaritem.h` at run time. `CARDOS_STATE/sign_key.pem` is
 the key every item is signed with: back it up, and never let it be
 regenerated, or every item already given out stops verifying.
 
@@ -525,10 +525,10 @@ Phase 2 as built. The files:
 
 | File | What |
 |---|---|
-| `apps/jarvm.def` | **The** instruction table, and the language's words (events, actions, senses, names), as X-macro lines. Both sides read it. |
-| `apps/jarvm.h` | The device's machine: portable, libc-free, no allocation. |
-| `apps/jarsim.h` | The hook: `js_item_event` asks the script first. |
-| `server/jarvm.py` | Reads the `.def` at import; the compiler, the same machine in Python, the simulated day, `LANGUAGE_GUIDE`. |
+| `apps/jar/jarvm.def` | **The** instruction table, and the language's words (events, actions, senses, names), as X-macro lines. Both sides read it. |
+| `apps/jar/jarvm.h` | The device's machine: portable, libc-free, no allocation. |
+| `apps/jar/jarsim.h` | The hook: `js_item_event` asks the script first. |
+| `server/jar/jarvm.py` | Reads the `.def` at import; the compiler, the same machine in Python, the simulated day, `LANGUAGE_GUIDE`. |
 | `tools/make_jarvm_fixtures.py` | Writes `test/fixtures/jarvm_*`: scripts, events, and the Python machine's trace. `test/test_jarvm.c` replays them through the C machine and needs the same trace byte for byte. |
 
 ### The bytes
@@ -547,7 +547,7 @@ opcode known, every slot, sense and action in range. Anything else and the
 script is left out -- the recipe does everything, as in phase 1. That is the
 spec's "unknown instruction or newer format: ignore the script".
 
-The instructions (`apps/jarvm.def` is the truth): `END`, `PUSH8 b`,
+The instructions (`apps/jar/jarvm.def` is the truth): `END`, `PUSH8 b`,
 `PUSH16 lo hi`, `LOAD k`, `STORE k`, `SENSE k`, `RAND`, `ADD SUB MUL DIV
 MOD NEG`, `EQ NE LT LE GT GE`, `NOT AND OR`, `JMP a`, `JZ a`, `ACT k` (the
 argument from the stack) and `ACTK k b` (a constant argument). Values are
@@ -586,7 +586,7 @@ placed item has.
 ### The language
 
 Small and readable, so an AI writes it reliably; compiled on the server only.
-`server/jarvm.py`'s `LANGUAGE_GUIDE` is the page the generation prompt gets.
+`server/jar/jarvm.py`'s `LANGUAGE_GUIDE` is the page the generation prompt gets.
 
     script    := handler+
     handler   := "on" EVENT [FILTER] ":" block "end"
