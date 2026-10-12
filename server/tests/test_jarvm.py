@@ -340,19 +340,25 @@ class GuideTest(unittest.TestCase):
                 self.assertIn(word, g)
         self.assertLess(len(g), 7000)
         v1 = V.LANGUAGE_GUIDE_V1
-        for word in ("burst", "throw", "on hour", "has(", "neartraits"):
+        for word in ("burst", "throw", "on chime", "has(", "neartraits"):
             self.assertNotIn(word, v1)                       # nothing a device cannot run yet
         self.assertLess(len(v1), 4000)
 
 
 class VersionTwoTest(unittest.TestCase):
     def test_new_events_narrow(self):
-        src = ("on hour 18: sound horn; end\non hour: say 1; end\n"
+        src = ("on chime 5: sound horn; end\non chime: say 1; end\n"
                "on signal 2: throw; end\non world ants: shake; end\n"
                "on new: if has(newtraits, sweet) then hop 10 end; end\n"
                "on berry: eat; end\non bumped: say 2; end")
-        self.assertEqual(go(src, "hour", 19)[1], [("sound", V.GROUPS["sound"]["horn"])])  # 18 + 1
-        self.assertEqual(go(src, "hour", 3)[1], [("say", 0)])
+        # a period in minutes: every 5th, and the plain one every 15th
+        self.assertEqual(go(src, "chime", 10)[1], [("sound", V.GROUPS["sound"]["horn"])])
+        self.assertEqual(go(src, "chime", 30)[1], [("sound", V.GROUPS["sound"]["horn"])])
+        self.assertEqual(go(src, "chime", 45)[1], [("sound", V.GROUPS["sound"]["horn"])])
+        self.assertEqual(go(src, "chime", 7)[1], [])
+        src2 = "on chime: say 1; end"
+        self.assertEqual(go(src2, "chime", 15)[1], [("say", 0)])
+        self.assertEqual(go(src2, "chime", 14)[1], [])
         self.assertEqual(go(src, "signal", 2)[1], [("throw", 0)])
         self.assertEqual(go(src, "signal", 3)[1], [])
         self.assertEqual(go(src, "world", V.GROUPS["world"]["ants"])[1], [("shake", 0)])
@@ -371,7 +377,8 @@ class VersionTwoTest(unittest.TestCase):
             V.compile_script("on poke: if has(traits, purple) then hop end; end", v2=True)
 
     def test_filters_are_checked(self):
-        for bad in ("on hour 24: hop; end", "on signal 0: hop; end", "on world rain: hop; end"):
+        for bad in ("on chime 16: hop; end", "on chime 60: hop; end", "on hour 7: hop; end",
+                    "on signal 0: hop; end", "on world rain: hop; end"):
             with self.assertRaises(V.ScriptError, msg=bad):
                 V.compile_script(bad, v2=True)
 

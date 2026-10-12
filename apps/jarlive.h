@@ -94,10 +94,10 @@ static int lv_patches(char *t) {
 
 /* ---- the day's events, written (server/jarevents.py) -------------------------------
  *
- * "event HH:MM KIND TITLE" lines, asked for once a day; kept across the
- * shop and the post (which clear the scene's state). At its minute -- or
- * within a quarter of an hour after, if another world event was going on --
- * an event begins in the sim with its title in the bar. */
+ * "event N KIND TITLE" lines, asked for once a day; kept across the shop and
+ * the post (which clear the scene's state). Never at a time of day (you would
+ * never catch it): while the jar is open the next one begins every 5-15
+ * minutes, when no other world event is going on, its title in the bar. */
 
 #define LV_EVENTS 3
 static const char *const LV_KIND[JWD_KINDS] = { "", "ants", "leak", "breeze", "visitor", "dark", "bloom" };
@@ -106,7 +106,8 @@ static struct {
   char day[10];                          /* the day they are for, YYYYMMDD */
   int n;
   uint32_t again;                        /* "pending": ask again then */
-  struct { int16_t minute; uint8_t kind, done; char title[32]; } ev[LV_EVENTS];
+  uint32_t wait;                         /* minutes open until the next one */
+  struct { uint8_t kind, done; char title[32]; } ev[LV_EVENTS];
 } LVE;
 
 static void lv_today(char *out, int n) {
@@ -136,35 +137,33 @@ static void lv_events_reply(const char *t) {
   LVE.n = 0;
   for (p = t; *p && LVE.n < LV_EVENTS; p = tsv_next_line(p)) {
     const char *q = p + 6;
-    uint32_t h, m;
     int k, i;
     if (!str_starts(p, "event ")) continue;
-    h = str_uint(&q);
-    if (*q++ != ':') continue;
-    m = str_uint(&q);
+    (void)str_uint(&q);                               /* its turn: they come in order */
     while (*q == ' ') q++;
     for (k = 1; k < JWD_KINDS; k++)
       if (str_starts(q, LV_KIND[k]) && q[api->str_len(LV_KIND[k])] == ' ') break;
     if (k == JWD_KINDS) continue;
     q += api->str_len(LV_KIND[k]) + 1;
-    LVE.ev[LVE.n].minute = (int16_t)(h * 60 + m);
     LVE.ev[LVE.n].kind = (uint8_t)k;
     LVE.ev[LVE.n].done = 0;
     for (i = 0; *q && *q != '\n' && i < (int)sizeof LVE.ev[0].title - 1; i++) LVE.ev[LVE.n].title[i] = *q++;
     LVE.ev[LVE.n].title[i] = 0;
     LVE.n++;
   }
+  LVE.wait = 5 + api->ticks_ms() % 11;              /* the first, 5-15 minutes in */
 }
 
-/* From the minute's tick: an event whose time has come, begun. */
-static void lv_events_minute(int minute) {
+/* From the minute's tick (of the jar being open): the next of the day's
+ * events, when its wait is over and nothing else is going on. */
+static void lv_events_minute(void) {
   int i;
-  if (minute < 0) return;
+  if (LVE.wait > 1) { LVE.wait--; return; }
+  if (J.world || J.jar_at) return;                               /* wait for the one going on */
   for (i = 0; i < LVE.n; i++) {
-    if (LVE.ev[i].done || minute < LVE.ev[i].minute) continue;
-    if (minute > LVE.ev[i].minute + 15) { LVE.ev[i].done = 1; continue; }   /* missed: the jar was shut */
-    if (J.world) continue;                                         /* wait for the one going on */
+    if (LVE.ev[i].done) continue;
     LVE.ev[i].done = 1;
+    LVE.wait = 5 + api->ticks_ms() % 11;
     js_world_begin(&J, LVE.ev[i].kind);
     api->fmt(G.msg, sizeof G.msg, "%s", LVE.ev[i].title);
     G.msg_until = api->ticks_ms() + 9000;

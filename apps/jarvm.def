@@ -45,8 +45,10 @@ JV_OP(26, BIT,    0, 2, 1, "pop k, pop a, push bit k of a (0 when k is outside 0
 
 /* JV_EVENT(number, word, C enum, filter, "fires when")
  *   The word is what follows `on` in a script. The filter says what may come
- *   after the word: none, every (tick: `every N`), hour (0..23, kept as
- *   hour + 1 so 0 can mean any), count (1..255), or a group of names below. */
+ *   after the word: none, every (tick: `every N`), chime (1..15 minutes, a
+ *   period like tick's; 0 means 15), count (1..255), or a group of names
+ *   below. Nothing happens at a time of day (the owner, 2026-10-11: "you will
+ *   never catch it"): the longest wait is a quarter of an hour. */
 JV_EVENT(0, tick,    JE_TICK,    every,  "4 times a second; `on tick every N:` runs every Nth tick")
 JV_EVENT(1, poke,    JE_POKE,    none,   "the player selects the item")
 JV_EVENT(2, near,    JE_NEAR,    near,   "something comes within 16 px; `on near snail:` narrows it")
@@ -55,7 +57,7 @@ JV_EVENT(4, jam,     JE_JAM,     jam,    "the belt jams or is fixed; `on jam fix
 JV_EVENT(5, gift,    JE_GIFT,    none,   "a parcel enters the jar")
 JV_EVENT(6, time,    JE_TIME,    time,   "dawn, day, dusk or night begins; `on time night:` narrows it")
 JV_EVENT(7, weather, JE_WEATHER, weather, "the real weather outside changes; `on weather rainy:` narrows it")
-JV_EVENT(8, hour,    JE_HOUR,    hour,   "the clock reaches the hour; `on hour 18:` narrows it (a fog horn)")
+JV_EVENT(8, chime,   JE_CHIME,   chime,  "every N minutes the jar is open, 1..15 (15 when no N): `on chime 15:` for a clock")
 JV_EVENT(9, signal,  JE_SIGNAL,  count,  "another item says `signal N`; `on signal 3:` narrows it")
 JV_EVENT(10, world,  JE_WORLD,   world,  "a world event begins in the jar; `on world ants:` narrows it")
 JV_EVENT(11, new,    JE_NEW,     none,   "a new item is put in the jar (`newtraits` says what it is)")

@@ -117,6 +117,7 @@ void test_jarsim_plants_make_their_own_things(void) {
   J.bed[2].type = JPL_SHROOM;
   J.bed[3].type = JPL_FLOWER;
   J.nmoss = 2;
+  J.world_clock = 1 << 30;                /* no ants or leaks in this one */
   CHECK_EQ(js_rate_ph(&J), 0);            /* nothing here makes jam */
   shipped = J.shipped;
   run_s(900);
@@ -703,20 +704,34 @@ void test_jarsim_seek_sound_burst_boost_shake(void) {
   CHECK(J.placed[0].vy > 0 && J.placed[1].vy > 0);
 }
 
-void test_jarsim_the_hour_and_a_new_item(void) {
+/* Nothing at a time of day (the owner, 2026-10-11): `chime` is every N
+ * minutes open, 15 at most; the hour is only a sense. */
+void test_jarsim_the_chime_and_a_new_item(void) {
+  int m, glows = 0;
   fresh(8);
   CHECK_EQ(place_at(1, JK_FLOOR, JM_SITS, 60, ""), 0);
-  J.placed[0].hab[0].event = JE_HOUR; J.placed[0].hab[0].earg = 19;   /* 18:00 */
+  J.placed[0].hab[0].event = JE_CHIME; J.placed[0].hab[0].earg = 5;   /* every five minutes */
   J.placed[0].hab[0].action = JA_GLOW; J.placed[0].hab[0].aarg = 2;
   J.placed[0].hab[1].event = JE_NEW; J.placed[0].hab[1].action = JA_HOP;
   J.placed[0].nhab = 2;
   CHECK_EQ(js_sense(&J, 0, JSN_HOUR), -1);
-  js_set_hour(&J, 17);
-  CHECK_EQ(J.placed[0].glow, 0);
   js_set_hour(&J, 18);
-  CHECK_EQ(J.placed[0].glow, 1);
-  js_set_hour(&J, 18);                                 /* the same hour: once */
-  CHECK_EQ(J.placed[0].glow, 1);
+  CHECK_EQ(J.placed[0].glow, 0);                       /* the hour itself does nothing */
+  CHECK_EQ(js_sense(&J, 0, JSN_HOUR), 18);
+  for (m = 1; m <= 15; m++) {
+    int was = J.placed[0].glow;
+    js_chime(&J);
+    if (J.placed[0].glow != was) glows++;
+  }
+  CHECK_EQ(glows, 3);                                  /* minutes 5, 10 and 15 */
+  J.placed[0].hab[0].earg = 60;                        /* an old hour: a quarter at most */
+  glows = 0;
+  for (m = 1; m <= 30; m++) {
+    int was = J.placed[0].glow;
+    js_chime(&J);
+    if (J.placed[0].glow != was) glows++;
+  }
+  CHECK_EQ(glows, 2);
   CHECK_EQ(js_sense(&J, 0, JSN_HOUR), 18);
   CHECK_EQ(place_at(2, JK_FLOOR, JM_SITS, 160, "sweet"), 1);
   js_announce(&J, 1);

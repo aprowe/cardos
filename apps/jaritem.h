@@ -120,7 +120,7 @@ enum { JLV_CALM = 0, JLV_NORMAL, JLV_JITTERY, JLV_KINDS };
  *   time     0 any change, then 1 dawn, 2 day, 3 dusk, 4 night
  * and is ignored by the rest. */
 enum { JE_TICK = 0, JE_POKE, JE_NEAR, JE_SHIPPED, JE_JAM, JE_GIFT, JE_TIME,
-       JE_WEATHER, JE_HOUR, JE_SIGNAL, JE_WORLD, JE_NEW, JE_BERRY, JE_BUMPED, JE_KINDS };
+       JE_WEATHER, JE_CHIME, JE_SIGNAL, JE_WORLD, JE_NEW, JE_BERRY, JE_BUMPED, JE_KINDS };
 enum { JN_ANY = 0, JN_MOSS, JN_SNAIL, JN_CRITTER, JN_DECOR };
 
 /* The actions (spec, "Actions"), with what the argument means:

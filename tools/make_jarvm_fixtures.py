@@ -37,8 +37,8 @@ OP = V.OP
 
 
 VERSION2 = """
-on hour 18: sound horn; end
-on hour: mem[0] = hour; end
+on chime 15: sound horn; end
+on chime: mem[0] = hour; end
 on signal 2: throw; signal 3; end
 on world ants: shake; boost 20; end
 on world: nudge; end
@@ -140,7 +140,7 @@ FIXTURES = [
      {V.SENSES["neartraits"]: -32768, V.SENSES["newtraits"]: 0x0202, V.SENSES["berries"]: 3,
       V.SENSES["fed"]: 2, V.SENSES["hour"]: 18},
      [0] * 8,
-     [("hour", 19), ("hour", 3), ("signal", 2), ("signal", 9), ("world", 1), ("world", 2),
+     [("chime", 15), ("chime", 7), ("signal", 2), ("signal", 9), ("world", 1), ("world", 2),
       ("new", 0), ("berry", 0), ("bumped", 0), ("near", 1), ("poke", 0), ("poke", 0)]),
     ("clamp", asm([(E["poke"], 0, 0)],
                   [OP["SENSE"], 6, OP["STORE"], 0, OP["SENSE"], 0, OP["STORE"], 1, OP["END"]]),

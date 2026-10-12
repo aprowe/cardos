@@ -980,24 +980,26 @@ void test_jar_the_lanes_deals_reach_the_open_jar(void) {
 }
 
 
-/* The day's events: asked once, begun at their minute with their title. */
+/* The day's events: asked once, then played in turn while the jar is open,
+ * 5-15 minutes apart -- never at a time of day (the owner, 2026-10-11). */
 static int EV_ASKS;
 static int events_server(const char *m, const char *path, const char *body, char *out, int cap) {
   if (!strncmp(path, "/jar/events?day=", 16)) {
     if (EV_ASKS++ == 0) return snprintf(out, (size_t)cap, "pending\n");
-    return snprintf(out, (size_t)cap, "event 12:05 ants The Great Ant Parade\nevent 23:59 bloom Late Bloom\n");
+    return snprintf(out, (size_t)cap, "event 1 ants The Great Ant Parade\nevent 2 bloom Late Bloom\n");
   }
   if (!strncmp(path, "/jar/patches", 12)) return 0;
   return patch_server(m, path, body, out, cap);
 }
 
-void test_jar_the_days_events_come_at_their_time(void) {
+void test_jar_the_days_events_come_in_turn(void) {
+  int i;
   start(T0);
   memset(&LVE, 0, sizeof LVE);
   EV_ASKS = 0;
   fakeapi_now.synced = 2;
   fakeapi_now.year = 2026; fakeapi_now.month = 10; fakeapi_now.day = 11;
-  fakeapi_now.hour = 12; fakeapi_now.min = 0;
+  fakeapi_now.hour = 3; fakeapi_now.min = 0;           /* the middle of the night: no matter */
   jf_handler = events_server;
   GIFTS = 0; THANKS = 0; NET_UP = 1;
   J.world_clock = 1 << 30;
@@ -1007,12 +1009,14 @@ void test_jar_the_days_events_come_at_their_time(void) {
   CHECK(EV_ASKS >= 2);
   CHECK_EQ(LVE.n, 2);
   CHECK(strcmp(LVE.day, "20261011") == 0);
+  CHECK(LVE.wait >= 5 && LVE.wait <= 15);
   CHECK_EQ(J.world, 0);
-  fakeapi_now.min = 5;
-  ticks(1200);
+  for (i = 0; i < 16 * 60 && !LVE.ev[0].done; i++) ticks(1000);   /* within a quarter hour */
+  CHECK(i < 16 * 60);
   CHECK_EQ(J.world, JWD_ANTS);
   CHECK(strstr(G.msg, "Ant Parade") != 0);
   CHECK(LVE.ev[0].done);
+  CHECK(!LVE.ev[1].done);                              /* the next, in its turn */
 }
 
 /* ---- motion as parts: the idle, drawn (the item pipeline spec, section 2) ---- */

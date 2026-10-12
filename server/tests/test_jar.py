@@ -598,7 +598,7 @@ class VersionTwo(unittest.TestCase):
             s = jar.item_schema()
             self.assertNotIn("traits", s["properties"])
             whens = s["properties"]["habits"]["items"]["properties"]["when"]["enum"]
-            self.assertNotIn("hour", whens)
+            self.assertNotIn("chime", whens)
             self.assertNotIn("burst", s["properties"]["habits"]["items"]["properties"]["do"]["enum"])
             p = jar.prompt_for("a brass beetle", kind="critter", form="scenery")
             self.assertNotIn("burst", p)
@@ -613,7 +613,9 @@ class VersionTwo(unittest.TestCase):
         s = jar.item_schema("furniture")
         self.assertIn("surface", s["required"])
         self.assertIn("traits", s["required"])
-        self.assertIn("hour", s["properties"]["habits"]["items"]["properties"]["when"]["enum"])
+        whens = s["properties"]["habits"]["items"]["properties"]["when"]["enum"]
+        self.assertIn("chime", whens)
+        self.assertNotIn("hour", whens)                    # nothing at a time of day
         self.assertEqual(jar.item_schema("part")["properties"]["frames"]["minItems"], 2)
 
     def test_forms_by_the_dice_and_only_where_they_suit(self):
@@ -847,8 +849,9 @@ class Events(unittest.TestCase):
         from server import jarevents
         plan = jarevents.roll("20261011", "alex")
         self.assertEqual(plan, jarevents.roll("20261011", "alex"))   # the same all day
-        self.assertTrue(1 <= len(plan) <= 3)
-        self.assertTrue(all(8 * 60 <= m < 22 * 60 and k in jarevents.KINDS for m, k in plan))
+        self.assertTrue(3 <= len(plan) <= 6)
+        self.assertEqual([n for n, _k in plan], list(range(1, len(plan) + 1)))   # turns, not times
+        self.assertTrue(all(k in jarevents.KINDS for _n, k in plan))
         asked = []
 
         def fake(chat, prompt, schema, **kw):
@@ -862,7 +865,8 @@ class Events(unittest.TestCase):
         self.assertIn("rainy", asked[0])
         self.assertEqual([e["title"] for e in evs], ["Parade of %d" % i for i in range(len(plan))])
         lines = jarevents.text(evs).splitlines()
-        self.assertTrue(lines[0].startswith("event %02d:" % (plan[0][0] // 60)))
+        self.assertTrue(lines[0].startswith("event 1 "))
+        self.assertNotIn(":", lines[0].split()[1])
         self.assertIn(" %s Parade of 0" % plan[0][1], lines[0])
         self.assertEqual(jarevents.answer(None, "alex", "20261011"), jarevents.text(evs))
         self.assertIn("they marched", shopkeep._get(kv.store(), "tibbs/events", [])[-1])

@@ -131,6 +131,7 @@ DONE, NONE, LIMIT, FAULT, IGNORE = 0, 1, -1, -2, -3
 RESULT_NAME = {DONE: "done", NONE: "none", LIMIT: "limit", FAULT: "fault", IGNORE: "ignore"}
 
 TICK = EVENTS["tick"]
+CHIME = EVENTS["chime"]
 INVISIBLE = {ACTIONS["nothing"], ACTIONS["wait"], ACTIONS["stop"], ACTIONS["signal"]}
 
 _KEYWORDS = {"on", "end", "if", "then", "elif", "else", "and", "or", "not", "mem",
@@ -209,6 +210,9 @@ def entry(s, ev, arg):
             continue
         if ev == TICK:
             if t[1] > 1 and _cmod(arg, t[1]):
+                continue
+        elif ev == CHIME:                               # a period, 15 minutes at most
+            if _cmod(arg, t[1] if 0 < t[1] < 15 else 15):
                 continue
         elif t[1] and t[1] != arg:
             continue
@@ -514,12 +518,13 @@ class _Parser:
             if n[0] != "num" or not 1 <= int(n[1]) <= 255:
                 raise ScriptError(n[2], "expected a number of ticks 1..255 after 'every', found %s" % _show(n))
             return int(n[1])
-        if kind == "hour":
+        if kind == "chime":                             # every N minutes, 15 at most
             self.next()
-            if tok[0] != "num" or not 0 <= int(tok[1]) <= 23:
-                raise ScriptError(tok[2], "expected an hour 0..23 or ':' after 'on hour', found %s"
+            if tok[0] != "num" or not 1 <= int(tok[1]) <= 15:
+                raise ScriptError(tok[2], "expected minutes 1..15 or ':' after 'on chime' -- "
+                                  "nothing waits longer than a quarter of an hour; found %s"
                                   % _show(tok))
-            return int(tok[1]) + 1                      # 0 is "any": the hour is kept + 1
+            return int(tok[1])
         if kind == "count":
             self.next()
             if tok[0] != "num" or not 1 <= int(tok[1]) <= 255:
@@ -1022,7 +1027,8 @@ def simulate_day(script, nbub=MAX_BUB, nframes=MAX_FRAMES, seed=1, ticks_per_hou
     for hour in range(24):
         world["hour"] = hour
         clock[0] = hour
-        fire("hour", hour + 1)
+        for m in range(0, 60, 1 if hour == 0 else 15):   # chimes: every minute of the
+            fire("chime", hour * 60 + m)                     # first hour, quarters after
         if hour in phases:
             world["time"] = phases[hour]
             fire("time", phases[hour])
@@ -1106,7 +1112,7 @@ def _guide(v2=True):
         if not v2 and _n >= V1_EVENTS:
             continue
         form = {"none": "on %s:" % word, "every": "on tick: / on tick every N:",
-                "hour": "on %s: / on %s 0..23:" % (word, word),
+                "chime": "on %s: / on %s 1..15:" % (word, word),
                 "count": "on %s: / on %s N:" % (word, word)}.get(
             filt, "on %s: / on %s %s:" % (word, word, "|".join(GROUPS.get(filt, {}))))
         evs.append("  %-34s %s" % (form, doc))

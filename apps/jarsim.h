@@ -305,6 +305,7 @@ typedef struct {
   uint8_t  nsell, ntrash;
   uint16_t res[JRS_KINDS];             /* the stores: spores, nectar, twigs */
   uint8_t  njars, jar_at;              /* extra jars bought; the one on screen (0 the factory) */
+  uint32_t chime_n;                    /* minutes open, this launch (`on chime`) */
   uint32_t away_acc;                   /* jar-ms of pay owed while away, toward the next jar */
   uint8_t  build_k;                    /* an upgrade being built: JU_* + 1, 0 none */
   uint32_t build_at;                   /* ... done at this UTC second */
@@ -1231,8 +1232,11 @@ static JS_OPT int js_item_event(Jar *j, int i, int ev, int arg) {
     if (ev == JE_TICK) {
       int per = hb->earg ? hb->earg : 1;
       if ((arg + p->phase) % per) continue;
+    } else if (ev == JE_CHIME) {
+      int per = hb->earg && hb->earg < 15 ? hb->earg : 15;
+      if (arg % per) continue;
     } else if (hb->earg && hb->earg != arg && (ev == JE_NEAR || ev == JE_JAM || ev == JE_TIME ||
-                                                ev == JE_WEATHER || ev == JE_HOUR ||
+                                                ev == JE_WEATHER ||
                                                 ev == JE_SIGNAL || ev == JE_WORLD)) {
       continue;
     }
@@ -1474,7 +1478,7 @@ static JS_OPT void js_init(Jar *j, uint32_t seed) {
   j->fixer[0] = j->fixer[1] = -1;
   j->jam_clock = js_rr(j, 120, 240) * JS_HZ;
   j->nap_clock = js_rr(j, 60, 150) * JS_HZ;
-  j->world_clock = js_rr(j, 20, 60) * 60 * JS_HZ;
+  j->world_clock = js_rr(j, 5, 15) * 60 * JS_HZ;     /* never a wait you would miss */
   j->sulk_clock = js_rr(j, 40, 80) * 60 * JS_HZ;
   j->mould_clock = js_rr(j, 60, 120) * 60 * JS_HZ;
   j->sig_from = -1;
@@ -1524,12 +1528,17 @@ static JS_OPT void js_set_weather(Jar *j, int w) {
 }
 
 /* The real hour, 0..23 or -1 (the app hands it in; js_set_minute's minute is
- * moved to the real sunrise). On the hour is an event: `on hour 18:`. */
+ * moved to the real sunrise), for the hour sense only: nothing happens at a
+ * time of day (the owner, 2026-10-11) -- day, night, dawn and dusk are states. */
 static JS_OPT void js_set_hour(Jar *j, int hour) {
-  int h1 = hour >= 0 && hour < 24 ? hour + 1 : 0;
-  if (h1 == j->hour1) return;
-  j->hour1 = (uint8_t)h1;
-  if (h1) js_event(j, JE_HOUR, h1);
+  j->hour1 = (uint8_t)(hour >= 0 && hour < 24 ? hour + 1 : 0);
+}
+
+/* A minute of the jar being open: `on chime N:` runs every N of them (15 at
+ * most), so a clock can chime every quarter-hour and nothing waits longer. */
+static JS_OPT void js_chime(Jar *j) {
+  j->chime_n++;
+  js_event(j, JE_CHIME, (int)j->chime_n);
 }
 
 /* The player put item i in the jar just now: the others hear `on new`. */
@@ -2243,7 +2252,7 @@ static JS_OPT void js_step_world(Jar *j) {
       r -= WEIGHT[k] + (k == JWD_LEAK && j->weather >= 4 ? 4 : 0);
       if (r < 0) { w = k; break; }
     }
-    j->world_clock = js_rr(j, 20, 60) * 60 * JS_HZ;
+    j->world_clock = js_rr(j, 5, 15) * 60 * JS_HZ;     /* never a wait you would miss */
     js_world_begin(j, w);
   }
   if (!j->sulk && --j->sulk_clock <= 0) {

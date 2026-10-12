@@ -229,7 +229,7 @@ on time night: glow on; end
 on time dawn: glow off; end"""
 
 STUB_SCRIPT_V2 = STUB_SCRIPT_V1 + """
-on hour 12: sound ding; end
+on chime 15: sound ding; end
 on new: if has(newtraits, food) then burst sparkle end; end"""
 
 

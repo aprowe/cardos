@@ -13,8 +13,8 @@
  *   then        entries x { event, filter, offset of its code }
  *   then        code, to the end
  * One entry runs per event: the first whose event matches and whose filter
- * is 0 (any) or equals the event's argument -- for tick, the filter is a
- * period instead: every Nth tick. The compiler lists a filtered entry before
+ * is 0 (any) or equals the event's argument -- for tick and chime, the
+ * filter is a period instead: every Nth tick, every N minutes (15 at most). The compiler lists a filtered entry before
  * an unfiltered one for the same event, so the narrower one wins.
  *
  * THE MACHINE runs one entry: a stack of JV_STACK 16-bit values, the item's
@@ -162,7 +162,9 @@ static JV_OPT int jv_entry(const uint8_t *s, int ev, int arg) {
   for (e = 0; e < s[1]; e++) {
     const uint8_t *t = s + 2 + 3 * e;
     if (t[0] != ev) continue;
-    if (ev == JE_TICK ? (t[1] > 1 && arg % t[1]) : (t[1] && t[1] != arg)) continue;
+    if (ev == JE_TICK ? (t[1] > 1 && arg % t[1]) :
+        ev == JE_CHIME ? (arg % (t[1] && t[1] < 15 ? t[1] : 15) != 0) :   /* a period, 15 at most */
+        (t[1] && t[1] != arg)) continue;
     return t[2];
   }
   return -1;

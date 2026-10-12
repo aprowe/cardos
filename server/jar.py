@@ -981,7 +981,7 @@ def prompt_for(brief, owned=(), avoid=(), kind=None, tier=None, form=None):
             "each other: poke it and it sets off fireworks (burst sparkle) or a sound; it "
             "throws the nearest small thing about; it eats ripe berries (eat) and leaves "
             "pellets that feed the bushes (drop); it chases anything sweet (seek sweet); it "
-            "signals the others (signal N / on signal N:); it sounds on the hour (on hour 12: "
+            "signals the others (signal N / on signal N:); it chimes now and then (on chime 15: "
             "sound horn); it reacts to world events (on world ants:, on world dark:) and to new "
             "arrivals (on new: if has(newtraits, food) ...). React to traits, never to names. "
             "Not every item needs a script: a cheap one can be a simple sitter.",

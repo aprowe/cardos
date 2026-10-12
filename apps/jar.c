@@ -97,6 +97,7 @@ static struct {
   char msg[40];
   uint32_t msg_until;
   uint32_t last_ms, acc, last_key, last_paint, last_save, last_min, frames, bar_ms;
+  uint32_t open_ms;                     /* toward the next minute of the jar being open */
   int bars, menu_dirty, asked;
   int sky[6];                           /* top and bottom of the background, r g b */
   uint32_t hash[NSTRIP];
@@ -1569,8 +1570,7 @@ static void clock_minute(void) {
   api->now(&t);
   J.epoch = api->epoch();
   js_set_minute(&J, sun_minute(t.synced ? t.hour * 60 + t.min : -1));
-  js_set_hour(&J, t.synced ? t.hour : -1);       /* the real hour: on hour 18 */
-  lv_events_minute(t.synced ? t.hour * 60 + t.min : -1);   /* the day's written events */
+  js_set_hour(&J, t.synced ? t.hour : -1);       /* the hour sense; no event */
   js_settle_beds(&J, J.epoch);              /* a plant comes of age while you watch */
   if (J.build_k && !js_settle_build(&J, J.epoch)) { say("An upgrade is finished"); save(); }
   set_sky(J.minute);
@@ -1587,6 +1587,12 @@ static int scene_tick(void *st, uint32_t now) {
   if (dt > 250) dt = 250;
   G.acc += dt;
   while (G.acc >= JS_STEP_MS && steps < 10) { js_step(&J); post_step(); G.acc -= JS_STEP_MS; steps++; }
+  G.open_ms += dt;
+  if (G.open_ms >= 60000u) {            /* a minute open: chimes, and the day's events in turn */
+    G.open_ms -= 60000u;
+    js_chime(&J);
+    lv_events_minute();
+  }
   if (now - G.last_min > 1000) {
     G.last_min = now;
     clock_minute();
