@@ -787,7 +787,7 @@ function renderScreen(){
   }
 }
 function googleState(){ const g=S.st&&S.st.google; if(!g) return 'unknown'; if(!g.configured) return 'unset'; if(!g.signed_in) return 'out'; if(!g.ok||g.client_mismatch) return 'broken'; if(!g.tasks||!g.calendar) return 'partial'; return 'ok'; }
-const SRV=[['claude','Claude agent','Available','Not available'],['builds','Builds','Enabled','Disabled'],['voice','Voice (whisper)','Ready','Not ready'],['render','Web renderer','Available','Not available']];
+const SRV=[['claude','Claude agent','Available','Not available'],['builds','Builds','Enabled','Disabled'],['voice','Voice (whisper)','Ready','Not ready']];
 // Builds being off is a choice (a laptop server has none), not a fault.
 function srvProblems(){ const s=S.st&&S.st.server; if(!s) return []; return SRV.filter(([k])=>k!=='builds'&&s[k]&&!s[k].ok).map(r=>r[1]); }
 function togglLine(t){ const r=t.running; return `${esc(r.description||'(no description)')}${r.project?' — '+esc(r.project):''}`; }

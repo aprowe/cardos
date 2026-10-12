@@ -164,7 +164,6 @@ static void seen_begin(void) {
     seen_list(path, NULL, NULL);
   }
   seen_list(FONTS_DIR, NULL, NULL);
-  seen_list(ASM_DIR, NULL, NULL);
 }
 
 static void seen_end(void) {
@@ -355,39 +354,6 @@ static void seed_colour_icons(void) {
   }
 }
 
-/* One example program for the IDE, so it opens on something that runs.
- *
- * Same reasoning as the .capp blobs above: a file that can only arrive by
- * card reader is a file the user does not have, and an assembler with an
- * empty buffer teaches nobody the syntax. Written once and never again --
- * unlike the apps, this is a document, and a version the user has edited is
- * worth more than the one shipped. */
-static void seed_example(void) {
-  static const char PROG[] =
-  "; Sum 1..100 and print it.\n"\
-    ";\n"\
-    "; ctrl-b runs this on the VM, ctrl-l compiles it to real Xtensa\n"\
-    "; and runs that, ctrl-x does both and checks they agree.\n"\
-    "\n"\
-    "        movi r0, 0        ; total\n"\
-    "        movi r1, 1        ; i\n"\
-    "        movi r2, 101      ; limit\n"\
-    "        movi r3, 1\n"\
-    "loop:   add  r0, r0, r1\n"\
-    "        add  r1, r1, r3\n"\
-    "        blt  r1, r2, loop\n"\
-    "        sys  1            ; print r0  -- expect 5050\n"\
-    "        halt\n";
-
-  int fd;
-  have_dir(ASM_DIR);
-  if (have_size(ASM_DIR "/sum.s") >= 0) return;
-  fd = fs_open(ASM_DIR "/sum.s", FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
-  if (fd < 0) return;
-  write_all(fd, (const uint8_t *)PROG, sizeof PROG - 1);
-  fs_close(fd);
-}
-
 /* Seed the folder the first time, so a fresh card still has something to click
  * rather than an empty desktop with no clue what to do. Each entry is created
  * only if absent rather than only on a wholly empty folder: a card that
@@ -422,7 +388,6 @@ static void seed_dir(void) {
   seed_capps();
   seed_colour_icons();
   seed_fonts();
-  seed_example();
   seen_end();
 }
 

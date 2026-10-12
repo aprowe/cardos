@@ -59,7 +59,6 @@
 #include "kernel/sys/alarm.h"
 #include "kernel/sys/agent.h"
 #include "kernel/net/httpq.h"
-#include "kernel/net/share.h"
 #include "kernel/ui/fontres.h"
 #include "kernel/sys/midi.h"
 #include "kernel/net/update.h"
@@ -239,7 +238,7 @@ static void cmd_help(void) {
   con_write("         set TZ=PST8PDT,M3.2.0,M11.1.0 -- clocks are UTC until\n");
   con_write("         you do; every app reads it\n");
   con_write("radios   wifi [scan|SSID PASS|saved|forget|off]\n");
-  con_write("         mouse, get URL, share [off|log] (card as a drive)\n");
+  con_write("         mouse, get URL\n");
   con_write("         usbdisk (card as a USB drive; or hold d at power-on)\n");
   con_write("         print [scan|use N|test|FILE] (bluetooth thermal printer)\n");
   con_write("screens  launch (carousel), desk (windows), escape returns\n");
@@ -411,7 +410,6 @@ static void run_builtin(const char *line, char *arg) {
       con_printf("%s%s%s\n", shot_last_path(), *shot_error() ? ": " : "", shot_error());
     else con_printf("shot: %s\n", shot_error());
   }
-  else if (!strcmp(line, "share")) cmd_share(arg);
   else if (!strcmp(line, "print")) cmd_print(arg);
   else if (!strcmp(line, "volume")) {
     if (arg && *arg) speaker_set_volume(atoi(arg));
@@ -506,7 +504,7 @@ static const char *const COMMANDS[] = {
   "battery", "defaults", "listen", "mouse", "pwd", "reboot", "rm",
   "run", "time",
   "safe",
-  "print", "share", "shot", "taskcost", "update", "usbdisk", "volume", "wifi", "xip",
+  "print", "shot", "taskcost", "update", "usbdisk", "volume", "wifi", "xip",
 };
 #define NCOMMANDS ((int)(sizeof COMMANDS / sizeof COMMANDS[0]))
 
@@ -1618,7 +1616,6 @@ void app_main(void) {
   capprun_on_release(midi_release_owner);    /* the MIDI port, its notes stopped */
   capprun_on_release(link_release_owner);    /* the ESP-NOW link, its partner told */
   capprun_on_release(power_release_owner);   /* the screen, if it held it on */
-  capprun_on_release(share_app_closed);      /* the share, if it started it */
   {
     /* Big-app mode (kernel/app/bigmode.h): the heap it takes from, what it
      * lets go of on entering, and its blocks freed with the app. */

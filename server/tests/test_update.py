@@ -32,7 +32,7 @@ def main():
     tmp = tempfile.mkdtemp()
     apps = os.path.join(tmp, "apps")
     os.mkdir(apps)
-    with open(os.path.join(apps, "pinball.capp"), "wb") as f:
+    with open(os.path.join(apps, "mines.capp"), "wb") as f:
         f.write(b"a")                       # fnv1a32("a") = e40c292c
     with open(os.path.join(apps, "notes.txt"), "wb") as f:
         f.write(b"not an app")
@@ -41,11 +41,11 @@ def main():
     m = updates.manifest(firmware=os.path.join(tmp, "none.bin"), apps_dir=apps,
                          folders={})
     fails += not check("lists each .capp with its hash and size",
-                       m, "app pinball e40c292c 1\nversion server %s\n" % updates.server_version())
+                       m, "app mines e40c292c 1\nversion server %s\n" % updates.server_version())
     m = updates.manifest(firmware=os.path.join(tmp, "none.bin"), apps_dir=apps,
-                         folders={"pinball": "Games"})
+                         folders={"mines": "Games"})
     fails += not check("and the folder it belongs in, last",
-                       m, "app pinball e40c292c 1 Games\nversion server %s\n"
+                       m, "app mines e40c292c 1 Games\nversion server %s\n"
                        % updates.server_version())
     fails += not check("the repository's own table is apps/folders.txt",
                        updates.load_folders().get("timer"), "Plan")
@@ -91,9 +91,9 @@ def main():
 
     r = get(base + "/update").decode()
     fails += not check("/update is the manifest", r.split("\n")[1],
-                       "app pinball e40c292c 1 Games")
+                       "app mines e40c292c 1 Games")
     fails += not check("/update/app/NAME is the file",
-                       get(base + "/update/app/pinball"), b"a")
+                       get(base + "/update/app/mines"), b"a")
     fails += not check("no flavor is firmware older than the split: release",
                        r.split("\n")[0],
                        "firmware " + bytes(range(100, 132)).hex() + " 400")

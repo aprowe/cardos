@@ -2,7 +2,7 @@
 
 Everything the device reaches over the network that is not the open internet
 comes through here -- Build's conversation, voice, updates, screenshots, the
-screen stream, the web renderer. None of that lives in this file. Each service
+screen stream. None of that lives in this file. Each service
 module declares its own routes:
 
     ROUTES = [("GET", "/update", get_manifest),
@@ -15,8 +15,7 @@ owes the device, and the helpers for writing a reply.
 A route is behind the token unless its tuple says otherwise (the kinds are
 in server/routes.py): "device_or_dash" also takes the dashboard's cookie,
 "dash" takes only the cookie, "admin" is the token and the owner, and an
-"open" route checks for itself when it has something worth protecting --
-/render shows the banner to anyone but renders only for the device.
+"open" route checks for itself when it has something worth protecting.
 
 Run it with `python -m server`; see __main__.py for the flags.
 """
@@ -112,17 +111,6 @@ SERVER_ROUTES = [
 ]
 
 
-def _render_routes():
-    """The renderer drags in Pillow's filters and the DevTools client; a
-    server that cannot import them still serves everything else."""
-    try:
-        from .render import render
-        return render.ROUTES
-    except ImportError as e:
-        sys.stderr.write("render: unavailable (%s)\n" % e)
-        return []
-
-
 def _screen_routes():
     """mss and numpy, for the desktop stream -- a PC-only feature."""
     try:
@@ -141,7 +129,6 @@ ALL_ROUTES = _normalise(SERVER_ROUTES + chat.ROUTES + agent.ROUTES + m5hub.ROUTE
                         voice.ROUTES + shots.ROUTES + tz.ROUTES + dash.ROUTES + dashapi.ROUTES +
                         google.ROUTES + files.ROUTES + toggl.ROUTES + notes.ROUTES + daily.ROUTES + photos.ROUTES + music.ROUTES + midi.ROUTES + talk.ROUTES + msg.ROUTES +
                         kv.ROUTES + people.ROUTES + ask.ROUTES + sign.ROUTES + jar.ROUTES + jarlab.ROUTES +
-                        _render_routes() +
                         _screen_routes())
 
 

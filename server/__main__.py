@@ -1,6 +1,6 @@
 """The CardOS server: everything the device talks to that is not the open
 internet. Build's conversation with Claude Code, voice, updates, screenshots,
-the desktop stream and the web renderer, on one port.
+and the desktop stream, on one port.
 
     python -m server --port 8080                     on the laptop
     python -m server --port 8081 --token ... \\
@@ -22,12 +22,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m server", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8080)
-    ap.add_argument("--chrome", default=None)
-    ap.add_argument("--test", help="render this URL to page.cpx and exit")
-    ap.add_argument("--width", type=int, default=420,
-                    help="CSS viewport width, --no-pixel only; wider is scaled to 240")
-    ap.add_argument("--no-pixel", action="store_true",
-                    help="photographic mode: real fonts, rendered wide and scaled down")
+    ap.add_argument("--chrome", default=None, help=argparse.SUPPRESS)   # the web renderer's; gone
     ap.add_argument("--claude-cli", default=None,
                     help="path to the claude executable, if it is not on PATH")
     ap.add_argument("--model", default=None,
@@ -50,32 +45,7 @@ def main(argv=None):
     if args.build and not args.store:
         raise SystemExit("--build publishes into --store; give it one")
 
-    try:
-        from .render import render
-        Handler.chrome = args.chrome or render.find_chrome()
-    except (ImportError, SystemExit) as e:
-        # The droplet has no Chrome and no need of one; say so and serve the
-        # rest. --test is the one thing that cannot go on without it.
-        if args.test:
-            raise
-        render = None
-        Handler.chrome = args.chrome
-        sys.stderr.write("render: no Chrome (%s); /render will fail\n" % e)
-
-    if args.test:
-        if args.no_pixel:
-            im, _ = render.shoot(Handler.chrome, args.test, 2000, 6000, args.width)
-        else:
-            im, _ = render.shoot_pixelfont(Handler.chrome, args.test, 2000, 6000)
-        if im is None:
-            raise SystemExit("render failed")
-        im = render.trim(im)
-        data = render.to_cpx(im)
-        with open("page.cpx", "wb") as f:
-            f.write(data)
-        print("page.cpx: %dx%d, %d bytes (raw %d)"
-              % (im.size[0], im.size[1], len(data), im.size[0] * im.size[1] * 2))
-        return
+    Handler.chrome = None             # --chrome is accepted and ignored: the web renderer is gone
 
     kw = dict(claude=args.claude_cli, token=args.token,
               model=args.model, use_api_key=args.api_key)
@@ -104,7 +74,6 @@ def main(argv=None):
     # single-threaded server every poll queued behind the work it was polling.
     srv = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     print("cardos server on port %d" % args.port)
-    print("  chrome: %s" % (Handler.chrome or "none -- /render will fail"))
     print("  claude: %s" % (Handler.chat.claude or "NOT FOUND -- /chat will fail"))
     print("  voice:  %s" % ("whisper ready" if Handler.voice.ready()
                             else "NOT FOUND -- /voice will fail"))

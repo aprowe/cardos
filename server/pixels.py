@@ -2,8 +2,8 @@
 
 RGB565, high byte first, which is what the ST7789 is sent: as a u16 in
 the chip's little-endian memory that is the value byte-swapped. And the
-RLE row both /render (server/render) and /screen send, which apps/web.c
-and the screen viewer decode a row at a time -- two modes:
+RLE row /screen sends, which the screen viewer
+decodes a row at a time -- two modes:
 
     0..127    a run: the next pixel (u16, little-endian) repeated N+1 times
     128..255  a literal: the next N-127 pixels as they are

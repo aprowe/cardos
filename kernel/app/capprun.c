@@ -7,7 +7,6 @@
 #include "kernel/net/wifi.h"
 #include "kernel/net/http.h"
 #include "kernel/net/httpq.h"
-#include "kernel/net/share.h"
 #include "kernel/net/update.h"
 #include "kernel/sys/env.h"
 #include "kernel/app/cmdline.h"
@@ -764,7 +763,7 @@ const char *capprun_start_error(void) { return s_start_error; }
  * pieces up again; WiFi is built again by the next thing that wants the
  * network -- meet_needs, straight after this load, for an app that does --
  * and it lands round the app instead of under it. Nothing is taken that is
- * in use: not WiFi under a request or the share, not Bluetooth under a print
+ * in use: not WiFi under a request, not Bluetooth under a print
  * or a mouse (bt_radio_down keeps a claimed link).
  * Data in the arena never needs this; only a RAM code block or a heap data
  * block can be what failed. */
@@ -774,7 +773,7 @@ static void make_room(void) {
   size_t after, after8;
   if (s_hold_owner == NULL) capp_hold_code(0);
   if (!printq_busy()) bt_radio_down();
-  if (!httpq_active() && !share_running()) wifi_release();
+  if (!httpq_active()) wifi_release();
   /* Both pools: code wants one piece of executable RAM, data one piece of
    * the 8-bit heap, and either can be the one that failed. */
   after = heap_caps_get_largest_free_block(MALLOC_CAP_EXEC);

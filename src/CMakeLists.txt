@@ -64,8 +64,6 @@ idf_component_register(
     "../kernel/net/httpslot.c"
     "../kernel/sys/applog.c"
     "../kernel/sys/logring.c"
-    "../kernel/net/dav.c"
-    "../kernel/net/share.c"
     "../kernel/drv/battery.c"
     "../kernel/sys/power.c"
     "../kernel/sys/clock.c"

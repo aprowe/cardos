@@ -19,7 +19,6 @@
 #include "kernel/sys/notify.h"
 #include "kernel/net/wifi.h"
 #include "kernel/net/update.h"
-#include "kernel/net/share.h"
 #include "kernel/sys/printq.h"
 #include "kernel/sys/input.h"
 #include "kernel/ui/picker.h"
@@ -486,12 +485,13 @@ static const CappAgent AGENT = {
   agent_generation, agent_transcript, agent_status, agent_seen,
 };
 static const CappAgent *api_agent(void) { return &AGENT; }
-static int api_share_start(void) { return share_start(capprun_caller()); }
-static void api_share_stop(void) { share_stop(); }
-static const char *api_share_status(void) {
-  return share_running() ? share_url() : share_error();
-}
-static const char *api_share_take_log(void) { return share_take_log(); }
+/* The card as a WebDAV drive is gone (2026-10-12; tag before-app-removal).
+ * The four entries stay in the table so its layout, and CAPP_API_VERSION,
+ * do not move; an app that still asks is told no. */
+static int api_share_start(void) { return -1; }
+static void api_share_stop(void) {}
+static const char *api_share_status(void) { return "the share was removed"; }
+static const char *api_share_take_log(void) { return NULL; }
 static int api_print(const char *doc) { return printq_print_doc(doc); }
 static const char *api_print_status(void) { return printq_status(); }
 static int api_key_repeat(void) { return input_is_repeat(); }

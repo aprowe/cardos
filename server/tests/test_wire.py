@@ -1,6 +1,6 @@
 """Bytes and lines the device reads, pinned.
 
-The RLE rows of /render and /screen, the RGB565 of a converted picture,
+The RLE rows of /screen, the RGB565 of a converted picture,
 and the one-line text the device's apps parse (Chat, Hub, Toggl, Google).
 The device decodes these with no slack: a byte out of place is a garbled
 row or a field in the wrong column. The expected values were taken from
@@ -54,7 +54,7 @@ CIMG_SHA = "338f5ff5d83e8ec82f53566b09245edbe3911be58be407183f405c6cbdc9e184"
 class Pixels(unittest.TestCase):
 
     def test_render_rows(self):
-        from server.render import render
+        from server import pixels as render
         self.assertEqual(digest(render.encode_row(r) for r in rows()), ROWS_SHA)
 
     def test_screen_rows_are_the_same_bytes(self):
@@ -73,7 +73,7 @@ class Pixels(unittest.TestCase):
                                          for _ in range(500)]
 
     def test_rgb565(self):
-        from server.render import render
+        from server import pixels as render
         got = b"".join(render.rgb565_swapped(*c).to_bytes(2, "little") for c in self.colours())
         self.assertEqual(hashlib.sha256(got).hexdigest(), RGB_SHA)
 

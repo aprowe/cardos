@@ -21,7 +21,8 @@ class Catalog(unittest.TestCase):
 
     def test_todo_declares_its_commands(self):
         cmds = {c["id"]: c for c in build_apps.read_commands(TODO)}
-        self.assertEqual(sorted(cmds), ["add", "done", "list", "lists", "newlist", "show", "sync"])
+        self.assertEqual(sorted(cmds), ["add", "claim", "done", "list", "lists", "newlist", "show", "sync",
+                                        "today", "tomorrow", "unclaim"])
         self.assertEqual(cmds["add"]["params"],
                          [{"name": "text", "type": "text", "about": "what the task says"}])
         self.assertTrue(cmds["sync"]["net"])

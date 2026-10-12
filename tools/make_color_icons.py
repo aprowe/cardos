@@ -528,26 +528,6 @@ ICONS = {
         "................",
     ],
 
-    # A forklift, amber, with a blue crate up on its forks: the mast and
-    # the forks are what say forklift rather than truck.
-    "Forklift": [
-        "................",
-        "................",
-        ".K..............",
-        ".K........KKKKK.",
-        ".K........KbbbK.",
-        ".KKKKK....KbnbK.",
-        ".KyyyK....KbbbK.",
-        ".KyWyK.K..KKKKK.",
-        ".KyyyKKKKKKKKK..",
-        ".KyyyyyyK.K.....",
-        ".KyyyyyyK.K.....",
-        ".KyyyyyyKKKKK...",
-        ".KKKKKKKK.......",
-        "..KDK..KDK......",
-        "..KKK..KKK......",
-        "................",
-    ],
     # A tube man mid-flail on his fan: yellow hair, googly eyes, one arm up
     # and one out. The fan under him is what makes him a tube man and not a
     # red worm.
@@ -569,43 +549,7 @@ ICONS = {
         "...KDGDGDGDGK...",
         "...KKKKKKKKKK...",
     ],
-    "Pinball": [
-        "................",
-        "..KKKKKKKKKKKK..",
-        "..KnnnnnnnnnnK..",
-        "..KnnbnWWnbnnK..",
-        "..KnnnWWWWnnnK..",
-        "..KnbnWWWWnbnK..",
-        "..KnnnnWWnnnnK..",
-        "..KnnnnnnnnnnK..",
-        "..KnnnnnnnnnnK..",
-        "..KGnnnnnnnnGK..",
-        "..KnGGnnnnGGnK..",
-        "..KnnGGnnGGnnK..",
-        "..KnnnGGGGnnnK..",
-        "..KnnnnnnnnnnK..",
-        "..KKKKKKKKKKKK..",
-        "................",
-    ],
 
-    "Web": [
-        "................",
-        ".....KKKKKK.....",
-        "...KKWbWWbWKK...",
-        "..KKbWbWWbWbKK..",
-        "..KbWbbWWbbWbK..",
-        ".KbbWbbWWbbWbbK.",
-        ".KbbWbbWWbbWbbK.",
-        ".KWWWWWWWWWWWWK.",
-        ".KbbWbbWWbbWbbK.",
-        ".KbbWbbWWbbWbbK.",
-        ".KbbWbbWWbbWbbK.",
-        "..KbWbbWWbbWbK..",
-        "..KKbWbWWbWbKK..",
-        "...KKWbWWbWKK...",
-        ".....KKKKKK.....",
-        "................",
-    ],
 
     "Todo": [
         "................",
@@ -755,25 +699,6 @@ ICONS = {
         "..KbbbbWWbbbbK..",
         "..KbbbbbbbbbbK..",
         "...KKKKKKKKKK...",
-        "................",
-        "................",
-    ],
-    # The card, and something going each way: the card as a network drive.
-    "Share": [
-        "................",
-        "..KKKKKKK..b....",
-        "..KtKtKtKKbbb...",
-        "..KttttttK.b....",
-        "..KttttttK.b..g.",
-        "..KtKKKKtK.b..g.",
-        "..KtKWWKtK.b..g.",
-        "..KtKKKKtK.b..g.",
-        "..KttttttK....g.",
-        "..KttttttK...ggg",
-        "..KKKKKKKK....g.",
-        "................",
-        "................",
-        "................",
         "................",
         "................",
     ],
@@ -966,27 +891,6 @@ ICONS = {
         "................",
     ],
 
-    # IDE: a terminal window -- a title bar, a prompt chevron, a line of
-    # code and a caret. Dark where the editor apps are light, because it
-    # is the one app whose screen really is a console.
-    "IDE": [
-        "................",
-        ".KKKKKKKKKKKKKK.",
-        ".KWWWWWWWWWWWWK.",
-        ".KKKKKKKKKKKKKK.",
-        ".KnnnnnnnnnnnnK.",
-        ".KngnnnnnnnnnnK.",
-        ".KnngnnnnnnnnnK.",
-        ".KngnnnnnnnnnnK.",
-        ".KnnnnnnnnnnnnK.",
-        ".KnyyyynnnnnnnK.",
-        ".KnnnnnnnnnnnnK.",
-        ".KntnnnnnnnnnnK.",
-        ".KnnnnnnnnnnnnK.",
-        ".KKKKKKKKKKKKKK.",
-        "................",
-        "................",
-    ],
 
     # The fallback: a blank page with a folded corner.
     "generic": [

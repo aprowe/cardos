@@ -132,10 +132,8 @@ def toggl_state():
 
 
 def server_state(h):
-    from . import app
     c = h.chat
     voice = h.voice.ready() if h.voice else False
-    render = any(r[1].startswith("/render") for r in app.ALL_ROUTES)
     store = getattr(c, "store", None)
     from . import updates
     return {
@@ -147,8 +145,6 @@ def server_state(h):
                    else "off: the server was started without --build"},
         "voice": {"ok": bool(voice), "detail": "whisper ready" if voice
                   else "whisper was not found"},
-        "render": {"ok": render, "detail": "headless Chrome" if render
-                   else "unavailable on this server"},
     }
 
 

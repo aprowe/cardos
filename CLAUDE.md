@@ -75,20 +75,16 @@ quiet for 420 s (with a 1500 s backstop per step) rather than at a wall clock
 `CAPP_PROXY_DEFAULT`), because renaming a setting stored on every device is
 not worth a word.
 
-There is a web browser, of a sort. The device has no HTML parser and no layout
-engine; the server's `/render` (`server/render/`) drives headless Chrome over
-the DevTools protocol at a **240px viewport**, re-typesets the page in
-**CardOS's own 6x8 font** (built into a TTF by `server/render/pixelfont.py`
-from the same table the console draws from,
-so text lands on the pixel grid with nothing to antialias), and ships RLE'd
-RGB565 rows. Rendering wide and scaling down was tried first and is still there
-behind `?px=0`; it turns body text into grey mush, which is the whole reason for
-the font. The device decodes one row at a time and blits it, holding 480 bytes
-rather than a page. See `apps/web.c`.
-
 Also working: BLE mouse and keyboard (two links at once), WiFi with an HTTPS
 client apps can call, SD card, and chain-booting third-party firmware with a
 one-shot rollback home.
+
+**Removed on 2026-10-12**, to find in history at the tag
+`before-app-removal`: Forklift (and Forklang), Pinball, the IDE (and its
+toy assembler, `apps/asmvm.h`), Web (and the server's `/render`, its only
+client -- `--chrome` is still accepted and ignored), and Share, the card
+as a WebDAV drive (`kernel/net/share.c`, `dav.c`). The four `share_*`
+entries stay in the API table as refusals, so its layout did not move.
 
 **The device updates itself from the PC.** `update` in the console asks
 the server for its manifest (`/update`: the firmware's ELF SHA and an FNV
@@ -160,15 +156,8 @@ what says whether anything is listening. `listen` in the console does the same
 thing without the button. Design in
 `docs/specs/2026-09-12-voice-and-capabilities.md`.
 
-**The card is a network drive when you ask.** `share` in the console, or the
-Share app, runs a WebDAV server on port 80 (`kernel/net/share.c` is the
-socket and task; `kernel/net/dav.c` is the protocol and is host-tested).
-Windows maps `http://IP/` as a drive letter, Finder connects to it. No
-password: the boundary is the LAN, so it is a thing you turn on. Design in
-`docs/superpowers/specs/2026-09-14-webdav-share-design.md`.
-
 **Apps declare what they need**: `CAPP_NEEDS_NET`, `CAPP_NEEDS_PROXY`, or
-nothing (Mines and Pinball work on a device that has never seen a network).
+nothing (Mines works on a device that has never seen a network).
 The OS joins WiFi and checks the proxy answers *before* `capp_main` runs, so
 twenty seconds of joining belongs to "starting Web" rather than to "Web is
 broken". It never refuses to start an app; `api->caps_ok()` says what was
@@ -275,7 +264,7 @@ repaint goes through `kernel/ui/apphost.c` (`apphost_paint`, both shells)
 inside it, so an app paints the way it always did and the screen never sees
 the in-between; a damage-clipped paint stays direct. An app that composes its
 own strips or does I/O in paint sets `CAPP_PAINT_DIRECT` in its flags (Kart,
-Noodle, Calc, Photo, Pinball, Level, Forklift, Web). **Paint now runs once
+Noodle, Calc, Photo, Level). **Paint now runs once
 per strip**: a paint must not change state or read the clock mid-way (Toggl
 and Pet were fixed for exactly that). The launcher's carousel and bar, the
 banner, the picker, the desktop's pieces and the alarm's panel use the same
@@ -561,23 +550,6 @@ on the mic and he inflates and flails, stop and he folds over. He is drawn in
 how the physics was tuned. Apps are not told when they are closed, so it
 records in 8 s pieces restarted from tick: leaving the app leaves the mic on
 for at most that long.
-
-**Forklift is a warehouse you program** (2026-09-25, `apps/forklift.c`,
-Games). It is a demake of *The Farmer Was Replaced*. Orders arrive, robots
-fetch kinds from bays and ship them from a dock, and credits buy forks, a
-motor, more robots and a bigger warehouse with racks. The robots run the
-player's Forklang program: `apps/forklang.h`, a tiny pure ML-ish language
-(`c ? a : b`, `x -> e`, application by juxtaposition, a few definitions,
-`bot` returning an action). It is a tree walker with a fixed node pool, a
-cell arena reset every step, and limits on fuel and depth. `FL_MAX_DEPTH` is
-28 because the evaluator recurses on the shell's 8 KB stack. It has its own
-editor made for this keyboard: Tab completes, brackets pair, Enter indents,
-and the program is checked as you type. Design in
-`docs/superpowers/specs/2026-09-25-forklift-design.md`. Tests are
-`test_forklang.c` and `test_forklift.c`; `FORKLIFT_DUMP=dir` writes the
-screens. Its `.data` is 32 KB, the largest of any app. It pushed the debug
-image to 85% of flash, so the embedded-blob lever under "Flash is the
-constraint" is getting close.
 
 **Edit's preview is set in Atkinson Hyperlegible and word-wraps** (2026-09-25),
 using `ui13`/`ui13b`, with code still in 6x8. It used to cut a long line at the

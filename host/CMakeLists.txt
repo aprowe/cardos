@@ -19,7 +19,6 @@ file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
   ${ROOT}/kernel/fs/path.c
   ${ROOT}/kernel/net/manifest.c   # update.c is device glue around it
   ${ROOT}/kernel/net/httpslot.c   # httpq.c is the task and lock around it
-  ${ROOT}/kernel/net/dav.c
   ${ROOT}/kernel/net/wifilist.c   # wifi.c is the radio around it
   ${ROOT}/kernel/net/linkproto.c  # link.c is the ESP-NOW radio around it
   ${ROOT}/kernel/ui/iconorder.c   # icons.c is the card around it

@@ -61,8 +61,8 @@ static const char HEAD_SYSTEM[] =
 static const char HEAD_TOOLS[] =
   "\\nFor anything else, open the app with the open tool; its result lists the "
   "app's actions, run with the action tool, and text is typed with the type tool. "
-  "The apps are Todo, Calendar, Edit (which is where notes go), IDE, Files, "
-  "Explorer, Photos, Web, Stocks, Screen, Mines, Pinball, Memory and Settings.\","
+  "The apps are Todo, Calendar, Edit (which is where notes go), Files, "
+  "Explorer, Photos, Stocks, Screen, Mines, Memory and Settings.\","
   "\"tools\":["
   "{\"name\":\"do\",\"description\":\"Run one of the commands in the system prompt, "
   "as one line: APP COMMAND then the arguments, text in double quotes, e.g. todo "
