@@ -191,3 +191,115 @@ void test_toggl_counts_from_the_servers_seconds_not_the_clock(void) {
   CHECK_EQ(app_command(0, ACT_STATUS, 0, NULL, out, sizeof out), 0);
   CHECK(!strcmp(out, "running: Writing (CardOS), 0:45"));
 }
+
+/* ---- editing targets on the targets screen (g) ---------------------------- */
+
+static char s_start_body[200];
+static int s_started;
+static int t_start(const char *m, const char *url, const char *body, const char *ct,
+                   const char *bearer, int ms) {
+  (void)m; (void)ct; (void)bearer; (void)ms;
+  snprintf(s_url, sizeof s_url, "%s", url);
+  snprintf(s_start_body, sizeof s_start_body, "%s", body ? body : "");
+  s_started++;
+  return 0;
+}
+static int t_poll(char *out, size_t n) {
+  snprintf(out, n, "%s", s_reply);
+  return (int)strlen(s_reply);
+}
+
+static const char TARGETS[] =
+  "target\tCardOS\t#0b83d9\tweek\t3600\t36000\t\n"
+  "target\tHome\t\ttotal\t0\t5400\t2026-10-01\n";
+
+static void goals_open(void) {
+  topen();
+  TF.http_start = t_start; TF.http_poll = t_poll;
+  s_started = 0;
+  snprintf(G.reply, sizeof G.reply, "%s", STATUS);
+  absorb_status();
+  snprintf(G.reply, sizeof G.reply, "%s", TARGETS);
+  absorb_targets();
+  G.goals = 1;
+}
+
+static void type(const char *s) { while (*s) app_key(0, (uint8_t)*s++); }
+
+void test_toggl_a_targets_hours_are_edited_in_place(void) {
+  goals_open();
+  CHECK_EQ(G.ntg, 2);
+  app_key(0, 'e');
+  CHECK_EQ(G.typing, 3);
+  CHECK(!strcmp(G.draft, "10"));                  /* what it was, to change */
+  app_key(0, CAPP_KEY_BACK); app_key(0, CAPP_KEY_BACK);
+  type("1x2.5.");                                 /* digits and one point */
+  CHECK(!strcmp(G.draft, "12.5"));
+  app_key(0, CAPP_KEY_ENTER);
+  CHECK_EQ(G.typing, 0);
+  CHECK(strstr(s_url, "/toggl/target") != NULL);
+  CHECK(!strcmp(s_start_body, "project=CardOS\nkind=week\nhours=12.5"));
+  /* Saved, the bars are asked for again. */
+  s_reply = "ok\n";
+  CHECK_EQ(poll(), 1);
+  CHECK(strstr(s_url, "/toggl/targets?off=") != NULL);
+}
+
+void test_toggl_a_total_target_keeps_its_start_day(void) {
+  goals_open();
+  app_key(0, CAPP_KEY_DOWN);
+  app_key(0, CAPP_KEY_ENTER);
+  CHECK(!strcmp(G.draft, "1.5"));
+  app_key(0, CAPP_KEY_BACK);
+  app_key(0, CAPP_KEY_BACK);
+  app_key(0, '\t');                               /* an old one's kind stays */
+  type("20");
+  app_key(0, CAPP_KEY_ENTER);
+  CHECK(!strcmp(s_start_body, "project=Home\nkind=total\nhours=120\nsince=2026-10-01"));
+}
+
+void test_toggl_a_new_target_picks_a_project_then_hours(void) {
+  goals_open();
+  app_key(0, 'n');
+  CHECK_EQ(G.gpick, 1);
+  app_key(0, CAPP_KEY_DOWN);
+  app_key(0, CAPP_KEY_DOWN);                      /* two projects: stays on the last */
+  CHECK_EQ(G.gpsel, 1);
+  app_key(0, CAPP_KEY_ENTER);
+  CHECK_EQ(G.gpick, 0);
+  CHECK_EQ(G.typing, 3);
+  CHECK(!G.draft[0]);
+  app_key(0, CAPP_KEY_ENTER);                     /* nothing typed: nothing sent */
+  CHECK_EQ(s_started, 0);
+  app_key(0, 'n'); app_key(0, CAPP_KEY_DOWN); app_key(0, CAPP_KEY_ENTER);
+  type("4");
+  app_key(0, '\t');                               /* a new one can be a total */
+  app_key(0, CAPP_KEY_ENTER);
+  CHECK(!strcmp(s_start_body, "project=Home\nkind=total\nhours=4"));
+}
+
+void test_toggl_removing_a_target_asks_first(void) {
+  goals_open();
+  app_key(0, 'd');
+  CHECK_EQ(G.gasking, 1);
+  app_key(0, CAPP_KEY_ENTER);                     /* not an answer */
+  CHECK_EQ(G.gasking, 1);
+  app_key(0, 'n');
+  CHECK_EQ(G.gasking, 0);
+  CHECK_EQ(s_started, 0);
+  app_key(0, 'd');
+  app_key(0, 'y');
+  CHECK(!strcmp(s_start_body, "project=CardOS\nkind=week\nhours=0"));
+}
+
+void test_toggl_esc_backs_out_a_level_at_a_time(void) {
+  goals_open();
+  app_key(0, 'n');
+  app_key(0, CAPP_KEY_ESC);
+  CHECK(!G.gpick && G.goals);
+  app_key(0, 'e');
+  app_key(0, CAPP_KEY_ESC);
+  CHECK(!G.typing && G.goals);
+  app_key(0, CAPP_KEY_ESC);
+  CHECK(!G.goals);
+}

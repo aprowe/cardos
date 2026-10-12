@@ -16,8 +16,10 @@
  * and s is sync.)
  *
  * Targets: hours a project should get, weekly or in total since a date --
- * set on the dashboard or with `target`. g shows them as bars filling up in
- * each project's colour, and `targets` gives Today the same as %bar lines.
+ * set here, on the dashboard or with `target`. g shows them as bars filling
+ * up in each project's colour; there e (or Enter) changes the highlighted
+ * one's hours, n adds one (a project, then hours; Tab says week or total),
+ * d removes one. `targets` gives Today the same as %bar lines.
  *
  * A running timer has the screen to itself: its project, in the project's
  * own colour from Toggl, the time in clock56, the description, and the keys
@@ -34,6 +36,7 @@
 #include "apps/datetime.h"
 #include "apps/str.h"
 #include "apps/footer.h"
+#include "apps/confirm.h"
 
 static const CardApi *api;
 
@@ -52,7 +55,7 @@ static const CardApi *api;
 #define CLR_SEL    CAPP_RGB(42, 48, 64)
 #define CLR_BAD    CAPP_RGB(240, 110, 96)
 
-enum { ST_IDLE = 0, ST_STATUS, ST_START, ST_STOP, ST_DESCRIBE, ST_TARGETS };
+enum { ST_IDLE = 0, ST_STATUS, ST_START, ST_STOP, ST_DESCRIBE, ST_TARGETS, ST_SET_TARGET };
 
 #define MAX_TARGETS 8
 
@@ -82,6 +85,12 @@ static struct {
   int      goals;                 /* the targets view is up (g) */
   Target   tg[MAX_TARGETS];
   int      ntg;
+  int      gsel;                  /* the target highlighted */
+  int      gpick;                 /* choosing a new target's project */
+  int      gpsel;                 /* ... this one of the projects */
+  int      gasking;               /* remove the highlighted target? y/n */
+  int      gnew;                  /* the hours being typed are a new target's */
+  Target   gedit;                 /* the target being set: project, kind, since */
 
   Recent   rec[MAX_ROWS];
   int      nrec;
@@ -97,13 +106,14 @@ static struct {
   uint32_t elapsed0;              /* seconds run when the server answered */
   uint32_t got_ms;                /* our uptime then: the count goes on from it */
 
-  int      typing;                /* 1 a new entry, 2 describing the running one */
+  int      typing;                /* 1 a new entry, 2 describing the running one,
+                                     3 a target's hours */
   char     draft[DESC_MAX];
   int      dlen;
 
   int      f_big, f_num, f_ui, f_uib;
   CRect    content;
-  char     body[DESC_MAX + 32];
+  char     body[PROJ_MAX + 64];      /* a target: project, kind, hours, since */
   char     reply[REPLY_MAX];
 } G;
 
@@ -278,7 +288,8 @@ static int ask(const char *method, const char *rel, const char *body, int stage)
   api->fmt(G.status, sizeof G.status, "%s", stage == ST_STATUS ? "asking..." :
            stage == ST_START ? "starting..." :
            stage == ST_DESCRIBE ? "saving..." :
-           stage == ST_TARGETS ? "adding up..." : "stopping...");
+           stage == ST_TARGETS ? "adding up..." :
+           stage == ST_SET_TARGET ? "saving..." : "stopping...");
   return 0;
 }
 
@@ -299,6 +310,42 @@ static void stop_entry(void) {
   ask("POST", "/toggl/stop", "", ST_STOP);
 }
 
+/* Set a target: the project by name (the server prefers an exact match), its
+ * kind, and hours, 0 removing it. A total target keeps the day it counts
+ * from -- sent without one, the server would start it again today. */
+static void save_target(const Target *g, const char *hours) {
+  if (!g->week && g->since[0])
+    api->fmt(G.body, sizeof G.body, "project=%s\nkind=total\nhours=%s\nsince=%s",
+             g->proj, hours, g->since);
+  else
+    api->fmt(G.body, sizeof G.body, "project=%s\nkind=%s\nhours=%s", g->proj,
+             g->week ? "week" : "total", hours);
+  ask("POST", "/toggl/target", G.body, ST_SET_TARGET);
+}
+
+/* The projects lead the list the status gave. */
+static int nprojects(void) {
+  int i = 0;
+  while (i < G.nrec && G.rec[i].kind == 'p') i++;
+  return i;
+}
+
+/* Hours as typed back: "10", "1.5". */
+static void hours_text(uint32_t secs, char *out, int n) {
+  unsigned long h = secs / 3600, tenth = secs % 3600 / 360;
+  if (tenth) api->fmt(out, (size_t)n, "%lu.%lu", h, tenth);
+  else api->fmt(out, (size_t)n, "%lu", h);
+}
+
+static void edit_hours(const Target *g, int is_new) {
+  api->mem_cpy(&G.gedit, g, sizeof G.gedit);   /* struct copy is memcpy, and apps have none */
+  G.gnew = is_new;
+  G.typing = 3;
+  if (is_new) G.draft[0] = 0;
+  else hours_text(g->want, G.draft, sizeof G.draft);
+  G.dlen = (int)api->str_len(G.draft);
+}
+
 static int poll(void) {
   int n;
   if (G.stage == ST_IDLE) return 0;
@@ -311,8 +358,12 @@ static int poll(void) {
   }
   if (G.stage == ST_TARGETS) {
     absorb_targets();
+    if (G.gsel >= G.ntg) G.gsel = G.ntg ? G.ntg - 1 : 0;
     G.status[0] = 0;
     G.stage = ST_IDLE;
+  } else if (G.stage == ST_SET_TARGET) {
+    G.stage = ST_IDLE;
+    ask_targets();                     /* the bars, added up again */
   } else if (G.stage == ST_STATUS) {
     absorb_status();
     G.status[0] = 0;
@@ -504,26 +555,75 @@ static void paint_list(void) {
                          "enter start  n new  g targets");
 }
 
-/* Each target: its project in its colour, the hours, and a bar filling up. */
+/* A new target's project: every project, the chosen one highlighted. */
+static void paint_pick(void) {
+  CRect c = G.content;
+  int y = c.y + TOP_H, i, top = 0, np = nprojects();
+  int rows = (c.y + c.h - FOOT_H - y - ROW_H) / ROW_H;
+  api->fill(capp_rect(c.x, y, c.w, c.h - TOP_H - FOOT_H), CLR_BG);
+  draw(G.f_ui, c.x + 8, y + (ROW_H - height(G.f_ui)) / 2, "new target for:", CLR_DIM, CLR_BG);
+  y += ROW_H;
+  if (G.gpsel >= rows) top = G.gpsel - rows + 1;
+  for (i = top; i < np && i - top < rows; i++, y += ROW_H) {
+    uint16_t bg = i == G.gpsel ? CLR_SEL : CLR_BG;
+    api->fill(capp_rect(c.x, y, c.w, ROW_H), bg);
+    api->fill(capp_rect(c.x + 8, y + ROW_H / 2 - 3, 6, 6), proj_colour(G.rec[i].colour));
+    draw(G.f_uib, c.x + 20, y + (ROW_H - height(G.f_uib)) / 2, G.rec[i].proj,
+         proj_colour(G.rec[i].colour), bg);
+  }
+  paint_foot("enter choose  esc back");
+}
+
+/* The hours being typed, under the project they are for. */
+static void paint_hours(void) {
+  CRect c = G.content;
+  const Target *g = &G.gedit;
+  int y = c.y + TOP_H + 6;
+  char line[64];
+  api->fill(capp_rect(c.x, c.y + TOP_H, c.w, c.h - TOP_H - FOOT_H), CLR_BG);
+  draw(G.f_uib, c.x + 8, y, g->proj, proj_colour(g->colour), CLR_BG);
+  y += ROW_H + 4;
+  api->fmt(line, sizeof line, "%s_ hours", G.draft);
+  draw(G.f_num >= 0 ? G.f_num : G.f_uib, c.x + 8, y, line, CLR_TEXT, CLR_BG);
+  y += height(G.f_num >= 0 ? G.f_num : G.f_uib) + 4;
+  if (g->week) api->fmt(line, sizeof line, "a week, from Monday");
+  else if (g->since[0]) api->fmt(line, sizeof line, "in total since %s", g->since);
+  else api->fmt(line, sizeof line, "in total, from today");
+  draw(G.f_ui, c.x + 8, y, line, CLR_DIM, CLR_BG);
+  paint_foot(G.gnew ? "enter save  tab week/total  esc back" : "enter save  0 removes  esc back");
+}
+
+/* Each target: its project in its colour, the hours, and a bar filling up.
+ * The highlighted one has a mark at its left. */
 static void paint_goals(void) {
   CRect c = G.content;
-  int y = c.y + TOP_H, i, rowh = 30;
-  char words[48];
+  int y = c.y + TOP_H, i, rowh = 30, top = 0;
+  int rows = (c.h - TOP_H - FOOT_H) / rowh;
+  char words[64];
+  if (G.gpick) { paint_pick(); return; }
+  if (G.typing == 3) { paint_hours(); return; }
   api->fill(capp_rect(c.x, y, c.w, c.h - TOP_H - FOOT_H), CLR_BG);
   if (!G.ntg)
     draw(G.f_ui, c.x + 8, y + 6, G.stage == ST_TARGETS ? "adding up..." :
-         "no targets: set them on the dashboard", CLR_DIM, CLR_BG);
-  for (i = 0; i < G.ntg && y + rowh <= c.y + c.h - FOOT_H; i++, y += rowh) {
+         "no targets: n adds one", CLR_DIM, CLR_BG);
+  if (G.gsel >= rows) top = G.gsel - rows + 1;
+  for (i = top; i < G.ntg && y + rowh <= c.y + c.h - FOOT_H; i++, y += rowh) {
     const Target *g = &G.tg[i];
     uint16_t col = proj_colour(g->colour);
     int bw = c.w - 16, fill = pct_of(g) >= 100 ? bw - 2 : (bw - 2) * pct_of(g) / 100;
     target_words(g, words, sizeof words);
+    if (i == G.gsel) api->fill(capp_rect(c.x + 2, y + 1, 3, 25), CLR_RUN);
     draw(G.f_uib, c.x + 8, y + 1, g->proj, col, CLR_BG);
     draw(G.f_ui, c.x + c.w - 8 - width(G.f_ui, words), y + 1, words, CLR_DIM, CLR_BG);
     api->fill(capp_rect(c.x + 8, y + 18, bw, 8), CLR_SEL);
     if (fill > 0) api->fill(capp_rect(c.x + 9, y + 19, fill, 6), col);
   }
-  paint_foot("esc back  r refresh");
+  if (G.gasking) {
+    api->fmt(words, sizeof words, "remove %s? y/n", G.tg[G.gsel].proj);
+    paint_foot(words);
+  } else {
+    paint_foot("e edit  n new  d remove  r refresh");
+  }
 }
 
 static void app_paint(void *st, CRect c) {
@@ -546,7 +646,31 @@ static void app_paint(void *st, CRect c) {
 
 /* ---- keys ---------------------------------------------------------------------------- */
 
+/* A target's hours: digits and one point; Tab turns a new one weekly or
+ * total. Enter with nothing typed sets nothing. */
+static int has_point(const char *s) {
+  while (*s && *s != '.') s++;
+  return *s == '.';
+}
+
+static int key_hours(uint8_t k) {
+  if (k == CAPP_KEY_ENTER) {
+    G.typing = 0;
+    if (G.dlen) save_target(&G.gedit, G.draft);
+    return 1;
+  }
+  if (k == CAPP_KEY_ESC) { G.typing = 0; return 1; }
+  if (k == CAPP_KEY_BACK) { if (G.dlen) G.draft[--G.dlen] = 0; return 1; }
+  if (k == '\t' && G.gnew) { G.gedit.week = !G.gedit.week; return 1; }
+  if (((k >= '0' && k <= '9') || (k == '.' && !has_point(G.draft))) && G.dlen < 6) {
+    G.draft[G.dlen++] = (char)k;
+    G.draft[G.dlen] = 0;
+  }
+  return 1;
+}
+
 static int key_typing(uint8_t k) {
+  if (G.typing == 3) return key_hours(k);
   if (k == CAPP_KEY_ENTER) {
     int was = G.typing;
     G.typing = 0;
@@ -571,14 +695,61 @@ static void begin_typing(void) {
   G.draft[0] = 0;
 }
 
+static int key_goals(uint8_t k) {
+  if (G.gasking) {
+    int a = confirm_key(api, k);
+    if (a == CONFIRM_YES && G.gsel < G.ntg) save_target(&G.tg[G.gsel], "0");
+    if (a != CONFIRM_WAIT) G.gasking = 0;
+    return 1;
+  }
+  if (G.gpick) {
+    int np = nprojects();
+    switch (k) {
+    case CAPP_KEY_UP:   if (G.gpsel > 0) G.gpsel--; return 1;
+    case CAPP_KEY_DOWN: if (G.gpsel < np - 1) G.gpsel++; return 1;
+    case CAPP_KEY_ESC: case CAPP_KEY_BACK: G.gpick = 0; return 1;
+    case CAPP_KEY_ENTER:
+      if (G.gpsel < np) {
+        Target t;
+        api->mem_set(&t, 0, sizeof t);
+        api->fmt(t.proj, sizeof t.proj, "%s", G.rec[G.gpsel].proj);
+        t.colour = G.rec[G.gpsel].colour;
+        t.week = 1;
+        G.gpick = 0;
+        edit_hours(&t, 1);
+      }
+      return 1;
+    }
+    return 1;
+  }
+  switch (k) {
+  case 'g': case 'G': case CAPP_KEY_ESC: case CAPP_KEY_BACK: G.goals = 0; return 1;
+  case 'r': case 'R': ask_targets(); return 1;
+  case CAPP_KEY_UP:   if (G.gsel > 0) G.gsel--; return 1;
+  case CAPP_KEY_DOWN: if (G.gsel < G.ntg - 1) G.gsel++; return 1;
+  case 'e': case 'E': case CAPP_KEY_ENTER:
+    if (G.gsel < G.ntg) edit_hours(&G.tg[G.gsel], 0);
+    return 1;
+  case 'n': case 'N': case 'a': case 'A':
+    if (!nprojects()) {
+      G.bad = 1;
+      api->fmt(G.status, sizeof G.status, "no projects yet: r on the list");
+      return 1;
+    }
+    G.gpick = 1;
+    G.gpsel = 0;
+    return 1;
+  case 'd': case 'D': case 0x7F:
+    if (G.gsel < G.ntg) G.gasking = 1;
+    return 1;
+  }
+  return 1;
+}
+
 static int app_key(void *st, uint8_t k) {
   (void)st;
   if (G.typing) return key_typing(k);
-  if (G.goals) {
-    if (k == 'g' || k == 'G' || k == CAPP_KEY_ESC || k == CAPP_KEY_BACK) { G.goals = 0; return 1; }
-    if (k == 'r' || k == 'R') { ask_targets(); return 1; }
-    return 1;
-  }
+  if (G.goals) return key_goals(k);
   if (k == 'g' || k == 'G') { G.goals = 1; ask_targets(); return 1; }
   if (timer_screen()) {
     switch (k) {
@@ -871,6 +1042,8 @@ const CappInfo capp_info = {
   "e\tdescribe the running entry\n"
   "l\tthe list, and back to the timer\n"
   "g\ttargets: hours against each project's target\n"
+  "\ton the targets: e or enter edits the hours (0 removes),\n"
+  "\tn adds one (tab: week or total), d removes one\n"
   "r\task Toggl again\n"
   "up/down\tchoose\n"
   "esc\tback: from the targets, or the list to the timer\n"

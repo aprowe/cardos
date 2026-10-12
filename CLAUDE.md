@@ -322,8 +322,8 @@ in the launcher opened apps nobody asked for.
 
 **Toggl targets and the day's focus** (2026-10-01). A target is hours a
 project should get, weekly from Monday or in total since a date
-(`server/toggl.py`, set on the dashboard's Toggl card or `do toggl target
-NAME 10 week`); `toggl targets` answers `%bar NN label` lines, which Today
+(`server/toggl.py`, set on the dashboard's Toggl card, in Toggl's `g` view
+-- e hours, n new, d remove -- or `do toggl target NAME 10 week`); `toggl targets` answers `%bar NN label` lines, which Today
 draws and the printer prints as filled bars (`printdoc.c`). Today's `daily
 focus` and `daily fact` come from `/daily` (`server/daily.py`): one
 stateless Claude call a day, cached; a fallback line when Claude fails, not
