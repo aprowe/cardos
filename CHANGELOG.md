@@ -11,6 +11,17 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.22.0 -- 2026-10-11
+
+Firmware and every app: API 47 (`update all`).
+
+- **Big-app mode.** An app flagged `CAPP_BIG` may take blocks of the heap
+  while it is on screen (`api->big_alloc`, `api->big_room`), keeping 24 KB
+  free for the OS; entering lets go of Today's held code block and an idle
+  Bluetooth radio. Measured on the ADV with WiFi up: 31 KB in one piece
+  (68 KB free in all). Jar Factory is the first big app; it reports its room
+  in the log and does not use it yet.
+
 ## v0.21.0 -- 2026-10-11
 
 Jar Factory (`update apps`).
