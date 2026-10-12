@@ -2037,8 +2037,7 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
       T.over_full = 0;
       over_claimed(cutoff);
       for (i = 0; i < T.nover && o + 8 < n; i++)
-        o += (size_t)api->fmt(out + o, n - o, "%s[ ] %s (%s)", o ? "\n" : "",
-                              T.over[i].title, T.lists[T.over[i].list].name);
+        o += (size_t)api->fmt(out + o, n - o, "%s[ ] %s", o ? "\n" : "", T.over[i].title);
       if (o) return 0;
     }
     return show_list(find_list(argv[0], 0), out, n);

@@ -303,3 +303,15 @@ void test_toggl_esc_backs_out_a_level_at_a_time(void) {
   app_key(0, CAPP_KEY_ESC);
   CHECK(!G.goals);
 }
+
+/* On screen the list is the projects alone; a command still reads the
+ * recent entries, to find start TEXT's project. */
+void test_toggl_the_list_on_screen_is_only_the_projects(void) {
+  topen();
+  G.projects_only = 1;
+  snprintf(G.reply, sizeof G.reply, "%s", STATUS);
+  absorb_status();
+  CHECK_EQ(G.nrec, 2);
+  CHECK(G.rec[0].kind == 'p' && G.rec[1].kind == 'p');
+  CHECK_EQ(G.running, 1);                       /* the timer is still read */
+}

@@ -1342,10 +1342,10 @@ void test_todo_today_gathers_claims_from_every_list(void) {
   const char *argv[1] = { "My Tasks" };
   agenda_lists();
   CHECK_EQ(app_command(0, ACT_TODAY, 1, argv, out, sizeof out), 0);
-  CHECK(!strcmp(out, "[ ] Fix bike (My Tasks)\n[ ] Eggs (Groceries)"));
+  CHECK(!strcmp(out, "[ ] Fix bike\n[ ] Eggs"));
   /* Tomorrow's page counts tomorrow too. */
   CHECK_EQ(app_command(0, ACT_TOMORROW, 1, argv, out, sizeof out), 0);
-  CHECK(!strcmp(out, "[ ] Fix bike (My Tasks)\n[ ] Call mum (My Tasks)\n[ ] Eggs (Groceries)"));
+  CHECK(!strcmp(out, "[ ] Fix bike\n[ ] Call mum\n[ ] Eggs"));
   host_clean();
 }
 

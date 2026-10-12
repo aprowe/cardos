@@ -134,6 +134,14 @@ connected:
   while (j->fn(j->ctx, row)) {
     n = printdoc_row_packet(row, pkt, sizeof pkt);
     if (btprint_write(pkt, (size_t)n) != 0) { why = btprint_error(); goto out; }
+    /* A dark row takes the head longer to burn than the link takes to send:
+     * after one more than half black, a moment, so the printer's buffer
+     * does not overrun into garbage (seen under Today's target bars). */
+    {
+      int b, dots = 0;
+      for (b = 0; b < PRINT_ROW_BYTES; b++) dots += __builtin_popcount(row[b]);
+      if (dots > PRINT_WIDTH / 2) vTaskDelay(pdMS_TO_TICKS(12));
+    }
     sent++;
     if (j->total > 0 && (sent & 15) == 0)
       set_status("printing %d%%", sent * 100 / j->total);

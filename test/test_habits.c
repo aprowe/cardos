@@ -383,9 +383,9 @@ void test_habits_today_is_boxes_to_tick(void) {
   put(DIR "/Read.log", "20260922\n20260923\n20260924\n");
   open_app();
   CHECK_EQ(app_command(0, ACT_TODAY, 0, NULL, out, sizeof out), 0);
-  CHECK(!strcmp(out, "[x] Read  (3 days)\n[ ] Stretch"));
+  CHECK(!strcmp(out, "[x] Read\t3 streak\n[ ] Stretch"));
   /* Tomorrow nothing is done yet; the streaks are as they stand. */
   CHECK_EQ(app_command(0, ACT_TOMORROW, 0, NULL, out, sizeof out), 0);
-  CHECK(!strcmp(out, "[ ] Read  (3 days)\n[ ] Stretch"));
+  CHECK(!strcmp(out, "[ ] Read\t3 streak\n[ ] Stretch"));
   wipe();
 }

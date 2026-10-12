@@ -439,8 +439,9 @@ void test_printdoc_a_bar_is_outlined_and_filled_to_its_percent(void) {
     int inner_left = PRINT_MARGIN + 6, three_q = PRINT_MARGIN + 3 * (PRINT_WIDTH - 2 * PRINT_MARGIN) / 4;
     if (r == 16 + 4 + 9) {
       y_fill = r;
-      black_at_left = (row[inner_left >> 3] >> (inner_left & 7)) & 1;
-      black_at_right = (row[three_q >> 3] >> (three_q & 7)) & 1;
+      /* the fill is a checker: half the dots across a span, none past it */
+      black_at_left = ink(row, inner_left, inner_left + 16) == 8;
+      black_at_right = ink(row, three_q, three_q + 16) != 0;
     }
     r++;
   }

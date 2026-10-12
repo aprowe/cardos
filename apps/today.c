@@ -472,6 +472,17 @@ static void paint_line(const char *s, int len, int y, int x, int w) {
   } else if (str_starts(buf, "[ ] ") || str_starts(buf, "[x] ")) {
     int done = buf[1] == 'x';
     int by = y + (ROW_H - 9) / 2;
+    char *tab = buf;
+    while (*tab && *tab != '\t') tab++;
+    /* "[ ] task<TAB>note": the note at the right of the row, dim (Habits'
+     * streak). The task is drawn up to where the note starts. */
+    if (*tab) {
+      int nw = api->text_width(D.f_ui, tab + 1), nx = x + w - 8 - nw;
+      *tab = 0;
+      if (nx < x + 40) nx = x + 40;
+      row_text(D.f_ui, nx - 6, x + w, y, nx, tab + 1, CLR_DIM);
+      w = nx - 6 - x;
+    }
     fill_round(capp_rect(x, y, 22, ROW_H), capp_rect(x + 8, by, 9, 9));
     if (done) {
       api->fill(capp_rect(x + 8, by, 9, 9), CLR_DONE);
@@ -604,7 +615,14 @@ static void app_paint(void *st, CRect full) {
 /* ---- doing things ------------------------------------------------------------------ */
 
 static int print_page(void) {
-  int rc = api->print_fonts(D.page, "print24", "print24b", "print34b");
+  int rc, i, nt = 0;
+  static uint16_t tabs[48];
+  /* Paper has no right-hand column: a tab prints as a space, and is put
+   * back after (the kernel has its own copy by then). */
+  for (i = 0; D.page[i]; i++)
+    if (D.page[i] == '\t') { D.page[i] = ' '; if (nt < 48) tabs[nt++] = (uint16_t)i; }
+  rc = api->print_fonts(D.page, "print24", "print24b", "print34b");
+  for (i = 0; i < nt; i++) D.page[tabs[i]] = '\t';
   if (rc == 0) { D.printing = 1; api->fmt(D.status, sizeof D.status, "printing"); }
   else if (rc == -1) api->fmt(D.status, sizeof D.status, "printer busy");
   else if (rc == -2) api->fmt(D.status, sizeof D.status, "no printer set");

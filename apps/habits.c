@@ -846,7 +846,8 @@ static int app_command(void *st, int action, int argc, const char *const *argv,
       o += (size_t)api->fmt(out + o, n - o, "%s[%c] %s", i ? "\n" : "",
                             action == ACT_TODAY && is_done(i, H.today) ? 'x' : ' ',
                             H.habit[i].name);
-      if (s > 1 && o + 16 < n) o += (size_t)api->fmt(out + o, n - o, "  (%d days)", s);
+      /* After a tab: Today draws it at the right of the row. */
+      if (s > 1 && o + 16 < n) o += (size_t)api->fmt(out + o, n - o, "\t%d streak", s);
     }
     return 0;
   case ACT_LIST:

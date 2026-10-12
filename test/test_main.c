@@ -905,6 +905,7 @@ void test_toggl_a_total_target_keeps_its_start_day(void);
 void test_toggl_a_new_target_picks_a_project_then_hours(void);
 void test_toggl_removing_a_target_asks_first(void);
 void test_toggl_esc_backs_out_a_level_at_a_time(void);
+void test_toggl_the_list_on_screen_is_only_the_projects(void);
 void test_toolbar_busy_dots_mark_once_a_step_and_only_themselves(void);
 void test_tzreply_reads_the_rule_and_the_zone(void);
 void test_tzreply_rules_with_offsets_and_brackets(void);
@@ -1982,6 +1983,7 @@ int main(void) {
   RUN(test_toggl_a_new_target_picks_a_project_then_hours);
   RUN(test_toggl_removing_a_target_asks_first);
   RUN(test_toggl_esc_backs_out_a_level_at_a_time);
+  RUN(test_toggl_the_list_on_screen_is_only_the_projects);
   printf("-- toolbar --\n");
   RUN(test_toolbar_busy_dots_mark_once_a_step_and_only_themselves);
   printf("-- tzreply --\n");

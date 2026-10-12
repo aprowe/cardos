@@ -411,8 +411,16 @@ static void bar_block(PrintDoc *d) {
   fill(d->block, rows, PRINT_MARGIN, y + BAR_H - 2, USABLE, 2);
   fill(d->block, rows, PRINT_MARGIN, y, 2, BAR_H);
   fill(d->block, rows, PRINT_MARGIN + USABLE - 2, y, 2, BAR_H);
+  /* The fill is half the dots, a checker, not solid black: a run of rows
+   * black the width of the paper is the most a thermal head is asked to
+   * heat, and on the X6h it fell behind and garbled what came after. */
   inner = (USABLE - 8) * pct / 100;
-  fill(d->block, rows, PRINT_MARGIN + 4, y + 4, inner, BAR_H - 8);
+  {
+    int i, j;
+    for (j = 0; j < BAR_H - 8; j++)
+      for (i = 0; i < inner; i++)
+        if (((i + j) & 1) == 0) set_px(d->block, rows, PRINT_MARGIN + 4 + i, y + 4 + j);
+  }
 }
 
 /* Render the next block: the next wrapped line of the current source line,

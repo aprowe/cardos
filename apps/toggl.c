@@ -6,8 +6,10 @@
  * the running timer itself from the start time it was given -- a request a
  * second would be the quota gone in a minute.
  *
- * The list is what to start from: a new entry, then every project, then the
- * descriptions and projects of the last two weeks, newest first, each once.
+ * The list is what to start from: a new entry, then every project. (The
+ * descriptions of the last two weeks used to follow, and most were a
+ * project again with no description: the owner wanted only the projects,
+ * 2026-10-12. Commands still read them, for `start TEXT`'s project.)
  * Enter starts the highlighted one (whatever was running stops) -- a project
  * starts with no description, which e adds while it runs. Space stops the
  * running one, or with nothing running starts the highlighted one, as space
@@ -83,6 +85,7 @@ static struct {
   uint16_t colour;                /* the running project's, or 0 */
   int      list;                  /* the list, not the timer, while one runs */
   int      goals;                 /* the targets view is up (g) */
+  int      projects_only;         /* the list on screen: no recent entries */
   Target   tg[MAX_TARGETS];
   int      ntg;
   int      gsel;                  /* the target highlighted */
@@ -174,8 +177,8 @@ static void absorb_status(void) {
   G.running = 0;
   G.nrec = 0;
   /* Projects first -- starting one with no description is the quick way --
-   * then what was done lately. */
-  for (pass = 0; pass < 2; pass++)
+   * then what was done lately, which only a command (start TEXT) wants. */
+  for (pass = 0; pass < (G.projects_only ? 1 : 2); pass++)
     for (p = G.reply; *p; ) {
       if (pass == 0 && str_starts(p, "running\t")) absorb_running(p);
       else if (G.nrec < MAX_ROWS &&
@@ -1065,6 +1068,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
     G.f_num = api->font_load("num30");
     G.f_ui = api->font_load("ui13");
     G.f_uib = api->font_load("ui13b");
+    G.projects_only = 1;
     refresh();
   }
   UI.paint = app_paint;
