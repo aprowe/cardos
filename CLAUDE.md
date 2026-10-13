@@ -414,6 +414,26 @@ the volume there, as the wheel was), in Inter (`pod13`, `pod13b`,
 `pod16b`). MP3s put in /music by hand are named by their ID3 tags
 (`apps/id3.h`).
 
+**Chat has dog emojis: Arty and Marcy** (2026-10-13). Tab in Chat opens a
+picker of eight moods (happy, love, sad, sleepy, hungry, grumpy, zoomies,
+huh) for one dog -- Tab again is the other, kept as the second line of
+/config/chat.txt; arrows choose, Enter sends. An emoji is only text on the
+wire, a message that is exactly `:arty-happy:`, so the server and older
+Chats need nothing; Chat draws it as a picture four log rows tall (each row
+a log line marked `\x01`, painted by the row hook `tl_paint_log_ex` in
+`apps/termlog.h`), and the notify poll turns it into words for the banner
+("Arty: happy", `msg.banner_text`). The art is pixel art in
+`tools/make_emoji.py` -- each dog an 18x18 grid of letters drawn by hand
+(Arty: the small white terrier, black head with tan; Marcy: the black one,
+white blaze), each mood stamps of eyes, mouth and a mark beside the head,
+and a grey outline so a black dog shows on Chat's black. `python
+tools/make_emoji.py` writes `apps/chat/chat_emoji.h` (palette indices, the
+palette in the panel's byte order as `CAPP_RGB` makes it; 7 KB of constants,
+in flash); `--preview FILE.html` draws them all big and at device size.
+Chat moved to `apps/chat/` for it. Tests: `test/test_chat_emoji.c`, and
+`test/test_chat_paint.c` runs the real app into a framebuffer
+(`CHAT_DUMP=dir` writes the screens).
+
 **Talking to Claude about a document** (2026-10-06). `claude [-k song]
 PATH` opens the Claude app about one file instead of the device agent:
 `server/talk.py` takes the document, Claude answers there with no tools,
@@ -1371,7 +1391,7 @@ hardware-specific. What it cost to learn:
 
 - **An app with several files of its own lives in a folder** (2026-10-12):
   `apps/jar/`, `apps/kart/`, `apps/midi/` (MIDI and Circuit), `apps/iron/`,
-  `apps/gamenight/`, `apps/quoridor/`, `apps/tetris/`, `apps/pet/`.
+  `apps/gamenight/`, `apps/quoridor/`, `apps/tetris/`, `apps/pet/`, `apps/chat/`.
   `tools/build_apps.py` (`app_sources`) builds every `.c` directly in `apps/`
   and every `.c` one folder down; the `.capp` is named by the file, not the
   folder (`apps/jar/jar.c` is still `jar.capp`), so `folders.txt`, the icons,

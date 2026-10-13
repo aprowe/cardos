@@ -156,10 +156,15 @@ static TL_OPT void tl_paint_bar(const CardApi *api, CRect c, const char *text, u
   tl_text_cols(api, c.x + 3, c.y + 1, text, cols, fg, bg);
 }
 
+/* A row the app draws itself (Chat's pictures): given the line, its tag and
+ * the row's place, 1 if it painted the whole row, 0 to have it drawn as
+ * text. */
+typedef int (*TlRowPaint)(const char *line, int tag, int x, int y, int w);
+
 /* The log, the newest line just above the input; scroll moves back through
  * it. Only the rows inside `clip` are written. */
-static TL_OPT void tl_paint_log(const CardApi *api, const TermLog *L, CRect c, CRect clip,
-                                uint16_t (*colour)(int tag), uint16_t bg) {
+static TL_OPT void tl_paint_log_ex(const CardApi *api, const TermLog *L, CRect c, CRect clip,
+                                   uint16_t (*colour)(int tag), uint16_t bg, TlRowPaint own) {
   int rows = tl_rows(c);
   int top = c.y + TL_BAR_H, bottom = c.y + c.h - TL_IN_H;
   int cols = (c.w - 2 + 5) / 6, right;   /* to the edge: a 40-column line reaches it */
@@ -174,13 +179,19 @@ static TL_OPT void tl_paint_log(const CardApi *api, const TermLog *L, CRect c, C
     int i = first + r;
     if (i >= L->n) break;
     y = top + r * TL_ROW_H;
-    if (y < clip.y + clip.h && y + TL_ROW_H > clip.y) {
+    if (y < clip.y + clip.h && y + TL_ROW_H > clip.y &&
+        !(own && own(L->line[i], L->tag[i], c.x + 2, y, cols * 6))) {
       tl_text_cols(api, c.x + 2, y, L->line[i], cols, colour(L->tag[i]), bg);
       tl_fill_if(api, c.x + 2, y + 8, cols * 6, TL_ROW_H - 8, bg);
     }
     y += TL_ROW_H;
   }
   tl_fill_if(api, c.x + 2, y, cols * 6, bottom - y, bg);
+}
+
+static TL_OPT void tl_paint_log(const CardApi *api, const TermLog *L, CRect c, CRect clip,
+                                uint16_t (*colour)(int tag), uint16_t bg) {
+  tl_paint_log_ex(api, L, c, clip, colour, bg, 0);
 }
 
 /* The input line: the prompt, the tail of what has been typed, the cursor,

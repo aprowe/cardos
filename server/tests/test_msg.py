@@ -74,6 +74,18 @@ class Room(unittest.TestCase):
         self.assertEqual(lines[1:], ["chat\tbritney\tb2", "chat\tbritney\tb3", "chat\tbritney\tb4"])
         self.assertEqual(self.req("GET", "/notify/poll?chat=7&me=Alex"), (200, "ok 7\n"))
 
+    def test_a_dog_emoji_is_words_in_a_banner(self):
+        # the room keeps the code; only the banner turns it into words
+        self.req("POST", "/msg?name=Alex", b"one")
+        self.req("POST", "/msg?name=home", b":arty-happy:")
+        self.req("POST", "/msg?name=home", b":marcy-zoomies: ")
+        self.req("POST", "/msg?name=home", b"see :arty-happy:")
+        s, body = self.req("GET", "/notify/poll?chat=1&me=alex")
+        self.assertEqual(body.splitlines()[1:], ["chat\thome\tArty: happy", "chat\thome\tMarcy: zoomies",
+                                                 "chat\thome\tsee :arty-happy:"])
+        s, body = self.req("GET", "/msg?since=1&max=1")
+        self.assertEqual(body.rstrip("\n").split("\t")[3], ":arty-happy:")
+
     def test_notes_reach_the_poll(self):
         from server import msg
         msg._notes.clear(); msg._note_ids.clear()

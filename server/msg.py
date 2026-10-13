@@ -15,6 +15,7 @@ Lines, not JSON, because the device parses them with no library. A tab or
 a newline in a message becomes a space.
 """
 import os
+import re
 import threading
 import time
 
@@ -85,6 +86,16 @@ def post_msg(h, path, args):
     h.text("%d\n" % mid)
 
 
+# A message that is only ":dog-mood:" is a dog emoji (apps/chat/emoji.h):
+# Chat draws it, a banner cannot, so the banner gets it in words.
+_EMOJI = re.compile(r"^\s*:(arty|marcy)-([a-z]+):\s*$")
+
+
+def banner_text(text):
+    m = _EMOJI.match(text)
+    return "%s: %s" % (m.group(1).title(), m.group(2)) if m else text
+
+
 POLL_MAX = 3
 NOTES_KEEP = 20
 
@@ -141,7 +152,7 @@ def get_notify_poll(h, path, args):
     out = ["ok %d %d\n" % (last, note_last) if nid >= 0 or "note" in args else "ok %d\n" % last]
     if sid >= 0:
         new = [m for m in msgs if m["id"] > sid and m["name"].lower() != me][-POLL_MAX:]
-        out += ["chat\t%s\t%s\n" % (m["name"], m["text"]) for m in new]
+        out += ["chat\t%s\t%s\n" % (m["name"], banner_text(m["text"])) for m in new]
     if nid >= 0:
         out += ["note\t%s\t%s\t%s\n" % (x["app"], x["title"], x["text"]) for x in news[-POLL_MAX:]]
     h.text("".join(out))

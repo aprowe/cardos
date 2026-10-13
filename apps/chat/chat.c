@@ -8,6 +8,11 @@
  *
  * Hold the button on top and talk, and what you said is sent.
  *
+ * Tab picks a dog emoji -- Arty or Marcy, eight moods (apps/chat/emoji.h,
+ * drawn in tools/make_emoji.py). One is sent as the text ":arty-happy:"
+ * and shown here as the picture, four log rows tall: each row is a log
+ * line marked EMO_MARK, which paint_row draws instead of the text.
+ *
  * The requests are http_start/http_poll, so typing never waits on the
  * network. Drawn the way apps/claude.c is: every line written over the one
  * before, padded to the width, nothing cleared first.
@@ -15,6 +20,7 @@
 #include "kernel/app/capp.h"
 #include "apps/str.h"
 #include "apps/safefile.h"
+#include "apps/chat/emoji.h"
 
 #define CONF       "/config/chat.txt"
 #define TL_LINES   90
@@ -35,6 +41,14 @@
 #define CLR_ME     CAPP_RGB(140, 210, 150)
 #define CLR_ERR    CAPP_RGB(232, 110, 100)
 #define CLR_IN     CAPP_RGB(28, 32, 42)
+#define CLR_SEL    CAPP_RGB(60, 92, 140)
+
+#define EMO_MARK   '\x01'         /* a log line that is a slice of a picture */
+#define EMO_SCALE  2              /* a sprite pixel is 2x2 here */
+#define EMO_ROWS   (EMO_H * EMO_SCALE / TL_ROW_H)
+#define PANEL_H    32             /* the picker, over the bottom of the log */
+#define SLOT       29             /* a picker sprite and the gap after it */
+#define KEY_TAB    0x09
 
 /* Everyone else gets a colour from their name, the same on every device. */
 static const uint16_t WHO[6] = {
@@ -61,9 +75,13 @@ static struct {
   int      dirty;                  /* something was marked since the last tick */
   CRect    at;
   int      have_at;
+  int      picking;                /* the emoji picker is up */
+  int      dog;                    /* which dog it shows */
+  int      mood;                   /* the one chosen */
 } C;
 
 static char reply[REPLY_MAX];
+static uint16_t pic[EMO_W * EMO_SCALE * TL_ROW_H];   /* a slice; a picker sprite fits too */
 
 /* Marked, and remembered: tick says so, or a message that arrives while no
  * key is pressed waits for one to be drawn (2026-10-06). */
@@ -93,21 +111,31 @@ static void say(const char *s) { push_wrapped(s, CLR_DIM); damage_log(); }
 
 /* ---- the name ------------------------------------------------------------------ */
 
+/* /config/chat.txt: the name, then the dog the picker opens on. */
 static void name_load(void) {
+  char b[NAME_MAX + 16], *dog = 0;
   int fd = safe_open_read(api, CONF), n, i;
   C.name[0] = 0;
   if (fd < 0) return;
-  n = api->read(fd, C.name, NAME_MAX);
+  n = api->read(fd, b, sizeof b - 1);
   api->close(fd);
   if (n < 0) n = 0;
-  C.name[n] = 0;
-  for (i = 0; C.name[i]; i++) if (C.name[i] == '\n' || C.name[i] == '\r') { C.name[i] = 0; break; }
+  b[n] = 0;
+  for (i = 0; b[i]; i++)
+    if (b[i] == '\n' || b[i] == '\r') {
+      b[i] = 0;
+      if (!dog) dog = b + i + 1;
+    }
+  api->fmt(C.name, sizeof C.name, "%s", b);
+  for (i = 0; dog && i < EMO_DOGS; i++) if (str_same(dog, EMO_DOG[i])) C.dog = i;
 }
 
 static void name_save(void) {
   SafeFile f;
   if (safe_begin(&f, api, CONF) != 0) return;
   safe_write(&f, C.name, api->str_len(C.name));
+  safe_write(&f, "\n", 1);
+  safe_write(&f, EMO_DOG[C.dog], api->str_len(EMO_DOG[C.dog]));
   safe_write(&f, "\n", 1);
   safe_commit(&f);
 }
@@ -144,7 +172,7 @@ static int take_messages(void) {
   int got = 0;
   while (*p) {
     char *f[4];
-    int k = 0, id = 0;
+    int k = 0, id = 0, code;
     f[0] = p;
     while (*p && *p != '\n') {
       if (*p == '\t' && k < 3) { *p = 0; f[++k] = p + 1; }
@@ -156,8 +184,16 @@ static int take_messages(void) {
     if (id <= C.last_id) continue;
     C.last_id = id;
     api->fmt(name, sizeof name, "%s", f[2]);
-    api->fmt(line, sizeof line, "%s: %s", name, f[3]);
-    push_wrapped(line, colour_of(name));
+    if ((code = emo_parse(f[3])) >= 0) {
+      int r;
+      for (r = 0; r < EMO_ROWS; r++) {
+        api->fmt(line, sizeof line, "%c%c%c%s:", EMO_MARK, 'A' + code, '0' + r, name);
+        tl_push(api, &C.log, line, colour_of(name));
+      }
+    } else {
+      api->fmt(line, sizeof line, "%s: %s", name, f[3]);
+      push_wrapped(line, colour_of(name));
+    }
     got++;
   }
   return got;
@@ -222,14 +258,67 @@ static void paint_bar(CRect c) {
   tl_paint_bar(api, c, bar, C.offline ? CLR_ERR : CLR_FG, CLR_BAR);
 }
 
+static void fill(int x, int y, int w, int h, uint16_t c) {
+  if (w > 0 && h > 0) api->fill(capp_rect(x, y, w, h), c);
+}
+
+/* A slice of a picture: the name on the first, then the picture's rows. */
+static int paint_row(const char *line, int tag, int x, int y, int w) {
+  int code, part, nw, i;
+  if (line[0] != EMO_MARK) return 0;
+  code = line[1] - 'A';
+  part = line[2] - '0';
+  if (code < 0 || code >= EMO_DOGS * EMO_MOODS || part < 0 || part >= EMO_ROWS) return 0;
+  nw = (int)api->str_len(line + 3) * 6 + 6;
+  if (part == 0) {
+    tl_text_cols(api, x, y, line + 3, nw / 6, (uint16_t)tag, CLR_BG);
+    fill(x, y + 8, nw, TL_ROW_H - 8, CLR_BG);
+  } else fill(x, y, nw, TL_ROW_H, CLR_BG);
+  for (i = 0; i < TL_ROW_H; i++)
+    emo_row(code, part * TL_ROW_H + i, EMO_SCALE, CLR_BG, pic + i * EMO_W * EMO_SCALE);
+  api->pixels(capp_rect(x + nw, y, EMO_W * EMO_SCALE, TL_ROW_H), pic);
+  fill(x + nw + EMO_W * EMO_SCALE, y, w - nw - EMO_W * EMO_SCALE, TL_ROW_H, CLR_BG);
+  return 1;
+}
+
+/* The picker: which dog and mood, then the eight at their own size. Every
+ * pixel of the panel written once. */
+static void paint_picker(CRect c) {
+  int y = c.y + c.h - IN_H - PANEL_H, i, x = c.x + 3;
+  char label[48];
+  api->fmt(label, sizeof label, "%c%s %s  < > enter  tab %s",
+           EMO_DOG[C.dog][0] - 32, EMO_DOG[C.dog] + 1, EMO_MOOD[C.mood], EMO_DOG[(C.dog + 1) % EMO_DOGS]);
+  fill(c.x, y, c.w, 2, CLR_IN);
+  fill(c.x, y + 2, 3, 8, CLR_IN);
+  tl_text_cols(api, c.x + 3, y + 2, label, 39, CLR_DIM, CLR_IN);
+  fill(c.x + 3 + 39 * 6, y + 2, c.w - 3 - 39 * 6, 8, CLR_IN);
+  fill(c.x, y + 10, c.w, 2, CLR_IN);
+  fill(c.x, y + 12, 3, EMO_H, CLR_IN);
+  for (i = 0; i < EMO_MOODS; i++) {
+    int code = C.dog * EMO_MOODS + i, r;
+    uint16_t bg = i == C.mood ? CLR_SEL : CLR_IN;
+    fill(x, y + 12, 2, EMO_H, bg);
+    for (r = 0; r < EMO_H; r++) emo_row(code, r, 1, bg, pic + r * EMO_W);
+    api->pixels(capp_rect(x + 2, y + 12, EMO_W, EMO_H), pic);
+    fill(x + 2 + EMO_W, y + 12, 2, EMO_H, bg);
+    fill(x + 4 + EMO_W, y + 12, SLOT - 4 - EMO_W, EMO_H, CLR_IN);
+    x += SLOT;
+  }
+  fill(x, y + 12, c.x + c.w - x, EMO_H, CLR_IN);
+  fill(c.x, y + 12 + EMO_H, c.w, PANEL_H - 12 - EMO_H, CLR_IN);
+}
+
 static void app_paint(void *st, CRect c) {
-  CRect clip = api->paint_area();
+  CRect clip = api->paint_area(), lc = c;
   (void)st;
   C.at = c;
   C.have_at = 1;
+  if (C.picking) lc.h = (int16_t)(lc.h - PANEL_H);    /* the log ends above the picker */
   if (clip.y < c.y + BAR_H) paint_bar(c);
-  if (clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + BAR_H)
-    tl_paint_log(api, &C.log, c, clip, colour_is, CLR_BG);
+  if (clip.y < lc.y + lc.h - IN_H && clip.y + clip.h > c.y + BAR_H)
+    tl_paint_log_ex(api, &C.log, lc, clip, colour_is, CLR_BG, paint_row);
+  if (C.picking && clip.y < c.y + c.h - IN_H && clip.y + clip.h > c.y + c.h - IN_H - PANEL_H)
+    paint_picker(c);
   if (clip.y + clip.h > c.y + c.h - IN_H)
     tl_paint_input(api, c, C.naming ? "?" : ">", C.input, C.in_len, CLR_FG, CLR_DIM, CLR_IN);
 }
@@ -270,8 +359,35 @@ static void submit(void) {
   damage_log();
 }
 
+static void pick(int on) {
+  C.picking = on;
+  damage_log();
+}
+
+static int picker_key(uint8_t k) {
+  if (k == CAPP_KEY_LEFT)  { C.mood = (C.mood + EMO_MOODS - 1) % EMO_MOODS; damage_log(); return 1; }
+  if (k == CAPP_KEY_RIGHT) { C.mood = (C.mood + 1) % EMO_MOODS; damage_log(); return 1; }
+  if (k == KEY_TAB || k == CAPP_KEY_UP || k == CAPP_KEY_DOWN) {
+    C.dog = (C.dog + 1) % EMO_DOGS;
+    name_save();
+    damage_log();
+    return 1;
+  }
+  if (k == CAPP_KEY_ENTER) {
+    char t[24];
+    if (emo_text(t, sizeof t, C.dog * EMO_MOODS + C.mood)) send(t);
+    pick(0);
+    return 1;
+  }
+  if (k == CAPP_KEY_ESC) { pick(0); return 1; }
+  pick(0);
+  return 0;                          /* anything else: away, and typed */
+}
+
 static int app_key(void *st, uint8_t k) {
   (void)st;
+  if (C.picking && picker_key(k)) return 1;
+  if (k == KEY_TAB && !C.naming) { pick(1); return 1; }
   if (k == CAPP_KEY_ENTER) { submit(); return 1; }
   if (k == CAPP_KEY_BACK) {
     if (C.in_len) C.input[--C.in_len] = 0;
@@ -329,6 +445,7 @@ const CappInfo capp_info = {
   "Talk between the devices, through the CardOS server.\n"
   "enter\tsend\nG0\thold and talk: what you say is sent\n"
   "arrows\tscroll back, when nothing is typed\nesc\tclear what is typed\n"
+  "tab\tdog emojis: < > choose, enter sends, tab the other dog\n"
   "/name\tchange the name the others see\n",
 };
 
