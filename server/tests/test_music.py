@@ -1,5 +1,6 @@
-"""Music: a 16-bit PCM WAV is kept and listed; anything else is refused with
-a reason; the device lists, downloads and deletes.
+"""Music: what arrives is kept as a mono MP3 (with ffmpeg) or, without it,
+as a WAV the device plays; anything else is refused with a reason; the
+device lists, downloads and deletes; the old WAVs are made MP3.
 
     python -m server.tests.test_music
 """
@@ -70,20 +71,38 @@ class Routes(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, e.read()
 
-    def test_upload_list_download_delete(self):
+    def test_without_ffmpeg_a_wav_is_kept_as_it_came(self):
+        self.addCleanup(setattr, music, "ffmpeg", music.ffmpeg)
+        music.ffmpeg = lambda: None
         self.cookie = True
-        s, body = self.req("POST", "/dash/music/upload?title=Night%20Drive.mp3", wav(3.0), bearer=None)
+        s, body = self.req("POST", "/dash/music/upload?title=Night%20Drive.wav", wav(3.0), bearer=None)
         self.assertEqual(s, 200)
         meta = json.loads(body)
-        self.assertEqual((meta["title"], meta["ms"]), ("Night Drive", 3000))
+        self.assertEqual((meta["title"], meta["ms"], meta["fmt"]), ("Night Drive", 3000, "wav"))
         self.cookie = False
         s, body = self.req("GET", "/music")
-        tid, title, ms, size = body.decode().strip().split("\t")
-        self.assertEqual((tid, title, ms), (meta["id"], "Night Drive", "3000"))
+        tid, title, ms, size, fmt, artist = body.decode().rstrip("\n").split("\t")
+        self.assertEqual((tid, title, ms, fmt, artist), (meta["id"], "Night Drive", "3000", "wav", ""))
         s, data = self.req("GET", "/music/track?id=" + tid)
         self.assertEqual((s, len(data), data[:4]), (200, int(size), b"RIFF"))
         self.assertEqual(self.req("DELETE", "/music/track?id=" + tid), (200, b"ok\n"))
         self.assertEqual(self.req("GET", "/music"), (200, b""))
+
+    @unittest.skipUnless(music.ffmpeg(), "no ffmpeg here")
+    def test_upload_list_download_an_mp3(self):
+        self.cookie = True
+        s, body = self.req("POST", "/dash/music/upload?title=Night%20Drive.wav", wav(3.0), bearer=None)
+        self.assertEqual(s, 200)
+        meta = json.loads(body)
+        self.assertEqual((meta["title"], meta["fmt"]), ("Night Drive", "mp3"))
+        self.assertAlmostEqual(meta["ms"], 3000, delta=120)
+        self.cookie = False
+        s, body = self.req("GET", "/music")
+        fields = body.decode().rstrip("\n").split("\t")
+        self.assertEqual((fields[0], fields[1], fields[4]), (meta["id"], "Night Drive", "mp3"))
+        s, data = self.req("GET", "/music/track?id=" + meta["id"])
+        self.assertEqual((s, len(data)), (200, int(fields[3])))
+        self.assertEqual(data[0], 0xFF)                    # a frame, no tag in front
 
     def test_refusals(self):
         self.cookie = True
@@ -100,27 +119,53 @@ class Routes(unittest.TestCase):
 class Convert(unittest.TestCase):
     """What the device cannot play is made into what it can."""
 
-    def test_an_8_bit_wav_comes_out_22050_mono_16_bit(self):
-        out = music.playable(wav(1.0, 44100, 2, bits=8))
-        rate, ch, ms = music.wav_info(out)
-        self.assertEqual((rate, ch), (22050, 1))
-        self.assertAlmostEqual(ms, 1000, delta=30)
+    def stream(self, data):
+        """sample rate, channels and codec of audio bytes, by ffprobe"""
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "x")
+            with open(p, "wb") as f:
+                f.write(data)
+            r = subprocess.run([music.ffprobe(), "-v", "error", "-of", "json", "-show_streams", p],
+                               capture_output=True, check=True)
+        st = json.loads(r.stdout)["streams"][0]
+        return int(st["sample_rate"]), st["channels"], st["codec_name"]
 
-    def test_an_mp3(self):
+    def test_a_stereo_wav_comes_out_a_mono_mp3(self):
+        out, fmt, ms, tags = music.playable(wav(1.0, 22050, 2, bits=8))
+        self.assertEqual(fmt, "mp3")
+        self.assertEqual(self.stream(out), (44100, 1, "mp3"))
+        self.assertAlmostEqual(ms, 1000, delta=80)
+
+    def test_an_mp3_keeps_its_title_and_artist(self):
         import subprocess
         with tempfile.TemporaryDirectory() as d:
             mp3 = os.path.join(d, "t.mp3")
             subprocess.run([music.ffmpeg(), "-v", "error", "-f", "lavfi", "-i", "sine=440:duration=2",
-                            "-c:a", "libmp3lame", mp3], check=True)
+                            "-ac", "2", "-c:a", "libmp3lame", "-metadata", "title=Holocene",
+                            "-metadata", "artist=Bon Iver", mp3], check=True)
             with open(mp3, "rb") as f:
-                out = music.playable(f.read())
-        rate, ch, ms = music.wav_info(out)
-        self.assertEqual((rate, ch), (22050, 1))
+                out, fmt, ms, tags = music.playable(f.read())
+        self.assertEqual(self.stream(out), (44100, 1, "mp3"))
         self.assertAlmostEqual(ms, 2000, delta=100)
+        self.assertEqual((tags.get("title"), tags.get("artist")), ("Holocene", "Bon Iver"))
+        self.assertNotIn(b"Holocene", out)               # the device reads no tags
 
-    def test_a_playable_wav_is_kept_as_it_came(self):
-        w = wav(1.0)
-        self.assertIs(music.playable(w), w)
+    def test_the_old_wavs_are_made_mp3_under_the_same_id(self):
+        root = tempfile.mkdtemp()
+        d = os.path.join(root, "users", "alex", "music", "abc123")
+        os.makedirs(d)
+        with open(os.path.join(d, "track.wav"), "wb") as f:
+            f.write(wav(2.0))
+        with open(os.path.join(d, "meta.json"), "w") as f:
+            json.dump({"id": "abc123", "title": "Old", "ms": 2000, "bytes": 1, "rate": 22050}, f)
+        self.assertEqual(music.to_mp3(root), 1)
+        self.assertEqual(sorted(os.listdir(d)), ["meta.json", "track.mp3"])
+        with open(os.path.join(d, "meta.json")) as f:
+            meta = json.load(f)
+        self.assertEqual((meta["fmt"], meta["title"]), ("mp3", "Old"))
+        self.assertEqual(meta["bytes"], os.path.getsize(os.path.join(d, "track.mp3")))
+        self.assertEqual(music.to_mp3(root), 0)          # once
 
 
 if __name__ == "__main__":

@@ -124,6 +124,11 @@ static inline const void *capprun_caller(void) { return capprun_executing(); }
 
 /* Big-app mode's let-go (bigmode_on_enter registers it at boot). */
 void           capprun_big_let_go(void);
+/* Let go of what can come back -- the held code block, Bluetooth unless a
+ * print or a link holds it, WiFi unless a request is under way -- so the
+ * heap's pieces join up. For a load that failed for memory, and for the
+ * MP3 decoder (kernel/sys/audio.c). Call it from the shell's loop. */
+void           capprun_make_room(void);
 int            capprun_on_release(void (*fn)(const void *owner));
 
 /* Its name, for a log line. "app" when no app code is running. */

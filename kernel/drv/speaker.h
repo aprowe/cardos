@@ -41,6 +41,16 @@ int  speaker_play_wav_ex(const char *path, int (*stop)(void),
                          int (*paused)(void), int32_t (*seek)(void));
 const char *speaker_error(void);
 
+/* Samples made as they play -- an MP3, decoded on the audio task: open
+ * takes the pin (waiting, as a WAV does) and the channel, mono at `rate`;
+ * write scales by the volume, in place, and blocks until the DMA takes it;
+ * hush sends a block of silence (paused); close drains and lets go. -1 with
+ * speaker_error() set. Close after a failed open is safe. */
+int  speaker_stream_open(uint32_t rate);
+int  speaker_stream_write(int16_t *pcm, int n);
+int  speaker_stream_hush(void);
+void speaker_stream_close(void);
+
 /* n mono samples from memory, already at the volume wanted; blocks until
  * played. -1 at once if the channel is in use -- for blip.c, whose sounds
  * are worth nothing late. */

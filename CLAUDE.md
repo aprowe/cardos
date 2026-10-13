@@ -348,7 +348,7 @@ running `print FILE` through `api->shell`, which now reads the whole file
 device's token to its own server, as `http` and `http_upload` did.
 
 **Music: tracks dragged onto the dashboard, played on the device**
-(2026-10-06). The device plays PCM WAV only, so the dashboard's Music page
+(2026-10-06; MP3 since 2026-10-12, below). The device played PCM WAV only, so the dashboard's Music page
 converts in the browser -- decodeAudioData, an OfflineAudioContext at
 22050 Hz mono, lifted to near full scale -- and uploads a 16-bit WAV
 (about 2.6 MB a minute); `server/music.py` checks it is one and keeps it.
@@ -387,6 +387,32 @@ Beats in /circuit; the preview plays drums as synthesised hits; the roll is
 a lane a track. A beat is dense (1536 events), so the song is a big-mode
 block (`CAPP_BIG`), not the arena. `c` there asks the composer for a change
 (it knows the tracks; the talk would not), `u` undoes -- in MIDI too.
+
+**Music is an MP3 player, dressed as an iPod nano** (2026-10-12). The
+kernel decodes MP3 (`kernel/sys/mp3stream.c`, host-tested against
+`test/fixtures/mp3_*.mp3`; minimp3, public domain, vendored in
+`kernel/ext/minimp3` with one patch, `MINIMP3_EXTERNAL_SCRATCH`, so its
+16 KB of scratch comes from the heap, not the stack): `audio_play` of a
+path ending `.mp3` probes it (ID3v2 skipped, length from the Xing/Info
+frame or the bitrate, seeks through the Xing table), and an `mp3` task
+on core 1 decodes, mixes to mono and streams to the speaker
+(`speaker_stream_*`). No API change: `CappAudio.play` takes either.
+Measured: 20 s of 128 kbps stereo plays in 20.4 s with WiFi up, task
+stack 6 KB (2.5 spare); the decoder is 29 KB of heap in two blocks, so an
+MP3 lets the radios go first (`capprun_make_room`, as a print does) --
+with WiFi up and Music's fonts loaded, the heap was too broken for the
+serial link's frames. Nothing polls for notifications while one plays.
+`play FILE` in the console plays either kind. The server keeps each
+upload as a 44.1 kHz mono 96 kbps MP3 (0.7 MB a minute; the WAV was 2.6),
+title and artist from its tags, and `/music` lists `fmt` and `artist` as
+fields 5 and 6; `python -m server.music mp3` makes the old WAVs MP3 under
+the same ids, and the device swaps them at its next sync. The app
+(`apps/music.c`) is the nano: a grey title bar, white lists with a blue
+bar and chevrons, Songs, Artists, Shuffle Songs, Now Playing ("3 of 12",
+a cover drawn from the name, a bar with time gone and left; up/down are
+the volume there, as the wheel was), in Inter (`pod13`, `pod13b`,
+`pod16b`). MP3s put in /music by hand are named by their ID3 tags
+(`apps/id3.h`).
 
 **Talking to Claude about a document** (2026-10-06). `claude [-k song]
 PATH` opens the Claude app about one file instead of the device agent:

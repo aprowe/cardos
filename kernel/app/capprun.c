@@ -784,6 +784,8 @@ static void make_room(void) {
           (unsigned)after, (unsigned)before8, (unsigned)after8);
 }
 
+void capprun_make_room(void) { make_room(); }
+
 /* A big app came on screen (bigmode.h): let go of what can come back --
  * the code block Today keeps (unless a run holds it), the Bluetooth radio
  * (unless a print, a mouse or a keyboard holds it). WiFi stays: the big app

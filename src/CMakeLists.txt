@@ -77,6 +77,7 @@ idf_component_register(
     "../kernel/sys/conf_file.c"
     "../kernel/sys/printdoc.c"
     "../kernel/sys/printq.c"
+    "../kernel/sys/mp3stream.c"
     "../kernel/drv/mic.c"
     "../kernel/drv/speaker.c"
     "../kernel/sys/audio.c"

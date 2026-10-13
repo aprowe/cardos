@@ -29,7 +29,9 @@ enum { AUDIO_IDLE = 0, AUDIO_RECORDING, AUDIO_PLAYING };
  * 0 started, -1 busy, -2 the mic or the card refused. */
 int  audio_record(const char *path, int max_ms);
 
-/* Play a PCM WAV. 0 started, -1 busy, -2 unplayable (audio_error says). */
+/* Play a PCM WAV, or an MP3 (by its name: NAME.mp3), decoded as it plays
+ * (kernel/sys/mp3stream.c) and mixed down to mono. 0 started, -1 busy, -2
+ * unplayable (audio_error says). */
 int  audio_play(const char *path);
 
 void audio_stop(void);

@@ -73,6 +73,7 @@
 #include "nvs_flash.h"
 #include "kernel/drv/bthid.h"
 #include "kernel/drv/speaker.h"
+#include "kernel/sys/audio.h"
 #include "kernel/app/bigmode.h"
 
 /* Long enough for the lines a tool sends rather than the ones a person types.
@@ -411,6 +412,23 @@ static void run_builtin(const char *line, char *arg) {
     else con_printf("shot: %s\n", shot_error());
   }
   else if (!strcmp(line, "print")) cmd_print(arg);
+  else if (!strcmp(line, "play")) {
+    /* A WAV or an MP3 on the audio task, as Music plays it: `play FILE`,
+     * `play` alone says how far, `play stop`. */
+    if (arg && !strcmp(arg, "stop")) audio_stop();
+    else if (arg && *arg) {
+      char path[FS_PATH_MAX];
+      int r;
+      if (path_resolve(shell_cwd(), arg, path, sizeof path) != 0) { con_write("play: bad path\n"); return; }
+      r = audio_play(path);
+      if (r == -1) con_printf("busy: %s has the audio\n", audio_holder() ? audio_holder() : "something");
+      else if (r != 0) con_printf("play: %s\n", audio_error());
+      else con_printf("playing %s, %u s\n", path, (unsigned)(audio_total_ms() / 1000));
+    } else if (audio_state() == AUDIO_PLAYING)
+      con_printf("%u of %u s%s\n", (unsigned)(audio_pos_ms() / 1000),
+                 (unsigned)(audio_total_ms() / 1000), audio_paused() ? ", paused" : "");
+    else con_printf("nothing playing%s%s\n", audio_error()[0] ? ": " : "", audio_error());
+  }
   else if (!strcmp(line, "volume")) {
     if (arg && *arg) speaker_set_volume(atoi(arg));
     if (speaker_volume()) con_printf("volume %d%%\n", speaker_volume());
@@ -504,7 +522,7 @@ static const char *const COMMANDS[] = {
   "battery", "defaults", "listen", "mouse", "pwd", "reboot", "rm",
   "run", "time",
   "safe",
-  "print", "shot", "taskcost", "update", "usbdisk", "volume", "wifi", "xip",
+  "play", "print", "shot", "taskcost", "update", "usbdisk", "volume", "wifi", "xip",
 };
 #define NCOMMANDS ((int)(sizeof COMMANDS / sizeof COMMANDS[0]))
 

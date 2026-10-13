@@ -30,3 +30,10 @@ ui13b       AtkinsonHyperlegible-Bold.ttf     13
 # Numbers that are the point of a screen but not the whole of it: a streak,
 # a count past six digits, Clock's seconds. Inter Bold like clock56.
 num30       Inter-Variable.ttf                30    --chars "0123456789+-:%/" --tabular --tight --style Bold
+#
+# Music's iPod-nano look: Inter, which is near the nano's own lettering --
+# lists and the artist in 13, the bold title bar and selected row in 13
+# bold, the song on Now Playing in 16 bold.
+pod13       Inter-Variable.ttf                13
+pod13b      Inter-Variable.ttf                13    --style Bold
+pod16b      Inter-Variable.ttf                16    --style Bold

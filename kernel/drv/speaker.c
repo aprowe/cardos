@@ -235,6 +235,42 @@ int speaker_play_pcm(const int16_t *pcm, int n, uint32_t rate) {
   return 0;
 }
 
+static int s_streaming;
+
+int speaker_stream_open(uint32_t rate) {
+  need_lock();
+  s_error[0] = 0;
+  xSemaphoreTake(s_lock, portMAX_DELAY);
+  if (open_tx(rate, 1) != 0) { xSemaphoreGive(s_lock); return -1; }
+  s_streaming = 1;
+  return 0;
+}
+
+int speaker_stream_write(int16_t *pcm, int n) {
+  int gain = speaker_volume() * 256 / 100, i;
+  size_t wrote;
+  if (!s_streaming) return -1;
+  for (i = 0; i < n; i++) pcm[i] = (int16_t)((pcm[i] * gain) >> 8);
+  if (i2s_channel_write(s_tx, pcm, (size_t)n * 2, &wrote, 500) != ESP_OK) { fail("I2S write failed"); return -1; }
+  return 0;
+}
+
+int speaker_stream_hush(void) {
+  static const int16_t hush[BLOCK_SAMPLES];
+  size_t wrote;
+  if (!s_streaming) return -1;
+  if (i2s_channel_write(s_tx, hush, sizeof hush, &wrote, 500) != ESP_OK) { fail("I2S write failed"); return -1; }
+  return 0;
+}
+
+void speaker_stream_close(void) {
+  if (!s_streaming) return;
+  drain();
+  close_tx();
+  s_streaming = 0;
+  xSemaphoreGive(s_lock);
+}
+
 static int play_wav_locked(const char *path, int (*stop)(void),
                            void (*progress)(uint32_t bytes),
                            int (*paused)(void), int32_t (*seek)(void)) {

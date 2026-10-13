@@ -488,7 +488,9 @@ typedef struct {
 /* ---- sound ----
  *
  * Recording (16 kHz mono 16-bit WAV, straight to the card) and playback
- * (any PCM WAV, 16-bit, mono or stereo) run on a task of their own; start
+ * (any PCM WAV, 16-bit, mono or stereo; or, on firmware since 2026-10-12,
+ * an MP3 -- a path ending .mp3 -- played as one channel) run on a task of
+ * their own; start
  * one, return, and watch it from tick. The mic and the speaker share a pin,
  * so one at a time. Holding the voice button while an app records is
  * refused by the hardware in the same way. */

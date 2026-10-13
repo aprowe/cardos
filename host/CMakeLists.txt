@@ -39,6 +39,7 @@ file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
   ${ROOT}/kernel/app/bigmode.c     # big-app mode; the heap is set at boot
   ${ROOT}/kernel/sys/g0gesture.c # voice.c is the device glue around it
   ${ROOT}/kernel/sys/printdoc.c  # printq.c/btprint.c are the task and radio around it
+  ${ROOT}/kernel/sys/mp3stream.c # audio.c plays it from the card to the speaker
   ${ROOT}/kernel/sys/serframe.c  # serlink.c is the device glue around it
   ${ROOT}/kernel/ui/pickmodel.c  # picker.c is the paint and fs glue
   ${ROOT}/kernel/ui/cfont.c      # .cfnt fonts; draw.c and fontres.c draw and load them
