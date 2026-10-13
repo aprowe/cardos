@@ -132,8 +132,10 @@ void test_chat_paint_an_emoji_is_a_picture(void) {
 void test_chat_paint_the_picker_sends_the_chosen_one(void) {
   boot();
   exchange("");
+  CHECK(CUI.wants_text(CUI.state));              /* typing: ; , . / are letters */
   key(KEY_TAB);
   CHECK(C.picking);
+  CHECK(!CUI.wants_text(CUI.state));             /* picking: they are arrows, no fn */
   CHECK_EQ(C.dog, 1);                            /* chat.txt said marcy */
   key(CAPP_KEY_RIGHT);
   key(CAPP_KEY_RIGHT);
@@ -145,12 +147,42 @@ void test_chat_paint_the_picker_sends_the_chosen_one(void) {
   key(KEY_TAB);                                   /* Arty, kept for next time */
   CHECK_EQ(C.dog, 0);
   CHECK(strstr(fakefs_get("/config/chat.txt"), "arty") != 0);
-  key(CAPP_KEY_ENTER);
+  key(CAPP_KEY_ENTER);                            /* into the box, not sent */
   CHECK(!C.picking);
-  CHECK(!strcmp(C.outbox, ":arty-sad:"));
+  CHECK(CUI.wants_text(CUI.state));
+  CHECK(!strcmp(C.input, ":arty-sad:"));
+  CHECK_EQ(C.outbox[0], 0);
+  key(KEY_TAB);                                   /* another, after a space */
+  key(CAPP_KEY_ENTER);
+  CHECK(!strcmp(C.input, ":arty-sad: :arty-sad:"));
+  key(CAPP_KEY_ENTER);                            /* enter in the box sends */
+  CHECK(!strcmp(C.outbox, ":arty-sad: :arty-sad:"));
   exchange("");                                   /* the send goes out */
-  CHECK(!strcmp(s_posted, ":arty-sad:"));
+  CHECK(!strcmp(s_posted, ":arty-sad: :arty-sad:"));
   paint();
+  CHECK_EQ(unset(), 0);
+}
+
+/* Words, a picture, words: the name leads, the picture sits under the
+ * words indented as a wrapped line is, and what follows goes on. */
+void test_chat_paint_words_and_pictures_in_one_message(void) {
+  int n0;
+  boot();
+  n0 = C.log.n;
+  exchange("1\t0\thome\tdinner? :arty-hungry: now :marcy-love:\n");
+  CHECK_EQ(C.log.n, n0 + 1 + EMO_ROWS + 1 + EMO_ROWS);
+  CHECK(!strcmp(C.log.line[n0], "home: dinner?"));
+  CHECK(C.log.line[n0 + 1][0] == EMO_MARK && C.log.line[n0 + 1][1] == 'A' + 4);
+  CHECK(!strcmp(C.log.line[n0 + 1] + 3, " "));
+  CHECK(!strcmp(C.log.line[n0 + 1 + EMO_ROWS], "  now"));
+  CHECK(C.log.line[n0 + 2 + EMO_ROWS][1] == 'A' + EMO_MOODS + 1);
+  /* An emoji first takes the name; a colon that is not one is words. */
+  n0 = C.log.n;
+  exchange("2\t0\thome\t:marcy-sad: ok :-)\n");
+  CHECK(!strcmp(C.log.line[n0] + 3, "home:"));
+  CHECK(!strcmp(C.log.line[n0 + EMO_ROWS], "  ok :-)"));
+  paint();
+  dump("mixed");
   CHECK_EQ(unset(), 0);
 }
 

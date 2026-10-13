@@ -82,7 +82,9 @@ class Room(unittest.TestCase):
         self.req("POST", "/msg?name=home", b"see :arty-happy:")
         s, body = self.req("GET", "/notify/poll?chat=1&me=alex")
         self.assertEqual(body.splitlines()[1:], ["chat\thome\tArty: happy", "chat\thome\tMarcy: zoomies",
-                                                 "chat\thome\tsee :arty-happy:"])
+                                                 "chat\thome\tsee (Arty: happy)"])
+        self.assertEqual(msg.banner_text("ok :-) :rex-happy: :arty-dance: :marcy-sad::arty-love:"),
+                         "ok :-) :rex-happy: :arty-dance: (Marcy: sad)(Arty: love)")
         s, body = self.req("GET", "/msg?since=1&max=1")
         self.assertEqual(body.rstrip("\n").split("\t")[3], ":arty-happy:")
 

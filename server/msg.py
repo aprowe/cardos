@@ -86,14 +86,18 @@ def post_msg(h, path, args):
     h.text("%d\n" % mid)
 
 
-# A message that is only ":dog-mood:" is a dog emoji (apps/chat/emoji.h):
-# Chat draws it, a banner cannot, so the banner gets it in words.
-_EMOJI = re.compile(r"^\s*:(arty|marcy)-([a-z]+):\s*$")
+# ":dog-mood:" in a message is a dog emoji (apps/chat/emoji.h): Chat draws
+# it, a banner cannot, so the banner gets it in words -- "Arty: happy"
+# when it is the whole message, "(Arty: happy)" among words.
+_EMOJI = re.compile(r":(arty|marcy)-(happy|love|sad|sleepy|hungry|grumpy|zoomies|huh):")
 
 
 def banner_text(text):
-    m = _EMOJI.match(text)
-    return "%s: %s" % (m.group(1).title(), m.group(2)) if m else text
+    words = lambda m: "%s: %s" % (m.group(1).title(), m.group(2))
+    whole = _EMOJI.fullmatch(text.strip())
+    if whole:
+        return words(whole)
+    return _EMOJI.sub(lambda m: "(%s)" % words(m), text)
 
 
 POLL_MAX = 3

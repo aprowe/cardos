@@ -31,6 +31,19 @@ void test_chat_emoji_parse(void) {
   CHECK_EQ(emo_parse("::"), -1);
 }
 
+void test_chat_emoji_found_among_words(void) {
+  int n = -7;
+  CHECK_EQ(emo_at(":arty-love: hi", &n), 1);
+  CHECK_EQ(n, 11);
+  CHECK_EQ(emo_at(":marcy-huh:", &n), EMO_DOGS * EMO_MOODS - 1);
+  CHECK_EQ(n, 11);
+  CHECK_EQ(emo_at("hi :arty-love:", &n), -1);       /* only where it starts */
+  CHECK_EQ(emo_at(":arty-love", &n), -1);
+  CHECK_EQ(emo_at(":Arty-love:", &n), -1);
+  CHECK_EQ(emo_at(":arty-love-x:", &n), -1);
+  CHECK_EQ(emo_at("::arty-love:", &n), -1);
+}
+
 void test_chat_emoji_code_round_trip(void) {
   char b[24];
   int i;

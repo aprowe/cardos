@@ -417,12 +417,14 @@ the volume there, as the wheel was), in Inter (`pod13`, `pod13b`,
 **Chat has dog emojis: Arty and Marcy** (2026-10-13). Tab in Chat opens a
 picker of eight moods (happy, love, sad, sleepy, hungry, grumpy, zoomies,
 huh) for one dog -- Tab again is the other, kept as the second line of
-/config/chat.txt; arrows choose, Enter sends. An emoji is only text on the
-wire, a message that is exactly `:arty-happy:`, so the server and older
-Chats need nothing; Chat draws it as a picture four log rows tall (each row
-a log line marked `\x01`, painted by the row hook `tl_paint_log_ex` in
-`apps/termlog.h`), and the notify poll turns it into words for the banner
-("Arty: happy", `msg.banner_text`). The art is pixel art in
+/config/chat.txt; arrows choose (no fn: Chat stops taking text while the
+picker is up), Enter puts it into the text box, and Enter there sends. An
+emoji is only text on the wire, `:arty-happy:` among the words, so the
+server and older Chats need nothing; Chat draws each as a picture four log
+rows tall among the message's wrapped words (each row a log line marked
+`\x01`, painted by the row hook `tl_paint_log_ex` in `apps/termlog.h`), and
+the notify poll turns them into words for the banner ("Arty: happy", or
+"(Arty: happy)" among words; `msg.banner_text`). The art is pixel art in
 `tools/make_emoji.py` -- each dog an 18x18 grid of letters drawn by hand
 (Arty: the small white terrier, black head with tan; Marcy: the black one,
 white blaze), each mood stamps of eyes, mouth and a mark beside the head,

@@ -1,8 +1,8 @@
 /* Chat's dog emojis: Arty and Marcy, eight moods each.
  *
- * On the wire an emoji is only text -- a message that is exactly
- * ":arty-happy:" (spaces round it allowed) -- so the server and older
- * Chats need nothing: they show the words. The pictures are pixel art,
+ * On the wire an emoji is only text -- ":arty-happy:" among a message's
+ * words, or the whole of it -- so the server and older Chats need nothing:
+ * they show the words. The pictures are pixel art,
  * drawn in tools/make_emoji.py and generated into chat_emoji.h as palette
  * indices; a code is dog * EMO_MOODS + mood.
  *
@@ -27,27 +27,35 @@ static EMO_OPT int emo__is(const char *s, const char *end, const char *word) {
   return s == end && !*word;
 }
 
-/* The emoji `text` is, or -1 for text. */
-static EMO_OPT int emo_parse(const char *text) {
-  const char *a, *dash, *b;
+/* The emoji `s` starts with, its length in *len; or -1. A message may
+ * hold several among its words. */
+static EMO_OPT int emo_at(const char *s, int *len) {
+  const char *a, *dash, *b, *p = s;
   int d, m;
-  while (*text == ' ') text++;
-  if (*text != ':') return -1;
-  a = ++text;
-  while (*text && *text != '-' && *text != ':') text++;
-  if (*text != '-') return -1;
-  dash = text++;
-  while (*text && *text != ':') text++;
-  if (*text != ':') return -1;
-  b = text++;
-  while (*text == ' ') text++;
-  if (*text) return -1;
+  if (*p != ':') return -1;
+  a = ++p;
+  while (*p >= 'a' && *p <= 'z') p++;
+  if (*p != '-') return -1;
+  dash = p++;
+  while (*p >= 'a' && *p <= 'z') p++;
+  if (*p != ':') return -1;
+  b = p++;
   for (d = 0; d < EMO_DOGS; d++) {
     if (!emo__is(a, dash, EMO_DOG[d])) continue;
     for (m = 0; m < EMO_MOODS; m++)
-      if (emo__is(dash + 1, b, EMO_MOOD[m])) return d * EMO_MOODS + m;
+      if (emo__is(dash + 1, b, EMO_MOOD[m])) { *len = (int)(p - s); return d * EMO_MOODS + m; }
   }
   return -1;
+}
+
+/* The emoji `text` is when it is nothing else (spaces round it allowed),
+ * or -1. */
+static EMO_OPT int emo_parse(const char *text) {
+  int code, n;
+  while (*text == ' ') text++;
+  if ((code = emo_at(text, &n)) < 0) return -1;
+  for (text += n; *text == ' '; text++) {}
+  return *text ? -1 : code;
 }
 
 /* ":dog-mood:" into out; its length, or 0 when the code is not one or it

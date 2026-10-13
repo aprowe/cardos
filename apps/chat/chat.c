@@ -9,9 +9,10 @@
  * Hold the button on top and talk, and what you said is sent.
  *
  * Tab picks a dog emoji -- Arty or Marcy, eight moods (apps/chat/emoji.h,
- * drawn in tools/make_emoji.py). One is sent as the text ":arty-happy:"
- * and shown here as the picture, four log rows tall: each row is a log
- * line marked EMO_MARK, which paint_row draws instead of the text.
+ * drawn in tools/make_emoji.py); Enter puts it in what is being typed, as
+ * the text ":arty-happy:", and the message goes when that is sent. Here
+ * each one is shown as the picture, four log rows tall, among the words:
+ * each row is a log line marked EMO_MARK, which paint_row draws instead.
  *
  * The requests are http_start/http_poll, so typing never waits on the
  * network. Drawn the way apps/claude.c is: every line written over the one
@@ -166,13 +167,59 @@ static void set_status(const char *s, int bad) {
   damage_bar();
 }
 
+/* A picture, EMO_ROWS log lines: the mark, the code, which row, and the
+ * label beside its first row -- "name:", or a space for one that follows
+ * words, so it sits under them as a wrapped line does. */
+static void push_picture(int code, const char *label, uint16_t colour) {
+  char line[NAME_MAX + 8];
+  int r;
+  for (r = 0; r < EMO_ROWS; r++) {
+    api->fmt(line, sizeof line, "%c%c%c%s", EMO_MARK, 'A' + code, '0' + r, label);
+    tl_push(api, &C.log, line, colour);
+  }
+}
+
+/* A message: its words wrapped, each emoji among them a picture. The name
+ * leads whichever comes first. */
+static void push_message(const char *name, const char *text) {
+  static char seg[TL_COLS * 12];
+  uint16_t colour = colour_of(name);
+  int first = 1;
+  while (*text) {
+    const char *q = text;
+    int code = -1, n = 0, k;
+    while (*q && (code = emo_at(q, &n)) < 0) q++;
+    while (text < q && *text == ' ') text++;
+    k = api->fmt(seg, sizeof seg, first ? "%s: " : "  ", name);
+    while (text < q && k < (int)sizeof seg - 1) seg[k++] = *text++;
+    while (k > 0 && seg[k - 1] == ' ') k--;
+    seg[k] = 0;
+    text = q;
+    if (k > (first ? (int)api->str_len(name) + 1 : 0)) {
+      push_wrapped(seg, colour);
+      first = 0;
+    }
+    if (code >= 0) {
+      char label[NAME_MAX + 2];
+      api->fmt(label, sizeof label, first ? "%s:" : " ", name);
+      push_picture(code, label, colour);
+      first = 0;
+      text = q + n;
+    }
+  }
+  if (first) {                                   /* nothing at all: the name */
+    api->fmt(seg, sizeof seg, "%s:", name);
+    push_wrapped(seg, colour);
+  }
+}
+
 /* id \t time \t name \t text, a line each. */
 static int take_messages(void) {
-  char *p = reply, name[NAME_MAX + 1], line[TL_COLS * 12];
+  char *p = reply, name[NAME_MAX + 1];
   int got = 0;
   while (*p) {
     char *f[4];
-    int k = 0, id = 0, code;
+    int k = 0, id = 0;
     f[0] = p;
     while (*p && *p != '\n') {
       if (*p == '\t' && k < 3) { *p = 0; f[++k] = p + 1; }
@@ -184,16 +231,7 @@ static int take_messages(void) {
     if (id <= C.last_id) continue;
     C.last_id = id;
     api->fmt(name, sizeof name, "%s", f[2]);
-    if ((code = emo_parse(f[3])) >= 0) {
-      int r;
-      for (r = 0; r < EMO_ROWS; r++) {
-        api->fmt(line, sizeof line, "%c%c%c%s:", EMO_MARK, 'A' + code, '0' + r, name);
-        tl_push(api, &C.log, line, colour_of(name));
-      }
-    } else {
-      api->fmt(line, sizeof line, "%s: %s", name, f[3]);
-      push_wrapped(line, colour_of(name));
-    }
+    push_message(name, f[3]);
     got++;
   }
   return got;
@@ -286,7 +324,7 @@ static int paint_row(const char *line, int tag, int x, int y, int w) {
 static void paint_picker(CRect c) {
   int y = c.y + c.h - IN_H - PANEL_H, i, x = c.x + 3;
   char label[48];
-  api->fmt(label, sizeof label, "%c%s %s  < > enter  tab %s",
+  api->fmt(label, sizeof label, "%c%s %s  < > enter add  tab %s",
            EMO_DOG[C.dog][0] - 32, EMO_DOG[C.dog] + 1, EMO_MOOD[C.mood], EMO_DOG[(C.dog + 1) % EMO_DOGS]);
   fill(c.x, y, c.w, 2, CLR_IN);
   fill(c.x, y + 2, 3, 8, CLR_IN);
@@ -373,9 +411,16 @@ static int picker_key(uint8_t k) {
     damage_log();
     return 1;
   }
-  if (k == CAPP_KEY_ENTER) {
+  if (k == CAPP_KEY_ENTER) {        /* into what is being typed; enter there sends */
     char t[24];
-    if (emo_text(t, sizeof t, C.dog * EMO_MOODS + C.mood)) send(t);
+    int n = emo_text(t, sizeof t, C.dog * EMO_MOODS + C.mood);
+    int sp = C.in_len && C.input[C.in_len - 1] != ' ';
+    if (n && C.in_len + sp + n <= INPUT_MAX) {
+      if (sp) C.input[C.in_len++] = ' ';
+      api->mem_cpy(C.input + C.in_len, t, (size_t)n + 1);
+      C.in_len += n;
+      damage_in();
+    }
     pick(0);
     return 1;
   }
@@ -422,8 +467,9 @@ static int app_tick(void *st, uint32_t now) {
   return d;
 }
 
-/* Always taking text, so a spoken sentence reaches the prompt. */
-static int app_wants_text(void *st) { (void)st; return 1; }
+/* Taking text, so a spoken sentence reaches the prompt -- except while
+ * the picker is up, when ; , . / are the arrows without fn. */
+static int app_wants_text(void *st) { (void)st; return !C.picking; }
 
 /* Hold the button and talk: the words are sent as a message. */
 static int app_button(void *st, int event, const char *text) {
@@ -445,7 +491,7 @@ const CappInfo capp_info = {
   "Talk between the devices, through the CardOS server.\n"
   "enter\tsend\nG0\thold and talk: what you say is sent\n"
   "arrows\tscroll back, when nothing is typed\nesc\tclear what is typed\n"
-  "tab\tdog emojis: < > choose, enter sends, tab the other dog\n"
+  "tab\tdog emojis: arrows choose, enter puts it in, tab the other dog\n"
   "/name\tchange the name the others see\n",
 };
 
