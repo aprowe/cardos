@@ -55,6 +55,8 @@ void test_arena_release_by_a_stranger_is_ignored(void);
 void test_arena_claim_is_zeroed(void);
 void test_arena_code_goes_to_flash_only_when_allowed(void);
 void test_arena_used_is_what_the_holder_claimed(void);
+void test_arrowkeys_swap_both_ways(void);
+void test_arrowkeys_where_they_come_first(void);
 void test_b64_rfc4648_vectors(void);
 void test_b64_round_trips_every_byte(void);
 void test_b64_stops_at_the_end_of_the_line_and_refuses_junk(void);
@@ -1074,6 +1076,9 @@ int main(void) {
   RUN(test_arena_claim_is_zeroed);
   RUN(test_arena_code_goes_to_flash_only_when_allowed);
   RUN(test_arena_used_is_what_the_holder_claimed);
+  printf("-- arrowkeys --\n");
+  RUN(test_arrowkeys_swap_both_ways);
+  RUN(test_arrowkeys_where_they_come_first);
   printf("-- b64 --\n");
   RUN(test_b64_rfc4648_vectors);
   RUN(test_b64_round_trips_every_byte);

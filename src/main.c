@@ -75,6 +75,7 @@
 #include "kernel/drv/speaker.h"
 #include "kernel/sys/audio.h"
 #include "kernel/app/bigmode.h"
+#include "kernel/input/arrowkeys.h"
 
 /* Long enough for the lines a tool sends rather than the ones a person types.
  * At 63 a Google client ID -- 72 characters on its own, 81 with the command in
@@ -1808,6 +1809,14 @@ void app_main(void) {
 
   for (;;) {
     uint8_t k = keyboard_poll();
+
+    /* ; , . / are the arrows first, and fn the characters, where text only
+     * filters a list: the palette, the launcher's search, an app that says
+     * CAPP_TEXT_ARROWS (kernel/input/arrowkeys.h). The built-in keyboard
+     * only: a Bluetooth one has arrow keys. */
+    if (k && arrowkeys_first(palette_active(), help_active() || notify_center_active(),
+                             sink_wants_text()))
+      k = arrowkeys_swap(k);
 
     /* The button on top, polled beside the keyboard so it works in every
      * shell and over every app. Press and hold to talk; see kernel/sys/voice.c

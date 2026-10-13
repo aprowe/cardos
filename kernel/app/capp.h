@@ -346,6 +346,10 @@ typedef struct {
  * the top one must take Escape: a prompt that swallows it is a trap. */
 #define CAPP_KEY_ESC   0x1B
 
+/* What wants_text answers for a box over a list: text, but ; . , / are
+ * the arrows on the built-in keyboard and fn types them. */
+#define CAPP_TEXT_ARROWS 2
+
 /* fn-b: show the menu bar and put the keyboard in it, or hide it again.
  * Handed straight to toolbar_key() by any app with a toolbar -- see
  * apps/toolbar.h. It is a window operation, so it lives on fn with the rest
@@ -407,7 +411,11 @@ typedef struct {
   int16_t (*height)(void *state, int16_t width);
 
   /* Does the app want typed characters right now? When it does not, the shell
-   * turns ; . , / into arrows so moving a selection needs no Fn key. */
+   * turns ; . , / into arrows so moving a selection needs no Fn key.
+   * CAPP_TEXT_ARROWS: yes, but it is a box over a list -- a search, a
+   * filter -- so on the built-in keyboard ; . , / are the arrows and fn
+   * types them (kernel/input/arrowkeys.h). A kernel before that reads it
+   * as plain yes. */
   int (*wants_text)(void *state);
 
   /* Preferred content size; 0 for whatever the shell hands out. */

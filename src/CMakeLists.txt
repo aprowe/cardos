@@ -20,6 +20,7 @@ idf_component_register(
     "../kernel/drv/btprint.c"
     "../kernel/input/kbd_hid.c"
     "../kernel/input/keyrepeat.c"
+    "../kernel/input/arrowkeys.c"
     "../kernel/drv/vendor/esp_hid_gap.c"
     "../kernel/console/console.c"
     "../kernel/fs/path.c"

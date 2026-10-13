@@ -1332,7 +1332,13 @@ and playback are mutually exclusive. Any audio API must say so rather than
 failing silently.
 
 The `` ` `` key (labelled ESC) is the universal escape. Arrow keys are the
-`; , . /` keys.
+`; , . /` keys: with fn where something takes text, without it where
+nothing does (the shells map them, `keyboard_arrow_for`). Where text only
+filters a list -- the fn-space palette, the launcher's search, an app whose
+`wants_text` answers `CAPP_TEXT_ARROWS` -- it is the other way round: plain
+they are arrows, fn types them (2026-10-13, `kernel/input/arrowkeys.c`,
+swapped in `src/main.c` for the built-in keyboard only; a Bluetooth keyboard
+has arrow keys). Not an API change: an older kernel reads 2 as plain yes.
 
 ## Toolchain
 

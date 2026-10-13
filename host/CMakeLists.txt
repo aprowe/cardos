@@ -25,6 +25,7 @@ file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
   ${ROOT}/kernel/ui/appsearch.c   # the launcher draws it
   ${ROOT}/kernel/ui/helpmodel.c   # help.c draws the fn-h panel and the palette
   ${ROOT}/kernel/input/mouse.c ${ROOT}/kernel/input/kbd_hid.c ${ROOT}/kernel/input/keyrepeat.c
+  ${ROOT}/kernel/input/arrowkeys.c
   ${ROOT}/kernel/sys/input.c ${ROOT}/kernel/sys/rpc.c   # text in, commands in
   ${ROOT}/kernel/sys/hotkeys.c ${ROOT}/kernel/sys/chatlog.c ${ROOT}/kernel/sys/conf.c
   ${ROOT}/kernel/sys/logring.c   # applog.c is the device glue around it

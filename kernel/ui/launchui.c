@@ -1168,8 +1168,10 @@ int launchui_key(uint8_t key) {
 
   /* ; . , / are the arrow cluster here without needing Fn. The carousel takes
    * no text at all, and a running app only gets the raw keys back while it is
-   * actually taking some. */
-  if (!s_app || !s_app->wants_text || !s_app->wants_text(s_app->state)) {
+   * actually taking some. The search takes text, arrows first: main.c has
+   * already swapped the built-in keyboard's (kernel/input/arrowkeys.h), so
+   * a ; reaching it was typed with fn and is a ;. */
+  if (s_app ? !s_app->wants_text || !s_app->wants_text(s_app->state) : !s_search) {
     uint8_t arrow = keyboard_arrow_for(key);
     if (arrow) key = arrow;
   }
@@ -1261,7 +1263,7 @@ int launchui_button(int event, const char *text) {
 
 int launchui_wants_text(void) {
   if (picker_active()) return picker_wants_text();
-  if (!s_app && s_search) return 1;
+  if (!s_app && s_search) return CAPP_TEXT_ARROWS;   /* a filter over a list */
   if (!s_app || !s_app->wants_text) return 0;
   return s_app->wants_text(s_app->state);
 }
