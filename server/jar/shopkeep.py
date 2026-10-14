@@ -32,7 +32,8 @@ that (2026-10-11: no sparks or random words any more).
 
 Variety is the code's job, not the model's (the owner: "AI tends to over
 fit... things need to sway"): the code rolls each find's kind, tier, form and
-activity; he is shown his last few searches and asked for somewhere new;
+activity; no place is ever named to him (he holds on to them) -- the code
+rolls the first letter of where he went (roll_letter);
 pool items are random as well as his; a coin (ANSWER_CHANCE) decides whether
 he had a customer's request in mind.
 """
@@ -52,7 +53,7 @@ TALK_EFFORT = "medium"
 STOCK_EFFORT = "high"
 LINE_LEN = 200                # his greeting with a stock
 SEARCH_LEN = 600              # where he went searching today (the staged pipeline)
-SEARCHES_KEPT = 6             # his last searches, so he goes somewhere new
+SEARCHES_KEPT = 6             # his last searches, kept for reading (never shown to him)
 SLACK = 80                    # allowed over, then trimmed: a few characters too many is not a reason to fail
 SAY_LEN = 160                 # what a player may say at once
 REPLY_LEN = 600               # what he says back
@@ -77,9 +78,7 @@ CHARACTER = (
     "keep a glass jar: a tiny world with a jam factory built from human junk, mossy "
     "plants, worker critters called mosslings and a snail who carries the jam out. You "
     "sell the odd things they put in their jars. You trade through a loose, changing web "
-    "of contacts -- a magpie who brings shiny things, the rail-yard men, a beachcomber, a "
-    "retired clockmaker, a seed lady, children who swap marbles, whoever turns up -- and "
-    "whatever washes in. You are chatty, a little vain about your finds, forgetful about "
+    "of contacts -- whoever turns up -- and whatever washes in. You are chatty, a little vain about your finds, forgetful about "
     "small things and sharp about people, given to tangents and small misadventures, and "
     "kind underneath. Your neighbours on the lane are Pip Cogsworth the tinkerer (she "
     "alters things, paid in spores), Bramble the grower (evolves critters and plants, paid in "
@@ -663,13 +662,24 @@ def stock_schema(n_pick, n_new):
                            "maxLength": SEARCH_LEN + SLACK, "pattern": "^[ -~\n]+$"}}}
 
 
+# Where he went is his to tell, but he holds on to whatever places he is
+# shown -- his character once named six contacts, and his last six days were
+# those six (2026-10-13). So no place is named to him, not even his own
+# recent ones: the code rolls the first letter of the place's name, which
+# sends him somewhere different without giving him an example.
+LETTERS = "ABCDEFGHIJKLMNOPRSTUVWY"
+
+
+def roll_letter(rng):
+    return rng.choice(LETTERS)
+
+
 def stock_prompt(person, pool, n_pick, n_new, asked, friends=(), commission=None, bribe=0,
-                 searches=()):
+                 letter=None):
     """His turn for a stock: his picks and greeting, and where he went
     searching today -- the one thing the DM (server/jar/jarstages.py) is given to
-    invent from.
-    No sparks and no chance events: the place is his, and he is shown his
-    last few so he goes somewhere new."""
+    invent from. The place is his; `letter` (roll_letter) is the first of
+    its name."""
     lines = ["[%s (account %s) has come in, and their shop shelf needs filling. %s]" % (
         display(person), person, _friends_line(person, friends))]
     if n_pick:
@@ -684,9 +694,9 @@ def stock_prompt(person, pool, n_pick, n_new, asked, friends=(), commission=None
                  "you after? Tell it in your own voice, a few sentences, up to %d characters: "
                  "the place, what it was like, what you hoped to turn up. Do not describe the "
                  "finds themselves.]" % (n_new, SEARCH_LEN))
-    if searches:
-        lines.append("[Lately you have searched: %s. Go somewhere you have not been lately.]"
-                     % " / ".join(wire.flat(s, 120, ascii=True) for s in searches))
+    if letter:
+        lines.append("[Go somewhere you have never been before. Wherever it was, its name "
+                     "begins with the letter %s.]" % letter)
     if commission is not None:
         if bribe:
             lines.append("[%s also slipped you %d coins on the side to do better than usual: "
@@ -716,9 +726,8 @@ def stock_turn(chat, person, pool, n_pick, n_new, friends=(), store=None, rng=No
     rng = rng or random.Random()
     asked = rng.randrange(100) < ANSWER_CHANCE
     schema = stock_schema(n_pick, n_new)
-    searches = _get(st, "tibbs/searches", [])
     prompt = stock_prompt(person, pool, n_pick, n_new, asked, friends, commission, bribe,
-                          searches[-SEARCHES_KEPT:])
+                          roll_letter(rng))
     why = None
     for attempt in range(2):
         try:

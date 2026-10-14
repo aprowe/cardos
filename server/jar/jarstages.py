@@ -67,19 +67,11 @@ SLOT_WORDS = {
     "hanging": "something that hangs from the lid.",
 }
 
-# Where this find turned up: rolled by the code, one a find, so the haul is
-# varied by dice rather than by the model (which latches on). Tibbs's search
-# is the day's story; this is the one thing the DM must start from.
-SOURCES = (
-    "the aquarium aisle of a pet shop", "a garden centre's greenhouse", "a dollhouse maker's "
-    "workshop", "the back of a kitchen cupboard", "a walk in the woods after rain",
-    "a beach at low tide", "a child's toy box", "a bakery's window", "a craft fair stall",
-    "the edge of a pond", "a seaside gift shop", "grandma's mantelpiece", "a florist's bucket",
-    "a tea shop", "a model village", "a bonsai nursery", "a museum gift shop", "a snowy garden",
-    "a market of second-hand china", "a cactus house", "a fishing village", "a fairground",
-    "a sewing basket", "a mossy stone wall", "a hobby shop's train shelf", "an old orchard",
-    "a Japanese garden", "a lighthouse keeper's shed", "a sweet shop", "a riverbank",
-)
+# No place is rolled for a find (2026-10-13). A list of places was rolled
+# here, "let that shape what it is"; the model held on to them -- a critter
+# slot with "a model village gift shop" came out "a painted tin hedgehog",
+# and 21 of 22 finds were made objects. A place named is an example, so
+# none is: Tibbs's day is the setting, and the slot says what to make.
 
 
 # How a new find belongs with someone already in the jar: the code picks the
@@ -108,8 +100,8 @@ def slot_of(kind, form):
     return SLOT_WORDS[form if form in ("furniture", "scenery", "part") else kind]
 
 
-def roll_source(rng):
-    return rng.choice(SOURCES)
+def is_critter(kind, form):
+    return slot_of(kind, form) is SLOT_WORDS["critter"]
 
 ACTIVITY_WORDS = {
     "still": "It keeps completely still -- an object, a fixture or a sleeper.",
@@ -119,19 +111,20 @@ ACTIVITY_WORDS = {
 }
 
 TIER_WORDS = {
-    "common": "a cheap trinket", "everyday": "an everyday find",
+    "common": "a common find", "everyday": "an everyday find",
     "rare": "a rare find", "treasure": "a treasure, the best thing in the shop",
 }
 
 
-def dm_prompt(search, activity, tier_name, earlier=(), kind="floor", form=None, source="",
+def dm_prompt(search, activity, tier_name, earlier=(), kind="floor", form=None,
               residents=(), tie=""):
     """Everything the DM is told about one find. It never sees the item
     format, the enums, the player or the script language; `residents` are
     one-line descriptions of what already lives in the jar."""
     lines = ["You invent things. " + DM_WORLD, ""]
     if search:
-        lines.append("Tibbs's day, in his words:\n\"%s\"" % search)
+        lines.append("Tibbs's day, in his words -- the setting it came out of, not a list of "
+                     "what to make; it need not be what he went looking for:\n\"%s\"" % search)
     if residents:
         lines += ["", "Already living in the terrarium:"] + ["- %s" % r for r in residents]
     lines += [
@@ -139,8 +132,8 @@ def dm_prompt(search, activity, tier_name, earlier=(), kind="floor", form=None, 
         "Invent one thing for the terrarium: %s" % slot_of(kind, form),
         "It is %s. %s" % (TIER_WORDS[tier_name], ACTIVITY_WORDS[activity]),
     ]
-    if source:
-        lines.append("He found it at %s -- let that shape what it is." % source)
+    if is_critter(kind, form):
+        lines.append("It is alive -- a real creature, not a toy, ornament or model of one.")
     if tie:
         lines.append("Make it belong with what is there: it %s. Say how they get along -- one "
                      "small moment that happens between them, again and again." % tie)
@@ -150,6 +143,8 @@ def dm_prompt(search, activity, tier_name, earlier=(), kind="floor", form=None, 
         lines.append("Already found today, so not these, nor anything like them: %s."
                      % " / ".join(earlier))
     lines += [
+        "Decide what it is first. Say what it is made of only where that is simply what such "
+        "a thing is made of.",
         "Write about 60 words: what it is and how it looks, and one delightful detail. It must "
         "be something you would recognise at a glance in a tiny picture: one clear shape, "
         "cute and cosy rather than odd. A real kind of thing, made charming -- not a riddle.",
@@ -411,15 +406,15 @@ def _script_error(raw, form):
 
 
 def make_find(chat, person, kind, tier, form, activity, search, earlier, taken, st, log=None,
-              concept=None, base=None, source=""):
+              concept=None, base=None):
     """One find through the stages: (raw, concept, sheet). Drop if it comes
     to nothing. With a `concept` the DM is skipped (a remake: the old idea
     and what was asked for), and `base` is the old picture for the artist."""
     say = log or (lambda s: None)
     if concept is None:
         try:
-            concept = _ask(chat, dm_prompt(search, activity, tier[0], earlier, kind, form,
-                                           source), dm_schema(),
+            concept = _ask(chat, dm_prompt(search, activity, tier[0], earlier, kind, form),
+                           dm_schema(),
                            person, tier[2], st)["concept"].strip()
         except Exception as e:                          # noqa: BLE001 - the find is dropped
             raise Drop("DM: %s" % e)
@@ -541,11 +536,10 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
         activity = jar.roll_activity(rng)
         if form in ("scenery", "furniture") and activity in ("ambles", "restless"):
             activity = "still"                          # a backdrop or a shelf does not wander
-        source = roll_source(rng)
         taken = set(owned) | {n.strip().lower() for n in names}
         try:
             raw, concept, sheet = make_find(chat, person, kind, tier, form, activity, search,
-                                            concepts, taken, st, log, source=source)
+                                            concepts, taken, st, log)
         except Drop as e:
             fails += 1
             last = e

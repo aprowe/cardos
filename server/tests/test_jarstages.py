@@ -255,10 +255,11 @@ class Search(unittest.TestCase):
         self.assertNotIn("sparks", asked)                   # no random words
         self.assertNotIn("by chance", asked)
         self.assertNotIn("brief", asked.lower())
-        # next time he is told where he has been, and asked for somewhere else
+        # next time he is not shown where he has been (he would hold on to
+        # it): a letter rolled by the code sends him somewhere else
         shopkeep.stock_turn(None, "alex", [], 0, 4)
-        self.assertIn("old canal locks", self.said[-1])
-        self.assertIn("somewhere you have not been lately", self.said[-1])
+        self.assertNotIn("old canal locks", self.said[-1])
+        self.assertIn("somewhere you have never been before", self.said[-1])
 
     def test_a_commission_is_in_the_question(self):
         shopkeep.stock_turn(None, "alex", [], 0, 8, commission="brass birds")
@@ -389,9 +390,9 @@ class Stages(unittest.TestCase):
         for word in ("Moth Lamp", "palette", "frames", "16x16", "script", "habits", "zone",
                      "floor decor", "travel", "liveliness", "alex"):
             self.assertNotIn(word, dm)
-        # told the slot in plain words, and where the code says it turned up
+        # told the slot in plain words, and no place: a named place steers it
         self.assertIn("Invent one thing for the terrarium:", dm)
-        self.assertTrue(any(s in dm for s in jarstages.SOURCES), dm)
+        self.assertNotIn("found it at", dm)
         fit = self.stub.prompts["fitter"][0]
         self.assertIn("thimble", fit)                       # the concept
         self.assertNotIn("palette", fit)
@@ -404,6 +405,35 @@ class Stages(unittest.TestCase):
         self.assertIn("rings when poked", beh)
         self.assertNotIn("dented brass thimble", beh)       # never the look
         self.assertIn(jarvm.LANGUAGE_GUIDE_V1[:60], beh)
+
+    def test_a_critter_is_alive_and_no_place_is_rolled_for_it(self):
+        # 2026-10-13: a critter slot was told "he found it at a model village
+        # gift shop -- let that shape what it is" and came out "a painted tin
+        # hedgehog"; 21 of 22 finds were made objects. A list of places is
+        # examples the model holds on to, so there is none.
+        from server.jar import jarstages
+        self.assertFalse(hasattr(jarstages, "SOURCES"))
+        dm = jarstages.dm_prompt("A day at the clockmaker's attic.", "ambles", "common",
+                                 kind="critter")
+        self.assertIn("It is alive", dm)
+        self.assertNotIn("trinket", dm)                 # the tier is rarity, not a thing
+        self.assertNotIn("found it at", dm)
+        self.assertNotIn("let that shape", dm)
+        dm = jarstages.dm_prompt("A day at the clockmaker's attic.", "still", "common",
+                                 kind="floor")
+        self.assertNotIn("It is alive", dm)
+        # a part's slot is not a critter's, whatever the kind
+        dm = jarstages.dm_prompt("", "still", "common", kind="critter", form="part")
+        self.assertNotIn("It is alive", dm)
+
+    def test_the_dm_decides_what_it_is_before_what_it_is_made_of(self):
+        from server.jar import jarstages
+        dm = jarstages.dm_prompt("Up the clockmaker's stairs, hoping for springs.", "still",
+                                 "common", earlier=("a brass watch key",))
+        self.assertIn("what it is first", dm)
+        self.assertIn("setting", dm)                    # his day, not a shopping list
+        # nothing about materials used today: they do not steer the next one
+        self.assertNotIn("made of:", dm)
 
     def test_the_fitter_is_held_to_the_activity_row(self):
         for activity in jar.MOTION_RULES:
@@ -473,7 +503,7 @@ class Stages(unittest.TestCase):
     def test_no_search_says_so_and_goes_on(self):
         self.gen(search="")
         self.assertNotIn("Tibbs's day", self.stub.prompts["dm"][0])
-        self.assertIn("He found it at", self.stub.prompts["dm"][0])
+        self.assertIn("Invent one thing for the terrarium:", self.stub.prompts["dm"][0])
         self.assertTrue(any("no search" in s for s in self.logs), self.logs)
 
     def test_a_stock_is_made_from_his_search(self):

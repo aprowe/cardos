@@ -1091,6 +1091,24 @@ class Shopkeeper(unittest.TestCase):
         self.assertIn("you had it in mind", a)                       # the coin
         self.assertNotIn("you had it in mind", b)
 
+    def test_where_he_goes_varies_by_the_code_with_no_places_named(self):
+        # 2026-10-13: his character named six contacts and his last six days
+        # were those six. A place in the prompt is an example he holds on to;
+        # the code rolls a letter for the place's name instead.
+        for word in ("magpie", "rail-yard", "beachcomber", "clockmaker", "seed lady", "marbles"):
+            self.assertNotIn(word, shopkeep.CHARACTER)
+        shopkeep.stock_turn(None, "alex", [], 0, 2, rng=random.Random(1))
+        shopkeep.stock_turn(None, "alex", [], 0, 2, rng=random.Random(1))
+        p = self.tibbs.prompts[-1]
+        self.assertNotIn("Lately you have searched", p)          # not his own places either
+        self.assertNotIn("canal locks", p)
+        self.assertRegex(p, r"its name begins with the letter [A-Z]\b")
+        letters = {re.search(r"letter ([A-Z])\b",
+                             shopkeep.stock_prompt("alex", [], 0, 2, False,
+                                                   letter=shopkeep.roll_letter(random.Random(i)))
+                             ).group(1) for i in range(200)}
+        self.assertGreater(len(letters), 15)
+
     def test_a_stock_turn_asks_again_for_the_json_then_gives_up(self):
         self.tibbs.answers.append("Ah, hello! Lovely day.")      # words, not JSON
         line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 2)

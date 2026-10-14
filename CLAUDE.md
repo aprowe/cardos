@@ -1226,6 +1226,22 @@ answers `search` (his last six in tibbs/searches); sparks, briefs and the
 chance event are gone. `tools/jar_stages_trial.py` runs real finds in a
 scratch state. Jar Lab still previews the old one-call prompt.
 
+**No examples in the prompts that make items** (2026-10-13, the owner: "AI
+grasps onto places so we need lots of variance without examples"). Finds
+had become made objects -- 21 of 22, critters as "a painted tin hedgehog",
+brass in 9 -- because the code rolled a place per find from a list ("he
+found it at a model village gift shop -- let that shape what it is"), and
+Tibbs's character named six contacts, whom his last six days visited in
+turn. Now: no place is rolled for a find; the critter slot says "It is
+alive -- not a toy, ornament or model of one"; the DM is told to decide
+what a thing is first and name a material only where that is simply what
+it is made of (materials never steer); his day is "the setting, not a list
+of what to make"; the tier is rarity ("a common find", not "a cheap
+trinket"). Tibbs is named no place, not even his own last searches
+(still kept in tibbs/searches, never shown); the code rolls the first
+letter of where he went (`shopkeep.roll_letter`). His resumed session and
+notebook still remember the old contacts.
+
 **More jars** (2026-10-11, v0.21.0). `JU_JAR` in Upgrades buys up to
 `JS_MAX_JARS` (3) extra jars: empty glass, no factory. `J.jar_at` is the
 jar on screen (0 the factory), saved as `jars N AT`. One wallet: coins,
