@@ -14,12 +14,13 @@ CARDOS_STATE/chat.json, the last KEEP messages.
 Lines, not JSON, because the device parses them with no library. A tab or
 a newline in a message becomes a space.
 """
+import json
 import os
 import re
 import threading
 import time
 
-from . import accounts, dash, store, wire
+from . import accounts, dash, kv, store, wire
 
 KEEP = 500
 SHOW = 40
@@ -104,27 +105,37 @@ POLL_MAX = 3
 NOTES_KEEP = 20
 
 # Things to tell a person's devices about, from the server's own work -- a
-# Build that finished while its app was shut. Per person, in memory: a
-# restart loses what was not yet fetched, which is a notification, not data.
-_notes = {}             # user -> [{"id", "app", "title", "text"}]
-_note_ids = {}          # user -> the last id given
+# Build that finished while its app was shut, an update to install. Per
+# person, in the store (server/kv.py), not memory (2026-10-13): a deploy
+# publishes from its own process (`python -m server.build deploy`) and then
+# restarts the service, so an "Update available" kept in memory was never
+# seen by anyone, while Chat, on disk, always was.
+NOTES_NS = "srv/notify"
+
+
+def _who(user):
+    return user or "-"
 
 
 def notify_push(user, app, title, text):
     """A note for every device of `user` (None: the one person a server
-    without accounts has), fetched at their next /notify/poll."""
+    without accounts has), fetched at their next /notify/poll. From any
+    process on the server."""
+    st = kv.store()
     with _lock:
-        n = _note_ids.get(user, 0) + 1
-        _note_ids[user] = n
-        q = _notes.setdefault(user, [])
+        n = st.incr(NOTES_NS, "id/" + _who(user))
+        q = json.loads((st.get(NOTES_NS, "q/" + _who(user)) or b"[]").decode())
         q.append({"id": n, "app": _flat(app, 12), "title": _flat(title, 30),
                   "text": _flat(text, 70)})
-        del q[:-NOTES_KEEP]
+        st.put(NOTES_NS, "q/" + _who(user), json.dumps(q[-NOTES_KEEP:]).encode())
 
 
 def notes_since(user, nid):
+    st = kv.store()
     with _lock:
-        return [x for x in _notes.get(user, []) if x["id"] > nid], _note_ids.get(user, 0)
+        q = json.loads((st.get(NOTES_NS, "q/" + _who(user)) or b"[]").decode())
+        last = st.incr(NOTES_NS, "id/" + _who(user), 0)
+    return [x for x in q if x["id"] > nid], last
 
 
 def get_notify_poll(h, path, args):

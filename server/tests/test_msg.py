@@ -88,9 +88,26 @@ class Room(unittest.TestCase):
         s, body = self.req("GET", "/msg?since=1&max=1")
         self.assertEqual(body.rstrip("\n").split("\t")[3], ":arty-happy:")
 
+    def test_a_note_from_another_process_survives_to_the_poll(self):
+        # 2026-10-13: a deploy publishes with `python -m server.build deploy`,
+        # its own process, and the notes were in memory: every "Update
+        # available" from a deploy was lost, and the restart after it would
+        # have lost it anyway. Chat, on disk, was always found.
+        import subprocess
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.assertEqual(self.req("GET", "/notify/poll?note=-1"), (200, "ok 0 0\n"))
+        subprocess.run([sys.executable, "-c",
+                        "from server import msg; msg.notify_push(None, 'Update', 'available', "
+                        "'jar: run update')"], cwd=root, check=True, env=dict(os.environ))
+        s, body = self.req("GET", "/notify/poll?note=0")
+        self.assertEqual(body.splitlines(), ["ok 0 1", "note\tUpdate\tavailable\tjar: run update"])
+        from server import kv
+        kv.close_all()                                        # a restart: still there
+        s, body = self.req("GET", "/notify/poll?note=0")
+        self.assertEqual(body.splitlines()[1:], ["note\tUpdate\tavailable\tjar: run update"])
+
     def test_notes_reach_the_poll(self):
         from server import msg
-        msg._notes.clear(); msg._note_ids.clear()
         # first ask: only where the notes are, so a new device is not told old news
         msg.notify_push(None, "Build", "done", "made timer.c\tbetter")
         self.assertEqual(self.req("GET", "/notify/poll?note=-1"), (200, "ok 0 1\n"))
@@ -98,10 +115,9 @@ class Room(unittest.TestCase):
         s, body = self.req("GET", "/notify/poll?note=1")
         self.assertEqual(body.splitlines(), ["ok 0 2", "note\tBuild\tstopped\tit went quiet"])
         self.assertEqual(self.req("GET", "/notify/poll?note=2"), (200, "ok 0 2\n"))
-        # a device that saw 9 before the server restarted is given what there is
+        # a device that saw 9 of a store since wiped is given what there is
         s, body = self.req("GET", "/notify/poll?note=9")
         self.assertEqual(len(body.splitlines()), 3)
-        msg._notes.clear(); msg._note_ids.clear()
 
     def test_refusals(self):
         self.assertEqual(self.req("POST", "/msg?name=", b"x")[0], 400)
