@@ -230,12 +230,31 @@ def _put(st, key, value):
 
 
 def note(text, store=None, who="tibbs"):
-    """Something that happened in the shop, for his (or `who`'s) next turn."""
+    """Something that happened in the shop, for his (or `who`'s) next turn,
+    and for his next chapter."""
     st = store or kv.store()
     with _meta:
         ev = _get(st, who + "/events", [])
         ev.append(wire.flat(text, 300, ascii=True))
         _put(st, who + "/events", ev[-EVENTS_KEPT:])
+    if who == "tibbs":
+        shoplog_add(st, wire.flat(text, 300, ascii=True))
+
+
+SHOPLOG_KEPT = 80
+
+
+def shoplog_add(st, line, now=None):
+    """One thing that happened in the shop, timed: the chapters roll in what
+    happened since the last one."""
+    with _meta:
+        log = _get(st, "tibbs/shoplog", [])
+        log.append([int(time.time() if now is None else now), line])
+        _put(st, "tibbs/shoplog", log[-SHOPLOG_KEPT:])
+
+
+def shoplog_since(st, t):
+    return [line for at, line in _get(st, "tibbs/shoplog", []) if at > t]
 
 
 # ---- his memory ---------------------------------------------------------------------
@@ -570,6 +589,9 @@ def _reply(chat, person, said, friends, st, context="", on_deal=None, who="tibbs
                 offer_put(person, who, deal, words, st)
         reply = wire.flat(out, REPLY_LEN, ascii=True)
         _log_add(st, person, "him", reply, who)
+        if who == "tibbs":
+            shoplog_add(st, "%s said at the counter: \"%s\" -- and you said: \"%s\"" % (
+                display(person), wire.flat(said, 160, ascii=True), wire.flat(reply, 160, ascii=True)))
         _set_talk(st, person, {"state": "ok"}, who)
     except ask.RateLimited:
         _set_talk(st, person, {"state": "error", "why": "they have talked enough for today"}, who)
@@ -652,8 +674,10 @@ def tx_add(person, op, arg, store=None):
 
 # ---- a stock ------------------------------------------------------------------------------------
 
-def stock_schema(n_pick, n_new):
-    return {"type": "object", "required": ["line", "picks", "search"],
+def stock_schema(n_pick, n_new, errand=False):
+    """A search is wanted only for a commission's errand; one given unasked
+    is allowed and ignored (the finds come from his chapter)."""
+    return {"type": "object", "required": ["line", "picks"] + (["search"] if errand else []),
             "additionalProperties": False, "properties": {
                 "line": {"type": "string", "minLength": 1, "maxLength": LINE_LEN + SLACK,
                          "pattern": "^[ -~]+$"},
@@ -662,24 +686,147 @@ def stock_schema(n_pick, n_new):
                            "maxLength": SEARCH_LEN + SLACK, "pattern": "^[ -~\n]+$"}}}
 
 
-# Where he went is his to tell, but he holds on to whatever places he is
-# shown -- his character once named six contacts, and his last six days were
-# those six (2026-10-13). So no place is named to him, not even his own
-# recent ones: the code rolls the first letter of the place's name, which
-# sends him somewhere different without giving him an example.
-LETTERS = "ABCDEFGHIJKLMNOPRSTUVWY"
+# ---- his story, a chapter every four hours of visits ---------------------------------
+#
+# The owner (2026-10-13): "for each 4h time passage lets add to tibb's story
+# ... like he went to WS and interacted with PK and found a CH where those
+# are random letters (weighted)"; "time dosent move forward without someone
+# visiting". A visit (the shop opened, its stock looked at) four hours or
+# more after the last chapter writes the next one -- one, however long the
+# gap. The code rolls three pairs of initials: a place, someone, something.
+# No place, person or thing is ever named to him: he holds on to examples
+# (his character once named six contacts, and six days visited them).
+# What players said and did since the last chapter is rolled in. The story
+# opens with tibbs_intro.txt, prose the owner edits. A chapter is the
+# setting the DM invents the next finds from.
+
+CHAPTER_S = 4 * 3600
+CHAPTER_LEN = 1200
+CHAPTERS_KEPT = 12
+INTRO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tibbs_intro.txt")
+SHOP_LINES_MAX = 12
+
+# How often a name's word starts with each letter (English dictionary
+# words, roughly): plenty of S and C, hardly any Q or Z, no X.
+INITIAL_WEIGHTS = {
+    "A": 57, "B": 59, "C": 94, "D": 61, "E": 39, "F": 42, "G": 34, "H": 35, "I": 39,
+    "J": 8, "K": 10, "L": 32, "M": 56, "N": 22, "O": 25, "P": 77, "Q": 5, "R": 56,
+    "S": 110, "T": 52, "U": 20, "V": 15, "W": 27, "Y": 4, "Z": 3,
+}
+_chapter_lock = threading.Lock()
 
 
-def roll_letter(rng):
-    return rng.choice(LETTERS)
+def roll_initials(rng):
+    """Two initials, "W. S."."""
+    letters, weights = zip(*INITIAL_WEIGHTS.items())
+    return "%s. %s." % tuple(rng.choices(letters, weights, k=2))
 
 
-def stock_prompt(person, pool, n_pick, n_new, asked, friends=(), commission=None, bribe=0,
-                 letter=None):
-    """His turn for a stock: his picks and greeting, and where he went
-    searching today -- the one thing the DM (server/jar/jarstages.py) is given to
-    invent from. The place is his; `letter` (roll_letter) is the first of
-    its name."""
+def intro():
+    """The opening of his story (tibbs_intro.txt), or ""."""
+    try:
+        with open(INTRO_PATH, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def chapters(store=None):
+    """[{"t", "initials", "text"}], oldest first."""
+    return _get(store or kv.store(), "tibbs/chapters", [])
+
+
+def latest_chapter(store=None):
+    ch = chapters(store)
+    return ch[-1]["text"] if ch else ""
+
+
+def chapter_schema():
+    return {"type": "object", "required": ["chapter"], "additionalProperties": False,
+            "properties": {"chapter": {"type": "string", "minLength": 40,
+                                       "maxLength": CHAPTER_LEN + SLACK,
+                                       "pattern": "^[ -~\n]+$"}}}
+
+
+def chapter_prompt(place, someone, something, shop=(), last="", opening=""):
+    lines = []
+    if opening:
+        lines += ["[Your story, as it began:]", opening, ""]
+    if last:
+        lines += ["[Your last chapter:]", last, ""]
+    if shop:
+        lines.append("[In the shop since then -- these happened; roll them into the chapter:]")
+        lines += ["- " + x for x in shop]
+        lines.append("")
+    lines.append(
+        "[Four hours have gone by. Write the next chapter of your story, in your own voice, "
+        "as prose -- a scene, not a summary -- up to %d characters. In it you went out to a "
+        "place whose name has the initials %s; you had dealings with someone whose initials "
+        "are %s; and you came back with something whose initials are %s. The initials are "
+        "the first letters of the words of each name; what they are is yours to make up. "
+        "Somewhere you have never been, someone you have never met. Do not say what will be "
+        "in anyone's shop. Answer with only JSON: {\"chapter\": \"...\"}]"
+        % (CHAPTER_LEN, place, someone, something))
+    return "\n".join(lines)
+
+
+def maybe_chapter(chat, store=None, now=None, rng=None, log=None):
+    """A visit: write the next chapter if the last is CHAPTER_S old (or
+    there is none). The latest chapter, written now or before; "" if there
+    has never been one. One writer at a time: a second visit meanwhile gets
+    the chapter there is."""
+    st = store or kv.store()
+    now = time.time() if now is None else now
+    ch = chapters(st)
+    if ch and now - ch[-1]["t"] < CHAPTER_S:
+        return ch[-1]["text"]
+    if not _chapter_lock.acquire(blocking=False):
+        return ch[-1]["text"] if ch else ""
+    try:
+        ch = chapters(st)                               # another writer may have just
+        if ch and now - ch[-1]["t"] < CHAPTER_S:
+            return ch[-1]["text"]
+        rng = rng or random.Random()
+        initials = [roll_initials(rng) for _ in range(3)]
+        since = ch[-1]["t"] if ch else 0
+        shop = shoplog_since(st, since)[-SHOP_LINES_MAX:]
+        prompt = chapter_prompt(*initials, shop=shop, last=ch[-1]["text"] if ch else "",
+                                opening=intro())
+        text = ""
+        for _ in range(2):
+            try:
+                out = turn(chat, prompt, None, st, effort=STOCK_EFFORT, limit=None,
+                           kind="chapter")
+                value = ask.extract(out)
+                bad = ask.validate(value, chapter_schema())
+            except ask.RateLimited:
+                raise
+            except Exception as e:                      # noqa: BLE001 - the shop still opens
+                bad = [str(e)]
+            if not bad:
+                text = wire.flat(value["chapter"], CHAPTER_LEN, ascii=True)
+                break
+            prompt = ("[That was not the JSON (%s). Answer again with only the JSON: "
+                      "{\"chapter\": \"...\"}]" % "; ".join(bad[:3]))
+        if not text:
+            if log:
+                log("chapter: not written (%s)" % "; ".join(bad[:3]))
+            return ch[-1]["text"] if ch else ""
+        with _meta:
+            ch = _get(st, "tibbs/chapters", []) + [
+                {"t": int(now), "initials": initials, "text": text}]
+            _put(st, "tibbs/chapters", ch[-CHAPTERS_KEPT:])
+        if log:
+            log("chapter: %s / %s / %s" % tuple(initials))
+        return text
+    finally:
+        _chapter_lock.release()
+
+
+def stock_prompt(person, pool, n_pick, n_new, asked, friends=(), commission=None, bribe=0):
+    """His turn for a stock: his picks and his greeting. Where the new finds
+    came from is his latest chapter (maybe_chapter), not asked here -- except
+    for a commission, an errand of its own: then he says where he went."""
     lines = ["[%s (account %s) has come in, and their shop shelf needs filling. %s]" % (
         display(person), person, _friends_line(person, friends))]
     if n_pick:
@@ -690,14 +837,10 @@ def stock_prompt(person, pool, n_pick, n_new, asked, friends=(), commission=None
                      "theirs: something they would never ask for as often as something "
                      "they might. Do not just match what they bought before.]" % (
                          n_pick, display(person)))
-    lines.append("[%d new finds came in today. Where did you go searching today, and what were "
-                 "you after? Tell it in your own voice, a few sentences, up to %d characters: "
-                 "the place, what it was like, what you hoped to turn up. Do not describe the "
-                 "finds themselves.]" % (n_new, SEARCH_LEN))
-    if letter:
-        lines.append("[Go somewhere you have never been before. Wherever it was, its name "
-                     "begins with the letter %s.]" % letter)
     if commission is not None:
+        lines.append("[%d new finds came in from an errand of their own. Where did you go, and "
+                     "what were you after? Tell it in your own voice, a few sentences, up to %d "
+                     "characters. Do not describe the finds themselves.]" % (n_new, SEARCH_LEN))
         if bribe:
             lines.append("[%s also slipped you %d coins on the side to do better than usual: "
                          "you went to your best contacts.]" % (display(person), bribe))
@@ -711,23 +854,24 @@ def stock_prompt(person, pool, n_pick, n_new, asked, friends=(), commission=None
         lines.append("[If %s has asked you to look out for something, you had it in mind while "
                      "you searched. If they have not, ignore this.]" % display(person))
     lines.append("[Then greet %s as they come in: what you say over the counter, under %d "
-                 "characters. Answer with only JSON: {\"line\": your words, \"picks\": [ids], "
-                 "\"search\": where you went}]" % (display(person), LINE_LEN))
+                 "characters. Answer with only JSON: {\"line\": your words, \"picks\": [ids]%s}]"
+                 % (display(person), LINE_LEN,
+                    ", \"search\": where you went" if commission is not None else ""))
     return "\n".join(lines)
 
 
 def stock_turn(chat, person, pool, n_pick, n_new, friends=(), store=None, rng=None, log=None,
                commission=None, bribe=0):
     """His turn for a stock: (line, picks, search). picks are ids from `pool`
-    (he may get some wrong; the caller checks); search is where he went
-    looking today, "" when he cannot be asked (a note on the door, no picks;
-    no random words in its place)."""
+    (he may get some wrong; the caller checks); search is where he went on
+    a commission's errand, else "" -- the finds come from his latest chapter
+    (maybe_chapter)."""
     st = store or kv.store()
     rng = rng or random.Random()
     asked = rng.randrange(100) < ANSWER_CHANCE
-    schema = stock_schema(n_pick, n_new)
-    prompt = stock_prompt(person, pool, n_pick, n_new, asked, friends, commission, bribe,
-                          roll_letter(rng))
+    errand = commission is not None
+    schema = stock_schema(n_pick, n_new, errand)
+    prompt = stock_prompt(person, pool, n_pick, n_new, asked, friends, commission, bribe)
     why = None
     for attempt in range(2):
         try:
@@ -744,17 +888,19 @@ def stock_turn(chat, person, pool, n_pick, n_new, friends=(), store=None, rng=No
             bad = [str(e)]
         if not bad:
             line = wire.flat(value["line"], LINE_LEN, ascii=True)
-            search = wire.flat(value["search"], SEARCH_LEN, ascii=True)
+            search = wire.flat(value.get("search", ""), SEARCH_LEN, ascii=True) if errand else ""
             with _meta:
                 _put(st, "tibbs/day/" + person, line)
-                _put(st, "tibbs/searches",
-                     (_get(st, "tibbs/searches", []) + [search])[-SEARCHES_KEPT:])
+                if search:
+                    _put(st, "tibbs/searches",
+                         (_get(st, "tibbs/searches", []) + [search])[-SEARCHES_KEPT:])
             return line, [int(i) for i in value["picks"]], search
         why = "; ".join(bad[:3])
         prompt = ("[That was not the JSON the shop needs (%s). Answer again with only the "
-                  "JSON: {\"line\": ..., \"picks\": [...], \"search\": \"...\"}]" % why)
+                  "JSON: {\"line\": ..., \"picks\": [...]%s}]"
+                  % (why, ", \"search\": \"...\"" if errand else ""))
     if log:
-        log("stock turn: %s; no search: the DM works from the rolls alone" % why)
+        log("stock turn: %s; a note on the door" % why)
     line = "A note on the door: 'Out on business. Help yourself, pay the jar.'"
     with _meta:
         _put(st, "tibbs/day/" + person, line)

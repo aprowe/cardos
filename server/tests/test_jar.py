@@ -209,6 +209,9 @@ class FakeTibbs:
                 if isinstance(a, Exception):
                     raise a
                 return a, "s1"
+            if "next chapter of your story" in prompt:
+                return json.dumps({"chapter": "I went out along the old road and came back "
+                                              "with a pocketful of rain and a story."}), "s1"
             if "needs filling" in prompt or "not the JSON" in prompt:
                 prompt = self.stock                      # a retry: the request it was for
                 m = re.search(r"Pick (\d+) of those", prompt)
@@ -1079,10 +1082,13 @@ class Shopkeeper(unittest.TestCase):
         line, picks, search = shopkeep.stock_turn(None, "alex", pool, 2, 2)
         self.assertEqual(line, "A crate came in.")
         self.assertEqual(picks, [101, 102])
+        self.assertEqual(search, "")             # the finds come from his chapter
+        # a commission is an errand of its own: then he says where he went
+        line, picks, search = shopkeep.stock_turn(None, "alex", pool, 2, 2, commission="owls")
         self.assertIn("canal locks", search)
         p = self.tibbs.prompts[0]
         self.assertIn("101: Cork Owl, critter, 80 coins -- hoots", p)
-        self.assertIn("Where did you go searching today", p)
+        self.assertNotIn("Where did you go", p)
         self.assertNotIn("by chance", p)                     # no random words
         self.assertIn("Do not just match what they bought", p)
         self.assertIn("A crate came in.", shopkeep.talk_text("alex"))   # his greeting, kept
@@ -1091,23 +1097,51 @@ class Shopkeeper(unittest.TestCase):
         self.assertIn("you had it in mind", a)                       # the coin
         self.assertNotIn("you had it in mind", b)
 
-    def test_where_he_goes_varies_by_the_code_with_no_places_named(self):
+    def test_no_places_are_named_to_him(self):
         # 2026-10-13: his character named six contacts and his last six days
-        # were those six. A place in the prompt is an example he holds on to;
-        # the code rolls a letter for the place's name instead.
+        # were those six. A place in the prompt is an example he holds on to.
         for word in ("magpie", "rail-yard", "beachcomber", "clockmaker", "seed lady", "marbles"):
             self.assertNotIn(word, shopkeep.CHARACTER)
-        shopkeep.stock_turn(None, "alex", [], 0, 2, rng=random.Random(1))
-        shopkeep.stock_turn(None, "alex", [], 0, 2, rng=random.Random(1))
+        shopkeep.stock_turn(None, "alex", [], 0, 2, commission="")
+        shopkeep.stock_turn(None, "alex", [], 0, 2, commission="")
+        self.assertNotIn("canal locks", self.tibbs.prompts[-1])  # not his own places either
+
+    def test_a_chapter_every_four_hours_of_visits(self):
+        t0 = 1_800_000_000
+        rng = random.Random(2)
+        text = shopkeep.maybe_chapter(object(), now=t0, rng=rng)
+        self.assertIn("pocketful of rain", text)
         p = self.tibbs.prompts[-1]
-        self.assertNotIn("Lately you have searched", p)          # not his own places either
-        self.assertNotIn("canal locks", p)
-        self.assertRegex(p, r"its name begins with the letter [A-Z]\b")
-        letters = {re.search(r"letter ([A-Z])\b",
-                             shopkeep.stock_prompt("alex", [], 0, 2, False,
-                                                   letter=shopkeep.roll_letter(random.Random(i)))
-                             ).group(1) for i in range(200)}
-        self.assertGreater(len(letters), 15)
+        self.assertIn("next chapter of your story", p)
+        self.assertIn("Your story, as it began", p)              # the opening, the owner's prose
+        self.assertIn(shopkeep.intro()[:60], p)
+        self.assertEqual(len(re.findall(r"initials (?:are )?[A-Z]\. [A-Z]\.", p)), 3)
+        n = len(self.tibbs.prompts)
+        # a visit within four hours: no new chapter
+        self.assertIn("pocketful", shopkeep.maybe_chapter(object(), now=t0 + 3600, rng=rng))
+        self.assertEqual(len(self.tibbs.prompts), n)
+        # what players did since is rolled in; a long gap is still one chapter
+        shopkeep.note("sam bought Cork Owl (critter, 80 coins: hoots).")
+        shopkeep.shoplog_add(kv.store(), "alex said at the counter: \"any owls?\"", now=t0 + 5)
+        shopkeep.maybe_chapter(object(), now=t0 + 3 * 86400, rng=rng)
+        p = self.tibbs.prompts[-1]
+        self.assertIn("roll them into the chapter", p)
+        self.assertIn("any owls?", p)
+        self.assertIn("Your last chapter", p)
+        self.assertEqual(len(shopkeep.chapters()), 2)
+        shopkeep.maybe_chapter(object(), now=t0 + 3 * 86400 + 60, rng=rng)
+        self.assertEqual(len(shopkeep.chapters()), 2)
+        self.assertNotIn("any owls?", shopkeep.chapter_prompt("A. B.", "C. D.", "E. F.",
+                                                              shopkeep.shoplog_since(
+                                                                  kv.store(), t0 + 3 * 86400)))
+
+    def test_initials_are_weighted_like_english(self):
+        rng = random.Random(5)
+        got = "".join(shopkeep.roll_initials(rng).replace(". ", "").rstrip(".")
+                      for _ in range(3000))
+        self.assertNotIn("X", got)
+        self.assertGreater(got.count("S"), got.count("Q") * 8)
+        self.assertGreater(len(set(got)), 20)
 
     def test_a_stock_turn_asks_again_for_the_json_then_gives_up(self):
         self.tibbs.answers.append("Ah, hello! Lovely day.")      # words, not JSON
@@ -1122,7 +1156,7 @@ class Shopkeeper(unittest.TestCase):
     def test_a_search_a_little_long_is_trimmed_not_refused(self):
         long = "x" * (shopkeep.SEARCH_LEN + 20)
         self.tibbs.answers.append(json.dumps({"line": "Hm.", "picks": [], "search": long}))
-        line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 1)
+        line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 1, commission="")
         self.assertEqual(len(search), shopkeep.SEARCH_LEN)
 
     def test_talking(self):
@@ -1298,6 +1332,76 @@ class Routes(unittest.TestCase):
         self.assertIn("\nitems 8\n", body)
         self.assertFalse(body.endswith("more\n"), body)
 
+    def wait_deck(self):
+        """Until no finds are being made ahead (jar.premake)."""
+        for _ in range(500):
+            if not jar._premaking:
+                return
+            time.sleep(0.02)
+        self.fail("the deck never finished")
+
+    def test_finds_are_made_ahead_once_a_stock_is_looked_at(self):
+        st = kv.store()
+        self.make_day(self.alex)
+        self.ids(self.alex, 7)                                # not the last: not looked at yet
+        self.wait_deck()
+        self.assertEqual(jar.deck("alex", st), [])
+        self.ids(self.alex, 8)                                # the last one: looked at
+        self.wait_deck()
+        ahead = jar.deck("alex", st)
+        self.assertEqual(len(ahead), jar.NEW_ITEMS)
+        for i in ahead:                                       # theirs, out of the pool
+            self.assertEqual(st.get(jar.NS, "own/%d" % i), b"alex")
+            self.assertNotIn(i, jar.pool_ids(st))
+        # nobody looking: nothing more is made, and the deck waits
+        self.assertFalse(jar.premake(None, "alex"))
+        made = len(self.stub.stages["dm"]) if hasattr(self, "stub") else None
+        self.req("POST", "/jar/day?fresh=1", self.alex, "")
+        self.wait_day(self.alex)
+        new = self.ids(self.alex, 8)[-jar.NEW_ITEMS:]
+        self.assertEqual(new, ahead)                          # the deck, not made now
+        if made is not None:
+            self.assertEqual(len(self.stub.stages["dm"]), made + jar.NEW_ITEMS)  # the refill only
+        self.wait_deck()
+        self.assertEqual(len(jar.deck("alex", st)), jar.NEW_ITEMS)   # looked at again: refilled
+
+    def test_a_find_passed_on_twice_is_banned(self):
+        st = kv.store()
+        i = jar.pool_ids(st)[0]
+        self.assertEqual(jar.passed_on([i], st), [])
+        self.assertFalse(jar.banned(i, st))
+        self.assertEqual(jar.passed_on([i], st), [i])
+        self.assertTrue(jar.banned(i, st))
+        self.assertNotIn(i, jar.pool_ids(st))
+        jar.to_pool([i], store=st)                            # never back
+        self.assertNotIn(i, jar.pool_ids(st))
+        self.assertEqual(jar.banned_ids(st), [i])
+        jar.unban(i, st)
+        self.assertIn(i, jar.pool_ids(st))
+        self.assertFalse(jar.passed_on([i], st))              # the count starts again
+        # by hand, and from the route: the owner only
+        j = jar.pool_ids(st)[1]
+        self.assertEqual(self.req("POST", "/jar/ban?id=%d" % j, self.sam)[0], 403)
+        self.assertEqual(self.req("POST", "/jar/ban?id=%d" % j, self.alex)[0], 200)
+        self.assertTrue(jar.banned(j, st))
+        self.assertIn(str(j), self.req("GET", "/jar/bans", self.alex)[1])
+        self.assertEqual(self.req("POST", "/jar/ban?id=%d&off=1" % j, self.alex)[0], 200)
+        self.assertFalse(jar.banned(j, st))
+
+    def test_a_stock_passed_on_twice_bans_what_was_passed(self):
+        st = kv.store()
+        self.make_day(self.alex)
+        first = self.ids(self.alex, 8)
+        self.wait_deck()
+        self.req("POST", "/jar/day?fresh=1", self.alex, "bought %d\n" % first[0])
+        self.wait_day(self.alex)
+        self.assertFalse(any(jar.banned(i, st) for i in first))       # once: back to the pool
+        for i in first[1:]:
+            self.assertEqual(st.incr(jar.NS, "passes/%d" % i, 0), 1)
+        self.assertEqual(jar.passed_on(first[1:2], st), first[1:2])     # twice: gone
+        self.assertNotIn(first[1], jar.pool_ids(st))
+        self.wait_deck()
+
     def wait_day(self, tok):
         for _ in range(500):
             s, body = self.req("GET", "/jar/day", tok)
@@ -1319,7 +1423,8 @@ class Routes(unittest.TestCase):
         self.make_day(self.alex)
         first = self.ids(self.alex, 8)
         self.assertEqual(len(jar.pool_ids(st)), 12 - 4)
-        self.assertIn("Pick 2 of those", self.tibbs.prompts[0])
+        stock = [p for p in self.tibbs.prompts if "needs filling" in p]
+        self.assertIn("Pick 2 of those", stock[0])
         s, body = self.req("POST", "/jar/day?fresh=1", self.alex,
                            "bought %d\nheld %d\n" % (first[0], first[1]))
         body = self.wait_day(self.alex)
@@ -1378,7 +1483,7 @@ class Routes(unittest.TestCase):
         p = self.tibbs.prompts[made]
         self.assertIn("paid you to go out looking, and asked for: \"brass birds\"", p)
         self.assertIn("Pick 2 of those", p)                    # 8 - 5 new: 2 his, 1 random
-        self.assertIn("5 new finds came in today", p)
+        self.assertIn("5 new finds came in from an errand", p)
         self.assertIn("paid you to go out and find new things", p)   # the news
         # too many asked for is the most allowed; a word that fails the filter is dropped
         req = jar.parse_request("finds 99\nask shit birds\n")

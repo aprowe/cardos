@@ -1153,6 +1153,17 @@ static void place_new(uint32_t id) {
   G.dl0 = 0;
 }
 
+/* j or Tab: the next jar, round to the factory. 1-9: straight to one, as
+ * they are named -- 1 the factory, 2 "Jar 2". */
+static int key_jar(int k) {
+  if (!J.njars) { say("More jars: Upgrades, Another jar"); return 1; }
+  if (k >= '1' && k <= '9') {
+    if (k - '1' > J.njars) { say("No jar with that number"); return 1; }
+    jar_go(k - '1');
+  } else jar_go((J.jar_at + 1) % (J.njars + 1));
+  return 1;
+}
+
 static int key_decor(int k) {
   JPlaced *p = J.nplaced ? &J.placed[G.dsel] : 0;
   if (G.dmove && p) {
@@ -1287,6 +1298,11 @@ static int scene_key(void *st, unsigned char k) {
   /* Poking: the arrows mark a thing, Space pokes it -- bars or no bars, since
    * it is the jar you are looking at. */
   if (G.view == V_JAR && !G.menu && poke_key(k, now)) { G.last_key = now; return 1; }
+  /* Tab and 1-9 change jars bars or no bars: they always do what they say. */
+  if (G.view == V_JAR && !G.menu && (k == 0x09 || (k >= '1' && k <= '9'))) {
+    G.last_key = now;
+    return key_jar(k);
+  }
   /* Bars hidden: a key brings them back and does nothing else. */
   if (G.view == V_JAR && G.bars > 0) { G.last_key = now; return 1; }
   G.last_key = now;
@@ -1316,10 +1332,7 @@ static int scene_key(void *st, unsigned char k) {
     return 1;
   case 'f': case 'F': open_app("Jar Post", "friends"); return 1;
   case 'm': case 'M': open_app("Jar Post", "mail"); return 1;
-  case 'j': case 'J':                               /* the next jar, round to the factory */
-    if (!J.njars) { say("More jars: Upgrades, Another jar"); return 1; }
-    jar_go((J.jar_at + 1) % (J.njars + 1));
-    return 1;
+  case 'j': case 'J': return key_jar(k);
   case CAPP_KEY_ENTER:
     /* the menu; with parcels on the dock, on Mail */
     G.menu = 1;
@@ -1734,7 +1747,8 @@ const CappInfo capp_info = {
   "T\tthe Town: Tibbs, Pip, Bramble, Wren\n"
   "F M U\tfriends, mail, upgrades\n"
   "D\tdecorate; ^v moves onto a ledge\n"
-  "Z\tzoom 2x; Tab follows a critter\n"
+  "Tab 1-9\tthe next jar, or jar N (1 the factory)\n"
+  "Z\tzoom 2x; Tab there follows a critter\n"
   "Shop\tEnter buys, Space holds, G gifts\n"
   "R F\tpay Tibbs: restock now, or 8 new finds\n"
   "Esc\tback to the jar\n",

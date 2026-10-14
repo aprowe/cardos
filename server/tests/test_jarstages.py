@@ -246,20 +246,23 @@ class Search(unittest.TestCase):
         os.environ.pop("CARDOS_STATE", None)
         shutil.rmtree(self.dir, ignore_errors=True)
 
-    def test_he_is_asked_where_he_searched(self):
+    def test_he_is_asked_where_he_went_only_on_an_errand(self):
+        # A stock's finds come from his latest chapter; only a commission is
+        # an errand of its own, with its own search.
         line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 4)
         self.assertEqual(line, "Back from the canal.")
+        self.assertEqual(search, "")
+        self.assertNotIn("Where did you go", self.said[-1])
+        line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 4, commission="")
         self.assertIn("old canal locks", search)
         asked = self.said[-1]
-        self.assertIn("Where did you go searching", asked)
+        self.assertIn("Where did you go", asked)
         self.assertNotIn("sparks", asked)                   # no random words
         self.assertNotIn("by chance", asked)
         self.assertNotIn("brief", asked.lower())
-        # next time he is not shown where he has been (he would hold on to
-        # it): a letter rolled by the code sends him somewhere else
-        shopkeep.stock_turn(None, "alex", [], 0, 4)
+        # next time he is not shown where he has been: he would hold on to it
+        shopkeep.stock_turn(None, "alex", [], 0, 4, commission="")
         self.assertNotIn("old canal locks", self.said[-1])
-        self.assertIn("somewhere you have never been before", self.said[-1])
 
     def test_a_commission_is_in_the_question(self):
         shopkeep.stock_turn(None, "alex", [], 0, 8, commission="brass birds")
@@ -271,7 +274,7 @@ class Search(unittest.TestCase):
         line, picks, search = shopkeep.stock_turn(None, "alex", [], 0, 4,
                                                   log=logs.append)
         self.assertEqual(search, "")
-        self.assertTrue(any("no search" in s for s in logs), logs)
+        self.assertTrue(any("note on the door" in s for s in logs), logs)
 
 # ---- 5-7. the stages --------------------------------------------------------------------
 
@@ -506,11 +509,14 @@ class Stages(unittest.TestCase):
         self.assertIn("Invent one thing for the terrarium:", self.stub.prompts["dm"][0])
         self.assertTrue(any("no search" in s for s in self.logs), self.logs)
 
-    def test_a_stock_is_made_from_his_search(self):
+    def test_a_stock_is_made_from_his_chapter(self):
         from server.tests.test_jar import Stub
-        tibbs = {"line": "Back from the canal.", "picks": [],
-                 "search": "Down the canal locks today, after anything the barges dropped."}
-        with mock.patch.object(shopkeep, "turn", lambda *a, **k: json.dumps(tibbs)):
+        tibbs = {"line": "Back from the canal.", "picks": []}
+        chapter = {"chapter": "Down the canal locks today, after anything the barges dropped."}
+
+        def turn(chat, text, *a, **k):
+            return json.dumps(chapter if "next chapter of your story" in text else tibbs)
+        with mock.patch.object(shopkeep, "turn", turn):
             jar.start_day(None, "alex", {"owned": []})
             for _ in range(300):
                 d = jar.day_state("alex")

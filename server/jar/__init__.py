@@ -1222,11 +1222,11 @@ def _set_shown(st, person, ids):
 
 def to_pool(ids, person=None, store=None):
     """Items back to the pool -- those `person` has in their shop, or (no
-    person) new ones for it. Not one that is someone else's."""
+    person) new ones for it. Not one that is someone else's, nor a banned one."""
     st = store or kv.store()
     pool = set(pool_ids(st))
     for i in ids:
-        if st.get(NS, "rec/%d" % i) is None:
+        if st.get(NS, "rec/%d" % i) is None or banned(i, st):
             continue
         own = st.get(NS, "own/%d" % i)
         if own is not None and (person is None or own.decode() != person):
@@ -1234,6 +1234,58 @@ def to_pool(ids, person=None, store=None):
         st.delete(NS, "own/%d" % i)
         pool.add(i)
     _set_pool(st, pool)
+
+
+# ---- bans -------------------------------------------------------------------------------
+#
+# The owner (2026-10-13): "let me ban items, and auto ban items the second
+# time they are shown in a store without being bought". A banned item leaves
+# the pool for good: no shop shows it again. Bought ones are untouched (they
+# are someone's). Passing on an item -- shown, neither bought nor held --
+# counts; the second pass bans it.
+
+BAN_AFTER = 2
+
+
+def banned(i, store=None):
+    return (store or kv.store()).get(NS, "banned/%d" % i) is not None
+
+
+def ban(i, why="by hand", store=None):
+    """Out of the pool for good. False if there is no such item."""
+    st = store or kv.store()
+    if st.get(NS, "rec/%d" % i) is None:
+        return False
+    st.put(NS, "banned/%d" % i, why.encode())
+    _set_pool(st, set(pool_ids(st)) - {i})
+    return True
+
+
+def unban(i, store=None):
+    """Back in the pool, if nobody has it."""
+    st = store or kv.store()
+    st.delete(NS, "banned/%d" % i)
+    st.delete(NS, "passes/%d" % i)
+    if st.get(NS, "rec/%d" % i) is not None and st.get(NS, "own/%d" % i) is None:
+        _set_pool(st, set(pool_ids(st)) | {i})
+
+
+def banned_ids(store=None):
+    st = store or kv.store()
+    return sorted(int(k.split("/")[1]) for k, _, _ in st.list(NS, "banned/", 100000))
+
+
+def passed_on(ids, store=None):
+    """These were shown and not bought or held: one more pass each. Those
+    at BAN_AFTER are banned. The ones banned."""
+    st = store or kv.store()
+    out = []
+    for i in ids:
+        n = st.incr(NS, "passes/%d" % i)
+        if n >= BAN_AFTER:
+            ban(i, "passed on %d times" % n, st)
+            out.append(i)
+    return out
 
 
 def _words(s):
@@ -1306,6 +1358,74 @@ def seed_pool(chat, n, store=None, signer=None, log=None, date=None):
     return made
 
 
+# ---- the deck: finds made ahead ---------------------------------------------------------
+#
+# The owner (2026-10-13): "pre-make the items in the store, but to not
+# waste, if they are never viewed they stay there until they are". Once a
+# person has looked at a stock (the last of its items fetched), their next
+# NEW_ITEMS finds are made in the background, from the latest chapter, and
+# wait in deck/PERSON -- theirs (own/ID), so out of the pool. A new stock
+# takes its finds from the deck first and makes only the rest. Nothing is
+# made for someone who has not looked; nothing in a deck expires. A
+# commission is made fresh, to order: the deck waits for the next one.
+
+_premaking = set()
+
+
+def deck(person, store=None):
+    return [int(i) for i in _json(store or kv.store(), "deck/" + person, [])]
+
+
+def _deck_push(st, person, i):
+    with _day_lock:
+        st.put(NS, "deck/" + person, json.dumps(deck(person, st) + [i]).encode())
+
+
+def deck_take(person, n, store=None):
+    """Up to n finds off the deck, oldest first, still there to show."""
+    st = store or kv.store()
+    with _day_lock:
+        d = deck(person, st)
+        got = [i for i in d[:n] if st.get(NS, "rec/%d" % i) is not None]
+        st.put(NS, "deck/" + person, json.dumps(d[n:]).encode())
+    return got
+
+
+def premake(chat, person, store=None, now=None, log=None, wait=False):
+    """Fill `person`'s deck to NEW_ITEMS on a thread (in this one with
+    wait). False when there is nothing to do or it is already being done."""
+    st = store or kv.store()
+    with _day_lock:
+        if person in _premaking or len(deck(person, st)) >= NEW_ITEMS:
+            return False
+        _premaking.add(person)
+    say = log or (lambda s: sys.stderr.write("jar: %s: deck: %s\n" % (person, s)))
+
+    def run():
+        try:
+            chapter = shopkeep.maybe_chapter(chat, st, now=now, log=say)
+            req = _json(st, "req/" + person, {})
+            req = {k: v for k, v in req.items() if k not in ("finds", "bribe", "ask")}
+            want = NEW_ITEMS - len(deck(person, st))
+            if want <= 0:
+                return
+            recs = generate(chat, person, req, _today(now), store=st, now=now, log=say,
+                            want=want, kind_at=random.randrange(len(KIND_PLAN)),
+                            search=chapter,
+                            on_item=lambda k, rec: _deck_push(st, person, decode(rec)["id"]))
+            say("%d made ahead" % len(recs))
+        except Exception as e:                          # noqa: BLE001 - tried again at the next look
+            say("not made: %s" % wire.flat(str(e) or type(e).__name__, 120))
+        finally:
+            with _day_lock:
+                _premaking.discard(person)
+    if wait:
+        run()
+    else:
+        threading.Thread(target=run, daemon=True).start()
+    return True
+
+
 # ---- the day's stock, kept ---------------------------------------------------------------
 
 _running = set()               # (person, date) generating in this process
@@ -1350,8 +1470,10 @@ def _item_note(rec):
 def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, passed=(),
               skey=None):
     """The rest of a stock, after the `base` (held and random) items already
-    on show: Tibbs's turn -- his greeting, his picks from the pool, where he
-    went searching -- then his picks, then the new finds, made from that."""
+    on show: the next chapter of his story if one is due (a visit), Tibbs's
+    turn -- his greeting, his picks from the pool -- then his picks, then the
+    new finds: off the deck first, the rest made from his latest chapter (or a
+    commission's errand)."""
     key = (person, skey or _stock_key())
     told = {"say": ""}
     at = [base]
@@ -1380,6 +1502,7 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
         pool = [(i, ) + _pool_view(store, i) for i in pool_ids(store) if i not in passed]
         rng = random.Random()
         rng.shuffle(pool)
+        chapter = shopkeep.maybe_chapter(chat, store, log=say_log)
         told["say"], mine, search = shopkeep.stock_turn(
             chat, person, pool[:POOL_SHOWN], n_pick, n_new, friends_of(person, store),
             store=store, log=say_log, commission=req.get("ask") if req.get("finds") else None,
@@ -1394,8 +1517,17 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
             rec = store.get(NS, "rec/%d" % i)
             if rec is not None:
                 show(rec)
-        records = generate(chat, person, req, date, store=store, on_item=on_item, want=n_new,
-                           kind_at=batch, log=say_log, search=search)
+        # A commission is made to order, from his errand; otherwise the
+        # finds made ahead come first, and the rest from his latest chapter.
+        made = [] if req.get("finds") else deck_take(person, n_new, store)
+        for i in made:
+            on_item(0, store.get(NS, "rec/%d" % i))
+        records = []
+        if n_new - len(made) > 0:
+            records = generate(chat, person, req, date, store=store, on_item=on_item,
+                               want=n_new - len(made), kind_at=batch, log=say_log,
+                               search=search or chapter)
+        records = [store.get(NS, "rec/%d" % i) for i in made] + records
         state("ok", at[0])
         sys.stderr.write("jar: %s: %d items for %s (%d his, %d new)\n" % (
             person, at[0], key[1], len(got), len(records)))
@@ -1463,7 +1595,13 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
         jarpatch.start(chat, person, sorted(bought), req.get("injar", []), st)
         held = [i for i in req.get("held", []) if i in prev and i not in bought][:MAX_HELD]
         passed = [i for i in prev if i not in bought and i not in held]
+        gone = passed_on(passed, st)
+        if gone:
+            sys.stderr.write("jar: %s: banned, passed on twice: %s\n" % (
+                person, ", ".join(str(i) for i in gone)))
         to_pool(passed, person, st)
+        st.put(NS, "req/" + person, json.dumps(
+            {k: v for k, v in req.items() if k in ("owned", "jar", "injar")}).encode())
         # A commission -- the player paid Tibbs to go looking -- is more new
         # finds, fewer from the pool; coins are the device's, taken there.
         n_new = max(NEW_ITEMS, min(req.get("finds", 0), MAX_FINDS, STOCK_SIZE - len(held)))
@@ -2011,7 +2149,44 @@ def get_item(h, args):
     rec = kv.store().get(NS, "stock/%s/%d" % (kv.me(), int(raw)))
     if rec is None:
         raise NotFound("no item %s" % raw)
+    # The last item of a whole stock is the person looking at it: their
+    # next finds are made now, to wait for them (the deck).
+    cur = day_state(kv.me())
+    if (cur and cur.get("state") == "ok" and int(raw) == cur.get("n", 0) - 1
+            and _chat_ok(h)):
+        premake(h.chat, kv.me())
     h.text(base64.b64encode(rec).decode() + "\n")
+
+
+def post_ban(h, path, args):
+    """ban item ?id=N for good (&off=1 lets it back into the pool); the owner only"""
+    raw = (args.get("id") or [""])[0]
+    if not raw.isdigit():
+        h.text("error id= is an item id\n", 400)
+        return
+    i = int(raw)
+    if (args.get("off") or ["0"])[0] == "1":
+        unban(i)
+        h.text("ok unbanned %d\n" % i)
+    elif ban(i):
+        h.text("ok banned %d\n" % i)
+    else:
+        h.text("error no item %d\n" % i, 404)
+
+
+def _ban_lines(st):
+    out = []
+    for i in banned_ids(st):
+        rec = st.get(NS, "rec/%d" % i)
+        name = decode(rec)["name"] if rec else "?"
+        why = (st.get(NS, "banned/%d" % i) or b"").decode("utf-8", "replace")
+        out.append("%d\t%s\t%s\n" % (i, name, why))
+    return "".join(out)
+
+
+def get_bans(h, path, args):
+    """banned items: id <tab> name <tab> why, a line each; the owner only"""
+    h.text(_ban_lines(kv.store()))
 
 
 def get_pubkey(h, path, args):
@@ -2107,19 +2282,32 @@ ROUTES = [
     ("POST", "/jar/release", post_release, "device_or_dash"),
     ("POST", "/jar/gift", post_gift, "device_or_dash"),
     ("POST", "/jar/thanks", post_thanks, "device_or_dash"),
+    ("POST", "/jar/ban", post_ban, "admin"),
+    ("GET", "/jar/bans", get_bans, "admin"),
 ]
 
 
 def main(argv=None):
     """python -m server.jar seed N [--claude-cli PATH]: N new items straight
-    into the pool (CARDOS_STATE is the store, as for the server)."""
+    into the pool (CARDOS_STATE is the store, as for the server). `pool`
+    lists it; `ban N`, `unban N` and `bans` are the bans."""
     import argparse
     from ..chat import ChatService
     ap = argparse.ArgumentParser(prog="python -m server.jar")
-    ap.add_argument("what", choices=["seed", "pool"])
+    ap.add_argument("what", choices=["seed", "pool", "ban", "unban", "bans"])
     ap.add_argument("n", type=int, nargs="?", default=20)
     ap.add_argument("--claude-cli", default=None)
     args = ap.parse_args(argv)
+    if args.what in ("ban", "unban", "bans"):
+        st = kv.store()
+        if args.what == "ban":
+            print("banned" if ban(args.n, store=st) else "no item %d" % args.n)
+        elif args.what == "unban":
+            unban(args.n, st)
+            print("unbanned")
+        else:
+            print(_ban_lines(st), end="")
+        return
     if args.what == "pool":
         st = kv.store()
         for i in pool_ids(st):

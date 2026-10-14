@@ -1239,8 +1239,35 @@ it is made of (materials never steer); his day is "the setting, not a list
 of what to make"; the tier is rarity ("a common find", not "a cheap
 trinket"). Tibbs is named no place, not even his own last searches
 (still kept in tibbs/searches, never shown); the code rolls the first
-letter of where he went (`shopkeep.roll_letter`). His resumed session and
-notebook still remember the old contacts.
+letter of where he went. His resumed session and notebook still remember
+the old contacts.
+
+**Tibbs's story moves in chapters, and finds are made ahead** (2026-10-13).
+- **Chapters** (`shopkeep.maybe_chapter`): time only moves when someone
+  visits. A visit (a stock started, or its last item fetched) 4 hours or more
+  after the last chapter writes the next one -- one, however long the gap.
+  The code rolls three pairs of initials, weighted like English word starts
+  (`INITIAL_WEIGHTS`): a place he went, someone he dealt with, something he
+  came back with ("W. S.", "P. K.", "C. H."); he names them. What players
+  said at the counter and did (`tibbs/shoplog`, filled by `note` and talk)
+  since the last chapter is rolled in. Every chapter prompt carries the
+  opening, `server/jar/tibbs_intro.txt` -- prose the owner edits -- and the
+  last chapter; the last 12 are kept in `tibbs/chapters`.
+- **The finds come from the chapter.** The stock turn only greets and picks
+  from the pool; it asks "where did you go" only for a commission's errand.
+- **The deck** (`jar.premake`, `deck/PERSON`): once a person has fetched
+  the last item of a whole stock, their next NEW_ITEMS finds are made in the
+  background from the latest chapter, theirs and out of the pool. A new stock
+  takes its finds off the deck first and makes only the rest; a commission is
+  made fresh. Nothing is made for someone who has not looked, and a deck
+  never expires.
+- **Bans** (`jar.ban`, `banned/ID`): out of the pool for good. An item
+  passed on (shown, neither bought nor held) twice is banned by itself
+  (`passed_on`, `passes/ID`). `POST /jar/ban?id=N[&off=1]` and `GET
+  /jar/bans` (the owner only), or `python -m server.jar ban N | unban N |
+  bans`.
+- **Jar keys**: Tab (or j) is the next jar, 1-9 jumps to one (1 the
+  factory), bars or no bars; zoomed, Tab still follows a critter.
 
 **More jars** (2026-10-11, v0.21.0). `JU_JAR` in Upgrades buys up to
 `JS_MAX_JARS` (3) extra jars: empty glass, no factory. `J.jar_at` is the
