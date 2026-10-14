@@ -33,7 +33,7 @@ static Msg Q[4];
 static int NQ, OFFLINE, GIFT_OK;
 static char ME[512];
 
-static char SAID[128], TXS[128], HAVE_SAID[64], BEDS_SAID[64], WHO_SAID[16];
+static char SAID[128], TXS[128], HAVE_SAID[64], BEDS_SAID[64], WHO_SAID[16], BOUGHT_SAID[64];
 static int TALK_POLLS, COINS_SAID, ITEM_GOOD;
 static char OFFER[128], DEAL_BODY[256], DEAL_PATH[64];
 static uint32_t ITEM_ID;
@@ -56,12 +56,13 @@ static int post_server(const char *m, const char *path, const char *body, char *
     const char *b = body ? body : "", *w = strstr(path, "who=");
     snprintf(WHO_SAID, sizeof WHO_SAID, "%s", w ? w + 4 : "");
     COINS_SAID = -1;
-    HAVE_SAID[0] = BEDS_SAID[0] = 0;
+    HAVE_SAID[0] = BEDS_SAID[0] = BOUGHT_SAID[0] = 0;
     for (;;) {                                  /* what the jar has, before the words */
       const char *e = strchr(b, '\n');
       if (!e) break;
       if (!strncmp(b, "coins ", 6)) COINS_SAID = atoi(b + 6);
       else if (!strncmp(b, "have ", 5)) snprintf(HAVE_SAID, sizeof HAVE_SAID, "%.*s", (int)(e - b - 5), b + 5);
+      else if (!strncmp(b, "bought ", 7)) snprintf(BOUGHT_SAID, sizeof BOUGHT_SAID, "%.*s", (int)(e - b - 7), b + 7);
       else if (!strncmp(b, "beds ", 5)) snprintf(BEDS_SAID, sizeof BEDS_SAID, "%.*s", (int)(e - b - 5), b + 5);
       else break;
       b = e + 1;
@@ -438,6 +439,7 @@ void test_jarpost_the_town_and_a_job_done(void) {
   key(CAPP_KEY_ENTER);
   tick(20);
   CHECK(strcmp(WHO_SAID, "pip") == 0);
+  CHECK(BOUGHT_SAID[0] == 0);                    /* nothing bought from the shop */
   CHECK_EQ(COINS_SAID, 50);
   CHECK(strcmp(HAVE_SAID, "spores=6 nectar=0 twigs=2") == 0);
   CHECK(strcmp(BEDS_SAID, "berry2,berry1") == 0);
@@ -467,6 +469,18 @@ void test_jarpost_an_offer_waits_for_yes(void) {
   card(50);
   launch("town");
   J.res[JRS_SPORES] = 20;
+  {
+    /* bought from the shop on show, not yet told: talk tells it, so Pip can
+     * find a thing bought an hour ago (2026-10-14) */
+    JStock st;
+    char text[384];
+    memset(&st, 0, sizeof st);
+    strcpy(st.date, "20261014-3");
+    st.n = 3;
+    st.id[0] = 9001; st.id[1] = 9002; st.id[2] = 9003;
+    st.sold = 1 | 4;
+    jst_stock_save(&A, &st, text, (int)sizeof text);
+  }
   key(CAPP_KEY_DOWN);
   key(CAPP_KEY_ENTER);                           /* Pip */
   tick(400);
@@ -474,6 +488,7 @@ void test_jarpost_an_offer_waits_for_yes(void) {
   type("can you make my lamp glow?");
   key(CAPP_KEY_ENTER);
   tick(9000);
+  CHECK(strcmp(BOUGHT_SAID, "9001,9003") == 0);
   CHECK(!TK_PENDING);
   CHECK(strstr(G.offer, "Pay 12 spores") == G.offer);
   CHECK_EQ(J.res[JRS_SPORES], 20);               /* nothing yet */
@@ -484,6 +499,7 @@ void test_jarpost_an_offer_waits_for_yes(void) {
   key('n');
   tick(400);
   CHECK(strstr(DEAL_PATH, "who=pip") != 0);
+  CHECK(strstr(DEAL_BODY, "bought 9001,9003\ncoins ") == DEAL_BODY);
   CHECK(strstr(DEAL_BODY, "have spores=20 ") != 0);
   CHECK(strstr(DEAL_BODY, "\nno") != 0);
   CHECK_EQ(J.res[JRS_SPORES], 20);

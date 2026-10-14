@@ -650,7 +650,7 @@ static void go_town(void) {
 
 /* Yes or no to the offer, with what the jar has now (checked again). */
 static void answer(int yes) {
-  char body[200], path[32];
+  char body[280], path[32];
   int n = jtx_have(body, (int)sizeof body - 8);
   api->fmt(body + n, sizeof body - (size_t)n, "%s", yes ? "yes" : "no");
   api->fmt(path, sizeof path, "/jar/deal?who=%s", NPC_ID[G.npc]);
@@ -746,7 +746,7 @@ static int key_talk(int k) {
   {
     /* what you have first: with it they can strike a deal (a bribe, a
      * trade, a job) -- coins, the stores, the beds */
-    char body[TK_SAY + 160], path[32];
+    char body[TK_SAY + 240], path[32];
     int n = jtx_have(body, (int)sizeof body - TK_SAY - 1);
     api->fmt(body + n, sizeof body - (size_t)n, "%s", G.input);
     api->fmt(path, sizeof path, "/jar/talk?who=%s", NPC_ID[G.npc]);

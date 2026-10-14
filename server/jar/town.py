@@ -41,13 +41,24 @@ PLANTS = ("berry", "reed", "shroom", "flower")
 PLANT_RESOURCE = {"berry": "jam", "reed": "twigs", "shroom": "spores", "flower": "nectar"}
 
 
+def parse_bought(body):
+    """The ids on a "bought" line among the device's lines before its words."""
+    for line in body.split("\n")[:6]:
+        if line.startswith("bought "):
+            return [int(p) for p in line[7:].split(",") if p.strip().isdigit()][:8]
+    return []
+
+
 def parse_have(body):
-    """The device's lines before its words -> (coins, have, beds, words)."""
+    """The device's lines before its words -> (coins, have, beds, words).
+    A "bought" line is skipped here; parse_bought reads it."""
     coins, have, beds = None, None, []
     lines = body.split("\n")
     while lines:
         head = lines[0].strip()
-        if head.startswith("coins ") and head[6:].strip().isdigit():
+        if head.startswith("bought "):
+            pass
+        elif head.startswith("coins ") and head[6:].strip().isdigit():
             coins = int(head[6:].strip())
         elif head.startswith("have "):
             have = {}

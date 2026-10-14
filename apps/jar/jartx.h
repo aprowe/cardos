@@ -127,11 +127,22 @@ static JTX_OPT const char *jtx_dur(uint32_t s) {
   return b;
 }
 
-/* What the jar has, for talk: the lines before the words. */
+/* What the jar has, for talk: the lines before the words. First what was
+ * bought from the shop on show, which the server otherwise hears of only
+ * with the next stock -- until then Pip could not find a thing bought an
+ * hour ago (2026-10-14). */
 static JTX_OPT int jtx_have(char *b, int n) {
-  int i, k = api->fmt(b, (size_t)n, "coins %u\nhave spores=%u nectar=%u twigs=%u\nbeds ",
-                      (unsigned)J.coins, (unsigned)J.res[JRS_SPORES], (unsigned)J.res[JRS_NECTAR],
-                      (unsigned)J.res[JRS_TWIGS]);
+  JStock s;
+  char t[384];
+  int i, k = 0;
+  jst_stock_load(api, &s, t, (int)sizeof t);
+  for (i = 0; s.date[0] && i < s.n && k < n - 24; i++)
+    if (s.sold >> i & 1)
+      k += api->fmt(b + k, (size_t)(n - k), "%s%u", k ? "," : "bought ", (unsigned)s.id[i]);
+  if (k) b[k++] = '\n';
+  k += api->fmt(b + k, (size_t)(n - k), "coins %u\nhave spores=%u nectar=%u twigs=%u\nbeds ",
+                (unsigned)J.coins, (unsigned)J.res[JRS_SPORES], (unsigned)J.res[JRS_NECTAR],
+                (unsigned)J.res[JRS_TWIGS]);
   if (k >= n) k = n - 1;
   for (i = 0; i < J.nbeds && k < n - 12; i++) {
     k += api->fmt(b + k, (size_t)(n - k), "%s%s%d", i ? "," : "",

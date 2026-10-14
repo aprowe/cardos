@@ -1553,6 +1553,34 @@ def _pool_view(st, i):
     return (it["name"], kinds.get(it["kind"], "item"), it["price"] or 0, it["line"])
 
 
+def _note_bought(person, ids, st):
+    who = shopkeep.display(person)
+    for i in ids:
+        rec = st.get(NS, "rec/%d" % i)
+        if rec is not None:
+            shopkeep.note("%s bought %s." % (who, _item_note(rec)), st)
+
+
+def settle_bought(chat, person, ids, store=None):
+    """What the device says it bought from its shop is theirs now, not shop
+    stock: off the shelf (so owned_by, and so Pip and the others, see it), noted
+    for Tibbs once. The shop says so again with its next stock, which then
+    finds it already gone from the shelf. Before (2026-10-14) a buy was told
+    only with the next stock, and Pip could not find a thing bought an hour
+    ago. The ids bought."""
+    st = store or kv.store()
+    with _day_lock:
+        prev = shown(person, st)
+        bought = [i for i in prev if i in set(ids)]
+        if not bought:
+            return []
+        _set_shown(st, person, [i for i in prev if i not in bought])
+    _note_bought(person, bought, st)
+    injar = (_json(st, "req/" + person, {}) or {}).get("injar", [])
+    jarpatch.start(chat, person, bought, injar, st)
+    return bought
+
+
 def start_day(chat, person, req, now=None, store=None, fresh=False):
     """("pending" | "ok", date): today's stock, started if it is not made or
     making. A failed one is tried again. `fresh` makes a new one even when
@@ -1586,9 +1614,7 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
         prev = shown(person, st)
         bought = set(req.get("bought", [])) & set(prev)
         who = shopkeep.display(person)
-        for i in prev:
-            if i in bought and st.get(NS, "rec/%d" % i) is not None:
-                shopkeep.note("%s bought %s." % (who, _item_note(st.get(NS, "rec/%d" % i))), st)
+        _note_bought(person, [i for i in prev if i in bought], st)
         if req.get("jar"):
             shopkeep.note("In %s's jar now: %s." % (who, ", ".join(req["jar"])), st)
         # What is in the jar may learn about what was just bought (server/jar/jarpatch.py).
@@ -1914,9 +1940,11 @@ def post_talk(h, args):
         h.text("error this server runs without Claude\n", 503)
         return
     who = _who(args)
+    bought = town.parse_bought(body)
     coins, have, beds, body = town.parse_have(body)
     try:
         me = kv.me()
+        settle_bought(h.chat, me, bought)
         # A deal is only checked here (dry) and kept as an offer: nothing
         # happens until the player confirms it (POST /jar/deal).
         if who == "tibbs":
@@ -1947,8 +1975,10 @@ def post_deal(h, args):
     except ValueError as e:
         raise kv.TooBig(str(e))
     who = _who(args)
+    bought = town.parse_bought(body)
     coins, have, beds, answer = town.parse_have(body)
     me = kv.me()
+    settle_bought(h.chat if _chat_ok(h) else None, me, bought)
     o = shopkeep.offer_take(me, who)
     if not o:
         h.text("error no offer waiting\n")

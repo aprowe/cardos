@@ -1446,6 +1446,35 @@ class Routes(unittest.TestCase):
         self.wait_day(self.sam)
         self.assertEqual(st.get(jar.NS, "own/%d" % second[0]), b"alex")
 
+    def test_talk_says_what_was_bought_so_it_can_be_dealt_on(self):
+        # 2026-10-14: Pip could not find a Lake Scene bought an hour before --
+        # a buy was told only with the next stock, so until then it was still
+        # shop stock, and owned_by leaves shop stock out. Talk says it now.
+        st = kv.store()
+        self.make_day(self.alex)
+        first = self.ids(self.alex, 8)
+        self.assertNotIn(first[0], [i for i, _n, _p in jar.owned_by("alex", st)])
+        self.tibbs.answers.append("Lovely.")
+        s, body = self.req("POST", "/jar/talk", self.alex,
+                           "bought %d,999999\ncoins 50\nwhat do you think of it?" % first[0])
+        self.assertEqual(body, "pending\n")
+        self.assertIn(first[0], [i for i, _n, _p in jar.owned_by("alex", st)])
+        self.assertNotIn(first[0], jar.shown("alex", st))
+        for _ in range(200):
+            if self.req("GET", "/jar/talk?tx=0", self.alex)[1].startswith("ok"):
+                break
+            time.sleep(0.02)
+        self.assertIn("own: %d:" % first[0], self.tibbs.prompts[-1])
+        self.assertNotIn("bought", self.tibbs.prompts[-1].split("They say:]")[1])
+        # the next stock is told again by the shop: still theirs, said once
+        notes = len([e for e in shopkeep._get(st, "tibbs/events", []) if "bought" in e])
+        self.req("POST", "/jar/day?fresh=1", self.alex, "bought %d\n" % first[0])
+        self.wait_day(self.alex)
+        self.assertEqual(st.get(jar.NS, "own/%d" % first[0]), b"alex")
+        self.assertNotIn(first[0], jar.pool_ids(st))
+        self.assertEqual(notes, len([e for e in shopkeep._get(st, "tibbs/events", [])
+                                     if "bought" in e]))
+
     def test_an_admin_is_not_held_to_the_days_limit(self):
         st = kv.store()
         for _ in range(3):
