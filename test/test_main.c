@@ -151,6 +151,8 @@ void test_calendar_a_queued_edit_survives_a_fetch(void);
 void test_calendar_the_form_follows_its_event_through_a_sync(void);
 void test_calendar_a_patch_to_a_deleted_event_is_dropped(void);
 void test_calendar_a_failed_patch_keeps_the_edit(void);
+void test_calendar_an_edit_google_refuses_is_dropped_and_the_sync_goes_on(void);
+void test_calendar_a_new_event_google_refuses_is_kept(void);
 void test_calendar_an_all_day_event_is_on_its_own_date_anywhere(void);
 void test_calendar_edit_is_one_of_the_apps_declared_actions(void);
 void test_calendar_escape_cancels_the_form_back_to_where_it_came_from(void);
@@ -1178,6 +1180,8 @@ int main(void) {
   RUN(test_calendar_the_form_follows_its_event_through_a_sync);
   RUN(test_calendar_a_patch_to_a_deleted_event_is_dropped);
   RUN(test_calendar_a_failed_patch_keeps_the_edit);
+  RUN(test_calendar_an_edit_google_refuses_is_dropped_and_the_sync_goes_on);
+  RUN(test_calendar_a_new_event_google_refuses_is_kept);
   RUN(test_calendar_an_all_day_event_is_on_its_own_date_anywhere);
   RUN(test_calendar_edit_is_one_of_the_apps_declared_actions);
   RUN(test_calendar_escape_cancels_the_form_back_to_where_it_came_from);

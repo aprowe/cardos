@@ -201,6 +201,7 @@ static struct {
   uint32_t next_auto;               /* when to sync again, unprompted */
   int      tried_once;
   int      cmd_waiting;             /* a `sync` command wants to hear the end */
+  int      refused;                 /* edits Google refused this sync, put back */
 } C;
 
 enum { SYNC_IDLE = 0, SYNC_PUSH, SYNC_FETCH };
@@ -785,13 +786,18 @@ static void sync_tick(void) {
            C.stage == SYNC_PUSH ? "push" : "fetch", n);
   logline(m);
 
-  if (n < 0 && C.stage == SYNC_PUSH && (n == -404 || n == -410)) {
-    /* A PATCH to an event deleted in a browser since. Retrying it would fail
-     * every sync from now on; the fetch that follows shows it gone. */
+  if (n < 0 && C.stage == SYNC_PUSH && (n == -404 || n == -410 || n == -400)) {
+    /* A PATCH to an event deleted in a browser since (404, 410), or one
+     * Google will not change (400: an event it made from a Gmail message
+     * keeps its own time and title). Retrying would fail every sync from
+     * now on, before the fetch; the fetch that follows shows Google's
+     * version. A new event (no id) is kept: it lives nowhere else. */
     int i = sending_index();
     if (i >= 0 && C.ev[i].id[0]) {
-      api->fmt(m, sizeof m, "sync: %s is gone at Google, edit dropped", C.ev[i].summary);
+      api->fmt(m, sizeof m, "sync: %s: %s, edit dropped", C.ev[i].summary,
+               n == -400 ? "Google refused the change" : "gone at Google");
       logline(m);
+      if (n == -400) C.refused++;
       C.ev[i].dirty = 0;
       C.ev[i].sending = 0;
       n = 0;
@@ -821,7 +827,12 @@ static void sync_tick(void) {
 
   n = absorb();
   C.stage = SYNC_IDLE;
-  api->fmt(C.status, sizeof C.status, "%d event%s", C.n, C.n == 1 ? "" : "s");
+  if (C.refused)
+    api->fmt(C.status, sizeof C.status, "%d event%s; Google refused %d edit%s",
+             C.n, C.n == 1 ? "" : "s", C.refused, C.refused == 1 ? "" : "s");
+  else
+    api->fmt(C.status, sizeof C.status, "%d event%s", C.n, C.n == 1 ? "" : "s");
+  C.refused = 0;
   api->fmt(m, sizeof m, "sync ok: %d event%s absorbed, %d held",
            n, n == 1 ? "" : "s", C.n);
   logline(m);

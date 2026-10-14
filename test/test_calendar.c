@@ -1030,6 +1030,35 @@ void test_calendar_a_failed_patch_keeps_the_edit(void) {
   CHECK_EQ(SYNC_IDLE, C.stage);
 }
 
+/* Google refuses some changes outright: an event it made from a Gmail
+ * message keeps its own time and title, and the PATCH is a 400 every time.
+ * Retried, it stopped every sync before the fetch (2026-10-13, "Appointment
+ * with Leslie"). The edit is dropped and the sync goes on, so the fetch puts
+ * Google's version back. */
+void test_calendar_an_edit_google_refuses_is_dropped_and_the_sync_goes_on(void) {
+  synced_three_events();
+  C.ev[1].dirty = 1;
+  sync_begin("s");
+  CHECK_EQ(SYNC_PUSH, C.stage);
+  POLL_RESULT = -400;
+  sync_tick();
+  CHECK_EQ(0, C.ev[1].dirty);
+  CHECK_EQ(SYNC_FETCH, C.stage);
+  CHECK_EQ(1, C.refused);                       /* said when the fetch is in */
+}
+
+/* A new event has nowhere else to live: a refusal keeps it to try again. */
+void test_calendar_a_new_event_google_refuses_is_kept(void) {
+  synced_three_events();
+  C.ev[1].dirty = 1;
+  C.ev[1].id[0] = 0;
+  sync_begin("s");
+  POLL_RESULT = -400;
+  sync_tick();
+  CHECK_EQ(1, C.ev[1].dirty);
+  CHECK_EQ(SYNC_IDLE, C.stage);
+}
+
 /* West of Greenwich an all-day event used to show on the day before: a bare
  * date is midnight UTC, and the zone was taken off it like a timed event. */
 void test_calendar_an_all_day_event_is_on_its_own_date_anywhere(void) {
