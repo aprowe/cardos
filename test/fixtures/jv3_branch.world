@@ -1,0 +1,9 @@
+seed 77
+ticks 600
+bodies 4
+item 0 1472 1792 32 32 2 08004000 2 jv3_branch_0.bin 0 0 0 0 0 0 0 0
+item 1 1152 1464 16 16 1 00450000 4 jv3_branch_1.bin 0 0 0 0 0 0 0 0
+item 2 2144 1792 16 16 2 00004800 2 jv3_branch_2.bin 0 0 0 0 0 0 0 0
+event 260 0 0 0 0
+event 480 2 0 0 0
+event 520 1 0 0 0

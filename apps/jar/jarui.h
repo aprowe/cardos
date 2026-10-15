@@ -60,8 +60,8 @@ enum { N_IDLE = 0, N_PUB, N_APP };
 static const CardApi *api;
 static Jar J;
 static JIo IO;
-static char TEXT[2048];                 /* the save and other files */
-static char NET[2048];                  /* a request's body, its reply, a signed message */
+static char TEXT[2560];                 /* the save and other files */
+static char NET[2560];                  /* a request's body, its reply, a signed message */
 #endif
 #define PB_N (32 * 8)                   /* a picture, eight rows at a time */
 

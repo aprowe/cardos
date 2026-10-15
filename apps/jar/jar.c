@@ -77,14 +77,38 @@ static const CardApi *api;
 static Jar J;
 #include "apps/jar/jartx.h"
 
+/* JarScript 3's block (big-mode heap), taken once a launch: capp_main. */
+#define V3_WANT (16 * 1024)
+static uint8_t *V3BLOCK;
+static int V3CAP;
+
+/* JarScript 3's items take one block of the big-mode heap for the launch,
+ * the first time one is placed (none placed, none taken): V3_WANT, or what
+ * there is less 2 KB; under 6 KB, none, and v3 items are placed on their
+ * recipes (apps/jar/jarv3.h). Measured 2026-10-14: 31.7 KB of room after a
+ * boot, 23.5 KB after 19 minutes. */
+static void v3_want(void *jar) {
+  char m[48];
+  size_t room;
+  if (!V3BLOCK) {
+    room = api->big_room ? api->big_room() : 0;
+    V3CAP = room >= V3_WANT + 2048 ? V3_WANT : room >= 6144 ? (int)room - 2048 : 0;
+    V3BLOCK = V3CAP ? (uint8_t *)api->big_alloc((size_t)V3CAP) : 0;
+    if (!V3BLOCK) V3CAP = 0;
+    api->fmt(m, sizeof m, "jar: v3 block %d of %u", V3CAP, (unsigned)room);
+    api->log(m);
+  }
+  if (V3BLOCK) js_v3_open((Jar *)jar, V3BLOCK, V3CAP);
+}
+
 /* The strip, and the same memory for the card and the network, which never
  * happen while a strip is being drawn -- and for the shop and post screens'
  * buffers (apps/jar/jarui.h), which are only in use while the scene is not. */
 static union {
   uint16_t strip[SW * SH];
   JIo io;
-  char text[2048];
-  struct { JIo io; char txt[2048]; char net[2048]; } ui;
+  char text[2560];                      /* a record in base64: 1728 bytes -> 2304 */
+  struct { JIo io; char txt[2560]; char net[2560]; } ui;
 } SCR;
 
 static struct {
@@ -555,6 +579,13 @@ static void dock(void) {
 static void item_at(int i, int *x, int *y) {
   const JPlaced *p = &J.placed[i];
   int bob = 0, ph = p->phase & 255;
+  if (p->v3) {                                 /* JarScript 3: where its machine put it */
+    const Jv3Item *it = js_v3_item(&J, i);
+    *x = p->x / JS_FX - 8;
+    *y = JS_SOIL - 16 - p->yoff / 16;
+    if (it && it->shake_ticks > 0) *x += (J.steps & 2) ? 1 : -1;
+    return;
+  }
   /* an old floater bobs and an old swayer swings; with parts of its own,
    * the idle does that (apps/jar/jarlive.h, lv_pose) */
   if (!p->given && (p->move == JM_FLOATS || p->move == JM_SWAYS)) bob = (ph < 128 ? ph : 255 - ph) * 7 / 128 - 3;
@@ -621,7 +652,10 @@ static void talk(void) {
     bubble(J.snail.x / JS_FX + 4, JS_SOIL - 13, JS_SAYINGS[(int)J.snail.say]);
   for (i = 0; i < J.nplaced; i++) {
     const JPlaced *p = &J.placed[i];
+    const char *said = js_v3_said(&J, i);
     int x, y;
+    if (p->v3 && js_v3_stopped(&J, i)) said = "?";  /* its script stopped for good */
+    if (said) { item_at(i, &x, &y); bubble(x + 8, y, said); continue; }
     if (p->say_t <= 0 || p->say < 0) continue;
     item_at(i, &x, &y);
     bubble(x + 8, y, p->bub[(int)p->say]);
@@ -1759,6 +1793,8 @@ static void scene_start(void) {
   api->mem_set(&J, 0, sizeof J);
   api->mem_set(&G, 0, sizeof G);
   js_init(&J, api->ticks_ms() ^ api->epoch());
+  J.v3_want = v3_want;                      /* the block when a v3 item is first placed */
+  if (V3BLOCK) js_v3_open(&J, V3BLOCK, V3CAP);   /* afresh: the scene places everything again */
   G.last_key = G.last_save = api->ticks_ms();
   G.next_q = api->ticks_ms() + NET_FIRST_MS;
   load();
@@ -1935,7 +1971,10 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api = a;
   {
     /* Big-app mode (CAPP_BIG): what the heap would give us, logged once a
-     * launch -- the measure before the world grows into it. */
+     * launch. JarScript 3's items take one block of it, for the launch:
+     * V3_WANT, or what there is less 2 KB; with under 6 KB, none, and v3
+     * items are placed without their scripts (apps/jar/jarv3.h). Measured
+     * 2026-10-14: 31.7 KB of room after a boot, 23.5 KB after 19 minutes. */
     char m[48];
     api->fmt(m, sizeof m, "big room %u bytes", (unsigned)api->big_room());
     api->log(m);

@@ -1,0 +1,37 @@
+log s=0 "night"
+act s=0 k=1 a=16
+log s=0 "time 0"
+act s=0 k=1 a=32
+log s=0 "rain"
+act s=0 k=0 a=192
+log s=0 "senses 14 2 4 3 5 0 1 2"
+log s=0 "more 0 1 0 0"
+t=1 s=0 x=960 y=1792 vx=0 vy=0 a=0 st=0 fr=0 fc=1 w=20000 h=0 f=0 v=16,0,0,0,0,0,0,0
+log s=0 "weather"
+log s=0 "chime 4"
+act s=0 k=5 a=320
+log s=0 "chime 15"
+act s=0 k=5 a=0
+t=2 s=0 x=960 y=1792 vx=0 vy=0 a=0 st=0 fr=0 fc=1 w=19999 h=0 f=0 v=16,0,0,0,0,0,0,0
+log s=0 "ants"
+act s=0 k=2 a=0
+log s=0 "world any"
+act s=0 k=3 a=0
+act s=0 k=4 a=0
+log s=0 "new 1"
+act s=0 k=6 a=0
+t=3 s=0 x=960 y=1792 vx=0 vy=0 a=0 st=0 fr=0 fc=1 w=19998 h=0 f=0 v=16,0,0,0,0,0,0,0
+act s=0 k=7 a=0
+act s=0 k=8 a=0
+act s=0 k=9 a=0
+log s=0 "fixed"
+act s=0 k=0 a=16
+log s=0 "jam any"
+t=4 s=0 x=960 y=1792 vx=0 vy=0 a=0 st=0 fr=0 fc=1 w=19997 h=0 f=0 v=16,0,0,0,0,0,0,0
+log s=0 "poke 2"
+act s=0 k=0 a=224
+log s=0 "land"
+log s=0 "poke 3"
+act s=0 k=0 a=224
+t=5 s=0 x=960 y=1792 vx=0 vy=0 a=0 st=0 fr=0 fc=1 w=19996 h=0 f=0 v=48,0,0,0,0,0,0,0
+t=6 s=0 x=960 y=1792 vx=0 vy=0 a=0 st=0 fr=0 fc=1 w=19995 h=0 f=0 v=48,0,0,0,0,0,0,0

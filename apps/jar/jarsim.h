@@ -282,6 +282,10 @@ typedef struct {
   int16_t  on_lo, on_hi;               /* that furniture's top, px */
   uint16_t poff, plen;                 /* its patch in j->spool: what it learned of a newcomer */
   int16_t  px, py, ptx, pty, pt;       /* the part, 1/16 px; its target; a timer */
+  /* JarScript 3 (apps/jar/jarv3.h): its chunk in j->v3mem, the script's
+   * length, and a sum of its memory (to see it change) */
+  uint8_t  v3;
+  uint16_t v3off, v3len, v3sum;
 } JPlaced;
 
 typedef struct { uint32_t id, on; int16_t x; int8_t y; uint8_t lv; } JWant;
@@ -361,7 +365,22 @@ typedef struct {
   uint16_t pel_t[JS_PELLETS];          /* steps left; 0 none */
   uint8_t  weather;                    /* JWX_* (apps/jar/jarvm.def), 0 unknown */
   uint32_t steps, seed, epoch;         /* epoch: now, for senses; 0 unknown */
+  /* JarScript 3's block (apps/jar/jarv3.h): the app's, never saved; v3short
+   * counts v3 items placed without their script for want of room */
+  uint8_t *v3mem;
+  uint16_t v3cap, v3used, v3short;
+  /* asked for the block the first time a v3 item is placed (the app takes
+   * it from the big-mode heap then, not before: no v3 item, no cost) */
+  void   (*v3_want)(void *jar);
 } Jar;
+
+/* JarScript 3's hooks (apps/jar/jarv3.h, included further down, after what
+ * it needs). */
+static JS_OPT int js_v3_attach(Jar *j, int i, const JItem *it);
+static JS_OPT void js_v3_detach(Jar *j, int i);
+static JS_OPT void js_v3_moved(Jar *j, int i);
+static JS_OPT int js_v3_event(Jar *j, int i, int ev, int arg);
+static JS_OPT void js_v3_tick(Jar *j);
 
 /* ---- small things ------------------------------------------------------ */
 
@@ -679,6 +698,7 @@ static JS_OPT int js_place(Jar *j, const JItem *it, int x, int y) {
   p->t = (int16_t)js_rr(j, 20, 120);
   p->phase = (int16_t)js_rr(j, 0, 255);
   j->nplaced++;
+  js_v3_attach(j, j->nplaced - 1, it);         /* a JarScript 3 item: its script runs there */
   return j->nplaced - 1;
 }
 
@@ -702,7 +722,7 @@ static JS_OPT void js_spool_cut(Jar *j, int at, int n) {
  * 0, or -1 if this machine would not run it or there is no room. */
 static JS_OPT int js_set_patch(Jar *j, int i, const uint8_t *code, int n) {
   JPlaced *p;
-  if (i < 0 || i >= j->nplaced || n <= 0 || n > JI_SCRIPT_MAX || jv_check(code, n) != 0) return -1;
+  if (i < 0 || i >= j->nplaced || n <= 0 || n > JI_SCRIPT_V2 || jv_check(code, n) != 0) return -1;
   p = &j->placed[i];
   if (p->plen) { js_spool_cut(j, p->poff, p->plen); p->plen = 0; }
   if (j->sused + n > JS_SPOOL_ROOM) return -1;
@@ -718,6 +738,7 @@ static JS_OPT void js_unplace(Jar *j, int i) {
   if (i < 0 || i >= j->nplaced) return;
   for (k = 0; k < j->nplaced; k++)             /* what stood on it comes down */
     if (k != i && j->placed[k].on_id && j->placed[k].on_id == j->placed[i].id) js_get_off(j, k);
+  js_v3_detach(j, i);                          /* the machine's slots close up with these */
   for (k = 0; k < JI_MAX_FRAMES; k++)
     if (j->placed[i].slot[k] < JS_POOL_ROOM) j->pool_used[j->placed[i].slot[k]] = 0;
   if (j->placed[i].plen) js_spool_cut(j, j->placed[i].poff, j->placed[i].plen);   /* its patch */
@@ -759,6 +780,7 @@ static JS_OPT int js_put_on(Jar *j, int i, int f) {
   p->vx = 0;
   p->moving = 0;
   p->climb = p->goal = 0;
+  js_v3_moved(j, i);
   return 0;
 }
 
@@ -788,6 +810,7 @@ static JS_OPT void js_carry(Jar *j, int f, int dx) {
       j->placed[k].on_hi = (int16_t)(j->placed[k].on_hi + dx);
       j->placed[k].x += (int32_t)dx * JS_FX;
       j->placed[k].tx = j->placed[k].x;
+      js_v3_moved(j, k);
     }
 }
 
@@ -809,6 +832,8 @@ static JS_OPT void js_move_to(Jar *j, int i, int x, int y) {
       p->home_x = (int16_t)js_clamp(x, lo, hi);
       p->x = p->tx = (int32_t)p->home_x * JS_FX;
       p->lift = (int8_t)h;
+      p->yoff = 0;
+      js_v3_moved(j, i);
       return;
     }
     p->on_id = 0;
@@ -822,6 +847,7 @@ static JS_OPT void js_move_to(Jar *j, int i, int x, int y) {
   p->moving = 0;
   p->lift = (int8_t)JS_LEDGE_H[lv];
   p->climb = p->goal = 0;
+  js_v3_moved(j, i);
   if (p->role == JR_FURNITURE && p->home_x != was) js_carry(j, i, p->home_x - was);
 }
 
@@ -861,9 +887,11 @@ static JS_SMALL int js_near_ledge(int x) {
 
 static JS_OPT int js_item_y(const Jar *j, int i) {     /* its middle, px */
   const JPlaced *p = &j->placed[i];
-  if (p->kind == JK_HANGING) return JS_LID + p->home_y + 8;
+  if (p->kind == JK_HANGING && !p->v3) return JS_LID + p->home_y + 8;
   return JS_SOIL - 8 - p->lift - p->home_y - p->yoff / 16;
 }
+
+#include "apps/jar/jarv3.h"
 
 static JS_OPT int js_zone_of(int x) {
   if (x < 78) return JZ_GARDEN;
@@ -971,7 +999,7 @@ static JS_OPT int js_throw(Jar *j, int i) {
     const JPlaced *q = &j->placed[k];
     int d;
     if (k == i || q->kind == JK_HANGING || (q->tags & JT_BIT(JT_BIG)) || q->level != p->level ||
-        q->yoff || q->vy || q->role != JR_THING)
+        q->yoff || q->vy || q->role != JR_THING || q->v3)   /* a v3 item moves itself */
       continue;
     d = js_abs(q->x / JS_FX - x);
     if (d < bd) { bd = d; best = k; }
@@ -995,7 +1023,8 @@ static JS_OPT void js_shake(Jar *j) {
   j->shake_t = 12;
   for (k = 0; k < j->nplaced; k++) {
     JPlaced *q = &j->placed[k];
-    if (q->kind != JK_HANGING && !q->yoff && !q->vy) q->vy = (int16_t)js_isqrt(2 * 6 * 4 * 16);
+    if (q->v3) js_v3_event(j, k, JE_BUMPED, 0);   /* a v3 item feels it; it moves itself */
+    else if (q->kind != JK_HANGING && !q->yoff && !q->vy) q->vy = (int16_t)js_isqrt(2 * 6 * 4 * 16);
   }
   js_scatter_ants(j, 0, -1);
 }
@@ -1216,6 +1245,7 @@ static JS_OPT int js_item_event(Jar *j, int i, int ev, int arg) {
    * step limit, or a fault): a ? bubble, and the recipe takes this event --
    * the script is tried again at the next one. */
   if (ev == JE_POKE && p->voice && !j->snd && p->voice <= JSD_KINDS) j->snd = p->voice;   /* its voice */
+  if (js_v3_event(j, i, ev, arg)) return 1;    /* a JarScript 3 item: its machine has it */
   if (p->slen) {
     int r = js_script(j, i, ev, arg);
     if (r == JV_DONE) return 1;
@@ -1986,6 +2016,7 @@ static JS_OPT void js_step_item(Jar *j, int i) {
   JPlaced *p = &j->placed[i];
   int lo, hi, spd = js_speed(p);
   if (p->say_t > 0) p->say_t--;
+  if (p->v3) return;                           /* the machine moves it (js_v3_tick) */
   /* in the air */
   if (p->vy || p->yoff) {
     p->yoff = (int16_t)(p->yoff + p->vy);
@@ -2295,6 +2326,7 @@ static JS_OPT void js_step(Jar *j) {
     js_step_jam(j);
   }
   for (k = 0; k < j->nplaced; k++) js_step_item(j, k);
+  if (j->steps % JS_V3_EVERY == 0) js_v3_tick(j);
   if (j->steps % JS_ITEM_TICK == 0) js_item_tick(j);
   js_step_chat(j);
   js_step_air(j);

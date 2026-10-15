@@ -3,7 +3,8 @@
  * 2026-10-09-jar-factory-design.md, "Items").
  *
  * A record is a fixed header, then the signature, the script and the frames,
- * all little-endian, at most JI_MAX bytes -- 912 is the most v1 can be:
+ * all little-endian, at most JI_MAX bytes (1696 with a JarScript 3 script of
+ * 1024 and four frames; a v1/v2 record is at most 1008):
  *
  *   off  size  field
  *     0     1  version (1)
@@ -31,7 +32,8 @@
  *   168    24  the seeding tags, comma-separated ("cosy,soft")
  *   192    12  who gifted it, empty if nobody
  *   204     1  signature length, 0..64 (0 for built-ins)
- *   205     2  script length, 0..256 (0 in phase 1)
+ *   205     2  script length, 0..1024 (0 in phase 1; a v1/v2 script is at most
+ *              256, a JarScript 3 one -- first byte 3 -- at most 1024)
  *   207     1  price / 5, chosen by the server (0: worked out on the device)
  *   208        signature bytes, then script bytes, then frames x 96
  *
@@ -90,7 +92,7 @@
 #define JI_HDR          208
 #define JI_HDR_EXT      224
 enum { JR_THING = 0, JR_FURNITURE, JR_BACKGROUND, JR_KINDS };
-#define JI_MAX          1024
+#define JI_MAX          1728
 #define JI_FRAME_BYTES  96
 #define JI_MAX_FRAMES   4
 #define JI_NAME         12
@@ -102,7 +104,8 @@ enum { JR_THING = 0, JR_FURNITURE, JR_BACKGROUND, JR_KINDS };
 #define JI_WHO          12
 #define JI_TAGS         24
 #define JI_SIG_MAX      64
-#define JI_SCRIPT_MAX   256
+#define JI_SCRIPT_MAX   1024     /* JarScript 3 (apps/jar/jv3.h); 2026-10-14 */
+#define JI_SCRIPT_V2    256      /* what the v2 machine and patches take */
 
 enum { JK_FLOOR = 0, JK_HANGING, JK_CRITTER, JK_KINDS };
 enum { JM_SITS = 0, JM_HOPS, JM_WANDERS, JM_SWAYS, JM_FLOATS, JM_KINDS };

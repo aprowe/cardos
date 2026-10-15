@@ -1,0 +1,13 @@
+seed 1
+ticks 40
+bodies 4
+item 0 960 1792 16 16 1 00000000 1 jv3_fault_0.bin 0 0 0 0 0 0 0 0
+event 3 0 0 0 0
+event 4 0 0 0 0
+event 5 0 0 0 0
+event 6 0 0 0 0
+event 7 0 0 0 0
+event 20 0 6 226 0
+event 25 0 0 0 0
+event 26 0 0 0 0
+event 30 0 6 226 0

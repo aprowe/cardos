@@ -1,0 +1,7 @@
+seed 1
+ticks 30
+bodies 4
+item 0 960 1792 16 16 1 00000000 1 jv3_budget_0.bin 0 0 0 0 0 0 0 0
+item 1 1920 1792 16 16 1 00000000 1 jv3_budget_1.bin 0 0 0 0 0 0 0 0
+event 5 0 0 0 0
+event 6 0 0 0 0

@@ -185,7 +185,7 @@ def fitter_prompt(concept, kind, form, activity, tier):
         "",
         "It must be %s." % jar.KIND_WORDS[kind],
     ]
-    if form and (jarvm.V2 or form == "furniture"):
+    if form and (jar.v2_on() or form == "furniture"):
         lines.append(jar.FORM_WORDS[form])
     lines += [
         "%s (%s)" % (ACTIVITY_WORDS[activity], tier[0]),
@@ -209,10 +209,10 @@ def fitter_prompt(concept, kind, form, activity, tier):
         "- intent: what it does, in plain words, or \"nothing\".",
         "- note: how you adapted the concept, or \"\".",
     ]
-    if jarvm.V2:
+    if jar.v2_on():
         lines += [
             "- traits: 1 to 4 words from: %s -- what it is, for other things to react to."
-            % ", ".join(jarvm.GROUPS["trait"]),
+            % ", ".join(jar.trait_words()),
             "- voice: its sound, one of: %s, or none." % ", ".join(jarvm.GROUPS["sound"]),
         ]
     if form == "furniture":
@@ -246,9 +246,9 @@ def fitter_schema(kind, form, activity):
     }
     req = ["name", "line", "kind", "zone", "travel", "idle", "liveliness", "speed", "bubbles",
            "frames", "look", "intent", "note"]
-    if jarvm.V2:
+    if jar.v2_on():
         p["traits"] = {"type": "array", "minItems": 1, "maxItems": 4,
-                       "items": {"enum": list(jarvm.GROUPS["trait"])}}
+                       "items": {"enum": list(jar.trait_words())}}
         p["voice"] = {"enum": list(jarvm.GROUPS["sound"]) + ["none"]}
         req += ["traits", "voice"]
     if form == "furniture":
@@ -334,7 +334,7 @@ def behaviour_prompt(sheet, kind, activity, nframes, tier):
                               if bubbles else "none (it cannot say anything)"),
         "Its frames: %d (frame 1 is how it usually looks)." % nframes,
     ]
-    if jarvm.V2 and sheet.get("traits"):
+    if jar.v2_on() and sheet.get("traits"):
         lines.append("Its traits: %s." % ", ".join(sheet["traits"]))
     lines += [
         "",
@@ -358,6 +358,58 @@ def behaviour_prompt(sheet, kind, activity, nframes, tier):
     return "\n".join(lines)
 
 
+# ---- JarScript 3 (2026-10-14) ----------------------------------------------------------
+#
+# The code gives each find a script tier (the owner: "different size scripts,
+# 0 for idle objects, 512, or 1024 based on complexity"): a still thing that
+# is not alive has none and skips the behaviour writer; any other non-critter
+# gets a small one; a critter a full one. The writer is told its limit and the
+# compiler holds it to it.
+
+SCRIPT_SRC_V3 = 6000                  # characters of source; the bytes are what is limited
+
+
+def script_tier(kind, form, activity):
+    if is_critter(kind, form):
+        return "full"
+    if activity == "still":
+        return "none"
+    return "small"
+
+
+def behaviour_prompt_v3(sheet, kind, activity, nframes, stier, form=None):
+    from . import jarvm3
+    lines = [
+        "Write the behaviour of a thing in a cosy game set inside a glass jar, in JarScript 3.",
+        "It is %s, called %s: %s." % (jar.KIND_WORDS[kind], sheet["name"], sheet["line"]),
+        "What it does: %s" % sheet["intent"],
+        "It likes to be at %s; it %s." % (sheet["zone"],
+                                          MOTION_SAID["travel"][sheet["travel"]]),
+        "Its frames: %d, 16x16 (frame 1 is how it usually looks)%s." % (
+            nframes, ", drawn at twice the size" if form in ("big", "scenery") else ""),
+    ]
+    if sheet.get("traits"):
+        lines.append("Its traits: %s." % ", ".join(sheet["traits"]))
+    lines += [
+        "",
+        BEHAVIOUR_RULE[activity],
+        "",
+        "- script: the whole script. It must compile to at most %d bytes (about %d lines); "
+        "smaller is better. React to traits, never to names. Keep it charming and friendly "
+        "for all ages." % (jarvm3.tier_limit(stier), jarvm3.tier_limit(stier) // 12),
+        "",
+        "The language:",
+        jarvm3.LANGUAGE_GUIDE_V3,
+    ]
+    return "\n".join(lines)
+
+
+def behaviour_schema_v3():
+    return {"type": "object", "required": ["script"], "additionalProperties": False,
+            "properties": {"script": {"type": "string", "minLength": 1,
+                                      "maxLength": SCRIPT_SRC_V3}}}
+
+
 def behaviour_schema():
     habit = jar.item_schema()["properties"]["habits"]
     return {"type": "object", "required": ["habits", "script"], "additionalProperties": False,
@@ -373,8 +425,9 @@ def _ask(chat, prompt, schema, person, effort, st):
                          cwd=shopkeep.home())
 
 
-def combine(sheet, art, beh, kind, form):
-    """The three parts as the dict check_item and to_item take."""
+def combine(sheet, art, beh, kind, form, stier=None):
+    """The three parts as the dict check_item and to_item take. `stier`: a
+    v3 item's script tier (none, small, full); None, v1/v2."""
     raw = {
         "name": sheet["name"], "line": sheet["line"], "kind": kind,
         "movement": jar.move_fallback(sheet["travel"], sheet["idle"]),
@@ -385,7 +438,9 @@ def combine(sheet, art, beh, kind, form):
     }
     if (beh.get("script") or "").strip():
         raw["script"] = beh["script"]
-    if jarvm.V2:
+    if stier:
+        raw["lang"], raw["tier"] = 3, stier
+    if jar.v2_on():
         raw["traits"] = list(sheet.get("traits") or [])
         raw["voice"] = sheet.get("voice", "none")
     if form == "furniture":
@@ -398,6 +453,14 @@ def _script_error(raw, form):
     if not src:
         return None
     nframes = len(raw["frames"]) - (1 if form == "part" and len(raw["frames"]) >= 2 else 0)
+    if raw.get("lang") == 3:
+        from . import jarvm3
+        try:
+            jarvm3.prepare_script(src, nframes, tier=raw.get("tier", "full"),
+                                  scale=2 if form in ("big", "scenery") else 1)
+            return None
+        except jarvm3.ScriptError as e:
+            return "the script does not work: %s" % e
     try:
         jarvm.prepare_script(src, nbub=len(raw["bubbles"]), nframes=nframes)
         return None
@@ -406,7 +469,7 @@ def _script_error(raw, form):
 
 
 def make_find(chat, person, kind, tier, form, activity, search, earlier, taken, st, log=None,
-              concept=None, base=None):
+              concept=None, base=None, stier=None):
     """One find through the stages: (raw, concept, sheet). Drop if it comes
     to nothing. With a `concept` the DM is skipped (a remake: the old idea
     and what was asked for), and `base` is the old picture for the artist."""
@@ -431,6 +494,11 @@ def make_find(chat, person, kind, tier, form, activity, search, earlier, taken, 
         return _ask(chat, p, artist_schema(sheet["frames"], form), person, tier[2], st)
 
     def behave(extra=""):
+        if stier == "none":
+            return {"habits": [], "script": ""}         # an idle thing: its motion parts alone
+        if stier:
+            p = behaviour_prompt_v3(sheet, kind, activity, sheet["frames"], stier, form) + extra
+            return dict(_ask(chat, p, behaviour_schema_v3(), person, tier[2], st), habits=[])
         p = behaviour_prompt(sheet, kind, activity, sheet["frames"], tier) + extra
         return _ask(chat, p, behaviour_schema(), person, tier[2], st)
 
@@ -463,7 +531,7 @@ def make_find(chat, person, kind, tier, form, activity, search, earlier, taken, 
     art, beh = got["art"], got["beh"]
     redone = False
     while True:
-        raw = combine(sheet, art, beh, kind, form)
+        raw = combine(sheet, art, beh, kind, form, stier)
         why = jar.check_item(raw, taken, form, activity)
         parts = jar.check_parts(raw, taken, activity) if why else \
             {"sheet": [], "art": [], "behaviour": []}
@@ -532,14 +600,15 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
             break
         kind = jar.KIND_PLAN[(kind_at + k) % len(jar.KIND_PLAN)]
         tier = jar.pick_tier(rng, req.get("bribe", 0) if req.get("finds") else 0)
-        form = force_form or (jar.roll_form(kind, rng) if jarvm.V2 else None)
+        form = force_form or (jar.roll_form(kind, rng) if jar.v2_on() else None)
         activity = jar.roll_activity(rng)
         if form in ("scenery", "furniture") and activity in ("ambles", "restless"):
             activity = "still"                          # a backdrop or a shelf does not wander
         taken = set(owned) | {n.strip().lower() for n in names}
+        stier = script_tier(kind, form, activity) if jar.V3 else None
         try:
             raw, concept, sheet = make_find(chat, person, kind, tier, form, activity, search,
-                                            concepts, taken, st, log)
+                                            concepts, taken, st, log, stier=stier)
         except Drop as e:
             fails += 1
             last = e
@@ -558,9 +627,9 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
         if person:
             st.put(jar.NS, "own/%d" % item_id, person.encode())
         records.append(rec)
-        say("%s: %s %s %s, %d coins, %s/%s/%s" % (
+        say("%s: %s %s %s, %d coins, %s/%s/%s%s" % (
             raw["name"], tier[0], activity, kind, tier[1], raw["travel"], raw["idle"],
-            raw["liveliness"]))
+            raw["liveliness"], (", v3 %s" % stier) if stier else ""))
         if on_item:
             on_item(len(records) - 1, rec)
     if not records:
@@ -607,8 +676,10 @@ def remake(chat, person, item_id, how, verb, store=None, log=None):
     rows = ["".join(str(v) for v in jar.unpack_frame(old["frames"][0])[r * 16:(r + 1) * 16])
             for r in range(16)]
     tier = ("rare", old["price"] or 200, "high", jar.TIERS[2][4])
+    stier = script_tier(kind, form, activity) if jar.V3 else None   # a remade v2 item comes back v3
     raw, concept, sheet = make_find(chat, person, kind, tier, form, activity, "", [], set(), st,
-                                    log, concept=concept, base={"palette": pal, "frames": [rows]})
+                                    log, concept=concept, base={"palette": pal, "frames": [rows]},
+                                    stier=stier)
     it = jar.to_item(raw, item_id, time.time(), old.get("tags") or "", log, old["price"], form)
     st.put(jar.NS, "concept/%d" % item_id, json.dumps(dict(was, concept=concept,
                                                            activity=activity,

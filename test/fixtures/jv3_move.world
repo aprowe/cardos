@@ -1,0 +1,5 @@
+seed 99
+ticks 520
+bodies 4
+item 0 1600 1792 16 16 1 08800000 1 jv3_move_0.bin 0 0 0 0 0 0 0 0
+item 1 480 1792 16 16 1 00120000 2 jv3_move_1.bin 0 0 0 0 0 0 0 0

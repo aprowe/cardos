@@ -101,7 +101,7 @@ void test_jarvm_table_matches_the_jar(void) {
   CHECK_EQ(k, JV_NOPS);
   CHECK_EQ(JV_NACTIONS, JA_KINDS);
   CHECK_EQ(JV_NSENSES, JSN_KINDS);
-  CHECK_EQ(JI_SCRIPT_MAX, 256);
+  CHECK_EQ(JI_SCRIPT_V2, 256);                 /* v3's records may carry 1024 */
 }
 
 /* ---- the machine ----------------------------------------------------------- */

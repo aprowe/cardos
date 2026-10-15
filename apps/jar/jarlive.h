@@ -36,7 +36,7 @@ static void lv_patch_path(char *out, int n, uint32_t item) {
 
 /* Item i (just placed) gets its patch from the card, if it has one. */
 static void lv_patch_load(int i) {
-  uint8_t code[JI_SCRIPT_MAX];
+  uint8_t code[JI_SCRIPT_V2];
   char path[48];
   int fd, n;
   if (i < 0 || i >= J.nplaced) return;
@@ -51,7 +51,7 @@ static void lv_patch_load(int i) {
 /* One "patch N ITEM NEW CODE64 SIG64" line: checked against the server's
  * key, kept on the card, put to work if the item is in the jar. */
 static void lv_patch_line(const char *p, const uint8_t *pub) {
-  static uint8_t msg[9 + 8 + JI_SCRIPT_MAX];
+  static uint8_t msg[9 + 8 + JI_SCRIPT_V2];
   uint8_t sig[64];
   char word[360], path[48];
   const char *q = p + 6;
@@ -62,7 +62,7 @@ static void lv_patch_line(const char *p, const uint8_t *pub) {
   nw = str_uint(&q); while (*q == ' ') q++;
   for (k = 0; *q && *q != ' ' && *q != '\n' && k < (int)sizeof word - 1; k++) word[k] = *q++;
   word[k] = 0;
-  len = b64_decode(word, msg + 17, JI_SCRIPT_MAX);
+  len = b64_decode(word, msg + 17, JI_SCRIPT_V2);
   while (*q == ' ') q++;
   for (k = 0; *q && *q != ' ' && *q != '\n' && k < (int)sizeof word - 1; k++) word[k] = *q++;
   word[k] = 0;
@@ -325,6 +325,8 @@ static void lv_pose(int i, LvPose *o) {
   o->flip = p->flip;
   o->frame = p->cur % (p->nframes ? p->nframes : 1);
   if (!p->given) return;
+  if (p->v3 && (p->idle == JID_FLICKER || p->idle == JID_BLINK))
+    return;                                   /* a JarScript 3 item's script chooses its frames */
   v = lv_tri(t, per, a);
   switch (p->idle) {
   case JID_SWAY: o->shear = v; break;

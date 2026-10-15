@@ -1269,6 +1269,34 @@ the old contacts.
 - **Jar keys**: Tab (or j) is the next jar, 1-9 jumps to one (1 the
   factory), bars or no bars; zoomed, Tab still follows a critter.
 
+**JarScript 3** (2026-10-14, branch `jarscript3`; spec
+docs/superpowers/specs/2026-10-14-jarscript3-design.md). The sandbox's
+language (tools/jarsandbox) on the device: states that take time (`wait`,
+`move to`, `walk`, `hop`, `play once`), physics, perches, signals by name,
+`find(trait)`, 12.4 fixed point, 20 ticks a second.
+- `apps/jar/jarvm3.def` is the one table. `apps/jar/jv3.h` (C) and
+  `server/jar/jarvm3.py` (compiler, the same machine, `simulate`, the guide)
+  must agree byte for byte: `tools/make_jarvm3_fixtures.py` writes
+  test/fixtures/jv3_*, `test/test_jv3.c` replays them.
+- A script's first byte says its language: 1 is v1/v2, 3 is v3. The v2
+  machine is untouched and never sees a v3 script.
+- Records carry up to 1024 bytes of script (`JI_SCRIPT_MAX`;
+  `JI_SCRIPT_V2` 256 for v2 and patches), `JI_MAX` 1728, four frames.
+- The code rolls a **script tier**: none (still non-critters), small (512),
+  full (1024, critters).
+- On the device, `apps/jar/jarv3.h` runs v3 items in **one big-mode block**
+  (16 KB, taken at launch). An item that does not fit is placed on its
+  recipe, never refused.
+- Measured: 260 us a tick for 24 items; 776 us for 24 copies of the worst
+  scripts; 252 bytes of runtime an item.
+- **Off by default**: `CARDOS_JAR_V3=1` makes new items v3 and retires the
+  pool's v2 items (kept, never stocked).
+- `python -m server.jar v3convert [--dry] [--id N]` rewrites held items in
+  v3, keeping each original in `v2rec/ID`. `v3undo` puts them back. Both send
+  the owner `tx remake ID`.
+- A device needs this jar.capp before any v3 record reaches it: an older one
+  refuses a script over 256 bytes.
+
 **More jars** (2026-10-11, v0.21.0). `JU_JAR` in Upgrades buys up to
 `JS_MAX_JARS` (3) extra jars: empty glass, no factory. `J.jar_at` is the
 jar on screen (0 the factory), saved as `jars N AT`. One wallet: coins,

@@ -106,8 +106,9 @@ void test_jaritem_size_limits(void) {
   fill_item(&a, 4);
   a.sig_len = JI_SIG_MAX;
   a.script_len = JI_SCRIPT_MAX;
-  /* the biggest a v1 record can be is under 1 KB */
-  CHECK_EQ(jitem_size(&a), JI_HDR + 64 + 256 + 4 * 96);
+  /* the biggest record: a JarScript 3 script of 1 KB and four frames
+   * (a v1/v2 one is at most 256 + the rest: 912) */
+  CHECK_EQ(jitem_size(&a), JI_HDR + 64 + 1024 + 4 * 96);
   CHECK(jitem_size(&a) <= JI_MAX);
   CHECK_EQ(jitem_encode(&a, buf, sizeof buf), jitem_size(&a));
   CHECK_EQ(jitem_encode(&a, buf, jitem_size(&a) - 1), -1);   /* does not fit */

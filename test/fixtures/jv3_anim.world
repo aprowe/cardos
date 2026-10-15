@@ -1,0 +1,5 @@
+seed 1
+ticks 140
+bodies 4
+item 0 960 1792 16 16 1 00000000 4 jv3_anim_0.bin 0 0 0 0 0 0 0 0
+event 90 0 0 0 0

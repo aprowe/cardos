@@ -1,0 +1,8 @@
+seed 7
+ticks 140
+bodies 4
+item 0 1600 1792 16 16 1 00000000 1 jv3_states_0.bin 0 0 0 0 0 0 0 0
+event 40 0 0 0 0
+event 60 0 11 0 0
+event 60 0 6 212 0
+event 100 0 0 0 0

@@ -125,7 +125,7 @@ static JV_OPT int16_t jv_w(int32_t v) { return (int16_t)(uint16_t)(v & 0xFFFF); 
 /* Where the code starts, or -1 if the header is not one this machine reads. */
 static JV_OPT int jv_code0(const uint8_t *s, int n) {
   int c;
-  if (n < 2 || n > JI_SCRIPT_MAX || s[0] != JV_FORMAT || s[1] > JV_MAX_ENTRIES) return -1;
+  if (n < 2 || n > JI_SCRIPT_V2 || s[0] != JV_FORMAT || s[1] > JV_MAX_ENTRIES) return -1;
   c = 2 + 3 * s[1];
   return c <= n ? c : -1;
 }
@@ -133,7 +133,7 @@ static JV_OPT int jv_code0(const uint8_t *s, int n) {
 /* The whole script, before it is used. 0, or JV_IGNORE. */
 #define JV_AT(t) ((t) < n && (at[(t) >> 3] >> ((t) & 7) & 1))
 static JV_OPT int jv_check(const uint8_t *s, int n) {
-  uint8_t at[JI_SCRIPT_MAX / 8];           /* a bit where each instruction starts */
+  uint8_t at[JI_SCRIPT_V2 / 8];           /* a bit where each instruction starts */
   int c = jv_code0(s, n), pc, e;
   if (c < 0) return JV_IGNORE;
   ji_zero(at, (int)sizeof at);

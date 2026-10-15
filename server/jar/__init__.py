@@ -139,11 +139,11 @@ def _ext(it):
     return bool(it.get("role") or it.get("scale", 1) > 1 or it.get("surface") or it.get("part")
                 or it.get("voice") or it.get("pdx") or it.get("pdy")
                 or it.get("travel") or it.get("idle") or it.get("lively"))
-REC_MAX = 1024
+REC_MAX = 1728                # a JarScript 3 script of 1024 and four frames (2026-10-14)
 FRAME_BYTES = 96
 MAX_FRAMES = 4
 NAME_LEN, LINE_LEN, BUB_LEN, MAX_BUB, MAX_HAB, MEM, WHO_LEN, TAGS_LEN = 12, 32, 12, 4, 3, 8, 12, 24
-SIG_MAX, SCRIPT_MAX = 64, 256
+SIG_MAX, SCRIPT_MAX = 64, 1024    # a v1/v2 script is at most 256 (jarvm.py refuses more)
 F_GIFT, F_BUILTIN = 0x01, 0x02
 
 # where each field is: (offset, size)
@@ -1001,7 +1001,10 @@ def check_item(raw, nameset=(), form=None, activity=None):
     sprites, the text filter, the recipe's arguments, names already used.
     With an `activity` it is a staged item: its motion parts are checked
     against MOTION_RULES, and one that reacts must react to something."""
-    errs = ask.validate(raw, item_schema(form, motion=activity is not None))
+    shaped = raw
+    if raw.get("lang") == 3:                    # a v3 script is the compiler's to check
+        shaped = {k: v for k, v in raw.items() if k not in ("lang", "tier", "script")}
+    errs = ask.validate(shaped, item_schema(form, motion=activity is not None))
     if errs:
         return errs
     parts = check_parts(raw, nameset, activity)
@@ -1089,19 +1092,54 @@ def _check_habits(raw):
     return why
 
 
+# JarScript 3 (2026-10-14, docs/superpowers/specs/2026-10-14-jarscript3-design.md):
+# with CARDOS_JAR_V3=1 new items carry a v3 script (server/jar/jarvm3.py) at
+# the tier the code rolled. Off, everything is made exactly as before. It
+# needs devices with the jar.capp that knows v3: an older one refuses a
+# record whose script is over 256 bytes outright.
+V3 = os.environ.get("CARDOS_JAR_V3") == "1"
+
+
+def v2_on():
+    """v2's forms, traits and voices: on with v2, and always with v3."""
+    return jarvm.V2 or V3
+
+
+def trait_words():
+    if V3:
+        from . import jarvm3
+        return jarvm3.GROUPS["trait"]
+    return jarvm.GROUPS["trait"]
+
+
+def script_frames(raw, form):
+    nframes = len(raw.get("frames") or [])
+    if form == "part" and nframes >= 2:
+        nframes -= 1                                    # the last frame is the part, not a pose
+    return nframes
+
+
 def compile_script(raw, log=None, form=None):
     """An item's script source -> its bytecode, or b"" when it has none or it
     does not compile and live through a simulated day: the item then ships
     with its recipe alone, which always works -- a failed script is not worth
-    losing the item over."""
+    losing the item over. A v3 item (raw["lang"] 3) is compiled by jarvm3 at
+    its tier."""
     src = (raw.get("script") or "").strip()
     if not src:
         return b""
+    if raw.get("lang") == 3:
+        from . import jarvm3
+        try:
+            return jarvm3.prepare_script(src, script_frames(raw, form), tier=raw.get("tier", "full"),
+                                         scale=2 if form in ("big", "scenery") else 1)
+        except jarvm3.ScriptError as e:
+            if log:
+                log("v3 script of %r dropped: %s" % (raw.get("name"), e))
+            return b""
     try:
-        nframes = len(raw.get("frames") or [])
-        if form == "part" and nframes >= 2:
-            nframes -= 1                                # the last frame is the part, not a pose
-        return jarvm.prepare_script(src, nbub=len(raw.get("bubbles") or []), nframes=nframes)
+        return jarvm.prepare_script(src, nbub=len(raw.get("bubbles") or []),
+                                    nframes=script_frames(raw, form))
     except jarvm.ScriptError as e:
         if log:
             log("script of %r dropped: %s" % (raw.get("name"), e))
@@ -1113,7 +1151,7 @@ def traits_tags(traits):
     out = ""
     for w in traits or []:
         w = str(w).strip().lower()
-        if w in jarvm.GROUPS["trait"] and w not in out.split(","):
+        if w in trait_words() and w not in out.split(","):
             nxt = w if not out else out + "," + w
             if len(nxt) <= TAGS_LEN:
                 out = nxt
@@ -1126,7 +1164,7 @@ def to_item(raw, item_id, made, tags, log=None, price=0, form=None):
     ext = {}
     if form == "furniture":                             # Wren's furniture is furniture, v2 or not
         ext.update(role=1, surface=max(0, min(13, int(raw.get("surface", 4)))))
-    if jarvm.V2:
+    if v2_on():
         tags = traits_tags(raw.get("traits")) or tags
         voice = raw.get("voice")
         if voice and voice != "none":
@@ -1292,6 +1330,22 @@ def _words(s):
     return set(re.findall(r"[a-z]+", (s or "").lower()))
 
 
+def is_v3(rec):
+    """Does this record (bytes) carry a JarScript 3 script (its first byte 3)?"""
+    if not rec or len(rec) < HDR:
+        return False
+    slen = rec[205] | rec[206] << 8
+    at = rec[1] + rec[204]
+    return slen > 0 and at < len(rec) and rec[at] == 3
+
+
+def retired(rec):
+    """With v3 on, a pool item without a v3 script is never stocked again
+    (2026-10-14, the owner: "deprecate the pool of jarscript 2 items"). It
+    stays in the pool, so turning v3 off brings it back."""
+    return V3 and not is_v3(rec)
+
+
 def pick_from_pool(person, req, n, store=None, rng=None, skip=()):
     """Up to n pool items for `person`'s shop, taken out of the pool: a random
     mix, never a name they own."""
@@ -1301,7 +1355,7 @@ def pick_from_pool(person, req, n, store=None, rng=None, skip=()):
     scored = []
     for i in pool_ids(st):
         rec = st.get(NS, "rec/%d" % i)
-        if rec is None:
+        if rec is None or retired(rec):
             continue
         try:
             it = decode(rec)
@@ -1499,7 +1553,8 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
                       store)
 
     try:
-        pool = [(i, ) + _pool_view(store, i) for i in pool_ids(store) if i not in passed]
+        pool = [(i, ) + _pool_view(store, i) for i in pool_ids(store)
+                if i not in passed and not retired(store.get(NS, "rec/%d" % i))]
         rng = random.Random()
         rng.shuffle(pool)
         chapter = shopkeep.maybe_chapter(chat, store, log=say_log)
@@ -1559,6 +1614,10 @@ def _note_bought(person, ids, st):
         rec = st.get(NS, "rec/%d" % i)
         if rec is not None:
             shopkeep.note("%s bought %s." % (who, _item_note(rec)), st)
+        if st.get(NS, "v2rec/%d" % i) is not None:
+            # converted to v3 while on the shelf (server/jar/v3convert.py): the
+            # device bought its cached copy, so it fetches the record as it is
+            shopkeep.tx_add(person, "remake", i, st)
 
 
 def settle_bought(chat, person, ids, store=None):
@@ -2320,14 +2379,35 @@ ROUTES = [
 def main(argv=None):
     """python -m server.jar seed N [--claude-cli PATH]: N new items straight
     into the pool (CARDOS_STATE is the store, as for the server). `pool`
-    lists it; `ban N`, `unban N` and `bans` are the bans."""
+    lists it; `ban N`, `unban N` and `bans` are the bans. `v3convert [--dry]
+    [--id N] [--limit N]` rewrites what people hold in JarScript 3 (keeping
+    each original), `v3undo [--id N]` puts the originals back
+    (server/jar/v3convert.py)."""
     import argparse
     from ..chat import ChatService
     ap = argparse.ArgumentParser(prog="python -m server.jar")
-    ap.add_argument("what", choices=["seed", "pool", "ban", "unban", "bans"])
+    ap.add_argument("what", choices=["seed", "pool", "ban", "unban", "bans", "v3convert",
+                                     "v3undo"])
     ap.add_argument("n", type=int, nargs="?", default=20)
     ap.add_argument("--claude-cli", default=None)
+    ap.add_argument("--dry", action="store_true")
+    ap.add_argument("--id", type=int, action="append")
+    ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args(argv)
+    if args.what == "v3undo":
+        from . import v3convert
+        print("%d put back" % v3convert.undo(args.id))
+        return
+    if args.what == "v3convert":
+        from . import v3convert
+        chat = None if args.dry else (ChatService(claude=args.claude_cli) if args.claude_cli
+                                      else ChatService())
+        out = v3convert.convert(chat, args.id, dry=args.dry, limit=args.limit,
+                                log=lambda s: print(s, flush=True))
+        print("%d %s, %d failed, %d skipped" % (len(out["done"]),
+                                               "would be converted" if args.dry else "converted",
+                                               len(out["failed"]), out["skipped"]))
+        return
     if args.what in ("ban", "unban", "bans"):
         st = kv.store()
         if args.what == "ban":
