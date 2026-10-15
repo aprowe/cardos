@@ -11,6 +11,49 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.24.0 -- 2026-10-15
+
+Firmware and apps (`update all`), and the server. Its headline is
+**JarScript 3**, the jar's new item language -- a version of the language,
+not of CardOS.
+
+- **JarScript 3.** Items can now have states that take time (`wait`, `move
+  to`, `walk`, `hop`, `play once`), physics, perches, named signals,
+  `find(trait)` and fractions, at 20 ticks a second. A v3 item runs in one
+  block of big-mode heap, taken only once a v3 item is placed; one that does
+  not fit runs its recipe. v2 items run exactly as before. On the server,
+  `CARDOS_JAR_V3=1` makes new items v3, at a script size the code chooses
+  (none, 512 or 1024 bytes), and stops stocking the pool's v2 items.
+  `python -m server.jar v3convert` rewrites held items in v3, keeping every
+  original (`v3undo` puts them back). Spec:
+  docs/superpowers/specs/2026-10-14-jarscript3-design.md.
+- **Tibbs's story moves in 4-hour chapters**, only while someone visits, and
+  the shop's finds come from them. Finds are made ahead once a stock has been
+  looked through. Items can be banned, and one passed over twice is banned by
+  itself. No places or examples in the prompts that make items; critters
+  are alive, not ornaments.
+- **Jar keys**: Tab is the next jar, 1-9 jumps to one.
+- **Talking to Pip, Bramble, Wren or Tibbs tells the server what was
+  bought**, so a thing bought an hour ago can be dealt on.
+- **Notifications from the server are kept**, so "Update available" from a
+  deploy reaches the device.
+- **Music is an MP3 player** dressed as an iPod nano; the kernel decodes MP3.
+- **Chat sends dog emojis**: Arty and Marcy, eight moods each (Tab).
+- **Arrows first where text only filters a list** (the palette, search,
+  Chat's picker): plain ; , . / are arrows there, fn types them.
+- **fn-h is one help panel in tabs; fn-space is an action palette.**
+- **Wikipedia**: search, read and print articles.
+- **Circuit**: beats for a Novation Circuit, written by Claude, over MIDI.
+- **Todo** claims a task for a day by its due date; Today shows what is
+  claimed. Toggl targets are edited in the app.
+- **Calendar** drops an edit Google refuses, instead of failing every sync.
+- **Launcher** search scrolls and leads with recent apps; boot goes to the
+  last app.
+- Removed: Forklift, Pinball, the IDE, Web and Share (tag
+  `before-app-removal`).
+- Apps with several files live in folders; the server's Jar Factory is the
+  package `server/jar/`.
+
 ## v0.23.0 -- 2026-10-11
 
 Jar Factory (`update apps`) and the server.
