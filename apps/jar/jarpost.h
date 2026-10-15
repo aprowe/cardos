@@ -307,7 +307,7 @@ static void open_mail(int i) {
     n = jst_read_rec(api, path, &IO);
     if (n < 0) { say("That parcel is missing"); return; }
     if (!js_owns(&J, e->item)) {
-      if (js_own(&J, e->item)) { say("My Stuff is full: 64"); return; }
+      if (js_own(&J, e->item)) { say("My Stuff is full"); return; }
       jst_item_path(api, e->item, ip, sizeof ip);
       if (jst_put(api, ip, IO.raw, n) != 0) { J.nowned--; say("Could not write to the card"); return; }
     }

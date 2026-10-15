@@ -512,9 +512,11 @@ DEAL_RULES = (
     "end your answer with one more line, exactly: DEAL: {...} with any of \"take\": coins "
     "they hand you, \"give\": coins you hand them, \"trade_in\": [ids of their things they "
     "hand you], \"commission\": {\"ask\": what you will go out and look for, \"finds\": "
-    "how many, 4 to 8}. Coins handed over with a commission are a bribe: the more, the better "
-    "what you come back with. Never put in a deal what they did not agree to, never take more "
-    "than they have, and say nothing about the DEAL line itself.]")
+    "how many, 4 to 8}. You go out every four hours; asked to look for something without "
+    "coins, you keep it in mind for that next trip. Coins handed over with a commission send "
+    "you out at once, and they are a bribe: the more, the better what you come back with. "
+    "Never put in a deal what they did not agree to, never take more than they have, and say "
+    "nothing about the DEAL line itself.]")
 
 
 def talk_prompt(person, said, friends=(), context="", who="tibbs"):
@@ -748,7 +750,7 @@ def chapter_schema():
                                        "pattern": "^[ -~\n]+$"}}}
 
 
-def chapter_prompt(place, someone, something, shop=(), last="", opening=""):
+def chapter_prompt(place, someone, something, shop=(), last="", opening="", asked=()):
     lines = []
     if opening:
         lines += ["[Your story, as it began:]", opening, ""]
@@ -757,6 +759,10 @@ def chapter_prompt(place, someone, something, shop=(), last="", opening=""):
     if shop:
         lines.append("[In the shop since then -- these happened; roll them into the chapter:]")
         lines += ["- " + x for x in shop]
+        lines.append("")
+    if asked:
+        lines.append("[Asked of you since your last trip -- you kept it in mind on this one:]")
+        lines += ["- %s asked you to look for: %s" % (display(p), a) for p, a in asked]
         lines.append("")
     lines.append(
         "[Four hours have gone by. Write the next chapter of your story, in your own voice, "
@@ -768,6 +774,44 @@ def chapter_prompt(place, someone, something, shop=(), last="", opening=""):
         "in anyone's shop. Answer with only JSON: {\"chapter\": \"...\"}]"
         % (CHAPTER_LEN, place, someone, something))
     return "\n".join(lines)
+
+
+# ---- requests: what someone asked him to look for, without paying -----------------------
+#
+# The owner (2026-10-15): "if you ask him to get something, he keeps that in
+# mind on his next journey that departs every 4 hours. unless you pay him to
+# start immediately and refresh the items." An unpaid commission is kept
+# here, one per person (the latest); the next chapter is told of every one,
+# and that person's next stock is made around theirs (jar._make_day takes it).
+
+REQUEST_TTL = 7 * 86400
+
+
+def request_put(person, ask, store=None):
+    _put(store or kv.store(), "tibbs/ask/" + person, {"ask": ask, "at": time.time()})
+
+
+def request_take(person, store=None):
+    """Their request, gone once taken; None if there is none."""
+    st = store or kv.store()
+    with _meta:
+        r = _get(st, "tibbs/ask/" + person, None)
+        if r is not None:
+            _put(st, "tibbs/ask/" + person, None)
+    if not r or time.time() - r.get("at", 0) > REQUEST_TTL:
+        return None
+    return r.get("ask") or None
+
+
+def requests(store=None):
+    """[(person, ask)] waiting for his next trip, oldest first."""
+    st = store or kv.store()
+    out = []
+    for key, _s, _e in st.list(NS, "tibbs/ask/", limit=1000):
+        r = _get(st, key, None)
+        if r and r.get("ask") and time.time() - r.get("at", 0) <= REQUEST_TTL:
+            out.append((r.get("at", 0), key[len("tibbs/ask/"):], r["ask"]))
+    return [(p, a) for _t, p, a in sorted(out)]
 
 
 def maybe_chapter(chat, store=None, now=None, rng=None, log=None):
@@ -790,7 +834,8 @@ def maybe_chapter(chat, store=None, now=None, rng=None, log=None):
         initials = [roll_initials(rng) for _ in range(3)]
         since = ch[-1]["t"] if ch else 0
         shop = shoplog_since(st, since)[-SHOP_LINES_MAX:]
-        prompt = chapter_prompt(*initials, shop=shop, last=ch[-1]["text"] if ch else "",
+        prompt = chapter_prompt(*initials, shop=shop, asked=requests(st),
+                                last=ch[-1]["text"] if ch else "",
                                 opening=intro())
         text = ""
         for _ in range(2):

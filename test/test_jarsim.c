@@ -1129,3 +1129,29 @@ void test_jarsim_extra_jars(void) {
   CHECK_EQ((int)J.njars, JS_MAX_JARS);
   CHECK_EQ(js_up_cost(&J, JU_JAR), -1);
 }
+
+/* My Stuff holds 128 (2026-10-15: at 64 a delivery quietly lost Wren's
+ * furniture), and a save with all of it, long ids and a full jar, still fits
+ * the 2560-byte buffer the app saves into -- and reads back whole. */
+void test_jarsim_a_full_my_stuff_saves_and_reads_back(void) {
+  static Jar back;
+  static char buf[2560];
+  static JItem it;
+  int i, n;
+  fresh(5);
+  for (i = 0; i < JS_MAX_OWNED; i++) CHECK_EQ(js_own(&J, 1000000u + (uint32_t)i * 7919u), 0);
+  CHECK_EQ(js_own(&J, 42), -1);                    /* full is full */
+  for (i = 0; i < JS_MAX_PLACED; i++) {
+    mk_item(&it, 1000000u + (uint32_t)i * 7919u, JK_FLOOR, JM_SITS);
+    js_place(&J, &it, 20 + i * 8, 0);
+  }
+  n = js_save(&J, buf, (int)sizeof buf);
+  printf("    a full save: %d bytes of %d\n", n, (int)sizeof buf);
+  CHECK(n > 0 && n < (int)sizeof buf - 1);
+  memset(&back, 0, sizeof back);
+  js_init(&back, 5);
+  CHECK_EQ(js_load(&back, buf), 0);
+  CHECK_EQ(back.nowned, JS_MAX_OWNED);
+  CHECK_EQ(back.owned[JS_MAX_OWNED - 1], J.owned[JS_MAX_OWNED - 1]);
+  CHECK_EQ(back.nwant, J.nplaced);                 /* as many as the frame pool let in */
+}

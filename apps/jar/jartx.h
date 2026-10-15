@@ -106,7 +106,13 @@ static JTX_OPT int jtx_install(const JTx *t, const uint8_t *raw, int n, const JI
   jst_item_path(api, it->id, path, sizeof path);
   if (jst_put(api, path, raw, n) != 0) return -1;
   if (str_same(t->op, "give")) {
-    js_own(&J, it->id);
+    /* My Stuff full: the record stays on the card (the jar takes it into My
+     * Stuff at its next start, js_reown) and the deal waits -- before
+     * 2026-10-15 it was marked done and the thing was never seen */
+    if (js_own(&J, it->id) != 0) {
+      api->fmt(msg, (size_t)mn, "My Stuff is full: %s waits", it->name);
+      return -1;
+    }
     api->fmt(msg, (size_t)mn, "%s is yours: My Stuff", it->name);
   } else {
     /* what it learned about its neighbours was for the old script */

@@ -1572,9 +1572,14 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
             rec = store.get(NS, "rec/%d" % i)
             if rec is not None:
                 show(rec)
-        # A commission is made to order, from his errand; otherwise the
-        # finds made ahead come first, and the rest from his latest chapter.
-        made = [] if req.get("finds") else deck_take(person, n_new, store)
+        # A commission is made to order, from his errand; a request kept for
+        # this trip (unpaid) is made around, fresh; otherwise the finds made
+        # ahead come first, and the rest from his latest chapter.
+        asked = None if req.get("finds") else shopkeep.request_take(person, store)
+        if asked:
+            search = "%s\n\n%s asked you to look for: %s" % (
+                search or chapter, shopkeep.display(person), asked)
+        made = [] if req.get("finds") or asked else deck_take(person, n_new, store)
         for i in made:
             on_item(0, store.get(NS, "rec/%d" % i))
         records = []
@@ -1923,7 +1928,13 @@ def make_deal(person, deal, coins=None, store=None, dry=False):
         shopkeep.tx_add(person, "pay", take, st)
     if give:
         shopkeep.tx_add(person, "get", give, st)
-    if com:
+    if com and not take:
+        # Asked, not paid: he keeps it in mind for his next trip (every four
+        # hours, when someone visits), not a fresh stock now (2026-10-15).
+        ask_ = wire.flat(str(com.get("ask") or ""), ASK_LEN, ascii=True).replace('"', "'")
+        if ask_ and clean(ask_):
+            shopkeep.request_put(person, ask_, st)
+    elif com:
         ask_ = wire.flat(str(com.get("ask") or ""), ASK_LEN, ascii=True).replace('"', "'")
         try:
             finds = int(com.get("finds") or STOCK_SIZE)
@@ -1959,7 +1970,10 @@ def deal_words(person, deal, store=None):
     com = deal.get("commission") if isinstance(deal.get("commission"), dict) else None
     if com:
         ask_ = wire.flat(str(com.get("ask") or ""), 40, ascii=True)
-        parts.append("a new stock" + (": " + ask_ if ask_ else ""))
+        if n("take"):
+            parts.append("a new stock now" + (": " + ask_ if ask_ else ""))
+        else:
+            parts.append("Tibbs looks on his next trip" + (": " + ask_ if ask_ else ""))
     if not parts:
         return ""
     s = "; ".join(parts)

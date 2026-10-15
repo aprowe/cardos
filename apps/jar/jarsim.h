@@ -66,7 +66,7 @@
 #define JS_FLIES       8
 #define JS_MAX_PLACED  24
 #define JS_POOL        32              /* placed items' frames, 96 bytes each */
-#define JS_MAX_OWNED   64
+#define JS_MAX_OWNED   128     /* 64 filled up (2026-10-15): Wren's furniture vanished */
 #define JS_SPOOL       768             /* placed items' scripts, packed */
 
 /* An app that keeps the jar but never runs it (the companion apps: they load

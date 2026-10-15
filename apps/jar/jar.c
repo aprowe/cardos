@@ -1737,6 +1737,30 @@ static void first_run(void) {
   save();
 }
 
+/* Every record in /var/jar/items is a thing of ours: selling, trashing,
+ * handing over and gifting all delete the file. One not in My Stuff is put
+ * back -- a delivery before 2026-10-15 wrote the record and, with My Stuff
+ * at its old limit of 64, quietly lost the thing (Wren's furniture). SCR is
+ * free here: the save is parsed and the places are placed. */
+static void reown(void) {
+  CappEntry *e = (CappEntry *)(void *)&SCR;
+  int n = api->list_ex(JST_ITEMS, e, (int)(sizeof SCR / sizeof *e)), i, back = 0;
+  for (i = 0; i < n; i++) {
+    const char *p = e[i].name;
+    uint32_t id = 0;
+    while (*p >= '0' && *p <= '9') id = id * 10 + (uint32_t)(*p++ - '0');
+    if (!id || !str_same(p, ".itm") || js_owns(&J, id)) continue;
+    if (js_own(&J, id) != 0) break;
+    back++;
+  }
+  if (back) {
+    char m[48];
+    api->fmt(m, sizeof m, "jar: %d things back in My Stuff", back);
+    api->log(m);
+    save();
+  }
+}
+
 static void load(void) {
   int i;
   uint32_t now = api->epoch();
@@ -1756,6 +1780,7 @@ static void load(void) {
     }
     J.nwant = 0;                                   /* placed, or gone from the card */
   }
+  reown();
   js_away(&J, now);                                /* nothing is made off screen */
   /* Jar Shop or Jar Post asked for an item to be put in the jar. */
   if (J.decor) {

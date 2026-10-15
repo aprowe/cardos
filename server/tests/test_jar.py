@@ -1542,7 +1542,7 @@ class Routes(unittest.TestCase):
         # nothing happens until they say yes: an offer, in the code's words
         self.assertNotIn("tx ", body)
         self.assertIn("offer\tPay 300 coins; hand over ", body)
-        self.assertIn("a new stock: brass birds.", body)
+        self.assertIn("a new stock now: brass birds.", body)
         self.assertNotIn(owl, jar.pool_ids(st))
         s, ans = self.req("POST", "/jar/deal?who=tibbs", self.alex, "coins 500\nyes")
         self.assertEqual(ans, "ok\n")
@@ -1576,6 +1576,29 @@ class Routes(unittest.TestCase):
         self.assertNotIn("tx ", body)
         self.assertNotIn("offer\t", body)                       # not even offered
         self.assertIsNone(jar.pending_deal("alex"))
+
+    def test_asking_unpaid_waits_for_his_next_trip(self):
+        # 2026-10-15, the owner: asked, he keeps it in mind on his next
+        # journey (every 4 hours, and only when someone visits); paid, he goes
+        # at once and the stock is refreshed.
+        st = kv.store()
+        deal = {"commission": {"ask": "snails with hats", "finds": 6}}
+        self.assertIsNone(jar.make_deal("alex", deal, coins=100, store=st))
+        self.assertIsNone(jar.pending_deal("alex", st))                  # no fresh stock now
+        self.assertFalse(self.req("GET", "/jar/day", self.alex)[1].endswith("deal\n"))
+        self.assertEqual(shopkeep.requests(st), [("alex", "snails with hats")])
+        self.assertIn("next trip", jar.deal_words("alex", deal, st))
+        # his next chapter is told, and alex's next stock is made around it
+        prompt = shopkeep.chapter_prompt("A. B.", "C. D.", "E. F.",
+                                         asked=shopkeep.requests(st))
+        self.assertIn("snails with hats", prompt)
+        self.assertEqual(shopkeep.request_take("alex", st), "snails with hats")
+        self.assertIsNone(shopkeep.request_take("alex", st))             # once
+        # paid, it is the commission it always was: a new stock now
+        paid = dict(deal, take=40)
+        self.assertIsNone(jar.make_deal("alex", paid, coins=100, store=st))
+        self.assertEqual(jar.pending_deal("alex", st)["ask"], "snails with hats")
+        self.assertIn("a new stock now", jar.deal_words("alex", paid, st))
 
     def test_an_offer_declined_does_nothing(self):
         deal = {"take": 40}

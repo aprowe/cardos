@@ -769,7 +769,7 @@ static uint32_t buy(void) {
   if (n < 0) { say("That item is missing"); return 0; }
   id = IO.it.id;
   if (js_owns(&J, id)) { say("You have that one"); return 0; }
-  if (js_own(&J, id)) { say("My Stuff is full: 64"); return 0; }
+  if (js_own(&J, id)) { say("My Stuff is full"); return 0; }
   jst_item_path(api, id, p, sizeof p);
   if (jst_put(api, p, IO.raw, n) != 0) { J.nowned--; say("Could not write to the card"); return 0; }
   js_spend(&J, S.price[k]);

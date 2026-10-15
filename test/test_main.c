@@ -477,6 +477,7 @@ void test_jarsim_only_critters_travel(void);
 void test_jarsim_a_still_thing_keeps_still(void);
 void test_jarsim_travel_kinds_move_as_described(void);
 void test_jarsim_extra_jars(void);
+void test_jarsim_a_full_my_stuff_saves_and_reads_back(void);
 void test_jarstore_items_round_trip_and_builtins_are_whole(void);
 void test_jarstore_a_servers_record_is_kept_byte_for_byte(void);
 void test_jarstore_verify_checks_the_signed_message(void);
@@ -1566,6 +1567,7 @@ int main(void) {
   RUN(test_jarsim_a_still_thing_keeps_still);
   RUN(test_jarsim_travel_kinds_move_as_described);
   RUN(test_jarsim_extra_jars);
+  RUN(test_jarsim_a_full_my_stuff_saves_and_reads_back);
   printf("-- jarstore --\n");
   RUN(test_jarstore_items_round_trip_and_builtins_are_whole);
   RUN(test_jarstore_a_servers_record_is_kept_byte_for_byte);
