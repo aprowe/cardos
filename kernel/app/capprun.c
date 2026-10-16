@@ -788,12 +788,16 @@ void capprun_make_room(void) { make_room(); }
 
 /* A big app came on screen (bigmode.h): let go of what can come back --
  * the code block Today keeps (unless a run holds it), the Bluetooth radio
- * (unless a print, a mouse or a keyboard holds it). WiFi stays: the big app
- * on screen is usually the one that wants it. */
+ * (unless a print, a mouse or a keyboard holds it), and WiFi for an app
+ * that asks with CAPP_BIG_NO_NET (2026-10-16: Python's heap is the memory
+ * WiFi held, 52 KB), unless a request is in flight. WiFi otherwise stays:
+ * Jar Factory and Circuit use the network without declaring it. */
 void capprun_big_let_go(void) {
   size_t before = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  const Run *big = (const Run *)bigmode_owner();
   if (s_hold_owner == NULL) capp_hold_code(0);
   if (!printq_busy()) bt_radio_down();
+  if (big && (big->flags & CAPP_BIG_NO_NET) && !httpq_active()) wifi_release();
   applogf("big", "let go: largest %u -> %u, free %u", (unsigned)before,
           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
           (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));

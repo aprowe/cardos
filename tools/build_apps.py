@@ -240,7 +240,7 @@ def layout(elf):
 # day the largest was 24 KB.
 DATA_BUDGET = 28 * 1024          # ARENA_SIZE
 RAM_CODE_BUDGET = 16 * 1024      # CAPP_CODE_IN_RAM apps
-MAX_CODE = 96 * 1024             # CAPP_MAX_CODE in kernel/app/elfload.c
+MAX_CODE = 256 * 1024            # CAPP_MAX_CODE in kernel/app/elfload.c (96 KB before 2026-10-16)
 CAPP_CODE_IN_RAM = 0x0040
 
 # Apps allowed over the budget for now, each with why. Take one off as soon

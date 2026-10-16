@@ -101,6 +101,12 @@ typedef struct {
  * the arena; a big block is reached through a pointer. Jar Factory is one.
  * kernel/app/bigmode.h. */
 #define CAPP_BIG 0x0080
+/* With CAPP_BIG: entering big mode lets go of WiFi too (52 KB), unless a
+ * request is in flight. Opt-in, because a big app that does use the
+ * network without declaring CAPP_NEEDS_NET (Jar Factory's shop, Circuit's
+ * composer) would find the memory WiFi needs to come back already taken.
+ * Python (2026-10-16). A flag, not an API change: older kernels ignore it. */
+#define CAPP_BIG_NO_NET 0x0100
 
 /* Data overlays (API 46): docs/superpowers/specs/2026-10-10-app-data-overlays-design.md.
  *

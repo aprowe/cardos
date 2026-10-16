@@ -238,7 +238,17 @@ keeps and the Bluetooth radio unless something holds it
 blocks. Its data stays in the arena -- a big block is reached through a
 pointer, so XIP's fixed data address is untouched. The kernel's static
 tables (icon cache, app table) are not given back yet. Jar Factory is
-the first big app and logs "big room N" at launch.
+the first big app and logs "big room N" at launch. `CAPP_BIG_NO_NET`
+(2026-10-16, a flag bit) lets go of WiFi too on entering, unless a request
+is in flight -- opt-in, since Jar and Circuit use the network without
+declaring it; Python sets it.
+
+**An app's code may be 256 KB** (2026-10-16, `CAPP_MAX_CODE` in
+`kernel/app/elfload.c`, `MAX_CODE` in `tools/build_apps.py`). The 96 KB
+limit dated from code in executable RAM; flash-run code is relocated a
+window of the arena at a time (`write_part`) and costs no RAM. The paths
+that still put code in RAM fail on the memory itself. An app over 96 KB is
+refused as too big by firmware older than this.
 
 **Redundant redrawing is an OS problem, not an app problem.** The shell used
 to hand every app its whole rectangle as the clip on every event, so a

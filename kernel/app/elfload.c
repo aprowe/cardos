@@ -47,9 +47,16 @@ typedef struct {
   uint16_t st_shndx;
 } Elf32_Sym;
 
-/* An app larger than this is a mistake, not an app: executable RAM is the
- * scarce resource on this board. */
-#define CAPP_MAX_CODE (96u * 1024u)
+/* The most code an app may have. It was 96 KB when every app's code was
+ * copied into executable RAM ("an app larger than this is a mistake, not an
+ * app"). Code has run from flash since 2026-10-09, relocated a window of the
+ * arena at a time into the appcode partition (write_part), so its size costs
+ * no RAM there; the limit is now the partition's share for one app
+ * (2026-10-16: Python, MicroPython, was at 97992 bytes of the old 96 KB).
+ * The paths that still put code in RAM -- a headless command, a second
+ * desktop window, a device without appcode -- fail on the memory itself, as
+ * they always could, and say how much they wanted (capp_last_shortfall). */
+#define CAPP_MAX_CODE (256u * 1024u)
 #define CAPP_MAX_DATA (96u * 1024u)
 
 /* See capp_hold_code. One block: the largest one let go while holding. */

@@ -8,7 +8,7 @@
  *
  * Memory: the app's own state is in the arena as usual; the Python heap is
  * big-mode blocks (CAPP_BIG), several of them as one heap (MicroPython's
- * split heap). It declares no network, so entering lets go of WiFi too.
+ * split heap). CAPP_BIG_NO_NET: entering lets go of WiFi too.
  *
  * It runs on the shell's stack, so Python calls are stackless (frames on
  * the heap) and the C stack is checked. Nothing else runs while Python
@@ -439,7 +439,7 @@ static CappUi UI;
 
 const CappInfo capp_info = {
   CAPP_API_VERSION,
-  CAPP_FULLSCREEN | CAPP_BIG,
+  CAPP_FULLSCREEN | CAPP_BIG | CAPP_BIG_NO_NET,   /* WiFi's 52 KB is heap */
   "Python",
   /* 16x16: two snakes, head to tail, after the logo. */
   { 0x0F, 0xC0, 0x18, 0x60, 0x12, 0x60, 0x1F, 0xE0,
