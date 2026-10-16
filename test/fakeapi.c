@@ -155,6 +155,18 @@ static void *d_big_alloc(size_t n) {
   return (int)n <= fakeapi_big_room ? calloc(1, n) : NULL;
 }
 static size_t d_big_room(void) { return (size_t)fakeapi_big_room; }
+/* The way back (API 48): leave() counted, resumed() hands over what a test
+ * put in fakeapi_resume, once. */
+int  fakeapi_left;
+char fakeapi_resume[1024];
+int  fakeapi_resume_n;
+static int d_leave(void) { fakeapi_left++; return 0; }
+static int d_resumed(void *buf, size_t n) {
+  int k = fakeapi_resume_n < (int)n ? fakeapi_resume_n : (int)n;
+  if (k > 0) memcpy(buf, fakeapi_resume, (size_t)k);
+  fakeapi_resume_n = 0;
+  return k > 0 ? k : 0;
+}
 static int d_sig_verify(const uint8_t pub[65], const void *m, size_t n, const uint8_t sig[64]) {
   (void)pub; (void)m; (void)n; (void)sig;
   return -1;                                   /* could not check */
@@ -241,6 +253,9 @@ void fakeapi_init(CardApi *a) {
   a->big_alloc = d_big_alloc;
   a->big_room = d_big_room;
   fakeapi_big_room = 64 * 1024;
+  a->leave = d_leave;
+  a->resumed = d_resumed;
+  fakeapi_left = fakeapi_resume_n = 0;
   fakeapi_paint_direct = -1;
   a->key_repeat = d_key_repeat;
   a->key_pending = d_key_pending;

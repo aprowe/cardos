@@ -269,6 +269,19 @@ static int tr_key(void *state, uint8_t k) {
  * a model choosing between the verbs an app actually offers. */
 static Run *run_of(const AppDef *a);
 
+/* The app's state for the way back (CappUi.save, API 48): the bytes it
+ * wrote into buf, 0 for none or an app without save. */
+int capprun_save_state(const AppDef *a, void *buf, int n) {
+  Run *s = run_of(a), *prev;
+  int r;
+  if (!s || IMAGE_GONE(s) || !s->ui.save || n <= 0) return 0;
+  prev = s_active;
+  s_active = s;
+  r = s->ui.save(s->ui.state, buf, (size_t)n);
+  handler_done(s, prev);
+  return r < 0 ? 0 : r > n ? n : r;
+}
+
 int capprun_action_invoke(const AppDef *a, const char *id) {
   int j;
   Run *s = run_of(a), *prev;

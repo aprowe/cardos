@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 47
+#define CAPP_API_VERSION 48
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -497,7 +497,19 @@ typedef struct {
    * what the app wants the press to be; for PRESSED and HEARD return 1 to
    * repaint. NULL: never claimed. */
   int (*button)(void *state, int event, const char *text);
+
+  /* The way back (API 48). Called when this app is let go because it
+   * opened another one (api->run from a handler): write what it needs to
+   * come back as it was -- a file, a line, a folder, a selection -- at most
+   * `n` bytes (CAPP_SAVE_MAX), and return how many; 0 for nothing. When
+   * the user comes back (fn-` from the one it opened, or that one calling
+   * api->leave), the app starts again with the same arguments and
+   * api->resumed hands the bytes back. Not called when the app is simply
+   * closed. NULL: it comes back fresh, as every app did before. */
+  int (*save)(void *state, void *buf, size_t n);
 } CappUi;
+
+#define CAPP_SAVE_MAX 1024
 
 /* ---- sound ----
  *
@@ -1038,6 +1050,19 @@ typedef struct {
    * could be now, 0 if none. There is no free: the app's blocks go with it. */
   void  *(*big_alloc)(size_t n);
   size_t (*big_room)(void);
+
+  /* ---- the way back (API 48) ----
+   *
+   * leave(): go, as fn-` would -- back to the app that opened this one,
+   * or to the launcher. From a handler it happens once the handler has
+   * returned. 0 if it will, -1 where it cannot (a desktop window, a
+   * command). Vim's :q, Python's exit().
+   *
+   * resumed(buf, n): what this app's CappUi.save wrote when it opened
+   * another, now that the user has come back to it -- once, from capp_main
+   * or later; the bytes, at most n. 0 when it was opened any other way. */
+  int (*leave)(void);
+  int (*resumed)(void *buf, size_t n);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

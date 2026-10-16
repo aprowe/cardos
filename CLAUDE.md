@@ -900,7 +900,7 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36), `motion` (37), `midi` (38), `notify` (39), `notify_at`/`notify_cancel` (40), `update_apply_progress` (41), `firmware_boot` (42), `link` (43), `sig_verify` (44), `paint_direct` (45), `overlay`/`overlay_live` (46), which came with constants moving to their own link origin, and `big_alloc`/`big_room` (47, big-app mode). A new capp_info flag bit (`CAPP_PAINT_DIRECT`) is not an API change; neither is clamping what `http_poll` returns.
+`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36), `motion` (37), `midi` (38), `notify` (39), `notify_at`/`notify_cancel` (40), `update_apply_progress` (41), `firmware_boot` (42), `link` (43), `sig_verify` (44), `paint_direct` (45), `overlay`/`overlay_live` (46), which came with constants moving to their own link origin, `big_alloc`/`big_room` (47, big-app mode), and `leave`/`resumed` on CardApi with `save` on CappUi (48, the way back: below). A new capp_info flag bit (`CAPP_PAINT_DIRECT`) is not an API change; neither is clamping what `http_poll` returns.
 
 **Fonts are files an app asks for** (2026-09-23). The 6x8 console font is
 still compiled in and still the default; anything nicer is a `.cfnt` in
@@ -1089,6 +1089,18 @@ switch, and opt-backspace, or Enter, Space, Esc or Del twice within 1.5 s,
 unlocks. Unread notifications are listed under the clock; one arriving at
 black shows the clock for 15 s. An app with no colour icon (made by Build,
 arrived by `update apps`) wears its 1bpp icon, coloured.
+
+**The way back keeps each app's place** (2026-10-16, API 48,
+`kernel/ui/launchui.c`). An app opening another (api->run from a handler)
+is asked for its state first -- `CappUi.save`, at most `CAPP_SAVE_MAX`
+(1 KB) -- kept in `/cache/back-N.bin` beside the back stack's name and
+arguments; coming back (fn-`, or the one it opened calling `api->leave`),
+it starts fresh with the same arguments and `api->resumed` hands the bytes
+over, once. An app without `save` comes back fresh as before. `api->leave`
+is fn-` from code -- Vim's `:q`, Python's `exit()` -- acted on once the
+handler returns; -1 outside the launcher. Nothing is kept in RAM: the
+files go when their entry does (`back_clear`, `forget_saved`). Not
+host-tested: launchui is device code.
 
 **Hub: M5Launcher's firmware catalog** (2026-10-08, `apps/hub.c`, System).
 LauncherHub (api.launcherhub.net, ~700 Cardputer firmwares) through

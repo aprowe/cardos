@@ -167,5 +167,7 @@ uint32_t capprun_exec_free(void);
  * panel and anything that drives the machine without a finger. */
 const CappAction *capprun_actions(const AppDef *a, int *n);
 int capprun_action_invoke(const AppDef *a, const char *id);
+/* CappUi.save, for the launcher's way back: bytes written into buf. */
+int capprun_save_state(const AppDef *a, void *buf, int n);
 
 #endif /* CARDOS_CAPPRUN_H */

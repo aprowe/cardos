@@ -103,6 +103,93 @@ static char s_app_args[128];                /* what the app on screen was given 
 static char s_next[20], s_next_args[128];   /* asked for from a handler */
 static int  s_has_next;
 
+/* The way back keeps each app's place (API 48, 2026-10-16: "close back to
+ * the file tree at the same spot"). An app let go because it opened another
+ * is asked for its state (CappUi.save), which is kept in /cache, a file
+ * per entry named by a number that moves with the entry; coming back, the
+ * app is started fresh as before and api->resumed hands the bytes over,
+ * once. Not kept in RAM: four entries of up to 1 KB is a lot of heap for a
+ * way back nobody may take. */
+#define BACK_SAVE_FMT "/cache/back-%u.bin"
+static uint16_t s_back_saved[BACK_MAX];     /* 0: nothing saved */
+static uint16_t s_save_seq;
+static char     s_resume_name[20];           /* the one coming back, until it asks */
+static uint16_t s_resume_file;
+static int      s_close_req;                 /* api->leave from a handler */
+
+static void save_path(uint16_t id, char *out, size_t n) {
+  snprintf(out, n, BACK_SAVE_FMT, (unsigned)id);
+}
+
+static void forget_saved(uint16_t id) {
+  char p[32];
+  if (!id) return;
+  save_path(id, p, sizeof p);
+  fs_remove(p);
+}
+
+/* Ask the app on screen for its state and keep it: the file's number, or 0. */
+static uint16_t save_app_state(const AppDef *a) {
+  char p[32];
+  uint8_t *buf = malloc(CAPP_SAVE_MAX);
+  uint16_t id = 0;
+  int n, fd;
+  if (!buf) return 0;
+  n = capprun_save_state(a, buf, CAPP_SAVE_MAX);
+  if (n > 0) {
+    if (++s_save_seq == 0) s_save_seq = 1;
+    save_path(s_save_seq, p, sizeof p);
+    fd = fs_open(p, FS_O_WRITE | FS_O_CREATE | FS_O_TRUNC);
+    if (fd >= 0) {
+      if (fs_write(fd, buf, (size_t)n) == n) id = s_save_seq;
+      fs_close(fd);
+      if (!id) fs_remove(p);
+    }
+  }
+  free(buf);
+  return id;
+}
+
+/* The way back emptied (an app opened from the row or search): what its
+ * entries saved goes with them. */
+static void back_clear(void) {
+  while (s_nback > 0) {
+    s_nback--;
+    forget_saved(s_back_saved[s_nback]);
+    s_back_saved[s_nback] = 0;
+  }
+}
+
+/* `name` is coming back with what it saved: kept for api->resumed. */
+static void set_resume(const char *name, uint16_t id) {
+  if (s_resume_file && s_resume_file != id) forget_saved(s_resume_file);
+  snprintf(s_resume_name, sizeof s_resume_name, "%s", name);
+  s_resume_file = id;
+}
+
+int launchui_resumed(void *buf, size_t n) {
+  char p[32];
+  const char *who = capprun_executing_name();
+  int fd, got = -1;
+  if (!s_resume_file || !buf || !who || strcmp(who, s_resume_name) != 0) return 0;
+  save_path(s_resume_file, p, sizeof p);
+  fd = fs_open(p, FS_O_READ);
+  if (fd >= 0) {
+    got = fs_read(fd, buf, n);
+    fs_close(fd);
+  }
+  forget_saved(s_resume_file);
+  s_resume_file = 0;
+  return got > 0 ? got : 0;
+}
+
+int launchui_close(void) {
+  if (ui_shell() != UI_LAUNCHER || !s_app) return -1;
+  if (capprun_caller() && capprun_caller() != s_app->state) return -1;   /* only the one on screen */
+  s_close_req = 1;
+  return 0;
+}
+
 static void start_app(int slot, const char *name, const char *args) {
   snprintf(s_app_args, sizeof s_app_args, "%s", args ? args : "");
   notify_opened(name);                         /* its notifications are read */
@@ -605,6 +692,11 @@ static void leave_app_ex(int show) {
    * it again reloads it, which costs a card read nobody notices. */
   capprun_release(s_app);
   s_app = NULL;
+  s_close_req = 0;
+  if (s_resume_file) {            /* came back and never asked: it is done with */
+    forget_saved(s_resume_file);
+    s_resume_file = 0;
+  }
   s_note[0] = 0;
   s_dirty = 1;
   recent_closed();
@@ -644,6 +736,8 @@ static void quit_app(void) {
     s_nback--;
     snprintf(name, sizeof name, "%s", s_back[s_nback]);
     snprintf(args, sizeof args, "%s", s_back_args[s_nback]);
+    set_resume(name, s_back_saved[s_nback]);
+    s_back_saved[s_nback] = 0;
     if (run_now(name, args[0] ? args : NULL) != 0 || !s_app) flush();
   }
 }
@@ -753,7 +847,7 @@ static void launch_with(int i, const char *args) {
 /* `pos` is a carousel position at the current level. */
 static void launch(int pos) {
   const Icon *ic = at(pos);
-  s_nback = 0;                    /* opened from the row: back is the row */
+  back_clear();                    /* opened from the row: back is the row */
   s_anim = 0;
   blip(BLIP_OPEN);
   launch_with(icon_index(ic), NULL);
@@ -850,7 +944,7 @@ static int search_key(uint8_t key) {
     if (s_nhit) {
       int f = s_hit[s_hsel];
       s_search = 0;
-      s_nback = 0;
+      back_clear();
       select_flat(f);              /* leaving the app lands on it */
       s_dirty = 1;
       launch_with(f, NULL);
@@ -914,7 +1008,7 @@ void launchui_init(void) {
   capp_on_prepare(preparing);
   capprun_release(s_app);      /* from the last visit, if any */
   s_app = NULL;
-  s_nback = 0;
+  back_clear();
   s_has_next = 0;
   s_search = 0;
   icons_reload();
@@ -1007,26 +1101,38 @@ static void run_next(void) {
   for (i = s_nback - 1; i >= 0 && s_app; i--)
     if (same_name(s_back[i], name)) { back = i; break; }
   if (back >= 0) {
+    uint16_t saved = s_back_saved[back];
+    for (i = back + 1; i < s_nback; i++) forget_saved(s_back_saved[i]);
+    s_back_saved[back] = 0;
     s_nback = back;
     leave_app_ex(0);
+    set_resume(name, saved);     /* going back is coming back: as it was */
     if (run_now(name, args[0] ? args : NULL) != 0 || !s_app) flush();
     return;
   }
   if (s_app) {
+    uint16_t saved = save_app_state(s_app);   /* before it is let go */
     if (s_nback == BACK_MAX) {
+      forget_saved(s_back_saved[0]);
       memmove(s_back[0], s_back[1], sizeof s_back - sizeof s_back[0]);
       memmove(s_back_args[0], s_back_args[1], sizeof s_back_args - sizeof s_back_args[0]);
+      memmove(&s_back_saved[0], &s_back_saved[1], sizeof s_back_saved - sizeof s_back_saved[0]);
       s_nback--;
     }
     snprintf(s_back[s_nback], sizeof s_back[0], "%s", s_app->name);
     snprintf(s_back_args[s_nback], sizeof s_back_args[0], "%s", s_app_args);
+    s_back_saved[s_nback] = saved;
     s_nback++;
     leave_app_ex(0);
   }
   if (run_now(name, args[0] ? args : NULL) != 0 || !s_app) {
     /* It did not open, and the row says why; going back to the app that
      * asked would hide that. */
-    if (s_nback) s_nback--;
+    if (s_nback) {
+      s_nback--;
+      forget_saved(s_back_saved[s_nback]);
+      s_back_saved[s_nback] = 0;
+    }
     flush();
   }
 }
@@ -1282,6 +1388,10 @@ void launchui_tick(uint32_t ms) {
   uint32_t before = s_now_ms / 1000u;
   s_now_ms = ms;
 
+  if (s_close_req) {               /* api->leave, now that its handler has returned */
+    s_close_req = 0;
+    if (s_app) quit_app();
+  }
   if (s_has_next) run_next();
   if (s_anim && !s_app && !s_search && !overlay_active() && !picker_active()) anim_step(ms);
 

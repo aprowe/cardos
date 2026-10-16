@@ -53,6 +53,11 @@ void launchui_note(const char *text);
  * Escape then returns to the carousel rather than to the console, because that
  * is what Escape does everywhere else in this shell. */
 int launchui_run(const char *name, const char *args);
+/* The way back (API 48): api->leave and api->resumed, for the app on
+ * screen. close is -1 outside the launcher; resumed is 0 unless the caller
+ * is the app that came back, and only the first time. */
+int launchui_close(void);
+int launchui_resumed(void *buf, size_t n);
 
 /* What the fn-h panel shows over the launcher; src/main.c opens it. */
 void launchui_help(const char **app_title, const char **app_keys,
