@@ -1,0 +1,93 @@
+# Wordle's answers: common, family-friendly five-letter words, written for
+# CardOS by hand (2026-10-16) -- no list was copied. No plain plurals (BOOKS),
+# no names, nothing a child should not be handed as the word of the day.
+# Every one must also be in the accepted list (enable5.txt); make_wordle.py
+# refuses one that is not. Whitespace-separated, any number to a line.
+
+about above abuse actor acute adapt admit adopt adult after again agent
+agree ahead alarm album alert alien align alike alive allow alone along
+alter amber amaze amuse angel anger angle angry ankle apart apple apply
+apron arena argue arise armor aroma arrow aside asset atlas attic audio
+audit avoid awake award aware awful bacon badge badly bagel baker basic
+basin basis batch beach beard beast begin being belly below bench berry
+bible birth black blade blame bland blank blast blaze bleak blend
+bless blind blink bliss block bloom blown blunt blush board boast
+bonus boost booth bound brain brake brand brass brave bread break breed
+brick bride brief bring brisk broad broke brook broom brown brush buddy
+build built bunch bunny burst cabin cable camel candy canoe cargo carry
+catch cause cedar chain chair chalk champ charm chart chase cheap check
+cheek cheer chess chest chick chief child chili chill chimp choir chord
+chunk cider cinch civic civil claim clamp clash clasp class clean clear
+clerk click cliff climb cling cloak clock close cloth cloud clown coach
+coast cobra cocoa comet comic coral couch cough could count court cover
+crack craft crane crash crate crawl crazy cream creek crest crisp
+cross crowd crown crumb crush crust cubic curve cycle daily dairy daisy
+dance dated dealt decay decor delay delta dense depth derby diary
+digit diner dirty disco ditch diver dizzy dodge doing donor donut doubt
+dough dozen draft drain drama drank drawn dread dream dress dried drift
+drill drink drive drone drown dryer duvet dwarf dwell eager eagle early
+earth easel eaten ebony eight elbow elder elect elite embed
+ember empty enjoy enter entry equal equip erase error essay event every
+exact exist extra fable faint fairy faith false fancy fault favor feast
+fence ferry fetch fever fewer fiber field fifth fifty fight final first
+flame flash flask fleet flesh flick fling float flock flood floor flour
+fluid flute focus foggy force forge forth forty forum found frame frank
+fresh fried frill frisk frock frond front frost froze fruit fudge fully
+funny furry fuzzy gauge gecko genie ghost giant given glade gland glare
+glass gleam glide globe gloom glory gloss glove glyph going grace grade
+grain grand grant grape graph grasp grass grate gravy graze great greed
+green greet grief grill grind groan groom gross group grove growl grown
+guard guess guest guide guild habit hairy happy hardy harsh hatch haunt
+haven hazel heart heavy hedge hello hence heron hippo hobby honey honor
+horse hotel hound house hover human humid humor hurry husky icing ideal
+idiom igloo image imply index inner input irony issue ivory jelly jewel
+joint jolly judge juice juicy jumbo jumpy karma kayak kebab ketch kiosk
+kitty knack knead kneel knife knock known koala label labor ladle large
+laser latch later laugh layer learn lease least leave ledge legal lemon
+level lever light lilac limit linen liner liver llama lobby local
+lodge lofty logic loose lorry lotus lover lower loyal lucky lunar lunch
+lyric macaw magic major maker mango manor maple march marsh match maybe
+mayor meant medal media melon mercy merit merry metal meter might mimic
+minor minty minus mirth mixer model moist money month moose moral motor
+motto mound mount mouse mouth movie muddy mural music naive nanny nasty
+naval nerve never newly niece night ninja noble noise north notch novel
+nudge nurse nylon oasis occur ocean offer often olive omega onion opera
+orbit order organ other otter ought ounce outer owner oxide ozone paddy
+paint panda panel panic paper party pasta paste patch pause peace peach
+pearl pecan pedal penny perch peril petal phase phone photo piano piece
+pilot pinch pitch pizza place plain plane plant plate plaza plead pluck
+plumb plume plump plush point polar polka porch pouch pound power
+press price pride prime print prior prism prize probe prone proof proud
+prove prune pulse punch pupil puppy purse quack quail quake qualm queen
+query quest queue quick quiet quilt quirk quite quota quote radar radio
+rainy raise rally ranch range rapid raven razor reach react ready realm
+rebel recap refer reign relax relay renew repay reply rider ridge rifle
+right rigid rinse ripen risen rival river roast robin robot rocky rodeo
+rogue roomy roost rough round route rover royal rugby ruler rumor rural
+rusty sadly saint salad salon salsa salty sandy satin sauce sauna scale
+scarf scene scent scoop scope score scout scrap screw scrub seize sense
+serve setup seven shade shady shake shall shape share shark sharp shave
+shawl sheep sheet shelf shell shift shine shiny shirt shock shore short
+shout shown shrub shrug siege sight silky silly since siren sixth sixty
+skate skill skirt skull slate sleek sleep sleet slept slice slide slope
+sloth small smart smell smile smoke snack snail snake sneak sniff snore
+snowy solar solid solve sonic sorry sound south space spade spare spark
+speak spear speed spell spend spent spice spicy spike spill spine spoke
+spoon sport spray squad squid stack staff stage stain stair stake stale
+stall stamp stand stare start state steak steam steel steep steer
+stern stick stiff still sting stock stole stone stood stool store
+stork storm story stove straw stray strip stuck study stuff style sugar
+suite sunny super surge swamp swarm sweat sweep sweet swept swift swing
+sword syrup table taken tango tasty teach teeth tempo tenor tense tenth
+thank theme there thick thief thing think third thorn those three threw
+throw thumb tiger tight timer tired title toast today token tonic tooth
+topic torch total touch tough towel tower toxic trace track trade trail
+train trait tramp treat trend trial tribe trick tried troop trout truck
+truly trunk trust truth tulip tuner twice twirl twist ultra uncle
+under unfit union unite unity until upper upset urban usage usual utter
+valid value valve vapor vault venue verse video vigor vinyl viola viper
+virus visit vista vital vivid vocal voice voter wafer wagon waist
+waltz waste watch water waver weary weave wedge weigh weird whale wheat
+wheel where which while whisk white whole widen width windy witch woken
+woman world worry worth would wound woven wrath wreck wrist write wrong
+wrote yacht yearn yeast yield young youth zebra zesty

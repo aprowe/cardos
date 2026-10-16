@@ -1,0 +1,8 @@
+# Words in enable5.txt that Wordle does not accept as a guess: profanity,
+# slurs and sexual words. A guess list is never shown, but the game should
+# not congratulate anyone on finding one either. Whitespace-separated.
+bitch boner boobs cocks cunts dicks dicky dildo dyked dykes dykey faggy
+fagot fucks gooks gooky homos honky horny jisms kikes kinky nooky penis
+pimps poons porno porns porny prick pubes pussy raped raper rapes semen
+sexed shits slags sluts spick spics spunk titty turds twats whore coons
+hussy wench

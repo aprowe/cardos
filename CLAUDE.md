@@ -498,6 +498,38 @@ start; lean back to brake; `x` swaps the axis, `i` flips it, in
 `apps/kart/kart.h`, host-tested in `test/test_kart.c`; `KART_DUMP=dir` writes
 frames. Drawn in 15-row strips in paint, physics in 16 ms steps in tick.
 
+**Wordle** (2026-10-16, `apps/wordle/wordle.c`, Games). Six guesses at a
+five-letter word, the standard duplicate-letter rules (greens first, then a
+letter is yellow only while the answer has one unmatched -- pinned case by
+case in `test/test_wordle.c`), a keyboard strip coloured by each letter's
+best. The daily puzzle is the same word for everyone on a date: day 0 is
+2026-01-01 (puzzle #1), the answer `(day * WD_DAILY_MUL + WD_DAILY_ADD) %
+WD_NANSWERS`, every answer once before any repeats; with no clock it is
+practice only. Practice (`n` when a game is over, or from Tab's stats) is a
+random answer counted nowhere. Stats -- played, won, streak, best, the
+guess distribution -- and today's guesses so far are /var/wordle/stats.txt
+through safefile.h, so leaving the app keeps the board. The words are
+`tools/make_wordle.py` over `tools/wordle/`: ENABLE2K's five-letter words
+(public domain) less `blocked.txt` are the guesses (8586), and
+`answers.txt`, 1029 common words written by hand, the answers. One sorted
+list, two bytes a word (the first two letters pick a bucket, the last three
+are 15 bits, the top bit marks an answer): 19 KB of constants, which the
+icon scan reads into RAM -- do not grow it lightly. The rules are
+`apps/wordle/wordle.h`; `test/test_wordle_paint.c` plays it into a
+framebuffer with the real fonts (`test/fakescreen.h`; `WORDLE_DUMP=dir`).
+
+**Hangman** (2026-10-16, `apps/hangman/hangman.c`, Games), two players on
+one device. The setter types a word or phrase (letters and spaces, at most
+28, two lines of 14 without splitting a word) shown as dots -- Tab shows it
+-- passes the device over, and the guesser types letters. Six misses finish
+the figure (head, body, arms, legs) and the setter scores; every letter
+found cuts him down to stand on the grass, arms up, and the guesser scores.
+Then the other one sets the word. Esc in a round asks before giving up; `e`
+on the score screen names the players. The score is the session's: nothing
+is saved. Rules in `apps/hangman/hangman.h` (`test/test_hangman.c`), the
+screen in `test/test_hangman_paint.c` (`HANGMAN_DUMP=dir`). Neither game
+marks damage: every repaint is whole and composed off the panel.
+
 **More than one person on the server** (2026-10-06, branch `accounts`).
 `server/accounts.py`: `CARDOS_STATE/accounts.json` holds people (PBKDF2
 password, admin flag) and devices (the SHA-256 of each token, its owner).
@@ -1544,7 +1576,8 @@ hardware-specific. What it cost to learn:
 
 - **An app with several files of its own lives in a folder** (2026-10-12):
   `apps/jar/`, `apps/kart/`, `apps/midi/` (MIDI and Circuit), `apps/iron/`,
-  `apps/gamenight/`, `apps/quoridor/`, `apps/tetris/`, `apps/pet/`, `apps/chat/`.
+  `apps/gamenight/`, `apps/quoridor/`, `apps/tetris/`, `apps/pet/`, `apps/chat/`,
+  `apps/wordle/`, `apps/hangman/`.
   `tools/build_apps.py` (`app_sources`) builds every `.c` directly in `apps/`
   and every `.c` one folder down; the `.capp` is named by the file, not the
   folder (`apps/jar/jar.c` is still `jar.capp`), so `folders.txt`, the icons,

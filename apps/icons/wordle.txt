@@ -1,0 +1,17 @@
+Wordle
+................
+.gggg.yyyy.DDDD.
+.gggg.yyyy.DDDD.
+.gggg.yyyy.DDDD.
+.gggg.yyyy.DDDD.
+................
+.DDDD.gggg.yyyy.
+.DDDD.gggg.yyyy.
+.DDDD.gggg.yyyy.
+.DDDD.gggg.yyyy.
+................
+.gggg.gggg.gggg.
+.gggg.gggg.gggg.
+.gggg.gggg.gggg.
+.gggg.gggg.gggg.
+................
