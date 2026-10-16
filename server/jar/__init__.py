@@ -1672,6 +1672,8 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
     key = (person, _stock_key(now))
     with _day_lock:
         cur = day_state(person, st)
+        if fresh and cur and errand_back(person, st, now):
+            return cur.get("state", "ok"), cur.get("date", key[1])   # out: `r` waits for him
         if cur and cur.get("date") == key[1]:
             if cur["state"] == "ok" and not fresh:
                 return "ok", key[1]
@@ -1681,7 +1683,7 @@ def start_day(chat, person, req, now=None, store=None, fresh=False):
         if key in _running:
             return "pending", key[1]
         _running.add(key)
-        deal = pending_deal(person, st) if fresh else None
+        deal = due_deal(person, st, now) if fresh else None
         if deal:                                        # struck at the counter: this is it
             st.delete(NS, "deal/" + person)
             req = dict(req, finds=deal["finds"], ask=deal.get("ask") or req.get("ask"),
@@ -1875,6 +1877,38 @@ def post_unfriend(h, args):
 
 DEAL_GIVE_MAX = 1000
 
+# A paid errand takes real time (the owner, 2026-10-16: "when i tell tibbs to
+# go somewhere, then leave and come back hes immediately back after no
+# time"). Paying still sends him at once rather than on the next four-hourly
+# trip, but he is out ERRAND_S: the shop says so, `r` does not bring him back,
+# and /jar/day says "deal" (the shop's cue for the fresh stock) only once he is.
+ERRAND_S = 45 * 60
+
+
+def errand_back(person, store=None, now=None):
+    """When Tibbs is back from `person`'s paid errand, if he is still out."""
+    d = pending_deal(person, store)
+    t = time.time() if now is None else now
+    return d["back"] if d and d.get("back", 0) > t else None
+
+
+def due_deal(person, store=None, now=None):
+    """Their paid errand, if he is back from it (a deal from before ERRAND_S is)."""
+    d = pending_deal(person, store)
+    t = time.time() if now is None else now
+    return d if d and d.get("back", 0) <= t else None
+
+
+def away_line(person, store=None, now=None):
+    """What the shop says while he is out on their errand, or ""."""
+    back = errand_back(person, store, now)
+    if not back:
+        return ""
+    mins = max(1, int(round((back - (time.time() if now is None else now)) / 60.0)))
+    ask_ = (pending_deal(person, store) or {}).get("ask") or ""
+    return "Out on your errand%s -- back in about %d min." % (
+        (" (" + wire.flat(ask_, 40, ascii=True) + ")") if ask_ else "", mins)
+
 
 def owned_by(person, store=None):
     """[(id, name, price)] of the things `person` owns, not counting their shop."""
@@ -1895,8 +1929,15 @@ def owned_by(person, store=None):
 def deal_context(person, coins, store=None):
     things = owned_by(person, store)[:30]
     have = ", ".join("%d: %s (%d coins)" % t for t in things) or "nothing yet"
-    return "They have %s coins, and own: %s." % (
+    out = "They have %s coins, and own: %s." % (
         "%d" % coins if coins is not None else "some", have)
+    back = errand_back(person, store)
+    if back:
+        out += (" You are out right now on the errand they paid for (%s), back in about %d "
+                "minutes: you are answering the note they left on the counter, from the road." % (
+                    (pending_deal(person, store) or {}).get("ask") or "anything good",
+                    max(1, int((back - time.time()) // 60))))
+    return out
 
 
 def make_deal(person, deal, coins=None, store=None, dry=False):
@@ -1957,7 +1998,8 @@ def make_deal(person, deal, coins=None, store=None, dry=False):
             finds = STOCK_SIZE
         st.put(NS, "deal/" + person, json.dumps({
             "finds": max(NEW_ITEMS, min(MAX_FINDS, finds)),
-            "ask": ask_ if clean(ask_) else "", "bribe": take}).encode(), ttl=7 * 86400)
+            "ask": ask_ if clean(ask_) else "", "bribe": take,
+            "back": int(time.time()) + ERRAND_S}).encode(), ttl=7 * 86400)
     sys.stderr.write("jar: %s: deal: take %d give %d trade %s commission %s\n" % (
         person, take, give, trade, bool(com)))
     return None
@@ -1986,7 +2028,8 @@ def deal_words(person, deal, store=None):
     if com:
         ask_ = wire.flat(str(com.get("ask") or ""), 40, ascii=True)
         if n("take"):
-            parts.append("a new stock now" + (": " + ask_ if ask_ else ""))
+            parts.append("Tibbs sets off now, back in about %d min with new finds" % (
+                ERRAND_S // 60) + (": " + ask_ if ask_ else ""))
         else:
             parts.append("Tibbs looks on his next trip" + (": " + ask_ if ask_ else ""))
     if not parts:
@@ -2208,23 +2251,25 @@ def post_day(h, args):
                             fresh=(args.get("fresh") or ["0"])[0] == "1")
     # The whole answer, as GET gives it: "ok DATE" alone was read by the shop
     # as a stock of no items, and replaced the one it had with nothing.
-    h.text((_day_text(day_state(kv.me())) or "pending\n") + _deal_line(kv.me()))
+    h.text((_day_text(day_state(kv.me()), kv.me()) or "pending\n") + _deal_line(kv.me()))
 
 
 def _deal_line(person):
     """"deal" when Tibbs has a commission waiting: the shop asks for a fresh stock."""
-    return "deal\n" if pending_deal(person) else ""
+    return "deal\n" if due_deal(person) else ""
 
 
-def _day_text(cur):
+def _day_text(cur, person=None):
     """What /jar/day answers for a stock with something in it, or None: "ok",
-    then "more" while the rest is still being made."""
+    then "more" while the rest is still being made. While Tibbs is out on
+    `person`'s errand, his line is where he is."""
     if not cur or not cur.get("n") or cur.get("state") not in ("ok", "pending"):
         return None
     out = "ok %s\ntags %s\nitems %d\nbatch %d\n" % (
         cur["date"], ", ".join(cur.get("tags", [])), cur["n"], cur.get("batch", 0))
-    if cur.get("say"):
-        out += "say %s\n" % cur["say"]
+    say = (away_line(person) if person else "") or cur.get("say")
+    if say:
+        out += "say %s\n" % say
     return out + ("more\n" if cur["state"] == "pending" else "")
 
 
@@ -2241,7 +2286,7 @@ def get_day(h, args):
         h.text("ok %s\ntags %s\nitems 0\n" % (cur["date"], ", ".join(cur["tags"]))
                + _deal_line(kv.me()))
     elif cur["state"] in ("ok", "pending"):
-        h.text((_day_text(cur) or "pending\n") + _deal_line(kv.me()))
+        h.text((_day_text(cur, kv.me()) or "pending\n") + _deal_line(kv.me()))
     else:
         h.text("error %s\n" % cur.get("why", "it failed"))
 

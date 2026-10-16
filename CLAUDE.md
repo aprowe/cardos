@@ -1261,6 +1261,12 @@ the old contacts.
   takes its finds off the deck first and makes only the rest; a commission is
   made fresh. Nothing is made for someone who has not looked, and a deck
   never expires.
+- **A paid errand takes real time** (2026-10-16): paid, he sets off at once
+  but is out `ERRAND_S` (45 min). The deal keeps `back`; until then
+  /jar/day's `say` is "Out on your errand ... back in about N min", there is
+  no `deal` line (so the shop does not ask for the stock) and `r` waits;
+  talk is told he answers a note from the road. Unpaid, he waits for the
+  next chapter, as before.
 - **Bans** (`jar.ban`, `banned/ID`): out of the pool for good. An item
   passed on (shown, neither bought nor held) twice is banned by itself
   (`passed_on`, `passes/ID`). `POST /jar/ban?id=N[&off=1]` and `GET

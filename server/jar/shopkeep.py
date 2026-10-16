@@ -514,7 +514,8 @@ DEAL_RULES = (
     "hand you], \"commission\": {\"ask\": what you will go out and look for, \"finds\": "
     "how many, 4 to 8}. You go out every four hours; asked to look for something without "
     "coins, you keep it in mind for that next trip. Coins handed over with a commission send "
-    "you out at once, and they are a bribe: the more, the better what you come back with. "
+    "you out at once -- a trip of most of an hour, so do not promise anything sooner -- and "
+    "they are a bribe: the more, the better what you come back with. "
     "Never put in a deal what they did not agree to, never take more than they have, and say "
     "nothing about the DEAL line itself.]")
 

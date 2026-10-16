@@ -1546,7 +1546,8 @@ class Routes(unittest.TestCase):
         # nothing happens until they say yes: an offer, in the code's words
         self.assertNotIn("tx ", body)
         self.assertIn("offer\tPay 300 coins; hand over ", body)
-        self.assertIn("a new stock now: brass birds.", body)
+        self.assertIn("Tibbs sets off now, back in about 45 min with new finds: brass birds.",
+                      body)
         self.assertNotIn(owl, jar.pool_ids(st))
         s, ans = self.req("POST", "/jar/deal?who=tibbs", self.alex, "coins 500\nyes")
         self.assertEqual(ans, "ok\n")
@@ -1560,7 +1561,19 @@ class Routes(unittest.TestCase):
         self.assertNotIn("tx 1 ", self.req("GET", "/jar/talk?tx=1", self.alex)[1])
         self.assertNotIn("tx ", self.req("GET", "/jar/talk", self.alex)[1])   # an old device
         self.assertIn(owl, jar.pool_ids(st))                    # the owl is his to sell again
-        # the shop is told to ask for a fresh stock, and it is the commission
+        # 2026-10-16: he is out on it a while, and the shop says so; `r` does
+        # not bring him back sooner
+        day = self.req("GET", "/jar/day", self.alex)[1]
+        self.assertNotIn("deal\n", day)
+        self.assertIn("say Out on your errand (brass birds) -- back in about 45 min.", day)
+        batch = jar.day_state("alex", st)["batch"]
+        self.req("POST", "/jar/day?fresh=1", self.alex, "")
+        self.assertEqual(jar.day_state("alex", st)["batch"], batch)
+        self.assertIn("out right now on the errand", jar.deal_context("alex", 500, st))
+        # back: the shop is told to ask for a fresh stock, and it is the commission
+        d = jar.pending_deal("alex", st)
+        st.put(jar.NS, "deal/alex", json.dumps(dict(d, back=int(time.time()) - 1)).encode())
+        self.assertNotIn("Out on your errand", self.req("GET", "/jar/day", self.alex)[1])
         self.assertTrue(self.req("GET", "/jar/day", self.alex)[1].endswith("deal\n"))
         self.req("POST", "/jar/day?fresh=1", self.alex, "")
         body = self.wait_day(self.alex)
@@ -1598,11 +1611,14 @@ class Routes(unittest.TestCase):
         self.assertIn("snails with hats", prompt)
         self.assertEqual(shopkeep.request_take("alex", st), "snails with hats")
         self.assertIsNone(shopkeep.request_take("alex", st))             # once
-        # paid, it is the commission it always was: a new stock now
+        # paid, he sets off at once -- and is out ERRAND_S (2026-10-16)
         paid = dict(deal, take=40)
         self.assertIsNone(jar.make_deal("alex", paid, coins=100, store=st))
         self.assertEqual(jar.pending_deal("alex", st)["ask"], "snails with hats")
-        self.assertIn("a new stock now", jar.deal_words("alex", paid, st))
+        self.assertIn("sets off now", jar.deal_words("alex", paid, st))
+        self.assertTrue(jar.errand_back("alex", st))
+        self.assertIsNone(jar.due_deal("alex", st))
+        self.assertTrue(jar.due_deal("alex", st, now=time.time() + jar.ERRAND_S + 1))
 
     def test_an_offer_declined_does_nothing(self):
         deal = {"take": 40}
