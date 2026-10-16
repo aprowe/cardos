@@ -13,6 +13,10 @@
  * It runs on the shell's stack, so Python calls are stackless (frames on
  * the heap) and the C stack is checked. Nothing else runs while Python
  * does: a key held down stops it (KeyboardInterrupt, cardpy_poll).
+ *
+ * `python FILE` runs the file, then stays at the prompt with its globals;
+ * exit() and ctrl-d on an empty line leave (api->leave). Files, imports,
+ * os and time are cardpy_mod.h.
  */
 #include <setjmp.h>
 #include <string.h>
@@ -49,7 +53,7 @@
 #define CTRL_U 0x15                /* a ctrl chord is the letter's low five bits */
 #define CTRL_D 0x04
 
-enum { T_OUT, T_IN, T_ERR };
+enum { T_OUT, T_IN, T_ERR, T_NOTE };
 
 static const CardApi *api;
 static TermLog L;
@@ -124,15 +128,6 @@ void nlr_jump_fail(void *val) {
   }
 }
 
-/* open() is the port's to give; files on the card come later. */
-static mp_obj_t cardpy_open(size_t n_args, const mp_obj_t *args, mp_map_t *kw) {
-  (void)n_args;
-  (void)args;
-  (void)kw;
-  mp_raise_OSError(MP_EPERM);
-}
-MP_DEFINE_CONST_FUN_OBJ_KW(mp_builtin_open_obj, 1, cardpy_open);
-
 void cardpy_poll(void) {
   if (!armed) {
     if (!api->key_pending()) armed = 1;
@@ -142,33 +137,110 @@ void cardpy_poll(void) {
   }
 }
 
+/* Files, imports, os, time, sys.stdout and exit(): the port's other half. */
+#include "apps/python/cardpy_mod.h"
+
 /* ---- running ------------------------------------------------------------------- */
 
-static void run(const char *text) {
+enum { R_OK, R_ERR, R_EXIT };       /* how a run ended */
+static int exit_code;              /* SystemExit's argument, when it was a number */
+
+/* A line typed at the prompt, or (file) a script on the card, run as
+ * __main__ in the REPL's own globals -- so what a script defines is there
+ * to look at afterwards. SystemExit is not printed: the caller decides. */
+static int run(const char *text, int file) {
   nlr_buf_t nlr;
   volatile int top = 0;
+  int r = R_OK;
   mp_stack_set_top((void *)&top);
   mp_stack_set_limit(STACK_LIMIT);
   armed = 0;
   out_tag = T_OUT;
+  MP_STATE_THREAD(mp_pending_exception) = MP_OBJ_NULL;   /* a stop meant for the last run */
   if (nlr_push(&nlr) == 0) {
-    mp_lexer_t *lex = mp_lexer_new_from_str_len(MP_QSTR__lt_stdin_gt_, text, strlen(text), 0);
-    qstr name = lex->source_name;
-    mp_parse_tree_t tree = mp_parse(lex, MP_PARSE_SINGLE_INPUT);
-    mp_obj_t fun = mp_compile(&tree, name, true);
+    mp_lexer_t *lex;
+    qstr name;
+    mp_parse_tree_t tree;
+    mp_obj_t fun;
+    if (file) {
+      qstr q = qstr_from_str(text);
+      mp_store_global(MP_QSTR___file__, MP_OBJ_NEW_QSTR(q));
+      mp_obj_list_append(mp_sys_argv, MP_OBJ_NEW_QSTR(q));
+      lex = mp_lexer_new_from_file(q);
+    } else {
+      lex = mp_lexer_new_from_str_len(MP_QSTR__lt_stdin_gt_, text, strlen(text), 0);
+    }
+    name = lex->source_name;
+    tree = mp_parse(lex, file ? MP_PARSE_FILE_INPUT : MP_PARSE_SINGLE_INPUT);
+    fun = mp_compile(&tree, name, !file);
     mp_call_function_0(fun);
     nlr_pop();
   } else {
+    mp_obj_t e = MP_OBJ_FROM_PTR(nlr.ret_val);
     flush_out();
-    out_tag = T_ERR;
-    mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
+    if (mp_obj_is_subclass_fast(MP_OBJ_FROM_PTR(mp_obj_get_type(e)),
+                                MP_OBJ_FROM_PTR(&mp_type_SystemExit))) {
+      mp_obj_t v = mp_obj_exception_get_value(e);
+      exit_code = mp_obj_is_small_int(v) ? (int)MP_OBJ_SMALL_INT_VALUE(v) : 0;
+      r = R_EXIT;
+    } else {
+      out_tag = T_ERR;
+      mp_obj_print_exception(&mp_plat_print, e);
+      r = R_ERR;
+    }
   }
   flush_out();
   out_tag = T_OUT;
+  if (file) gc_collect();           /* closes the files the script forgot */
   (void)top;
+  return r;
 }
 
 static void say(const char *s, int tag) { tl_push_text(api, &L, s, tag, 0); }
+
+/* sys.path is ['', '/lib']: beside the script (the current directory),
+ * then the card's own library. */
+static void lib_on_path(void) {
+  nlr_buf_t nlr;
+  if (nlr_push(&nlr) == 0) {
+    mp_obj_list_append(mp_sys_path, mp_obj_new_str("/lib", 4));
+    nlr_pop();
+  }
+}
+
+/* exit(), ctrl-d: back where the app was opened from (Vim, the launcher).
+ * The session goes with it -- the heap is far too big to keep. */
+static void leave(void) {
+  files_close_all();
+  if (api->leave() < 0) say("(fn-` closes this)", T_NOTE);
+}
+
+/* python FILE: run it, say how it went, and stay at the prompt with its
+ * globals, as `python -i` does. Its folder becomes the current one, which
+ * is where open('x') and import look. */
+static void run_file(const char *arg) {
+  char path[PATH_MAX_], msg[PATH_MAX_ + 48];
+  const char *base;
+  CappStat st;
+  uint32_t t0, ms;
+  int r;
+  if (norm_path(arg, path, sizeof path) || api->stat(path, &st) || st.is_dir) {
+    api->fmt(msg, sizeof msg, "no such file: %s", arg);
+    say(msg, T_ERR);
+    return;
+  }
+  cwd_to_folder_of(path);
+  base = strrchr(path, '/') + 1;
+  t0 = api->ticks_ms();
+  r = run(path, 1);
+  ms = api->ticks_ms() - t0;
+  if (r == R_EXIT)
+    api->fmt(msg, sizeof msg, "-- %s exited (%d) after %u ms", base, exit_code, (unsigned)ms);
+  else
+    api->fmt(msg, sizeof msg, "-- ran %s in %u ms%s", base, (unsigned)ms,
+             r == R_ERR ? ", with an error" : "");
+  say(msg, T_NOTE);
+}
 
 /* Enter: the line joins the block, which runs once it is whole. */
 /* ---- history: the lines typed, newest last; up and down walk it ----------------- */
@@ -356,14 +428,16 @@ static void submit(void) {
   in_n = 0;
   in[0] = 0;
   if (mp_repl_continue_with_input(src)) return;
-  if (src_n) run(src);
+  if (src_n && run(src, 0) == R_EXIT) leave();
   src_n = 0;
   src[0] = 0;
 }
 
 /* ---- the screen ------------------------------------------------------------------ */
 
-static uint16_t colour(int tag) { return tag == T_IN ? C_IN : tag == T_ERR ? C_ERR : FG; }
+static uint16_t colour(int tag) {
+  return tag == T_IN ? C_IN : tag == T_ERR ? C_ERR : tag == T_NOTE ? DIM : FG;
+}
 
 static void app_paint(void *st, CRect c) {
   char bar[48];
@@ -402,6 +476,10 @@ static int app_key(void *st, uint8_t k) {
   if (k == CAPP_KEY_UP || k == CAPP_KEY_DOWN) {
     hist_walk(k == CAPP_KEY_UP);
     L.scroll = 0;
+    return 1;
+  }
+  if (k == CTRL_D && !in_n && !src_n && !L.scroll) {   /* on an empty line: leave */
+    if (ready) leave();
     return 1;
   }
   if (k == CTRL_U || k == CTRL_D) {       /* the log, half a screen at a time */
@@ -449,17 +527,25 @@ const CappInfo capp_info = {
   "enter\trun the line (a block runs at a blank line)\n"
   "tab\tcomplete a name; at the start, indent\n"
   "up/down\tthe lines typed before\nctrl-u ctrl-d\tscroll the log\n"
-  "esc\tdrop the block, clear the line\nany key\tstop a running program\n",
+  "ctrl-d\ton an empty line: leave, as exit() does\n"
+  "esc\tdrop the block, clear the line\nany key\tstop a running program\n"
+  "\n"
+  "python FILE runs it, then stays here with what it defined.\n"
+  "open() reads and writes the card; import finds NAME.py\n"
+  "beside the script, then in /lib. os and time are here too.\n",
 };
 
 int capp_main(const CardApi *a, int argc, char **argv) {
-  int nb = 0;
+  int nb = 0, i;
   volatile int top = 0;
-  (void)argc;
-  (void)argv;
   api = a;
   api->mem_set(&L, 0, sizeof L);
   heap_total = 0;
+  ready = in_n = src_n = out_n = 0;
+  in[0] = src[0] = 0;
+  cwd[0] = '/';
+  cwd[1] = 0;
+  for (i = 0; i < FILES_MAX; i++) files[i] = -1;
   while (nb < HEAP_BLOCKS && heap_total < HEAP_WANT) {
     size_t room = api->big_room(), n;
     uint8_t *b;
@@ -481,7 +567,9 @@ int capp_main(const CardApi *a, int argc, char **argv) {
     api->fmt(hello, sizeof hello, "MicroPython %s, %u KB in %d block%s", MICROPY_VERSION_STRING,
              (unsigned)(heap_total / 1024), nb, nb == 1 ? "" : "s");
     say(hello, T_OUT);
-    run("print(1 + 1)");
+    lib_on_path();
+    if (argc > 1 && argv[1][0]) run_file(argv[1]);
+    else run("print(1 + 1)", 0);
   } else {
     say("Not enough memory for Python's heap.", T_ERR);
   }

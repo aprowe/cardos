@@ -44,8 +44,19 @@ void cardpy_poll(void);
 #define MICROPY_VM_HOOK_LOOP                    MICROPY_VM_HOOK_POLL
 #define MICROPY_VM_HOOK_RETURN                  MICROPY_VM_HOOK_POLL
 
-#define MICROPY_ENABLE_EXTERNAL_IMPORT          (0)   /* no modules from the card yet */
-#define MICROPY_PY_SYS_STDFILES                 (0)
+/* Files on the card (cardpy_mod.h): open(), import from the script's
+ * folder and /lib, sys.stdout as a stream (print(file=f)), and a finaliser
+ * so a file nothing refers to is closed when the heap is collected. */
+#define MICROPY_ENABLE_EXTERNAL_IMPORT          (1)
+#define MICROPY_PY_SYS_STDFILES                 (1)
+#define MICROPY_ENABLE_FINALISER                (1)
+
+/* exit() and quit(), beside sys.exit: SystemExit, which leaves the app. */
+extern const struct _mp_obj_fun_builtin_var_t cardpy_exit_obj;
+#define MICROPY_PORT_EXTRA_BUILTINS \
+    { MP_ROM_QSTR(MP_QSTR_exit), MP_ROM_PTR(&cardpy_exit_obj) }, \
+    { MP_ROM_QSTR(MP_QSTR_quit), MP_ROM_PTR(&cardpy_exit_obj) },
+
 #define MICROPY_PY_SYS_PLATFORM                 "cardos"
 #define MICROPY_HW_BOARD_NAME                   "Cardputer"
 #define MICROPY_HW_MCU_NAME                     "ESP32-S3"

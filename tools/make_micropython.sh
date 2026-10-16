@@ -20,13 +20,15 @@ W=/tmp/cardos-mpy
 [ -d $W/mpy ] || git clone -q --depth 1 --branch '"$TAG"' https://github.com/micropython/micropython.git $W/mpy
 rm -rf $W/out && mkdir -p $W/out && tar xzf /tmp/cardos-pyconf.tgz -C $W/out
 cd $W/out
-printf "MICROPYTHON_TOP = $W/mpy\ninclude \$(MICROPYTHON_TOP)/ports/embed/embed.mk\n" > micropython_embed.mk
+cp cardpy_mod.h cardpy_scan.c   # the scanner reads only .c files
+printf "MICROPYTHON_TOP = $W/mpy\nSRC_QSTR += cardpy_scan.c\ninclude \$(MICROPYTHON_TOP)/ports/embed/embed.mk\n" > micropython_embed.mk
 make -s -f micropython_embed.mk >/dev/null
 cp $W/mpy/LICENSE micropython_embed/
 tar czf /tmp/cardos-mpembed.tgz -C micropython_embed .
 '
 
 # The config and the headers it includes (cardpy_hal.h): every .h beside it.
+# cardpy_mod.h is also scanned (SRC_QSTR) for the names and modules it adds.
 tar czf /tmp/cardos-pyconf.tgz -C "$(dirname "$CONF")" $(cd "$(dirname "$CONF")" && ls *.h)
 if [ -n "${HOST:-}" ]; then
   scp -q /tmp/cardos-pyconf.tgz "$HOST:/tmp/cardos-pyconf.tgz"

@@ -36,9 +36,17 @@ extern const struct _mp_obj_module_t mp_module_micropython;
 #undef MODULE_DEF_MICROPYTHON
 #define MODULE_DEF_MICROPYTHON { MP_ROM_QSTR(MP_QSTR_micropython), MP_ROM_PTR(&mp_module_micropython) },
 
+extern const struct _mp_obj_module_t cardpy_module_os;
+#undef MODULE_DEF_OS
+#define MODULE_DEF_OS { MP_ROM_QSTR(MP_QSTR_os), MP_ROM_PTR(&cardpy_module_os) },
+
 extern const struct _mp_obj_module_t mp_module_sys;
 #undef MODULE_DEF_SYS
 #define MODULE_DEF_SYS { MP_ROM_QSTR(MP_QSTR_sys), MP_ROM_PTR(&mp_module_sys) },
+
+extern const struct _mp_obj_module_t cardpy_module_time;
+#undef MODULE_DEF_TIME
+#define MODULE_DEF_TIME { MP_ROM_QSTR(MP_QSTR_time), MP_ROM_PTR(&cardpy_module_time) },
 
 
 #define MICROPY_REGISTERED_MODULES \
@@ -46,7 +54,9 @@ extern const struct _mp_obj_module_t mp_module_sys;
     MODULE_DEF_GC \
     MODULE_DEF_MATH \
     MODULE_DEF_MICROPYTHON \
+    MODULE_DEF_OS \
     MODULE_DEF_SYS \
+    MODULE_DEF_TIME \
     MODULE_DEF___MAIN__ \
 // MICROPY_REGISTERED_MODULES
 
