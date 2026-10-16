@@ -869,6 +869,25 @@ ICONS = {
     ],
     # A calculator whose screen is showing a graph -- which is the whole
     # difference between this and a plain calculator.
+    # Two snakes, blue over yellow, head to tail: after the Python logo.
+    "Python": [
+        "....KKKKKK......",
+        "...KbbbbbbK.....",
+        "...KbWbbbbK.....",
+        "...KbbbbbbK.....",
+        ".KKKKKKbbbK.....",
+        "KbbbbbbbbbKKKK..",
+        "KbbbbbbbbbKyyyK.",
+        "KbbbbbbbbKyyyyK.",
+        "KbbbKKKKKyyyyyK.",
+        "KbbKyyyyyyyyyyK.",
+        ".KKKyyyyyyyyyyK.",
+        "....KyyyKKKKKK..",
+        "....KyyyyyyK....",
+        "....KyyyyWyK....",
+        "....KyyyyyyK....",
+        ".....KKKKKK.....",
+    ],
     "Calc": [
         "..KKKKKKKKKKKK..",
         ".KDDDDDDDDDDDDK.",

@@ -36,6 +36,7 @@ jar       Games
 notes     Plan
 photo     Make
 pet       Games
+python    Make
 quoridor  Games
 kart      Games
 chat      Net
