@@ -130,6 +130,50 @@ class Publish(unittest.TestCase):
         build.publish(self.store, self.fw, self.apps, True)
         self.assertEqual(notes()[-1]["text"], "b, c: run update")
 
+    def test_icons_are_published_beside_the_apps(self):
+        # build/icons beside build/apps; STORE/icons beside STORE/apps.
+        os.makedirs(os.path.join(self.out, "icons"))
+        self.put("apps/a.capp", app_image(b"a"))
+        self.put("icons/A App.cic", b"CIC1" + bytes(516))
+        self.put("icons/generic.cic", b"CIC1" + bytes(516))
+        pub = lambda: build.publish(self.store, self.fw, self.apps, False)
+        self.assertEqual(sorted(pub()), ["A App.cic", "a", "generic.cic"])
+        self.assertEqual(pub(), [])
+        self.put("icons/A App.cic", b"CIC1" + bytes(515) + b"x")
+        self.assertEqual(pub(), ["A App.cic"])
+        os.remove(os.path.join(self.out, "icons", "generic.cic"))
+        pub()
+        self.assertEqual(updates.icon_files(os.path.join(self.store, "icons")), ["A App.cic"])
+        man = updates.manifest(firmware=os.devnull, apps_dir=os.path.join(self.store, "apps"),
+                               icons=True).splitlines()
+        self.assertEqual(man[1].split(None, 3)[3], "A App")
+
+    def test_a_tree_with_no_icons_leaves_the_stores_alone(self):
+        os.makedirs(os.path.join(self.out, "icons"))
+        self.put("icons/generic.cic", b"CIC1" + bytes(516))
+        build.publish(self.store, self.fw, self.apps, False)
+        shutil.rmtree(os.path.join(self.out, "icons"))
+        build.publish(self.store, self.fw, self.apps, False)
+        self.assertEqual(updates.icon_files(os.path.join(self.store, "icons")), ["generic.cic"])
+
+    def test_an_icon_that_is_not_one_is_refused(self):
+        os.makedirs(os.path.join(self.out, "icons"))
+        self.put("icons/x.cic", b"<html>")
+        with self.assertRaises(ValueError):
+            build.publish(self.store, self.fw, self.apps, False)
+
+    def test_icons_alone_do_not_notify(self):
+        from server import msg
+        last = lambda: msg.notes_since(None, 0)[1]     # the id, not the capped queue
+        before = last()
+        os.makedirs(os.path.join(self.out, "icons"))
+        self.put("icons/generic.cic", b"CIC1" + bytes(516))
+        self.assertEqual(build.publish(self.store, self.fw, self.apps, False), ["generic.cic"])
+        self.assertEqual(last(), before)
+        self.put("apps/a.capp", app_image(b"a"))       # and the test can tell
+        build.publish(self.store, self.fw, self.apps, False)
+        self.assertEqual(last(), before + 1)
+
     def test_firmware_only_when_asked(self):
         self.put("fw.bin", firmware_image(b"1"))
         self.put("apps/a.capp", app_image())

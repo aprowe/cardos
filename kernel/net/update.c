@@ -21,7 +21,10 @@ static const char *TAG = "update";
 #define DEFAULT_BASE  CAPP_PROXY_DEFAULT
 #define UPDATE_DIR    CAPP_SYS "/update"
 #define FIRMWARE_PATH UPDATE_DIR "/firmware.bin"
-#define MANIFEST_MAX  4096                   /* 48 apps at ~40 bytes a line, and room */
+/* 48 apps at ~40 bytes a line, and 64 icons at ~30. Firmware from before
+ * the icons has 4096 here, which is why the server lists them only when
+ * asked (?icons=1): that firmware never asks. */
+#define MANIFEST_MAX  6144
 
 static char s_error[96];
 static char s_token[64];
@@ -135,6 +138,11 @@ static void capp_path(const char *name, char *out, size_t size) {
   snprintf(out, size, "%s/%s.capp", ICONS_DIR, name);
 }
 
+/* /apps/icons/NAME.cic, where the launcher looks (icons.c, load_cic). */
+static void icon_path(const char *name, char *out, size_t size) {
+  snprintf(out, size, "%s/%s.cic", ICON_DIR, name);
+}
+
 int update_check(UpdateCheck *out) { return update_check_as(out, OWN_FLAVOR); }
 
 int update_check_as(UpdateCheck *out, const char *flavor) {
@@ -160,7 +168,7 @@ int update_check_as(UpdateCheck *out, const char *flavor) {
   }
 
   if (!update_flavor_valid(flavor)) flavor = OWN_FLAVOR;
-  snprintf(url, sizeof url, "%s/update?flavor=%s", update_base(), flavor);
+  snprintf(url, sizeof url, "%s/update?flavor=%s&icons=1", update_base(), flavor);
   n = http_request("GET", url, NULL, NULL, bearer(), w->text, sizeof w->text, 15000);
   if (n < 0) {
     if (n == -403)
@@ -170,6 +178,11 @@ int update_check_as(UpdateCheck *out, const char *flavor) {
     rc = -2;
     goto out;
   }
+  /* A reply that filled the buffer may have been cut. The icons come after
+   * the apps, so they are what goes first; say so rather than guess. */
+  if (n >= (int)sizeof w->text - 1)
+    ESP_LOGW(TAG, "the manifest filled %u bytes: its end may be missing",
+             (unsigned)sizeof w->text);
   if (manifest_parse(w->text, &out->m) < 0) {
     snprintf(s_error, sizeof s_error, "that is not a manifest -- is the server current?");
     rc = -3;
@@ -184,8 +197,24 @@ int update_check_as(UpdateCheck *out, const char *flavor) {
     if (hash_file(path, &w->local.app_hash[i]) == 0) w->local.have_app[i] = 1;
   }
 
+  /* The colour icons: 520 bytes each, read whole. A size that differs is
+   * stale without reading it. */
+  for (i = 0; i < out->m.nicons; i++) {
+    char path[96];
+    FsStat st;
+    icon_path(out->m.icon[i].name, path, sizeof path);
+    if (fs_stat(path, &st) != 0 || st.is_dir) continue;
+    if ((uint32_t)st.size != out->m.icon[i].size) {
+      w->local.have_icon[i] = 1;
+      w->local.icon_hash[i] = ~out->m.icon[i].hash;
+    } else if (hash_file(path, &w->local.icon_hash[i]) == 0) {
+      w->local.have_icon[i] = 1;
+    }
+  }
+
   out->firmware_stale = manifest_diff(&out->m, &w->local, out->stale);
   for (i = 0; i < out->m.napps; i++) out->nstale_apps += out->stale[i] != 0;
+  out->nstale_icons = manifest_diff_icons(&out->m, &w->local, out->stale_icon);
 out:
   free(w);
   return rc;
@@ -210,38 +239,30 @@ void update_forget_check(void) { s_check_valid = 0; }
 
 /* ---- apps ----------------------------------------------------------------- */
 
-static int install_app(const ManifestApp *a, UpdateLog log, void *ctx) {
-  char url[160], tmp[88], old[88], dst[80], line[96];
+/* Download `url` beside `dst` as DST.new, check its size and hash, and swap
+ * it in. `label` names it in the log. 0 when it is in place; the old file is
+ * untouched otherwise. Apps and colour icons both come this way. */
+static int install_file(const char *url, const char *dst, uint32_t size, uint32_t want,
+                        const char *label, UpdateLog log, void *ctx) {
+  char tmp[112], old[112], line[96];
   uint32_t hash = 0;
   FsStat st;
   int n;
 
-  snprintf(url, sizeof url, "%s/update/app/%s", update_base(), a->name);
-  capp_path(a->name, dst, sizeof dst);
-  /* Wherever it already is, it stays -- the user may have moved it. An app
-   * the card has never had goes where the manifest says, not the top level:
-   * that used to be the fate of every app Build made. */
-  if (a->folder[0] && fs_stat(dst, &st) != 0) {
-    char dir[48];
-    snprintf(dir, sizeof dir, "%s/%s", ICONS_DIR, a->folder);
-    if (fs_stat(dir, &st) != 0) fs_mkdir(dir);
-    snprintf(dst, sizeof dst, "%s/%s.capp", dir, a->name);
-  }
   snprintf(tmp, sizeof tmp, "%s.new", dst);
-
   n = http_download_ex(url, tmp, bearer(), NULL, NULL, 30000);
   if (n < 0) {
-    snprintf(line, sizeof line, "%s: download failed (%d)", a->name, n);
+    snprintf(line, sizeof line, "%s: download failed (%d)", label, n);
     say(log, ctx, line);
     fs_remove(tmp);
     return -1;
   }
 
   /* Measured and hashed before it is allowed to replace anything. */
-  if (fs_stat(tmp, &st) != 0 || (uint32_t)st.size != a->size ||
-      hash_file(tmp, &hash) != 0 || hash != a->hash) {
-    snprintf(line, sizeof line, "%s: bad copy (%u of %u bytes)", a->name,
-             (unsigned)(fs_stat(tmp, &st) == 0 ? st.size : 0), (unsigned)a->size);
+  if (fs_stat(tmp, &st) != 0 || (uint32_t)st.size != size ||
+      hash_file(tmp, &hash) != 0 || hash != want) {
+    snprintf(line, sizeof line, "%s: bad copy (%u of %u bytes)", label,
+             (unsigned)(fs_stat(tmp, &st) == 0 ? st.size : 0), (unsigned)size);
     say(log, ctx, line);
     fs_remove(tmp);
     return -1;
@@ -254,31 +275,85 @@ static int install_app(const ManifestApp *a, UpdateLog log, void *ctx) {
   snprintf(old, sizeof old, "%s.old", dst);
   fs_remove(old);
   if (fs_stat(dst, &st) == 0 && fs_rename(dst, old) != 0) {
-    snprintf(line, sizeof line, "%s: could not move the old one aside", a->name);
+    snprintf(line, sizeof line, "%s: could not move the old one aside", label);
     say(log, ctx, line);
     fs_remove(tmp);
     return -1;
   }
   if (fs_rename(tmp, dst) != 0) {
-    snprintf(line, sizeof line, "%s: could not replace the old one", a->name);
+    snprintf(line, sizeof line, "%s: could not replace the old one", label);
     say(log, ctx, line);
     fs_rename(old, dst);
     fs_remove(tmp);
     return -1;
   }
   fs_remove(old);
+  return 0;
+}
+
+static int install_app(const ManifestApp *a, UpdateLog log, void *ctx) {
+  char url[160], dst[80], line[96];
+  FsStat st;
+
+  snprintf(url, sizeof url, "%s/update/app/%s", update_base(), a->name);
+  capp_path(a->name, dst, sizeof dst);
+  /* Wherever it already is, it stays -- the user may have moved it. An app
+   * the card has never had goes where the manifest says, not the top level:
+   * that used to be the fate of every app Build made. */
+  if (a->folder[0] && fs_stat(dst, &st) != 0) {
+    char dir[48];
+    snprintf(dir, sizeof dir, "%s/%s", ICONS_DIR, a->folder);
+    if (fs_stat(dir, &st) != 0) fs_mkdir(dir);
+    snprintf(dst, sizeof dst, "%s/%s.capp", dir, a->name);
+  }
+  if (install_file(url, dst, a->size, a->hash, a->name, log, ctx) != 0) return -1;
   snprintf(line, sizeof line, "%s.capp %u bytes", a->name, (unsigned)a->size);
   say(log, ctx, line);
   return 0;
 }
 
+/* A colour icon into /apps/icons, the same way: beside, checked, swapped.
+ * Named by the app's own name ("Dashboard Link"), so a space in the URL. */
+static int install_icon(const ManifestIcon *ic, UpdateLog log, void *ctx) {
+  char url[192], dst[96], label[40];
+  size_t o;
+  const char *p;
+  FsStat st;
+
+  o = (size_t)snprintf(url, sizeof url, "%s/update/icon/", update_base());
+  for (p = ic->name; *p && o + 4 < sizeof url; p++) {
+    if (*p == ' ') { memcpy(url + o, "%20", 3); o += 3; }
+    else url[o++] = *p;
+  }
+  url[o] = 0;
+  if (fs_stat(ICON_DIR, &st) != 0) fs_mkdir(ICON_DIR);
+  icon_path(ic->name, dst, sizeof dst);
+  snprintf(label, sizeof label, "%s.cic", ic->name);
+  return install_file(url, dst, ic->size, ic->hash, label, log, ctx);
+}
+
 int update_apps(const UpdateCheck *c, UpdateLog log, void *ctx) {
-  int i, done = 0;
+  int i, done = 0, icons = 0;
   for (i = 0; i < c->m.napps; i++) {
     if (!c->stale[i]) continue;
     if (install_app(&c->m.app[i], log, ctx) == 0) done++;
   }
-  if (done) icons_reload();
+  /* After the apps: an icon is only a face, and an app is the thing. One
+   * line for the lot -- fifty "X.cic 520 bytes" lines would bury the apps.
+   * It starts with a word, not the count: the Update app reads a line that
+   * starts with a digit as the firmware's "N KB on the card". */
+  for (i = 0; i < c->m.nicons; i++) {
+    if (!c->stale_icon[i]) continue;
+    if (install_icon(&c->m.icon[i], log, ctx) == 0) icons++;
+  }
+  if (c->nstale_icons) {
+    char line[48];
+    snprintf(line, sizeof line, "icons %d of %d installed", icons, c->nstale_icons);
+    say(log, ctx, line);
+  }
+  /* The reload forgets the colour cache (colour_forget) and where each
+   * entry's picture comes from, so a new .cic is drawn at once. */
+  if (done || icons) icons_reload();
   return done;
 }
 

@@ -187,3 +187,97 @@ void test_manifest_diff_without_firmware_never_says_stale(void) {
   CHECK_EQ(manifest_diff(&m, &l, stale), 0);
   CHECK_EQ(stale[0], 1);
 }
+
+/* ---- colour icons (2026-10-16) --------------------------------------------
+ *
+ * `update apps` carries the .cic files too. A server lists them only when
+ * asked (/update?icons=1), and after the apps; an icon is named by the app's
+ * own name, which can have a space in it ("Dashboard Link"), so the name is
+ * the rest of the line. */
+
+void test_manifest_reads_icons_named_to_the_end_of_the_line(void) {
+  Manifest m;
+  int n = manifest_parse("app dashlink 00000001 900 Net\n"
+                         "icon 0000beef 520 Dashboard Link\r\n"
+                         "icon DEADBEEF 520 folder-Games\n"
+                         "icon 00000002 520 Edit   \n", &m);
+  CHECK_EQ(n, 4);
+  CHECK_EQ(m.napps, 1);
+  CHECK_EQ(m.nicons, 3);
+  CHECK(strcmp(m.icon[0].name, "Dashboard Link") == 0);
+  CHECK_EQ(m.icon[0].hash, 0x0000beefu);
+  CHECK_EQ((int)m.icon[0].size, 520);
+  CHECK(strcmp(m.icon[1].name, "folder-Games") == 0);
+  CHECK_EQ(m.icon[1].hash, 0xDEADBEEFu);
+  CHECK(strcmp(m.icon[2].name, "Edit") == 0);     /* trailing spaces trimmed */
+}
+
+/* The name becomes /apps/icons/NAME.cic: no dot, no slash, nothing too long
+ * to be what the launcher would look up. */
+void test_manifest_an_icon_name_that_is_not_a_name_is_dropped(void) {
+  Manifest m;
+  int n = manifest_parse("icon 1 520 ../x\n"
+                         "icon 1 520 a/b\n"
+                         "icon 1 520 a.b\n"
+                         "icon 1 520 abcdefghijklmnopqrstuvwxyz0123\n"
+                         "icon zz 520 Bad Hash\n"
+                         "icon 1 lots Bad Size\n"
+                         "icon 1 520\n"
+                         "icon 1 520 Ok_Name-2\n", &m);
+  CHECK_EQ(n, 1);
+  CHECK_EQ(m.nicons, 1);
+  CHECK(strcmp(m.icon[0].name, "Ok_Name-2") == 0);
+}
+
+void test_manifest_counts_icons_that_do_not_fit(void) {
+  static char text[(MANIFEST_MAX_ICONS + 5) * 32];
+  Manifest m;
+  int i, o = 0;
+  for (i = 0; i < MANIFEST_MAX_ICONS + 5; i++)
+    o += snprintf(text + o, sizeof text - o, "icon %08x 520 Icon %d\n", i, i);
+  manifest_parse(text, &m);
+  CHECK_EQ(m.nicons, MANIFEST_MAX_ICONS);
+  CHECK_EQ(m.icons_dropped, 5);
+  CHECK_EQ(m.dropped, 0);                         /* apps are counted apart */
+}
+
+/* What a server sends a device that did not ask for icons, and what every
+ * server sent before them: parsed exactly as it was, with no icons. */
+void test_manifest_an_old_manifest_has_no_icons(void) {
+  Manifest m;
+  CHECK_EQ(manifest_parse(SAMPLE, &m), 3);
+  CHECK_EQ(m.napps, 2);
+  CHECK_EQ(m.nicons, 0);
+  CHECK_EQ(m.icons_dropped, 0);
+}
+
+/* The other direction: firmware from before icons skips any line whose
+ * first word it does not know (the `font` line above), so an icon line
+ * among the apps changes nothing about the apps. Checked here by parsing
+ * with and without them -- the app half of the parser is the old one. */
+void test_manifest_icon_lines_leave_the_apps_alone(void) {
+  Manifest a, b;
+  manifest_parse("app pinball 8c1e2b47 19672 Games\napp claude DEADBEEF 24312\n", &a);
+  manifest_parse("icon 00000001 520 Pinball\napp pinball 8c1e2b47 19672 Games\n"
+                 "icon 00000002 520 Claude\napp claude DEADBEEF 24312\n"
+                 "icon 00000003 520 generic\n", &b);
+  CHECK_EQ(a.napps, b.napps);
+  CHECK(memcmp(a.app, b.app, sizeof a.app) == 0);
+  CHECK_EQ(b.nicons, 3);
+}
+
+void test_manifest_diff_icons_finds_what_differs(void) {
+  Manifest m;
+  ManifestLocal l;
+  uint8_t stale[MANIFEST_MAX_ICONS];
+  manifest_parse("icon 00000001 520 Todo\nicon 00000002 520 Edit\n"
+                 "icon 00000003 520 generic\n", &m);
+  memset(&l, 0, sizeof l);
+  l.have_icon[0] = 1; l.icon_hash[0] = 1;          /* current */
+  l.have_icon[1] = 1; l.icon_hash[1] = 7;          /* differs */
+  /* generic is not on the card at all */
+  CHECK_EQ(manifest_diff_icons(&m, &l, stale), 2);
+  CHECK_EQ(stale[0], 0);
+  CHECK_EQ(stale[1], 1);
+  CHECK_EQ(stale[2], 1);
+}

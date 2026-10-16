@@ -331,7 +331,10 @@ static void seed_fonts(void) {
 /* The colour icons, written out beside the apps. Same reasoning as the
  * binaries: a file the user can only get onto the card with a card reader is a
  * file they will not have. Overwritten whenever the size differs, which is the
- * cheap half of the check the .capp seeding does. */
+ * cheap half of the check the .capp seeding does -- and every .cic is the same
+ * size, so one `update apps` put there (kernel/net/update.c) is kept. Only
+ * what a blank card needs is embedded (SEED in tools/make_color_icons.py);
+ * every other app's icon arrives with `update apps`. */
 static void seed_colour_icons(void) {
   size_t i;
   char path[96];

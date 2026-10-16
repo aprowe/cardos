@@ -290,6 +290,13 @@ static int api_update_check(char *out, size_t n) {
                             count ? ", " : "", c->m.app[i].name);
     count++;
   }
+  /* The colour icons are one item, "icons": the install says one line for
+   * them ("icons N of M installed"), which the Update app ticks off. */
+  if (c->nstale_icons) {
+    len += (size_t)snprintf(out + (len < n ? len : n - 1), n > len ? n - len : 1, "%sicons",
+                            count ? ", " : "");
+    count++;
+  }
   if (c->firmware_stale) {
     snprintf(out + (len < n ? len : n - 1), n > len ? n - len : 1, "%sfirmware",
              count ? ", " : "");

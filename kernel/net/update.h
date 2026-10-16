@@ -2,9 +2,10 @@
  * manifest.h, which is portable and tested.
  *
  * The CardOS server (server/updates.py) serves what it last built under /update:
- * a manifest, the firmware, and each .capp. This fetches the manifest,
- * hashes what is on the card, reads the running firmware's own SHA, and says
- * what is stale; then installs it. Apps are downloaded beside the old one and
+ * a manifest, the firmware, each .capp and each colour icon (.cic). This
+ * fetches the manifest, hashes what is on the card, reads the running
+ * firmware's own SHA, and says what is stale; then installs it. Apps and
+ * icons are downloaded beside the old one and
  * renamed over it, so a failed download costs nothing. The firmware goes to
  * the card and then through launcher_boot(), which validates it, writes the
  * OTA slot we are not running from, arms rollback and restarts. A new CardOS
@@ -25,6 +26,8 @@ typedef struct {
   int firmware_stale;
   int stale[MANIFEST_MAX_APPS];
   int nstale_apps;
+  uint8_t stale_icon[MANIFEST_MAX_ICONS];   /* colour icons, as stale[] is apps */
+  int nstale_icons;
 } UpdateCheck;
 
 /* The proxy's base URL: the PROXY variable, or the compiled-in default. */
@@ -64,8 +67,11 @@ void         update_forget_check(void);
  * whichever screen is listening. */
 typedef void (*UpdateLog)(void *ctx, const char *line);
 
-/* Install every stale app in `c`. Returns how many were installed; the log
- * gets a line per failure. Rescans the launcher's list afterwards. */
+/* Install every stale app in `c`, then every stale colour icon (into
+ * /apps/icons, beside and swapped like an app). Returns how many apps were
+ * installed; the log gets a line per failure and one for the icons.
+ * Rescans the launcher's list afterwards, which forgets the cached colour
+ * icons, so a new one is drawn at once. */
 int update_apps(const UpdateCheck *c, UpdateLog log, void *ctx);
 
 /* Download and install the firmware. Does not return on success -- the chip

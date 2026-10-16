@@ -4,7 +4,17 @@ Served under /update (the routes are at the bottom). The manifest is one line pe
 whitespace separated, because the device has no JSON parser:
 
     firmware <sha256 of the ELF, hex> <size>
-    app <name> <fnv1a32 of the file, hex> <size>
+    app <name> <fnv1a32 of the file, hex> <size> [folder]
+    icon <fnv1a32 of the file, hex> <size> <name, to the end of the line>
+
+The icon lines are the launcher's colour icons, /apps/icons/NAME.cic on the
+card, so that a new app's picture arrives with `update apps` rather than only
+inside a firmware. They are sent only when the device asks (?icons=1), and
+after the apps. Firmware from before them would skip the lines -- manifest.c
+has always passed over a first word it does not know -- but it reads the
+manifest into 4 KB, and fifty icons would push the last apps past the end.
+An icon is named as the launcher looks it up, by the app's own name, which
+may have a space in it ("Dashboard Link"); hence last on the line.
 
 There are two firmware builds, and ?flavor= picks which one the manifest and
 /update/firmware are about: "debug" (the `cardputer` env, -Og) or "release"
@@ -51,6 +61,9 @@ def firmware_path(flavor):
     time, so a test can point FIRMWARE somewhere else."""
     return FIRMWARE if flavor == "debug" else FIRMWARE_RELEASE
 APPS_DIR = os.path.join(ROOT, "build", "apps")
+# The .cic files, beside the apps: tools/make_color_icons.py writes them (and
+# tools/build_apps.py has it do so, so the droplet's build has them too).
+ICONS_DIR = os.path.join(ROOT, "build", "icons")
 # Which folder each app belongs in. Shared with tools/build_apps.py, which
 # seeds the firmware from it; the manifest carries it so a first install
 # lands in the folder too, not at the top level.
@@ -120,6 +133,36 @@ def app_files(apps_dir=None):
                   if f.endswith(".capp") and os.path.isfile(os.path.join(apps_dir, f)))
 
 
+def icons_dir_for(apps_dir):
+    """Where the icons are for a given apps directory: its sibling `icons`
+    -- build/icons beside build/apps, STORE/icons beside STORE/apps."""
+    return os.path.join(os.path.dirname(os.path.normpath(apps_dir)), "icons")
+
+
+def icon_files(icons_dir):
+    if not icons_dir or not os.path.isdir(icons_dir):
+        return []
+    return sorted(f for f in os.listdir(icons_dir)
+                  if f.endswith(".cic") and valid_icon_name(f[:-len(".cic")])
+                  and os.path.isfile(os.path.join(icons_dir, f)))
+
+
+def valid_icon_name(name):
+    """An icon is named by its app's name: letters, digits, '-', '_' and
+    inner spaces. Never a path. 23 characters at most, which is what the
+    device keeps (MANIFEST_ICON_NAME_MAX)."""
+    return bool(name) and len(name) <= 23 and name == name.strip() and \
+        all(c.isalnum() and c.isascii() or c in "-_ " for c in name)
+
+
+def icon_path(name, icons_dir):
+    """The file for icon `name`, or None."""
+    if not valid_icon_name(name):
+        return None
+    p = os.path.join(icons_dir, name + ".cic")
+    return p if os.path.isfile(p) else None
+
+
 def load_folders(path=None):
     """{app: folder} from apps/folders.txt; top-level apps ("-") are left out."""
     out = {}
@@ -134,9 +177,10 @@ def load_folders(path=None):
     return out
 
 
-def manifest(firmware=None, apps_dir=None, folders=None):
+def manifest(firmware=None, apps_dir=None, folders=None, icons_dir=None, icons=False):
     """The locations default at call time, not definition time, so a test
-    can point the module somewhere else."""
+    can point the module somewhere else. `icons` adds the icon lines, from
+    `icons_dir` (by default the one beside `apps_dir`)."""
     firmware = firmware or FIRMWARE
     apps_dir = apps_dir or APPS_DIR
     folders = load_folders() if folders is None else folders
@@ -160,6 +204,11 @@ def manifest(firmware=None, apps_dir=None, folders=None):
         if folders.get(stem):
             line += " " + folders[stem]
         lines.append(line)
+    if icons:
+        for fn in icon_files(icons_dir or icons_dir_for(apps_dir)):
+            with open(os.path.join(icons_dir or icons_dir_for(apps_dir), fn), "rb") as f:
+                data = f.read()
+            lines.append("icon %08x %d %s" % (fnv1a32(data), len(data), fn[:-len(".cic")]))
     if lines:
         lines.append("version server %s" % server_version())
     return "".join(l + "\n" for l in lines)
@@ -202,6 +251,8 @@ def check_artifact(kind, data):
         return None if firmware_sha(data) else "not an ESP-IDF image"
     if kind == "app":
         return None if data[:4] == b"\x7fELF" else "not an ELF file"
+    if kind == "icon":
+        return None if data[:4] == b"CIC1" else "not a .cic icon"
     return "unknown kind"
 
 
@@ -223,9 +274,11 @@ def put_artifact(path, data):
 # the token.
 
 def get_manifest(h, path, args):
-    """what can be installed: firmware sha, app hashes (?flavor=debug|release)"""
+    """what can be installed: firmware sha, app hashes (?flavor=debug|release),
+    and with ?icons=1 the colour icons' hashes"""
     firmware, apps_dir = h.update_files(flavor_arg(args))
-    h.text(manifest(firmware=firmware, apps_dir=apps_dir))
+    icons = (args.get("icons") or [""])[0] == "1"
+    h.text(manifest(firmware=firmware, apps_dir=apps_dir, icons=icons))
 
 
 def get_firmware(h, path, args):
@@ -250,8 +303,20 @@ def get_app(h, path, args):
     sys.stderr.write("update: sent %s\n" % os.path.basename(p))
 
 
+def get_icon(h, path, args):
+    """one colour icon (.cic), by the app's name: /update/icon/Dashboard%20Link"""
+    import urllib.parse
+    _, apps_dir = h.update_files()
+    p = icon_path(urllib.parse.unquote(path[len("/update/icon/"):]), icons_dir_for(apps_dir))
+    if not p:
+        h.text("no such icon\n", 404)
+        return
+    h.file(p)
+
+
 ROUTES = [
     ("GET", "/update", get_manifest),
     ("GET", "/update/firmware", get_firmware),
     ("GET", "/update/app/*", get_app),
+    ("GET", "/update/icon/*", get_icon),
 ]
