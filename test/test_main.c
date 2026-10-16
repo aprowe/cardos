@@ -1040,6 +1040,7 @@ void test_vim_paint_write_with_no_name_asks_and_q_leaves(void);
 void test_vim_paint_the_tree_and_back_to_it(void);
 void test_vim_paint_run_python_and_come_back(void);
 void test_vim_paint_without_big_mode(void);
+void test_vim_paint_ctrl_s_saves(void);
 void test_wifilist_reads_the_old_one_network_file(void);
 void test_wifilist_round_trips_pairs(void);
 void test_wifilist_joining_again_moves_to_the_front(void);
@@ -2262,6 +2263,7 @@ int main(void) {
   RUN(test_vim_paint_the_tree_and_back_to_it);
   RUN(test_vim_paint_run_python_and_come_back);
   RUN(test_vim_paint_without_big_mode);
+  RUN(test_vim_paint_ctrl_s_saves);
   printf("-- wifilist --\n");
   RUN(test_wifilist_reads_the_old_one_network_file);
   RUN(test_wifilist_round_trips_pairs);

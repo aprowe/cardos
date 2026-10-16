@@ -52,6 +52,8 @@
 
 #define CTRL_U 0x15                /* a ctrl chord is the letter's low five bits */
 #define CTRL_D 0x04
+#define CTRL_B 0x02
+#define CTRL_F 0x06
 
 enum { T_OUT, T_IN, T_ERR, T_NOTE };
 
@@ -215,6 +217,23 @@ static void leave(void) {
   if (api->leave() < 0) say("(fn-` closes this)", T_NOTE);
 }
 
+#define RUN_DELAY_MS 400               /* the REPL drawn before a file runs */
+static char pending[PATH_MAX_];        /* python FILE, waiting for its moment */
+static uint32_t pending_at;
+
+static void run_file(const char *arg);
+
+/* The file waiting since capp_main, once the screen has had its moment. */
+static int app_tick(void *st, uint32_t now) {
+  char path[PATH_MAX_];
+  (void)st;
+  if (!pending[0] || !ready || (int32_t)(now - pending_at) < 0) return 0;
+  api->fmt(path, sizeof path, "%s", pending);
+  pending[0] = 0;
+  run_file(path);
+  return 1;
+}
+
 /* python FILE: run it, say how it went, and stay at the prompt with its
  * globals, as `python -i` does. Its folder becomes the current one, which
  * is where open('x') and import look. */
@@ -224,6 +243,8 @@ static void run_file(const char *arg) {
   CappStat st;
   uint32_t t0, ms;
   int r;
+  api->fmt(msg, sizeof msg, "-- running %s", arg);
+  say(msg, T_NOTE);
   if (norm_path(arg, path, sizeof path) || api->stat(path, &st) || st.is_dir) {
     api->fmt(msg, sizeof msg, "no such file: %s", arg);
     say(msg, T_ERR);
@@ -478,14 +499,24 @@ static int app_key(void *st, uint8_t k) {
     L.scroll = 0;
     return 1;
   }
-  if (k == CTRL_D && !in_n && !src_n && !L.scroll) {   /* on an empty line: leave */
-    if (ready) leave();
+  /* One meaning a key (2026-10-16): ctrl-d scrolled the log and, on an
+   * empty line, left -- so scrolling down to the bottom closed the REPL.
+   * Now ctrl-d only leaves, as Python's does, and only on an empty line;
+   * ctrl-b / ctrl-f scroll, as less and vim do; ctrl-u clears the line. */
+  if (k == CTRL_D) {
+    if (ready && !in_n && !src_n) leave();
     return 1;
   }
-  if (k == CTRL_U || k == CTRL_D) {       /* the log, half a screen at a time */
-    L.scroll += k == CTRL_U ? 6 : -6;
+  if (k == CTRL_B || k == CTRL_F) {       /* the log, half a screen at a time */
+    L.scroll += k == CTRL_B ? 6 : -6;
     if (L.scroll < 0) L.scroll = 0;
     if (L.scroll > L.n) L.scroll = L.n;
+    return 1;
+  }
+  if (k == CTRL_U) {
+    in_n = 0;
+    in[0] = 0;
+    hist_at = -1;
     return 1;
   }
   if (k == '\t') {
@@ -526,8 +557,8 @@ const CappInfo capp_info = {
     0x06, 0x48, 0x06, 0x18, 0x03, 0xF0, 0x00, 0x00 },
   "enter\trun the line (a block runs at a blank line)\n"
   "tab\tcomplete a name; at the start, indent\n"
-  "up/down\tthe lines typed before\nctrl-u ctrl-d\tscroll the log\n"
-  "ctrl-d\ton an empty line: leave, as exit() does\n"
+  "up/down\tthe lines typed before\nctrl-b ctrl-f\tscroll the log\n"
+  "ctrl-u\tclear the line\nctrl-d\ton an empty line: leave, as exit() does\n"
   "esc\tdrop the block, clear the line\nany key\tstop a running program\n"
   "\n"
   "python FILE runs it, then stays here with what it defined.\n"
@@ -568,14 +599,20 @@ int capp_main(const CardApi *a, int argc, char **argv) {
              (unsigned)(heap_total / 1024), nb, nb == 1 ? "" : "s");
     say(hello, T_OUT);
     lib_on_path();
-    if (argc > 1 && argv[1][0]) run_file(argv[1]);
-    else run("print(1 + 1)", 0);
+    /* python FILE: the REPL first, then the file from tick a moment later
+     * (2026-10-16, the owner: "when it gets to the repl the script has
+     * already run") -- run here, it was over before the screen was drawn. */
+    if (argc > 1 && argv[1][0]) {
+      api->fmt(pending, sizeof pending, "%s", argv[1]);
+      pending_at = api->ticks_ms() + RUN_DELAY_MS;
+    }
   } else {
     say("Not enough memory for Python's heap.", T_ERR);
   }
   (void)top;
   UI.paint = app_paint;
   UI.key = app_key;
+  UI.tick = app_tick;
   UI.wants_text = app_wants_text;
   api->ui(&UI);
   return 0;

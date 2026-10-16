@@ -762,8 +762,9 @@ saves and `api->run("python", PATH)`.
   key still stops), ticks_ms, ticks_diff, time (epoch, 0 until the clock
   is set). No input(): stdin is always at its end.
 - **Leaving**: `exit()`, `quit()`, `sys.exit()` or `raise SystemExit` at
-  the prompt, or ctrl-d on an empty line (ctrl-d otherwise scrolls),
-  call `api->leave` -- back to Vim or the launcher. A SystemExit inside a
+  the prompt, or ctrl-d on an empty line (only: it scrolled too, and
+  scrolling to the bottom closed the REPL -- ctrl-b / ctrl-f scroll now,
+  ctrl-u clears the line), call `api->leave` -- back to Vim or the launcher. A SystemExit inside a
   script ends the script, not the app. No `CappUi.save`: the session is
   the heap, far too big to keep.
 - Output appears when a run ends, not during it: the run is one key

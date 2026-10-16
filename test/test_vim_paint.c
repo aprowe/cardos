@@ -405,3 +405,36 @@ void test_vim_paint_without_big_mode(void) {
   CHECK_EQ(V.t.cap, POOL_TEXT);
   CHECK(vb_len(&V.t) > 0);
 }
+
+/* A chord the OS matches against the action table before the key handler
+ * (kernel/app/capprun.c tr_key): found and run here as it does it. */
+static int chord(int k) {
+  int i;
+  for (i = 0; i < (int)VUI.nactions; i++)
+    if (VUI.actions[i].key == k) return VUI.action(VUI.state, VUI.actions[i].action);
+  return -1;
+}
+
+/* ctrl-s writes the file in every mode, and insert mode stays insert;
+ * with no name yet it asks for one. */
+void test_vim_paint_ctrl_s_saves(void) {
+  const char *got;
+  boot("/home/s.txt", "hello\n");
+  keys("iX");
+  CHECK_EQ(V.mode, VM_INSERT);
+  CHECK(chord(0x13) >= 0);
+  got = fakefs_get("/home/s.txt");
+  CHECK(got && strcmp(got, "Xhello\n") == 0);
+  CHECK_EQ(V.mode, VM_INSERT);                   /* still typing */
+  keys("Y\x1b");
+  CHECK_EQ(V.mode, VM_NORMAL);
+  chord(0x13);                                   /* and from normal mode */
+  got = fakefs_get("/home/s.txt");
+  CHECK(got && strcmp(got, "XYhello\n") == 0);
+  CHECK(!vi_modified(&V));
+  /* a buffer with no name: the picker asks for one */
+  V.path[0] = 0;
+  s_pick_mode = -1;
+  chord(0x13);
+  CHECK_EQ(s_pick_mode, CAPP_PICK_SAVE);
+}

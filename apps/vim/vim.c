@@ -737,7 +737,7 @@ static int app_wants_text(void *st) { (void)st; return !s_picking; }
 enum { ACT_SAVE = 1, ACT_SAVEAS, ACT_OPEN, ACT_TREE, ACT_RUN };
 
 static const CappAction VIM_ACTIONS[] = {
-  { "save",   "Write (:w)",      "File", 0, ACT_SAVE },
+  { "save",   "Write (:w)",      "File", 0x13, ACT_SAVE },     /* ctrl-s, in every mode */
   { "saveas", "Write as...",     "File", 0, ACT_SAVEAS },
   { "open",   "Open... (:e)",    "File", 0, ACT_OPEN },
   { "tree",   "File tree (-)",   "File", 0, ACT_TREE },
@@ -753,7 +753,12 @@ static int app_action(void *st, int a) {
   }
   if (a == ACT_TREE) vi_ex(&V, "Ex");
   else if (a == ACT_RUN) vi_ex(&V, "run");
-  else if (a == ACT_SAVE) vi_ex(&V, "w");
+  else if (a == ACT_SAVE) {
+    /* ctrl-s: :w, and insert mode stays insert; with no name yet, the
+     * picker asks for one rather than E32 */
+    if (V.path[0]) vi_ex(&V, "w");
+    else V.req = VREQ_SAVEAS;
+  }
   else if (a == ACT_SAVEAS) V.req = VREQ_SAVEAS;
   else if (a == ACT_OPEN) vi_ex(&V, "e");
   if (V.req) take_request();

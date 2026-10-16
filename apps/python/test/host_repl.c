@@ -43,6 +43,12 @@ static void start_with(CardApi *A, const char *path) {
   argv[0] = (char *)"python";
   argv[1] = (char *)path;
   capp_main(A, path ? 2 : 1, argv);
+  if (path) {                    /* the REPL first; the file a moment later, from tick */
+    CHECK(pending[0] && !seen("-- running", 3), "not run at start: %s", last());
+    CHECK(!app_tick(0, A->ticks_ms()), "nor before its moment");
+    CHECK(app_tick(0, A->ticks_ms() + RUN_DELAY_MS + 1), "then it runs");
+    CHECK(!pending[0], "once");
+  }
 }
 
 static int open_files(void) {
@@ -204,7 +210,8 @@ int main(void) {
   capp_main(&A, 1, 0);
 
   CHECK(seen("MicroPython 1.24.1", 3), "banner: %s", L.line[0]);
-  CHECK(!strcmp(last(), "2"), "print(1 + 1) -> %s", last());
+  CHECK(seen("MicroPython", 1), "opened plain, the banner is all: %s", last());
+  CHECK(!app_tick(0, 99999), "and no file waits");
 
   type("x = 6 * 7\nx\n");
   CHECK(!strcmp(last(), "42"), "x -> %s", last());
@@ -279,10 +286,21 @@ int main(void) {
   app_key(0, CAPP_KEY_UP);
   type("\n");
   CHECK(!strcmp(last(), "3"), "a line from history runs -> %s", last());
-  app_key(0, CTRL_U);
-  CHECK(L.scroll == 6, "ctrl-u scrolls the log: %d", L.scroll);
-  app_key(0, CTRL_D);
-  CHECK(L.scroll == 0, "ctrl-d back: %d", L.scroll);
+  /* ctrl-b / ctrl-f scroll; scrolling to the bottom never leaves (ctrl-d
+   * used to do both); ctrl-u clears the line */
+  {
+    int left = fakeapi_left;
+    app_key(0, CTRL_B);
+    CHECK(L.scroll == 6, "ctrl-b scrolls the log back: %d", L.scroll);
+    app_key(0, CTRL_F);
+    app_key(0, CTRL_F);
+    CHECK(L.scroll == 0, "ctrl-f forward, and stops at the bottom: %d", L.scroll);
+    CHECK(fakeapi_left == left, "scrolling never leaves: %d", fakeapi_left);
+    type("half a line");
+    app_key(0, CTRL_U);
+    CHECK(in_n == 0, "ctrl-u clears the line: '%s'", in);
+    CHECK(fakeapi_left == left, "nor does clearing: %d", fakeapi_left);
+  }
 
   /* and the REPL goes on */
   type("open('x')\n");
