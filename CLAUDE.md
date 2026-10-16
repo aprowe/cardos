@@ -583,6 +583,39 @@ its end) when you scroll above the top; `r` random, `p`/fn-p prints the
 page loaded. Commands `summary TOPIC`, `featured` (for Today) and `open
 TOPIC`. Data 16.7 KB. Tests: `test/test_wiki.c`, `server/tests/test_wiki.py`.
 
+**Vim: a modal code editor** (2026-10-16, `apps/vim/vim.c`, Make). The
+owner asked for "an IDE with vim motions, basic autocomplete and syntax
+highlighting". Normal, insert, visual (v, V) and : modes; [count]
+operator [count] motion with d c y > < g~ gu gU over h j k l w b e W B E
+0 ^ $ gg G f t F T ; , % H M L { } n N * #; x X r s S D C Y p P J ~ o O
+a A i I; u and ctrl-r by change; the dot (`3.` too); / and ? (literal,
+not regex; `:set ic`); ctrl-d/u/e/y/f/b, zz zt zb; :w :q :wq :x :e :N
+:set nu sw= ts= et ic, :s and :%s (flags g, i), :d, ranges `%`, `N,M`,
+`'<,'>`. Colours for C, Python and Markdown by extension. Completion in
+insert mode: ctrl-n/ctrl-p, or tab after a word character -- words in the
+buffer, nearest first, then the language's keywords, in a list over the
+text. One unnamed register; no marks, macros, regex or windows. The core is
+portable headers (`apps/vim/vimbuf.h` the gap buffer, `vimhl.h` the
+highlighter, `vimcore.h` everything else), driven a key at a time by
+`test/test_vim.c`; `test/test_vim_paint.c` runs the real app into a
+framebuffer with the real font and checks that after every key a paint of
+only the damage equals a full paint (`VIM_DUMP=dir` writes the screens).
+- **Memory**: a 20 KB pool in the arena (14 KB text, 4 KB undo, 2 KB
+  register on its own); Vim is `CAPP_BIG`, and at launch the text takes one
+  big-mode block of big_room less 4 KB, up to 96 KB, the pool becoming
+  12 KB of undo and 8 KB of register. A file too big is refused, never
+  opened in part; a change too big for the undo log empties it and says
+  so. Measured by build_apps: code 24.4 KB, data 23.5 KB, rodata 3.1 KB.
+- **Syntax states**: a line's colours depend only on the state the line
+  above left (inside a block comment, a triple-quoted string, a fence),
+  kept at a checkpoint every 32 lines and invalidated from the edited line
+  down, so a paint never scans the file.
+- **:q** cannot close the app (no API does): it closes the file and opens
+  the picker. fn-` leaves. Esc is vim's; wants_text is always yes, so
+  ; , . / are commands and fn makes them arrows.
+- Not tried on a device yet: the big_room a real heap gives, and how a
+  full repaint feels on the panel.
+
 **The Bluetooth radio comes down after a print** unless Bluetooth is set
 to start at boot (`bt_radio_down`, run on cardos-bg after the job). Before,
 one print left 67 KB held for the uptime, and Todo could not load beside it.
