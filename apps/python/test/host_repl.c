@@ -79,6 +79,47 @@ int main(void) {
   CHECK(seen("KeyboardInterrupt", 2), "a key stops it: %s", last());
   A.key_pending = never;
 
+  /* tab: a unique name completes, an attribute too, several are listed;
+   * at the start of a line it is still an indent */
+  type("cardos_value = 7\ncardos_v\t");
+  CHECK(!strcmp(in, "cardos_value"), "completed: '%s'", in);
+  type("\n");
+  CHECK(!strcmp(last(), "7"), "and runs -> %s", last());
+  type("word = 'x'\nword.upp\t");
+  CHECK(!strcmp(in, "word.upper"), "an attribute: '%s'", in);
+  in_n = 0; in[0] = 0;
+  type("pri\t");
+  CHECK(!strcmp(in, "print"), "a builtin: '%s'", in);
+  in_n = 0; in[0] = 0;
+  type("whi\t");
+  CHECK(!strcmp(in, "while"), "a keyword: '%s'", in);
+  in_n = 0; in[0] = 0;
+  type("is\t");
+  CHECK(!strcmp(in, "is"), "two candidates leave the line: '%s'", in);
+  CHECK(seen("isinstance", 2) && seen("issubclass", 2), "and are listed: %s", last());
+  in_n = 0; in[0] = 0;
+  type("\t");
+  CHECK(!strcmp(in, "    "), "tab at the start indents: '%s'", in);
+  in_n = 0; in[0] = 0;
+
+  /* history: up walks back, down comes forward to what was being typed */
+  type("sum([1, 2])\nlen('abc')\nhalf");
+  app_key(0, CAPP_KEY_UP);
+  CHECK(!strcmp(in, "len('abc')"), "up: '%s'", in);
+  app_key(0, CAPP_KEY_UP);
+  CHECK(!strcmp(in, "sum([1, 2])"), "up again: '%s'", in);
+  app_key(0, CAPP_KEY_DOWN);
+  app_key(0, CAPP_KEY_DOWN);
+  CHECK(!strcmp(in, "half"), "down to the draft: '%s'", in);
+  in_n = 0; in[0] = 0;
+  app_key(0, CAPP_KEY_UP);
+  type("\n");
+  CHECK(!strcmp(last(), "3"), "a line from history runs -> %s", last());
+  app_key(0, CTRL_U);
+  CHECK(L.scroll == 6, "ctrl-u scrolls the log: %d", L.scroll);
+  app_key(0, CTRL_D);
+  CHECK(L.scroll == 0, "ctrl-d back: %d", L.scroll);
+
   /* and the REPL goes on */
   type("open('x')\n");
   CHECK(seen("OSError", 2), "no files yet: %s", last());

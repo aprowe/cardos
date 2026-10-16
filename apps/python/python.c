@@ -21,6 +21,7 @@
 #define TL_LINES 120
 #include "apps/termlog.h"
 
+#include "py/builtin.h"
 #include "py/compile.h"
 #include "py/gc.h"
 #include "py/lexer.h"
@@ -44,6 +45,9 @@
 #define BAR   0x2124
 #define C_IN  0x07E0               /* what was typed: green */
 #define C_ERR 0xF9A6
+
+#define CTRL_U 0x15                /* a ctrl chord is the letter's low five bits */
+#define CTRL_D 0x04
 
 enum { T_OUT, T_IN, T_ERR };
 
@@ -167,10 +171,177 @@ static void run(const char *text) {
 static void say(const char *s, int tag) { tl_push_text(api, &L, s, tag, 0); }
 
 /* Enter: the line joins the block, which runs once it is whole. */
+/* ---- history: the lines typed, newest last; up and down walk it ----------------- */
+
+#define HIST 24
+static char hist[HIST][IN_MAX + 1];
+static int hist_n;                 /* lines kept */
+static int hist_at = -1;           /* the one shown, or -1: the line being typed */
+static char draft[IN_MAX + 1];     /* the line being typed, while walking */
+
+static void hist_add(void) {
+  int i;
+  if (!in_n || (hist_n && !strcmp(hist[hist_n - 1], in))) return;   /* no blanks, no repeats */
+  if (hist_n == HIST) {
+    for (i = 1; i < HIST; i++) memcpy(hist[i - 1], hist[i], IN_MAX + 1);
+    hist_n--;
+  }
+  memcpy(hist[hist_n++], in, (size_t)in_n + 1);
+}
+
+static void set_line(const char *s) {
+  in_n = (int)strlen(s);
+  memcpy(in, s, (size_t)in_n + 1);
+}
+
+static void hist_walk(int back) {
+  if (!hist_n) return;
+  if (hist_at < 0) {
+    if (!back) return;
+    memcpy(draft, in, (size_t)in_n + 1);
+    hist_at = hist_n;
+  }
+  hist_at += back ? -1 : 1;
+  if (hist_at < 0) hist_at = 0;
+  if (hist_at >= hist_n) {                /* past the newest: what was being typed */
+    hist_at = -1;
+    set_line(draft);
+  } else {
+    set_line(hist[hist_at]);
+  }
+}
+
+/* ---- tab: a name completed, or the names it could be --------------------------- */
+
+static char comp[1024];            /* the candidates, as print_completions prints them */
+static int comp_n;
+
+static void comp_strn(void *env, const char *s, size_t n) {
+  (void)env;
+  while (n-- && comp_n < (int)sizeof comp - 1) comp[comp_n++] = *s++;
+}
+
+/* The candidates again, re-flowed to the screen: print_completions lays
+ * them out for 64 columns, three of thirteen here. */
+static void show_candidates(void) {
+  char row[TL_COLS + 1];
+  int i = 0, col = 0;
+  comp[comp_n] = 0;
+  while (comp[i]) {
+    int s, w;
+    while (comp[i] == ' ' || comp[i] == '\n') i++;
+    if (!comp[i]) break;
+    s = i;
+    while (comp[i] && comp[i] != ' ' && comp[i] != '\n') i++;
+    w = i - s;
+    if (w > TL_COLS) w = TL_COLS;
+    if (col && col + 13 > TL_COLS) {
+      row[col] = 0;
+      say(row, T_OUT);
+      col = 0;
+    }
+    if (col) while (col % 13) row[col++] = ' ';
+    memcpy(row + col, comp + s, (size_t)w);
+    col += w > 13 ? (w + 12) / 13 * 13 : w;
+    if (col > TL_COLS) col = TL_COLS;
+  }
+  if (col) {
+    row[col] = 0;
+    say(row, T_OUT);
+  }
+}
+
+static const char *const KEYWORDS[] = {
+  "and", "break", "class", "continue", "def", "elif", "else", "except", "False", "finally",
+  "for", "from", "global", "import", "lambda", "None", "nonlocal", "not", "pass", "raise",
+  "return", "True", "try", "while", "with", "yield",
+};
+
+static int is_name_char(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+
+/* One candidate for a plain word: the first sets *add, the rest shorten
+ * *n to the prefix they share; every one is written to comp. */
+static void consider(const char *cand, const char *word, size_t len, const char **add,
+                     size_t *n, int *count) {
+  size_t cl = strlen(cand), j;
+  if (cl < len || strncmp(cand, word, len) || (!len && cand[0] == '_')) return;
+  if (!*count) {
+    *add = cand + len;
+    *n = cl - len;
+  } else {
+    for (j = 0; j < *n && j < cl - len && (*add)[j] == cand[len + j]; j++) {
+    }
+    *n = j;
+  }
+  (*count)++;
+  comp_strn(0, cand, cl);
+  comp_strn(0, " ", 1);
+}
+
+/* A plain word: the names defined here, the builtins and the keywords --
+ * mp_repl_autocomplete looks only in __main__, so `pri` found nothing. */
+static size_t complete_word(const char *word, size_t len, const char **add) {
+  mp_map_t *maps[2];
+  size_t n = 0, i, m;
+  int count = 0;
+  maps[0] = &mp_globals_get()->map;
+  maps[1] = &((mp_obj_dict_t *)MP_OBJ_TO_PTR(mp_module_builtins.globals))->map;
+  for (m = 0; m < 2; m++)
+    for (i = 0; i < maps[m]->alloc; i++)
+      if (mp_map_slot_is_filled(maps[m], i) && mp_obj_is_qstr(maps[m]->table[i].key))
+        consider(qstr_str(MP_OBJ_QSTR_VALUE(maps[m]->table[i].key)), word, len, add, &n,
+                 &count);
+  for (i = 0; i < sizeof KEYWORDS / sizeof KEYWORDS[0]; i++)
+    consider(KEYWORDS[i], word, len, add, &n, &count);
+  if (count > 1 && n == 0) return (size_t)-1;
+  return count ? n : 0;
+}
+
+static void complete(void) {
+  const char *add = 0;
+  size_t n = 0;
+  int start = in_n, dotted = 0;
+  nlr_buf_t nlr;
+  volatile int top = 0;
+  mp_print_t to_comp = { 0, comp_strn };
+  mp_stack_set_top((void *)&top);
+  mp_stack_set_limit(STACK_LIMIT);
+  comp_n = 0;
+  while (start > 0 && (is_name_char(in[start - 1]) || in[start - 1] == '.')) {
+    start--;
+    if (in[start] == '.') dotted = 1;
+  }
+  if (nlr_push(&nlr) == 0) {
+    if (dotted)
+      n = mp_repl_autocomplete(in, (size_t)in_n, &to_comp, &add);
+    else
+      n = complete_word(in + start, (size_t)(in_n - start), &add);
+    nlr_pop();
+  } else {
+    n = 0;
+  }
+  if (n == (size_t)-1) {                  /* several: show them under the line */
+    char echo[IN_MAX + 8];
+    api->fmt(echo, sizeof echo, "%s %s", src_n ? "..." : ">>>", in);
+    say(echo, T_IN);
+    show_candidates();
+  } else if (n && add) {
+    if (in_n + (int)n > IN_MAX) n = (size_t)(IN_MAX - in_n);
+    memcpy(in + in_n, add, n);
+    in_n += (int)n;
+    in[in_n] = 0;
+  }
+  (void)top;
+}
+
 static void submit(void) {
   char echo[IN_MAX + 8];
   api->fmt(echo, sizeof echo, "%s %s", src_n ? "..." : ">>>", in);
   say(echo, T_IN);
+  hist_add();
+  hist_at = -1;
   if (src_n + in_n + 2 > SRC_MAX) {
     say("too long for one block", T_ERR);
     src_n = 0;
@@ -229,12 +400,23 @@ static int app_key(void *st, uint8_t k) {
     return 1;
   }
   if (k == CAPP_KEY_UP || k == CAPP_KEY_DOWN) {
-    L.scroll += k == CAPP_KEY_UP ? 1 : -1;
+    hist_walk(k == CAPP_KEY_UP);
+    L.scroll = 0;
+    return 1;
+  }
+  if (k == CTRL_U || k == CTRL_D) {       /* the log, half a screen at a time */
+    L.scroll += k == CTRL_U ? 6 : -6;
     if (L.scroll < 0) L.scroll = 0;
     if (L.scroll > L.n) L.scroll = L.n;
     return 1;
   }
-  if (k == '\t') {                        /* an indent, four spaces */
+  if (k == '\t') {
+    /* After a name: complete it. At the start or after a space: an
+     * indent, to the next four. */
+    if (ready && in_n && in[in_n - 1] != ' ') {
+      complete();
+      return 1;
+    }
     while (in_n < IN_MAX && (in_n % 4 || k == '\t')) { in[in_n++] = ' '; k = 0; }
     in[in_n] = 0;
     return 1;
@@ -265,8 +447,9 @@ const CappInfo capp_info = {
     0x60, 0x03, 0x77, 0xFE, 0x06, 0x00, 0x07, 0xF8,
     0x06, 0x48, 0x06, 0x18, 0x03, 0xF0, 0x00, 0x00 },
   "enter\trun the line (a block runs at a blank line)\n"
-  "tab\tindent\nesc\tdrop the block, clear the line\n"
-  "up/down\tscroll back\nany key\tstop a running program\n",
+  "tab\tcomplete a name; at the start, indent\n"
+  "up/down\tthe lines typed before\nctrl-u ctrl-d\tscroll the log\n"
+  "esc\tdrop the block, clear the line\nany key\tstop a running program\n",
 };
 
 int capp_main(const CardApi *a, int argc, char **argv) {
