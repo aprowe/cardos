@@ -97,6 +97,29 @@ static int name_ok(const char *n) {
   return 1;
 }
 
+/* An icon's name: the rest of the line, trailing space trimmed. Letters,
+ * digits, '-', '_' and spaces -- it becomes NAME.cic under /apps/icons, so
+ * never a dot or a slash. 0 if it is a name. */
+static int icon_name(const char *p, char *out, size_t cap) {
+  size_t n = 0;
+  p = skip_space(p);
+  while (*p && *p != '\n' && *p != '\r') {
+    char c = *p++;
+    if (c == '\t') c = ' ';
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9') || c == '-' || c == '_' || c == ' '))
+      return -1;
+    if (n + 1 >= cap) {
+      if (c != ' ') return -1;        /* only trailing space may run past */
+      continue;
+    }
+    out[n++] = c;
+  }
+  while (n > 0 && out[n - 1] == ' ') n--;
+  out[n] = 0;
+  return n ? 0 : -1;
+}
+
 int manifest_parse(const char *text, Manifest *out) {
   const char *p = text;
   int understood = 0;
@@ -125,6 +148,21 @@ int manifest_parse(const char *text, Manifest *out) {
       if ((q = word(q, b, sizeof b)) && (q = word(q, a, sizeof a))) {
         if (!strcmp(b, "firmware")) snprintf(out->fw_version, sizeof out->fw_version, "%.31s", a);
         else if (!strcmp(b, "server")) snprintf(out->server_version, sizeof out->server_version, "%.31s", a);
+      }
+    } else if (!strcmp(kind, "icon") && out->nicons >= MANIFEST_MAX_ICONS) {
+      out->icons_dropped++;
+    } else if (!strcmp(kind, "icon")) {
+      ManifestIcon *ic = &out->icon[out->nicons];
+      uint32_t hash, size;
+      if ((q = word(q, b, sizeof b)) && (q = word(q, c, sizeof c)) &&
+          parse_hex32(b, &hash) == 0 && parse_dec(c, &size) == 0 &&
+          icon_name(q, ic->name, sizeof ic->name) == 0) {
+        ic->hash = hash;
+        ic->size = size;
+        out->nicons++;
+        understood++;
+      } else {
+        ic->name[0] = 0;
       }
     } else if (!strcmp(kind, "app") && out->napps >= MANIFEST_MAX_APPS) {
       out->dropped++;                 /* said, not lost: see update.c */
@@ -160,4 +198,14 @@ int manifest_diff(const Manifest *m, const ManifestLocal *local,
   if (!m->has_firmware) return 0;
   if (!local->own_sha) return 1;
   return memcmp(local->own_sha, m->firmware_sha, 32) != 0;
+}
+
+int manifest_diff_icons(const Manifest *m, const ManifestLocal *local,
+                        uint8_t *stale_icon) {
+  int i, n = 0;
+  for (i = 0; i < m->nicons; i++) {
+    stale_icon[i] = (uint8_t)(!local->have_icon[i] || local->icon_hash[i] != m->icon[i].hash);
+    n += stale_icon[i];
+  }
+  return n;
 }

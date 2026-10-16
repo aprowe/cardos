@@ -90,7 +90,7 @@ entries stay in the API table as refusals, so its layout did not move.
 the server for its manifest (`/update`: the firmware's ELF SHA and an FNV
 hash per `.capp`), says what differs, and `update apps|os|all` installs it.
 The Claude terminal checks after every answer and offers `/update`. Apps land
-in `/desktop`; the firmware goes to the card and then through the same
+in `/apps`, and their colour icons in `/apps/icons` (below); the firmware goes to the card and then through the same
 `launcher.c` path guests use, into whichever OTA slot is not running.
 `factory` is USB-only and is where a bad update rolls back to; if a USB flash
 puts a newer build in `factory`, boot notices and switches to it. Design in
@@ -175,7 +175,8 @@ icon, flags and commands, and it ran twice on a boot into the launcher, since
 `/cache/apps.idx` (`kernel/app/appidx.c`, host-tested) remembers what each
 file said, keyed by path, size and date. The whole file is keyed by the API
 version and `CAPP_BLOB_STAMP`, which `build_apps.py` works out so boot no
-longer hashes the blobs. **Any change under `/apps` deletes the index**:
+longer hashes the blobs. **Any change under `/apps` deletes the index**
+(but `/apps/icons`, the colour icons, since 2026-10-16):
 `fs_on_change` in `fs_fat.c` tells `capprun`. That only covers writes that
 go through `fs_*`, so anything that writes the card any other way must delete
 it too. Seeding lists each directory once instead of opening every file. The
@@ -565,6 +566,32 @@ System.
 apps; the server listed 28, and the last four alphabetically (today,
 todo, toggl, web) were dropped unseen, so `update` called them current.
 It holds 48 now (`MANIFEST_MAX_APPS`), and an overflow is reported.
+
+**Colour icons travel with `update apps`** (2026-10-16). They used to reach
+a card only inside a firmware, which embedded every `.cic` to seed it, so a
+new app's picture waited for `update os`. Now a device asks for
+`/update?flavor=X&icons=1` and the manifest adds, after the apps, `icon
+<fnv1a32> <size> <name to the end of the line>` -- the name is the app's
+own, as the launcher looks it up (`Dashboard Link`), spaces and all; the
+file is `/update/icon/NAME` (`%20` for a space). Older firmware never asks,
+so never sees them: its parser skips unknown first words anyway, but it
+reads the manifest into 4 KB, and fifty icons would have cut the last apps
+off (the buffer is 6 KB now). `update` hashes each `/apps/icons/NAME.cic`
+(`manifest_diff_icons`, host-tested), says "N colour icons", and `update
+apps` downloads each stale one beside the old (`NAME.cic.new`), checks size
+and hash, swaps it in the way an app is (`install_file` in update.c), says
+one line, `icons N of M installed` (a word first: the Update app reads a
+line that starts with a digit as the firmware's), and reloads the
+launcher, which forgets its cached colours. To the API they are one item,
+`icons`, in `update_check`'s list; Update shows it as a "colour icons" row.
+Writes to `/apps/icons` no longer delete the app index (`apps_changed` in
+capprun.c). The server keeps them in `build/icons` -- `tools/build_apps.py`
+writes them (`make_color_icons.write_cic_files`), so the droplet has them
+-- and `server/build.py` publishes them to `STORE/icons` beside
+`STORE/apps`, retiring any nothing draws; icons alone send no note. The
+firmware now embeds only `SEED` in `tools/make_color_icons.py` -- generic,
+firmware, the folders, Settings, Memory, About and the four EMBED apps --
+what a blank card shows before its first `update apps`.
 
 **Toggl** (2026-10-01). `apps/toggl.c` (Net) shows the running timer in
 `num30`, starts one from a list of recent entries or a typed description,
@@ -1536,9 +1563,13 @@ hardware-specific. What it cost to learn:
   refuses it: a line in `apps/folders.txt` (`name Tools`, `Games`, `Net`, or
   `-` for a CLI app at the top level), and a non-blank 16x16 icon in its
   `capp_info` (32 bytes, 1bpp, two bytes a row, bit 7 leftmost; `apps/timer.c`
-  has one). And a colour icon under the app's name in
-  `tools/make_color_icons.py` (then run it): the launcher shows that one, and
-  without it the app is a blank page. The folder also reaches the `/update` manifest, so a first install
+  has one). And a colour icon under the app's name -- `apps/icons/STEM.txt`,
+  the name on the first line and sixteen rows of art in the INK letters of
+  `tools/make_color_icons.py`: the launcher shows that one, and without it
+  the app wears its 1bpp icon in one flat teal. `update apps` delivers the
+  icon with the app (`build_apps.py` writes `build/icons`); only the few in
+  `SEED` are in the firmware, so run `python tools/make_color_icons.py`
+  only when one of those changes. The folder also reaches the `/update` manifest, so a first install
   lands in it rather than at the top level, which is where every app Build
   made used to end up.
 

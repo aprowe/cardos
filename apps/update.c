@@ -250,12 +250,13 @@ static void paint_row(int i) {
   api->fill(capp_rect(x + 9, y, 6, ROW_H), CLR_BG);
   if (it->firmware) api->fmt(label, sizeof label, U.off_v[0] ? "CardOS %s" : "CardOS firmware",
                               U.off_v);
+  else if (str_same(it->name, "icons")) api->fmt(label, sizeof label, "colour icons");
   else api->fmt(label, sizeof label, "%s", it->name);
   draw(U.f_ui, x + 15, ty, label, it->state == I_WAIT ? CLR_DIM : CLR_TEXT, CLR_BG);
   w = width(U.f_ui, label);
   /* the rest of the row, and a tag on the right */
   {
-    const char *tag = it->firmware ? "system" : "app";
+    const char *tag = it->firmware ? "system" : str_same(it->name, "icons") ? "look" : "app";
     int tw = width(U.f_ui, tag), tx = U.c.x + U.c.w - 10 - tw;
     api->fill(capp_rect(x + 15 + w, y, tx - (x + 15 + w), ROW_H), CLR_BG);
     draw(U.f_ui, tx, ty, tag, it->firmware ? CLR_FW : CLR_FAINT, CLR_BG);
@@ -457,7 +458,19 @@ static void fw_state(int s) {
 static void on_line(void *ctx, const char *line) {
   const char *colon = 0, *p;
   (void)ctx;
-  if (str_starts(line, "downloading ")) {
+  if (str_starts(line, "icons ")) {
+    /* "icons N of M installed": the colour icons, one row for all of them. */
+    const char *of = line + 6;
+    int i = find_item("icons", 5), got = num(line + 6), want;
+    while (*of && !str_starts(of, " of ")) of++;
+    want = *of ? num(of + 4) : got;
+    if (i >= 0) {
+      U.it[i].state = got == want ? I_DONE : I_FAILED;
+      paint_row(i);
+      if (got == want) U.ok++; else U.failed++;
+    }
+    mark_next_going();
+  } else if (str_starts(line, "downloading ")) {
     if (U.phase == PH_APPS) { U.phase = PH_DOWNLOAD; fw_state(I_GOING); }
     U.pct = num(line + 12);
   } else if (line[0] >= '0' && line[0] <= '9') {

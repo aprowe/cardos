@@ -509,7 +509,20 @@ static void apps_changed(const char *path) {
     if (c != a[i]) return;
   }
   if (path[i] != '/' && path[i] != 0) return;
-  s_idx_ok = 0;                           /* a scan under way is stale too */
+  /* /apps/icons holds the colour icons, which `update apps` now writes too
+   * (2026-10-16). The index is about .capp files; a new picture is not a
+   * reason to load every app again at the next boot. */
+  if (path[i] == '/') {
+    const char *ic = "icons/";
+    size_t k;
+    for (k = 0; ic[k]; k++) {
+      char c = path[i + 1 + k];
+      if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+      if (c != ic[k]) break;
+    }
+    if (!ic[k]) return;
+  }
+  s_idx_ok = 0;                          /* a scan under way is stale too */
   if (!s_idx_live) return;
   s_idx_live = 0;
   fs_remove(APPIDX_PATH);

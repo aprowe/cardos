@@ -36,6 +36,13 @@ def main():
         f.write(b"a")                       # fnv1a32("a") = e40c292c
     with open(os.path.join(apps, "notes.txt"), "wb") as f:
         f.write(b"not an app")
+    icons = os.path.join(tmp, "icons")              # beside apps, as build/icons is
+    os.mkdir(icons)
+    cic = b"CIC1" + bytes(516)
+    with open(os.path.join(icons, "Dashboard Link.cic"), "wb") as f:
+        f.write(cic)
+    with open(os.path.join(icons, "bad.name.cic"), "wb") as f:
+        f.write(cic)
 
     print("the manifest:")
     m = updates.manifest(firmware=os.path.join(tmp, "none.bin"), apps_dir=apps,
@@ -47,6 +54,15 @@ def main():
     fails += not check("and the folder it belongs in, last",
                        m, "app mines e40c292c 1 Games\nversion server %s\n"
                        % updates.server_version())
+    m = updates.manifest(firmware=os.path.join(tmp, "none.bin"), apps_dir=apps,
+                         folders={}, icons=True)
+    fails += not check("asked, the icons follow the apps, named to the line's end",
+                       m, "app mines e40c292c 1\nicon %08x 520 Dashboard Link\n"
+                       "version server %s\n" % (updates.fnv1a32(cic), updates.server_version()))
+    fails += not check("an icon name is never a path",
+                       [updates.valid_icon_name(n) for n in
+                        ("Dashboard Link", "folder-Games", "../x", "a/b", "a.b", " x", "")],
+                       [True, True, False, False, False, False, False])
     fails += not check("the repository's own table is apps/folders.txt",
                        updates.load_folders().get("timer"), "Plan")
     fails += not check("where '-' means the top level",
@@ -94,6 +110,20 @@ def main():
                        "app mines e40c292c 1 Games")
     fails += not check("/update/app/NAME is the file",
                        get(base + "/update/app/mines"), b"a")
+    fails += not check("no icons unless asked: older firmware reads 4 KB",
+                       "icon " in r, False)
+    fails += not check("?icons=1 lists them",
+                       [l for l in get(base + "/update?icons=1").decode().split("\n")
+                        if l.startswith("icon ")],
+                       ["icon %08x 520 Dashboard Link" % updates.fnv1a32(cic)])
+    fails += not check("/update/icon/NAME is the file, the space escaped",
+                       get(base + "/update/icon/Dashboard%20Link"), cic)
+    for bad in ("..%2Ficons%2FDashboard%20Link", "nothing", "bad.name"):
+        try:
+            get(base + "/update/icon/" + bad)
+            fails += not check("icon %s is 404" % bad, "served", 404)
+        except urllib.error.HTTPError as e:
+            fails += not check("icon %s is 404" % bad, e.code, 404)
     fails += not check("no flavor is firmware older than the split: release",
                        r.split("\n")[0],
                        "firmware " + bytes(range(100, 132)).hex() + " 400")

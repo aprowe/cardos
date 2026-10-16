@@ -506,11 +506,14 @@ void cmd_update(const char *arg) {
   if (c->m.dropped)
     con_printf("%d more apps than this firmware can check: update os first\n", c->m.dropped);
 
-  if (!c->nstale_apps && !c->firmware_stale) {
+  if (c->m.icons_dropped)
+    con_printf("%d more icons than this firmware can check\n", c->m.icons_dropped);
+
+  if (!c->nstale_apps && !c->firmware_stale && !c->nstale_icons) {
     con_write("everything is current\n");
     return;
   }
-  {
+  if (c->nstale_apps || c->firmware_stale) {   /* icons alone are not news */
     char text[64];
     if (c->nstale_apps && c->firmware_stale)
       snprintf(text, sizeof text, "%d app%s and the firmware", c->nstale_apps,
@@ -523,6 +526,9 @@ void cmd_update(const char *arg) {
   }
   for (i = 0; i < c->m.napps; i++)
     if (c->stale[i]) con_printf("  app %s\n", c->m.app[i].name);
+  /* Counted, not listed: a card from before icons travelled lacks fifty. */
+  if (c->nstale_icons)
+    con_printf("  %d colour icon%s\n", c->nstale_icons, c->nstale_icons == 1 ? "" : "s");
   if (c->firmware_stale)
     con_printf("  firmware (%s) %uK\n", flavor, (unsigned)(c->m.firmware_size / 1024));
 
@@ -530,9 +536,9 @@ void cmd_update(const char *arg) {
     con_write("update apps | os | all installs; add debug or release\n");
     return;
   }
-  if (apps && c->nstale_apps) {
-    int n = update_apps(c, update_say, NULL);
-    con_printf("%d of %d apps installed\n", n, c->nstale_apps);
+  if (apps && (c->nstale_apps || c->nstale_icons)) {
+    int n = update_apps(c, update_say, NULL);      /* the icons say their own line */
+    if (c->nstale_apps) con_printf("%d of %d apps installed\n", n, c->nstale_apps);
   }
   if (os && c->firmware_stale) {
     con_set_color(COLOR_AMBER);

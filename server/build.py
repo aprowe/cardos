@@ -102,7 +102,8 @@ def errors_tail(log):
 
 def publish(store, firmwares, apps_dir, firmware):
     """Copy into the store whatever differs from it. Returns the names
-    published ("firmware" for debug, "firmware-release", or an app's name).
+    published ("firmware" for debug, "firmware-release", an app's name, or
+    "NAME.cic" for a colour icon -- from the icons beside `apps_dir`).
 
     `firmwares` is {flavor: image}; a bare path is the debug one alone, which
     is what there was before the release build. The firmware only when this
@@ -132,6 +133,17 @@ def publish(store, firmwares, apps_dir, firmware):
         name = line.split()[1]
         todo.append((name, os.path.join(apps_dir, name + ".capp"),
                      os.path.join(store_apps, name + ".capp"), "app"))
+    # The colour icons, the same way: `update apps` installs them too.
+    icons_dir, store_icons = updates.icons_dir_for(apps_dir), updates.icons_dir_for(store_apps)
+    have = set(updates.manifest(firmware=os.devnull, apps_dir=os.devnull,
+                                icons_dir=store_icons, icons=True).splitlines())
+    for line in updates.manifest(firmware=os.devnull, apps_dir=os.devnull,
+                                 icons_dir=icons_dir, icons=True).splitlines():
+        if line in have or not line.startswith("icon "):
+            continue
+        name = line.split(None, 3)[3]
+        todo.append((name + ".cic", os.path.join(icons_dir, name + ".cic"),
+                     os.path.join(store_icons, name + ".cic"), "icon"))
     blobs = []
     for name, src, dst, kind in todo:
         with open(src, "rb") as fh:
@@ -154,6 +166,14 @@ def publish(store, firmwares, apps_dir, firmware):
             if name[:-len(".capp")] not in built:
                 os.remove(os.path.join(store_apps, name))
                 sys.stderr.write("build: %s retired from the store\n" % name)
+    # And an icon nothing draws any more -- but only when the build wrote
+    # icons at all, so a tree that never made them does not empty the store.
+    made = set(updates.icon_files(icons_dir))
+    if made:
+        for name in updates.icon_files(store_icons):
+            if name not in made:
+                os.remove(os.path.join(store_icons, name))
+                sys.stderr.write("build: %s retired from the store\n" % name)
     if sent:
         _notify_update(sent)
     return sent
@@ -165,7 +185,10 @@ def _notify_update(sent):
     try:
         from . import msg
         fws = [n for n in sent if n.startswith("firmware")]
-        apps = [n for n in sent if not n.startswith("firmware")]
+        # Icons alone are not worth a note: they ride with the next update.
+        apps = [n for n in sent if not n.startswith("firmware") and not n.endswith(".cic")]
+        if not fws and not apps:
+            return
         if fws and len(apps) > 2:
             what = "firmware + %d apps" % len(apps)
         elif fws:
