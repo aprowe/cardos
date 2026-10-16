@@ -275,7 +275,7 @@ void test_vim_paint_the_tree_and_back_to_it(void) {
   int sel, top, i;
   boot(0, 0);
   tree_files();
-  key_and_check('r');                             /* read the card again */
+  key_and_check('R');                             /* read the card again */
   CHECK(s_tree);
   CHECK(VUI.wants_text(VUI.state));
   CHECK_EQ(unset(), 0);
@@ -334,7 +334,7 @@ void test_vim_paint_run_python_and_come_back(void) {
   int n, i;
   boot(0, 0);
   tree_files();
-  key_and_check('r');
+  key_and_check('R');
   for (i = 0; i < TR.nrows && strcmp(tree_sel(), "/home") != 0; i++) key_and_check('j');
   keys("ljl/util\r");
   CHECK(strcmp(tree_sel(), "/home/proj/util.py") == 0);

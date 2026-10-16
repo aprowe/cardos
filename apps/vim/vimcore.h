@@ -1539,6 +1539,18 @@ VI_FN void vi_ex(Vim *V, const char *line) {
     vi_load(V, path);
     return;
   }
+  /* :mkdir NAME -- a folder beside the file (or where it is written) */
+  if (vi_streq(cmd, "mkdir") || vi_streq(cmd, "md")) {
+    char path[VI_PATH];
+    int len;
+    if (!*p) { vi_say(V, 1, "E471: Argument required: :mkdir NAME"); return; }
+    vi_resolve(V, p, path, sizeof path);
+    len = (int)vapi->str_len(path);
+    while (len > 1 && path[len - 1] == '/') path[--len] = 0;
+    vapi->fmt(m, sizeof m, vapi->mkdir(path) == 0 ? "made %s/" : "could not make %s", path);
+    vi_say(V, m[0] == 'c', m);
+    return;
+  }
   if (vi_streq(cmd, "set") || vi_streq(cmd, "se")) { ex_set(V, p); return; }
   if (vi_streq(cmd, "s") || vi_streq(cmd, "substitute")) {
     if (L1 == -2) L1 = L2 = vi_line(V);

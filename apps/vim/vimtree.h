@@ -34,7 +34,7 @@
 #define VT_OPENSZ  448         /* the open folders' paths, NUL-separated */
 #define VT_DIRMAX  256         /* entries read from one folder at most */
 #define VT_DEPTH   12          /* folders opened inside folders, at most */
-#define VT_LINE    40          /* what is typed after / or : */
+#define VT_LINE    96          /* what is typed after / or : (a path, after rename) */
 #define VT_MSG     64
 #define VT_FRONT_MAX 0xF000    /* rows and names: offsets are 16-bit */
 
@@ -445,9 +445,152 @@ static int vt_select_file(VTree *T, int i, int act) {
   return act;
 }
 
+/* A name typed at the tree's command line, as a path: absolute as it is,
+ * else in the folder selected, or the one the selection is in. Into out. */
+static void vt_resolve(VTree *T, const char *p, char *out) {
+  int i;
+  if (*p == '/') { vt_cpy(out, p, VT_PATH); return; }
+  i = vt_is_dir(T, T->sel) ? T->sel : vt_parent(T, T->sel);
+  vt_path(T, i, T->tmp, VT_PATH);
+  vapi->fmt(out, VT_PATH, "%s/%s", (T->tmp[0] == '/' && !T->tmp[1]) ? "" : T->tmp, p);
+}
+
+/* `word` then a space or the end: the command, and *arg what follows it. */
+static int vt_cmd(const char *l, const char *word, const char **arg) {
+  int n = vt_len(word), i;
+  for (i = 0; i < n; i++) if (l[i] != word[i]) return 0;
+  if (l[n] != ' ' && l[n]) return 0;
+  l += n;
+  while (*l == ' ') l++;
+  *arg = l;
+  return 1;
+}
+
+/* `name` beside row i (in the folder it is in), or as it is if absolute. */
+static void vt_sibling(VTree *T, int i, const char *name, char *out) {
+  if (*name == '/') { vt_cpy(out, name, VT_PATH); return; }
+  vt_path(T, vt_parent(T, i), T->tmp, VT_PATH);
+  vapi->fmt(out, VT_PATH, "%s/%s", (T->tmp[0] == '/' && !T->tmp[1]) ? "" : T->tmp, name);
+}
+
+/* Built again with `path` shown and selected, and a word about it. */
+static void vt_show_made(VTree *T, const char *path, const char *what) {
+  char m[VT_MSG];
+  vt_reveal(T, path);
+  vt_build(T);
+  vapi->fmt(m, sizeof m, "%s %s", what, path);
+  vt_say(T, 0, m);
+}
+
+/* The keys nvim-tree has, as commands the keys pre-fill (a, r, d): the line
+ * shows what will happen, Enter does it and Esc does not -- the confirm. */
+static int vt_ex_files(VTree *T, const char *l) {
+  char m[VT_MSG], to[VT_PATH];
+  const char *arg;
+  CappStat st;
+  int i = T->sel, n;
+  if (vt_cmd(l, "add", &arg) || vt_cmd(l, "touch", &arg)) {
+    int dir;
+    if (!*arg) { vt_say(T, 1, "E471: Argument required: :add NAME (NAME/ for a folder)"); return 1; }
+    vt_resolve(T, arg, T->out);
+    n = vt_len(T->out);
+    dir = T->out[n - 1] == '/';
+    while (n > 1 && T->out[n - 1] == '/') T->out[--n] = 0;
+    if (vapi->stat(T->out, &st) == 0) {
+      vapi->fmt(m, sizeof m, "already there: %s", T->out);
+      vt_say(T, 1, m);
+      return 1;
+    }
+    if (dir) n = vapi->mkdir(T->out);
+    else {
+      int fd = vapi->open(T->out, CAPP_O_WRITE | CAPP_O_CREATE);
+      if (fd >= 0) vapi->close(fd);
+      n = fd >= 0 ? 0 : -1;
+    }
+    if (n != 0) {
+      vapi->fmt(m, sizeof m, "could not make %s", T->out);
+      vt_say(T, 1, m);
+      return 1;
+    }
+    vt_show_made(T, T->out, dir ? "made folder" : "made");
+    return 1;
+  }
+  if (vt_cmd(l, "rename", &arg) || vt_cmd(l, "mv", &arg)) {
+    if (i <= 0 || (T->rows[i].flags & VTF_CUT)) { vt_say(T, 1, "nothing to rename here"); return 1; }
+    if (!*arg) { vt_say(T, 1, "E471: Argument required: :rename NEWNAME"); return 1; }
+    vt_path(T, i, T->out, VT_PATH);
+    vt_sibling(T, i, arg, to);
+    if (vt_eq(to, T->out)) return 1;
+    if (vapi->stat(to, &st) == 0) {
+      vapi->fmt(m, sizeof m, "already there: %s", to);
+      vt_say(T, 1, m);
+      return 1;
+    }
+    if (vapi->rename(T->out, to) != 0) {
+      vapi->fmt(m, sizeof m, "could not rename %s", T->out);
+      vt_say(T, 1, m);
+      return 1;
+    }
+    if (vt_is_dir(T, i) && vt_is_open(T, T->out)) {   /* still open under its new name */
+      vt_set_open(T, T->out, 0);
+      vt_set_open(T, to, 1);
+    }
+    vt_show_made(T, to, "renamed to");
+    return 1;
+  }
+  if (vt_cmd(l, "delete", &arg) || vt_cmd(l, "rm", &arg)) {
+    if (i <= 0 || (T->rows[i].flags & VTF_CUT)) { vt_say(T, 1, "nothing to delete here"); return 1; }
+    if (*arg) vt_sibling(T, i, arg, T->out);
+    else vt_path(T, i, T->out, VT_PATH);
+    if (vapi->remove(T->out) != 0) {
+      vapi->fmt(m, sizeof m, vapi->stat(T->out, &st) == 0 && st.is_dir ?
+                "not deleted: %s is not empty" : "could not delete %s", T->out);
+      vt_say(T, 1, m);
+      return 1;
+    }
+    vt_set_open(T, T->out, 0);
+    vapi->fmt(m, sizeof m, "deleted %s", T->out);
+    T->sel = i + 1 < T->nrows && T->rows[i + 1].depth == T->rows[i].depth ? i + 1 : i - 1;
+    vt_path(T, T->sel, T->selpath, VT_PATH);
+    T->built = 0;
+    vt_build(T);
+    vt_say(T, 0, m);
+    return 1;
+  }
+  return 0;
+}
+
+/* The command line pre-filled by a key: `pre` then the selection's name. */
+static void vt_prefill(VTree *T, const char *pre, int with_name) {
+  T->mode = VTM_CMD;
+  if (with_name) vapi->fmt(T->line, VT_LINE, "%s%s", pre, vt_name(T, T->sel));
+  else vt_cpy(T->line, pre, VT_LINE);
+  T->linen = vt_len(T->line);
+}
+
 static int vt_ex(VTree *T, const char *l) {
   char m[VT_MSG];
+  const char *arg;
   while (*l == ' ' || *l == ':') l++;
+  if (vt_ex_files(T, l)) return VT_NONE;
+  /* :mkdir NAME -- a folder where :e would put a file, then shown selected */
+  if (vt_cmd(l, "mkdir", &arg) || vt_cmd(l, "md", &arg)) {
+    int n;
+    if (!*arg) { vt_say(T, 1, "E471: Argument required: :mkdir NAME"); return VT_NONE; }
+    vt_resolve(T, arg, T->out);
+    n = vt_len(T->out);
+    while (n > 1 && T->out[n - 1] == '/') T->out[--n] = 0;      /* "lib/" is "lib" */
+    if (vapi->mkdir(T->out) != 0) {
+      vapi->fmt(m, sizeof m, "could not make %s", T->out);
+      vt_say(T, 1, m);
+      return VT_NONE;
+    }
+    vt_reveal(T, T->out);
+    vt_build(T);
+    vapi->fmt(m, sizeof m, "made %s/", T->out);
+    vt_say(T, 0, m);
+    return VT_NONE;
+  }
   if (vt_eq(l, "q") || vt_eq(l, "q!") || vt_eq(l, "qa") || vt_eq(l, "qa!") || vt_eq(l, "quit") ||
       vt_eq(l, "x") || vt_eq(l, "wq"))
     return VT_QUIT;
@@ -460,13 +603,7 @@ static int vt_ex(VTree *T, const char *l) {
     const char *p = l + 1;
     while (*p == ' ') p++;
     if (!*p) { vt_say(T, 1, "E32: No file name"); return VT_NONE; }
-    if (*p == '/') vt_cpy(T->out, p, VT_PATH);
-    else {
-      /* relative to the folder selected, or the one the selection is in */
-      int i = vt_is_dir(T, T->sel) ? T->sel : vt_parent(T, T->sel);
-      vt_path(T, i, T->tmp, VT_PATH);
-      vapi->fmt(T->out, VT_PATH, "%s/%s", (T->tmp[0] == '/' && !T->tmp[1]) ? "" : T->tmp, p);
-    }
+    vt_resolve(T, p, T->out);
     vt_cpy(T->selpath, T->out, VT_PATH);
     return VT_OPEN;
   }
@@ -585,7 +722,17 @@ VI_FN int vt_key(VTree *T, int k) {
     }
     break;
   case '.': T->dots = !T->dots; vt_build(T); vt_say(T, 0, T->dots ? "dotfiles shown" : "dotfiles hidden"); break;
-  case 'R': case 'r': vt_build(T); vt_say(T, 0, "read again"); break;
+  case 'R': vt_build(T); vt_say(T, 0, "read again"); break;
+  /* nvim-tree's: each opens the command line filled in, Enter does it */
+  case 'a': T->count = 0; vt_prefill(T, "add ", 0); return VT_NONE;
+  case 'r':
+    T->count = 0;
+    if (i > 0) vt_prefill(T, "rename ", 1);
+    return VT_NONE;
+  case 'd':
+    T->count = 0;
+    if (i > 0) vt_prefill(T, "delete ", 1);
+    return VT_NONE;
   case '/':
     T->mode = VTM_SEARCH;
     T->linen = 0; T->line[0] = 0;

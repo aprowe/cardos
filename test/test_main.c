@@ -1030,6 +1030,7 @@ void test_vim_tree_lists_folders_first_and_hides_dotfiles(void);
 void test_vim_tree_folds_and_moves(void);
 void test_vim_tree_comes_back_at_the_same_spot(void);
 void test_vim_tree_search_and_commands(void);
+void test_vim_tree_adds_renames_and_deletes(void);
 void test_vim_tree_caps_big_folders(void);
 void test_vim_tree_state_round_trip(void);
 void test_vim_tree_and_run_from_a_file(void);
@@ -2250,6 +2251,7 @@ int main(void) {
   RUN(test_vim_tree_folds_and_moves);
   RUN(test_vim_tree_comes_back_at_the_same_spot);
   RUN(test_vim_tree_search_and_commands);
+  RUN(test_vim_tree_adds_renames_and_deletes);
   RUN(test_vim_tree_caps_big_folders);
   RUN(test_vim_tree_state_round_trip);
   RUN(test_vim_tree_and_run_from_a_file);

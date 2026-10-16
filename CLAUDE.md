@@ -687,8 +687,12 @@ only the damage equals a full paint (`VIM_DUMP=dir` writes the screens).
   a coloured mark per kind (.py, .c/.h, .md, other). j k gg G ctrl-d
   ctrl-u H M L move; Enter/o open a file or fold a folder, l unfolds (then
   steps in), h folds (or goes up), `-` goes up a folder and folds it, `/`
-  finds a name as it is typed (n N), r reads the card again, `:e NAME`
-  makes a file beside the selection, q or :q leaves Vim (api->leave). In a
+  finds a name as it is typed (n N), R reads the card again, `:e NAME`
+  makes a file beside the selection, q or :q leaves Vim (api->leave).
+  nvim-tree's keys (2026-10-16): a, r and d fill in the command line --
+  `add ` (NAME/ makes a folder), `rename OLDNAME`, `delete NAME` -- and
+  Enter does it, Esc does not (that is the confirm); `:mkdir NAME` (also in
+  a file, beside it) makes a folder; a folder must be empty to delete. In a
   file, `-` or `:Ex` shows the tree on that file (every folder on the way
   opened, it selected; E37 when it has changes), and :q / :wq / :x go back
   to the tree with the same folders open, the same row selected and the

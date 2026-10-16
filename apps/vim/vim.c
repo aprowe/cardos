@@ -574,7 +574,7 @@ static void tree_cmdline(CRect c, int y) {
   if (TR.mode == VTM_CMD || TR.mode == VTM_SEARCH)
     api->fmt(line, sizeof line, "%c%s", TR.mode == VTM_CMD ? ':' : '/', TR.line);
   else if (TR.msg[0]) { api->fmt(line, sizeof line, "%s", TR.msg); if (TR.msg_err) fg = C_ERR; }
-  else { api->fmt(line, sizeof line, "enter open  h l fold  / find  q quit"); fg = C_LINENO; }
+  else { api->fmt(line, sizeof line, "a add r ren d del  enter open  q quit"); fg = C_LINENO; }
   n = (int)api->str_len(line);
   if (n > c.w / CHW - 1) { n = c.w / CHW - 1; line[n] = 0; }
   api->text((int16_t)c.x, (int16_t)(y + 1), line, fg, C_BG);
@@ -784,8 +784,10 @@ const CappInfo capp_info = {
   ":s/a/b/g\tthis line; :%s all\n:set nu nonu\tline numbers; sw= ts= et ic\n"
   "Tree\nj k gg G\tmove; ctrl-d ctrl-u\nenter o\topen a file, fold a folder\n"
   "l h\tunfold, fold (or up)\n-\tup a folder, folded\n/ n N\tfind a name\n"
-  ". gh\tdotfiles\nr\tread the card again\nspace r :run\trun a .py\n"
-  ":e NAME\tnew file here\nq :q\tleave Vim\n",
+  ". gh\tdotfiles\nR\tread the card again\nspace r :run\trun a .py\n"
+  "a\tadd a file; NAME/ a folder\nr\trename\nd\tdelete (enter to confirm)\n"
+  ":e NAME\tnew file here, opened\n:mkdir NAME\ta folder here (in a file too)\n"
+  "q :q\tleave Vim\n",
   0, 0
 };
 

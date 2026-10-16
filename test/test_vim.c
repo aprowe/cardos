@@ -832,6 +832,67 @@ void test_vim_tree_search_and_commands(void) {
   CHECK(strstr(TT.msg, "E492") != NULL);
 }
 
+/* nvim-tree's keys: a, r and d fill in the command line, Enter does it, Esc
+ * does not; :mkdir and a trailing / make folders. */
+void test_vim_tree_adds_renames_and_deletes(void) {
+  CappStat st;
+  tree_card();
+  tk("jjl");                                      /* home, open */
+  CHECK(strcmp(sel_path(), "/home") == 0);
+  tk("a");
+  CHECK_EQ(TT.mode, VTM_CMD);
+  CHECK(strcmp(TT.line, "add ") == 0);
+  tk("new.py\r");                                 /* in the folder selected */
+  CHECK(fakefs_exists("/home/new.py"));
+  CHECK(strcmp(sel_path(), "/home/new.py") == 0);  /* shown and selected */
+  CHECK(strstr(TT.msg, "made") != NULL);
+  tk("anew.py\r");                                /* beside a file: same folder */
+  CHECK(strstr(TT.msg, "already there") != NULL);
+  tk("alib/\r");                                  /* a trailing /: a folder */
+  CHECK(A.stat("/home/lib", &st) == 0 && st.is_dir);
+  CHECK(strcmp(sel_path(), "/home/lib") == 0);
+  tk(":mkdir sub\r");                             /* inside the folder selected */
+  CHECK(A.stat("/home/lib/sub", &st) == 0 && st.is_dir);
+  CHECK(strcmp(sel_path(), "/home/lib/sub") == 0);
+  CHECK(vt_is_open(&TT, "/home/lib"));
+  tk(":mkdir /top/\r");                           /* absolute, and a trailing / */
+  CHECK(A.stat("/top", &st) == 0 && st.is_dir);
+  tk(":mkdir\r");
+  CHECK(strstr(TT.msg, "E471") != NULL);
+
+  /* r: rename, the old name filled in to edit */
+  tk("/new.py\r");
+  tk("r");
+  CHECK(strcmp(TT.line, "rename new.py") == 0);
+  while (TT.linen) vt_key(&TT, VK_BS);
+  tk("rename main.py\r");                         /* typed over */
+  CHECK(!fakefs_exists("/home/new.py") && fakefs_exists("/home/main.py"));
+  CHECK(strcmp(sel_path(), "/home/main.py") == 0);
+  tk("ra.c");                                     /* esc: nothing happens */
+  vt_key(&TT, VK_ESC);
+  CHECK(fakefs_exists("/home/main.py"));
+  tk(":rename a.c\r");                            /* not over another */
+  CHECK(strstr(TT.msg, "already there") != NULL);
+
+  /* d: delete, Enter to confirm; a folder must be empty */
+  tk("d");
+  CHECK(strcmp(TT.line, "delete main.py") == 0);
+  vt_key(&TT, VK_ESC);
+  CHECK(fakefs_exists("/home/main.py"));
+  tk("d\r");
+  CHECK(!fakefs_exists("/home/main.py"));
+  CHECK(strstr(TT.msg, "deleted") != NULL);
+  CHECK(strcmp(sel_path(), "/home/main.py") != 0);
+  tk("/lib\rd\r");
+  CHECK(strstr(TT.msg, "not empty") != NULL);
+  CHECK(A.stat("/home/lib", &st) == 0);
+  tk("gg");                                       /* nothing to do on / */
+  tk("d");
+  CHECK_EQ(TT.mode, VTM_LIST);
+  tk("R");                                        /* R reads the card again */
+  CHECK(strstr(TT.msg, "read again") != NULL);
+}
+
 /* A folder bigger than can be read at once is cut, and says so; rows that
  * do not fit are left out, and said. */
 void test_vim_tree_caps_big_folders(void) {
