@@ -19,6 +19,7 @@ clock     Plan
 counter   Plan
 dashlink  Net
 edit      Make
+vim       Make
 explorer  System
 files     System
 hub       System
