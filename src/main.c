@@ -1443,6 +1443,32 @@ static int     s_blink;
  * gating and every one of those transitions. The loop's own concerns -- the
  * lock screen, waking, repeats -- are about a physical keyboard and stay in
  * the loop. */
+/* api->key_wait (API 49): a key for an app whose own code is running
+ * (Python's input()), read as the loop below reads one -- the built-in
+ * keyboard with its arrow swap, then a Bluetooth one -- and handed to the
+ * app, not dispatched. Not the serial link: its frames run console lines,
+ * which must not happen inside an app's handler. Yields while it waits. */
+int os_key_wait(int ms) {
+  int64_t until = esp_timer_get_time() + (int64_t)(ms > 0 ? ms : 0) * 1000;
+  for (;;) {
+    uint8_t k = keyboard_poll();
+    if (k && arrowkeys_first(palette_active(), help_active() || notify_center_active(),
+                             sink_wants_text()))
+      k = arrowkeys_swap(k);
+    if (!k) {
+      bthid_tick((uint32_t)(esp_timer_get_time() / 1000));
+      bthid_poll_key(&k);
+    }
+    if (k) {
+      bg_note_activity();
+      if (power_dimmed()) power_wake();
+      return k;
+    }
+    if (esp_timer_get_time() >= until) return -1;
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
+
 static void dispatch_key(uint8_t k) {
   if (!k) return;
 

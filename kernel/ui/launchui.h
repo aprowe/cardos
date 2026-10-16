@@ -58,6 +58,8 @@ int launchui_run(const char *name, const char *args);
  * is the app that came back, and only the first time. */
 int launchui_close(void);
 int launchui_resumed(void *buf, size_t n);
+/* api->repaint_now (API 49): the app on screen drawn now. */
+void launchui_repaint_now(void);
 
 /* What the fn-h panel shows over the launcher; src/main.c opens it. */
 void launchui_help(const char **app_title, const char **app_keys,

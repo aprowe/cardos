@@ -201,6 +201,44 @@ static void files_on_the_card(CardApi *A) {
   start_with(A, "/home/imp.py");
   CHECK(seen("ImportError", 3), "no module: %s", last());
 
+  /* input(): typed keys from key_wait; the prompt and the answer stay in
+   * the log as one line, and the script carries on with it */
+  A->ticks_ms = moving_ticks;
+  fakefs_put("/home/ask.py", "name = input('Name? ')\nprint('hi', name.upper())\n");
+  fakeapi_keys = "bp\bob\r";                     /* a slip, a backspace, Enter */
+  start_with(A, "/home/ask.py");
+  CHECK(seen("Name? bob", 3), "prompt and answer: %s", last());
+  CHECK(seen("hi BOB", 3), "the script had it: %s", last());
+  CHECK(!inputting, "input is over");
+  type("name\n");
+  CHECK(!strcmp(last(), "'bob'"), "and it is kept -> %s", last());
+  /* at the prompt too; Esc is KeyboardInterrupt, ctrl-d on nothing EOFError */
+  fakeapi_keys = "\x1b";
+  type("input('? ')\n");
+  CHECK(seen("KeyboardInterrupt", 2), "esc: %s", last());
+  fakeapi_keys = "\x04";
+  type("input()\n");
+  CHECK(seen("EOFError", 2), "ctrl-d: %s", last());
+  fakeapi_keys = "x\r";
+  type("input() * 2\n");
+  CHECK(!strcmp(last(), "'xx'"), "an expression -> %s", last());
+
+  /* live: a script's prints are drawn as it goes, not only at its end */
+  fakefs_put("/home/slow.py", "import time\nfor i in range(4):\n    print('tick', i)\n"
+             "    time.sleep_ms(150)\n");
+  fakeapi_keys = 0;
+  fakeapi_repaints = 0;
+  start_with(A, "/home/slow.py");
+  CHECK(seen("tick 3", 3), "it ran: %s", last());
+  CHECK(fakeapi_repaints >= 2, "drawn while it ran: %d", fakeapi_repaints);
+  fakeapi_repaints = 0;
+  type("1 + 1\n");                               /* a quick line draws nothing extra */
+  CHECK(fakeapi_repaints == 0, "no live draws for a quick line: %d", fakeapi_repaints);
+  /* a key typed during a sleep stops it */
+  fakeapi_keys = "k";
+  type("import time\ntime.sleep(5)\n");
+  CHECK(seen("KeyboardInterrupt", 2), "a key during sleep: %s", last());
+  fakeapi_keys = 0;
 }
 
 int main(void) {

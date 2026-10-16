@@ -446,10 +446,16 @@ MP_REGISTER_MODULE(MP_QSTR_os, cardpy_module_os);
 
 /* ---- time: a sleep that a held key still stops ------------------------------- */
 
+/* Waiting in api->key_wait (API 49), which yields to the rest of the
+ * machine, rather than spinning: a key typed meanwhile is the interrupt,
+ * and what was printed before it is drawn. */
 static void sleep_ms(mp_int_t ms) {
   uint32_t t0 = api->ticks_ms();
-  while (ms > 0 && (mp_int_t)(api->ticks_ms() - t0) < ms) {
-    cardpy_poll();
+  for (;;) {
+    mp_int_t left = ms - (mp_int_t)(api->ticks_ms() - t0);
+    if (left <= 0) break;
+    live(0);
+    if (api->key_wait(left < 50 ? (int)left : 50) >= 0) mp_sched_keyboard_interrupt();
     mp_handle_pending(true);
   }
 }

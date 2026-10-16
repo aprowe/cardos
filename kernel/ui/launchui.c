@@ -183,6 +183,16 @@ int launchui_resumed(void *buf, size_t n) {
   return got > 0 ? got : 0;
 }
 
+static void flush(void);
+
+/* api->repaint_now (API 49): the app on screen drawn now, from inside its
+ * own handler, as flush would after it. */
+void launchui_repaint_now(void) {
+  if (ui_shell() != UI_LAUNCHER || !s_app) return;
+  s_app_dirty = 1;
+  flush();
+}
+
 int launchui_close(void) {
   if (ui_shell() != UI_LAUNCHER || !s_app) return -1;
   if (capprun_caller() && capprun_caller() != s_app->state) return -1;   /* only the one on screen */

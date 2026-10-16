@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 48
+#define CAPP_API_VERSION 49
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -1063,6 +1063,25 @@ typedef struct {
    * or later; the bytes, at most n. 0 when it was opened any other way. */
   int (*leave)(void);
   int (*resumed)(void *buf, size_t n);
+
+  /* ---- while the app's own code runs (API 49) ----
+   *
+   * Nothing else runs while an app's handler does: no key is read and
+   * nothing is drawn until it returns. For an app that runs long on
+   * purpose -- Python running a script --
+   *
+   * repaint_now(): its screen drawn now, from inside the handler, as the
+   * shell would after it (its paint is called; damage marks apply).
+   * Throttle it: a full paint is tens of milliseconds.
+   *
+   * key_wait(ms): the next key typed within ms milliseconds (0: only look),
+   * as the app's key handler would have had it, or -1. It yields while it
+   * waits, so the rest of the machine (WiFi, the watchdog) goes on. Keys it
+   * returns are the app's: the shell never sees them. Chords the OS keeps
+   * (fn-`, fn-h) arrive here as plain codes -- the app decides.
+   * Python's input(), and its print and time.sleep. */
+  void (*repaint_now)(void);
+  int  (*key_wait)(int ms);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

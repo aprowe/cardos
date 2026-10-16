@@ -161,6 +161,16 @@ int  fakeapi_left;
 char fakeapi_resume[1024];
 int  fakeapi_resume_n;
 static int d_leave(void) { fakeapi_left++; return 0; }
+/* API 49: repaint_now counted; key_wait hands out fakeapi_keys in order,
+ * then -1. */
+int fakeapi_repaints;
+const char *fakeapi_keys;
+static void d_repaint_now(void) { fakeapi_repaints++; }
+static int d_key_wait(int ms) {
+  (void)ms;
+  if (fakeapi_keys && *fakeapi_keys) return (uint8_t)*fakeapi_keys++;
+  return -1;
+}
 static int d_resumed(void *buf, size_t n) {
   int k = fakeapi_resume_n < (int)n ? fakeapi_resume_n : (int)n;
   if (k > 0) memcpy(buf, fakeapi_resume, (size_t)k);
@@ -254,6 +264,10 @@ void fakeapi_init(CardApi *a) {
   a->big_room = d_big_room;
   fakeapi_big_room = 64 * 1024;
   a->leave = d_leave;
+  a->repaint_now = d_repaint_now;
+  a->key_wait = d_key_wait;
+  fakeapi_repaints = 0;
+  fakeapi_keys = 0;
   a->resumed = d_resumed;
   fakeapi_left = fakeapi_resume_n = 0;
   fakeapi_paint_direct = -1;

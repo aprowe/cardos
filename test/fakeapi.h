@@ -46,6 +46,8 @@ extern int      fakeapi_big_room;     /* what big_room says and big_alloc gives 
 extern int      fakeapi_left;         /* how many times leave() was called */
 extern char     fakeapi_resume[1024]; /* what resumed() hands back, once ... */
 extern int      fakeapi_resume_n;     /* ... this many bytes of it */
+extern int      fakeapi_repaints;     /* how many times repaint_now() was called */
+extern const char *fakeapi_keys;      /* what key_wait() hands out, in order */
 extern char     fakeapi_out[4096];    /* what out() and out_line() wrote */
 extern CRect    fakeapi_screen;       /* what paint_area() returns: 240x135 */
 

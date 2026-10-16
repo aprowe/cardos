@@ -66,6 +66,7 @@ static int src_n;
 static char outl[TL_COLS * 4 + 1]; /* stdout not yet ended by a newline */
 static int out_n;
 static int out_tag;
+static int out_dirty;              /* lines pushed since the last live draw */
 static size_t heap_total;
 static int ready;
 static int armed;                  /* the key that started a run has been let go */
@@ -86,6 +87,7 @@ void mp_hal_stdout_tx_strn_cooked(const char *s, size_t n) {
       outl[out_n] = 0;
       tl_push_text(api, &L, outl, out_tag, 0);
       out_n = 0;
+      out_dirty = 1;
     } else if (s[i] != '\r') {
       if (out_n == (int)sizeof outl - 1) flush_out();
       outl[out_n++] = s[i];
@@ -130,6 +132,26 @@ void nlr_jump_fail(void *val) {
   }
 }
 
+/* ---- live while a script runs (API 49) -------------------------------------------
+ *
+ * Nothing is drawn while the app's own code runs, so a script's prints
+ * used to appear only when it ended. While one runs, a line printed is
+ * drawn within LIVE_MS (api->repaint_now, from the output and from the VM
+ * hook), and input() waits for typed keys (api->key_wait). */
+#define LIVE_MS 100
+static uint32_t live_at;
+static int in_run;                  /* a script or a REPL line is running */
+
+static void live(int force) {
+  uint32_t now;
+  if (!in_run || (!force && !out_dirty)) return;
+  now = api->ticks_ms();
+  if (!force && (int32_t)(now - live_at) < LIVE_MS) return;
+  live_at = now;
+  out_dirty = 0;
+  api->repaint_now();
+}
+
 void cardpy_poll(void) {
   if (!armed) {
     if (!api->key_pending()) armed = 1;
@@ -137,7 +159,56 @@ void cardpy_poll(void) {
     mp_sched_keyboard_interrupt();
     armed = 0;
   }
+  live(0);
 }
+
+/* input([prompt]): the prompt and what is typed on the input line, keys
+ * from api->key_wait; Enter gives the line back, Esc is KeyboardInterrupt,
+ * ctrl-d on nothing is EOFError -- as Python's. The prompt and the answer
+ * stay in the log as one line. */
+static int inputting;
+static char inp[IN_MAX + 1];
+static int inp_n;
+
+static mp_obj_t cp_input(size_t n_args, const mp_obj_t *args) {
+  int k;
+  if (n_args) mp_obj_print(args[0], PRINT_STR);
+  inputting = 1;
+  inp_n = 0;
+  inp[0] = 0;
+  for (;;) {
+    live(1);
+    k = api->key_wait(1000);
+    if (k < 0) continue;
+    if (k == CAPP_KEY_ENTER) break;
+    if (k == CAPP_KEY_ESC) {
+      inputting = 0;
+      armed = 0;
+      mp_raise_type(&mp_type_KeyboardInterrupt);
+    }
+    if (k == 0x04 && !inp_n) {             /* ctrl-d */
+      inputting = 0;
+      armed = 0;
+      mp_raise_type(&mp_type_EOFError);
+    }
+    if (k == CAPP_KEY_BACK) {
+      if (inp_n) inp[--inp_n] = 0;
+    } else if (k >= 32 && k < 127 && inp_n < IN_MAX) {
+      inp[inp_n++] = (char)k;
+      inp[inp_n] = 0;
+    }
+  }
+  inputting = 0;
+  armed = 0;                              /* the Enter just pressed is no interrupt */
+  if (out_n + inp_n < (int)sizeof outl) {
+    memcpy(outl + out_n, inp, (size_t)inp_n);
+    out_n += inp_n;
+  }
+  flush_out();
+  out_dirty = 1;
+  return mp_obj_new_str(inp, (size_t)inp_n);
+}
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(cardpy_input_obj, 0, 1, cp_input);
 
 /* Files, imports, os, time, sys.stdout and exit(): the port's other half. */
 #include "apps/python/cardpy_mod.h"
@@ -158,6 +229,8 @@ static int run(const char *text, int file) {
   mp_stack_set_limit(STACK_LIMIT);
   armed = 0;
   out_tag = T_OUT;
+  in_run = 1;                       /* prints drawn as they come (live) */
+  live_at = api->ticks_ms();
   MP_STATE_THREAD(mp_pending_exception) = MP_OBJ_NULL;   /* a stop meant for the last run */
   if (nlr_push(&nlr) == 0) {
     mp_lexer_t *lex;
@@ -193,6 +266,8 @@ static int run(const char *text, int file) {
   }
   flush_out();
   out_tag = T_OUT;
+  in_run = 0;
+  inputting = 0;
   if (file) gc_collect();           /* closes the files the script forgot */
   (void)top;
   return r;
@@ -473,7 +548,17 @@ static void app_paint(void *st, CRect c) {
     api->fmt(bar, sizeof bar, "Python  (no memory for a heap)");
   tl_paint_bar(api, tl_bar_rect(c), bar, FG, BAR);
   tl_paint_log(api, &L, c, clip, colour, BG);
-  tl_paint_input(api, c, src_n ? "." : ">", in, in_n, C_IN, DIM, BG);
+  if (inputting) {                  /* input(): its prompt, then what is typed */
+    static char box[sizeof outl + IN_MAX + 1];
+    int n = out_n;
+    memcpy(box, outl, (size_t)n);
+    memcpy(box + n, inp, (size_t)inp_n);
+    n += inp_n;
+    box[n] = 0;
+    tl_paint_input(api, c, "?", box, n, C_IN, DIM, BG);
+  } else {
+    tl_paint_input(api, c, src_n ? "." : ">", in, in_n, C_IN, DIM, BG);
+  }
 }
 
 static int app_key(void *st, uint8_t k) {

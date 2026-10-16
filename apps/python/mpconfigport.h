@@ -53,9 +53,12 @@ void cardpy_poll(void);
 
 /* exit() and quit(), beside sys.exit: SystemExit, which leaves the app. */
 extern const struct _mp_obj_fun_builtin_var_t cardpy_exit_obj;
+/* input(): typed keys through api->key_wait (API 49), apps/python/python.c */
+extern const struct _mp_obj_fun_builtin_var_t cardpy_input_obj;
 #define MICROPY_PORT_EXTRA_BUILTINS \
     { MP_ROM_QSTR(MP_QSTR_exit), MP_ROM_PTR(&cardpy_exit_obj) }, \
-    { MP_ROM_QSTR(MP_QSTR_quit), MP_ROM_PTR(&cardpy_exit_obj) },
+    { MP_ROM_QSTR(MP_QSTR_quit), MP_ROM_PTR(&cardpy_exit_obj) }, \
+    { MP_ROM_QSTR(MP_QSTR_input), MP_ROM_PTR(&cardpy_input_obj) },
 
 #define MICROPY_PY_SYS_PLATFORM                 "cardos"
 #define MICROPY_HW_BOARD_NAME                   "Cardputer"

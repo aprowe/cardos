@@ -390,6 +390,9 @@ static void *api_big_alloc(size_t n) {
 static size_t api_big_room(void) { return bigmode_room(capprun_executing()); }
 static int api_leave(void) { return launchui_close(); }
 static int api_resumed(void *buf, size_t n) { return launchui_resumed(buf, n); }
+static void api_repaint_now(void) { launchui_repaint_now(); }
+extern int os_key_wait(int ms);         /* src/main.c, beside the loop it reads keys like */
+static int api_key_wait(int ms) { return os_key_wait(ms); }
 
 static int api_sig_verify(const uint8_t pub[65], const void *msg, size_t n, const uint8_t sig[64]) {
   psa_key_attributes_t at = PSA_KEY_ATTRIBUTES_INIT;
@@ -673,6 +676,8 @@ static const CardApi API = {
   api_big_room,
   api_leave,
   api_resumed,
+  api_repaint_now,
+  api_key_wait,
 };
 
 const CardApi *cardos_api(void) { return &API; }
