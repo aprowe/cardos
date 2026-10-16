@@ -12,6 +12,7 @@ import base64
 import datetime
 import hashlib
 import importlib.util
+import itertools
 import json
 import os
 import random
@@ -110,13 +111,16 @@ def stage_of(schema):
     return None
 
 
+_NAMES = itertools.count(1)     # names are unique across the pool now (recent ones are taken)
+
+
 def stage_answer(stage, schema, n):
     """What a well-behaved stage of server/jar/jarstages.py would say."""
     p = schema["properties"]
     if stage == "dm":
         return {"concept": "A small odd thing found by the canal, dented and humming. (%d)" % n}
     if stage == "fitter":
-        sheet = {"name": "Thing %d" % n, "line": "A small odd thing",
+        sheet = {"name": "Thing %d" % next(_NAMES), "line": "A small odd thing",
                  "kind": p["kind"]["enum"][0], "zone": "garden", "travel": p["travel"]["enum"][-1],
                  "idle": p["idle"]["enum"][-1], "liveliness": "normal",
                  "speed": p["speed"]["enum"][0], "bubbles": ["hm?", "glowy!"],
@@ -1669,7 +1673,7 @@ class Routes(unittest.TestCase):
 
     def test_a_failed_day_says_why_and_a_post_tries_again(self):
         jar._set_pool(kv.store(), [])                       # nothing to fall back on
-        with mock.patch("server.ask.ask_shape", Stub(*[ask.Invalid("did not fit")] * jar.MAX_FAILS)):
+        with mock.patch("server.ask.ask_shape", Stub(*[ask.Invalid("did not fit")] * jar.MAX_FAILS * 2)):   # the fitter is asked twice
             s, body = self.make_day(self.alex)
         self.assertIn("did not fit", body)
         self.assertTrue(body.startswith("error "))

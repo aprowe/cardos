@@ -1269,6 +1269,31 @@ the old contacts.
 - **Jar keys**: Tab (or j) is the next jar, 1-9 jumps to one (1 the
   factory), bars or no bars; zoomed, Tab still follows a critter.
 
+**Lively finds** (2026-10-15, the owner: "i want things lively,
+interacting" -- the pill bug crawls, poked it curls and turns to physics).
+`server/jar/jarstages.py`, all v3:
+- **A life is rolled per find** (`roll_life`): a role from `ROLES` (critter:
+  grazer, hunter, timid, climber, flitter, singer, collector, player; floor:
+  stage, shelter, feeder, toy, noisemaker, lamp, weathervane; hanging: lamp,
+  roost, noisemaker, weathervane), a poke reaction from `POKES`, and a trait
+  it notices -- one a resident of the person's jar really has, mostly. The
+  role's trait is worn (`_wear_role`). Roles say what a thing does, never
+  what it is: no nouns.
+- **Shared signals** (`JAR_SIGNALS`: startle, call, crumbs, landed): items
+  made apart can set each other off. The writer sees the residents and their
+  traits (`residents_of`, from the request's `injar`).
+- **Nothing moves a v3 item but its script** (the device ignores travel), and
+  the writer is told so; `lively_error` refuses a script with no `on poke`,
+  none that answers the jar, or a critter that never moves. Every v3 find
+  has a script (rare and treasure: full); critters are never rolled still.
+- **One chapter is not every find**: `CHAPTER_CHANCE` (0.35) of finds are
+  told Tibbs's chapter, and borrow at most one thing from it; an errand or a
+  commission always is. The DM is shown the last 20 finds; a name may not
+  repeat one of the last 80 (`recent_finds`). (One chapter had made 4
+  windmills, 7 clovers and two Clover Ants in ten finds.)
+- Known: a v3 hanging item is placed on the soil by the device
+  (`js_item_y` uses the lid only for non-v3) -- a firmware fix.
+
 **JarScript 3** (2026-10-14, branch `jarscript3`; spec
 docs/superpowers/specs/2026-10-14-jarscript3-design.md). The sandbox's
 language (tools/jarsandbox) on the device: states that take time (`wait`,

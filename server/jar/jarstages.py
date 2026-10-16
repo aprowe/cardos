@@ -96,6 +96,197 @@ def roll_tie(rng, names):
     return "%s the %s" % (rng.choice(RELATIONS), rng.choice(list(names)))
 
 
+# ---- a life in the jar (2026-10-15) ----------------------------------------------------
+#
+# The owner: "i want things lively, interacting" -- the pill bug crawls, and
+# poked it curls and turns to physics. A review of ten finds: four did
+# nothing, two critters stood about, and nothing knew anything else was
+# there. The sandbox's scenes (tools/jarsandbox/scenarios) are good for three
+# reasons, and the code now rolls each find's share of them:
+#
+# - a role in a little ecology: the newt hunts, the pill bug hides, the snail
+#   climbs, the castle is a stage that answers being landed on. Rolled per
+#   find (ROLES), carried as a trait so the others can find it.
+# - a routine that is interrupted and picks up again, the interruption
+#   often physics: rolled as the find's answer to a poke (POKES).
+# - chains: one thing sets off the next. Items are made one at a time, so
+#   they share a few signal words (JAR_SIGNALS) rather than knowing names.
+#
+# No nouns in any of it: a role says what a thing does, never what it is.
+
+ROLES = {   # name: (for the DM, the trait it carries, for the script)
+    "critter": {
+        "grazer": ("It spends its days nibbling at the jar's plants and berries, between naps.",
+                   "critter", "a routine of going to food (find(plant), find(food), eat) and "
+                   "back to a resting spot"),
+        "hunter": ("It stalks smaller creatures -- it never catches one, and sulks about it.",
+                   "hunter", "on near bug or prey: freeze, creep up (a slow walk), pounce (a "
+                   "hop at it), miss, and sulk"),
+        "timid": ("It is shy and easily frightened, and dashes for cover.",
+                  "prey", "on near hunter, on near bird and on signal startle: dash to "
+                  "find(nest) or curl up where it is, peek out, and carry on when it is safe"),
+        "climber": ("It loves to climb up things and sit on top of them.",
+                    "climber", "move to perch (any, or a trait) to sit up high a while; on "
+                    "signal startle it loses its grip and falls (physics), then climbs again"),
+        "flitter": ("It flits about from spot to spot and never settles for long.",
+                    "flyer", "move to perch ... arc ... from one spot to the next; on land, "
+                    "signal landed to perched; off again when startled"),
+        "singer": ("It sings or calls, and loves to be answered.",
+                   "music", "on chime and at dawn or dusk: sound, emit note, signal call; on "
+                   "signal call: answer back"),
+        "collector": ("It gathers bits and bobs and takes them home to its spot.",
+                      "nest", "on berry and on signal crumbs: go to the food, then walk home "
+                      "(remember home in a var) and fuss over it"),
+        "player": ("It is playful: it races, tumbles and pesters the others.",
+                   "critter", "on near critter: race it, hop over it, or tumble (physics, "
+                   "roll on) and pick itself up"),
+    },
+    "floor": {
+        "stage": ("Creatures climb on it, sit on it and use it as a lookout.",
+                  "roost", "declare perch spots (and solid for a top); on signal landed: "
+                  "answer being landed on -- a creak, a wobble, a frame"),
+        "shelter": ("Timid creatures hide in it.",
+                    "nest", "on near prey or on signal startle: open up (a frame) or settle "
+                    "protectively; on poke it rattles and whoever was hiding bolts"),
+        "feeder": ("Creatures come to it for something to eat.",
+                   "food", "now and then drops treats (emit) and signals crumbs; on near "
+                   "critter: a little welcome"),
+        "toy": ("It gets knocked about -- it rolls, tips and bounces.",
+                "shiny", "body R; on bump and on poke: physics on, a fling, roll on if round; "
+                "settles and rights itself"),
+        "noisemaker": ("Every so often it goes off and sets the whole jar jumping.",
+                       "noisy", "on chime or every so often: its sound, a shake, signal startle"),
+        "lamp": ("It lights up the jar at night, and moths and bugs come to it.",
+                 "light", "on time night: glow on; on time dawn: glow off; on near flyer or "
+                 "bug: flicker or sway"),
+        "weathervane": ("It feels the real weather outside the window and shows it.",
+                        "wild", "on weather (each kind its own way) and on world breeze"),
+    },
+    "hanging": {
+        "lamp": ("It lights up the jar at night, and moths and bugs come to it.",
+                 "light", "on time night: glow on; on time dawn: glow off; on near flyer: "
+                 "sway"),
+        "roost": ("Flying things land on it and swing.",
+                  "roost", "declare perch spots; on signal landed: swing (sway) under the "
+                  "weight"),
+        "noisemaker": ("Every so often it jangles and sets the whole jar jumping.",
+                       "noisy", "on chime or every so often: its sound, sway hard, signal startle"),
+        "weathervane": ("It feels the real weather outside the window and shows it.",
+                        "wild", "on weather (each kind its own way) and on world breeze"),
+    },
+}
+
+POKES = {   # what it does when the player pokes it
+    "critter": (
+        "curls up into a ball and tumbles under physics, then uncurls and carries on",
+        "leaps away in a fright -- a big hop or a fling -- and lands somewhere else",
+        "falls over, lies there a moment, and picks itself up",
+        "freezes or hides, then peeks out and carries on when it feels safe",
+        "puffs itself up and shows off, then deflates",
+        "dashes off in a hurry, stops, and seems to forget why",
+        "is bowled over and bounces off the glass, then dusts itself off",
+        "gets cross and chases after whatever is nearest",
+    ),
+    "floor": (
+        "rocks, tips over under physics, and rights itself",
+        "jumps in place and lands with a thump that startles whatever is near",
+        "springs into action -- a part of it turns, opens or pops (frames) -- then settles",
+        "puffs or spills something out (particles), and anything near notices",
+        "rolls a little way and comes to rest somewhere new",
+    ),
+    "hanging": (
+        "swings hard on its string, then slowly settles",
+        "turns round and round on its thread, then unwinds",
+        "lets a little shower of something fall, and anything below notices",
+        "jangles and wakes whatever is below it",
+    ),
+}
+
+# Signal words every item may send and answer, so things made apart can
+# still set each other off. The wake reaches every other item.
+JAR_SIGNALS = (
+    ("startle", "something sudden and loud happened: flinch, hide, take off or fall off"),
+    ("call", "someone sang or called out: answer, or prick up and go and look"),
+    ("crumbs", "food was dropped: grazers and gatherers come for it"),
+    ("landed", "send it `to perched` after landing on something, so it can react"),
+)
+
+CHAPTER_CHANCE = 0.35     # a find borrows from Tibbs's chapter; the rest come from the dice
+RECENT = 20               # recent finds the DM is shown, not to repeat
+RECENT_NAMES = 80         # recent names a new one may not take
+
+
+def role_group(kind, form):
+    if is_critter(kind, form):
+        return "critter"
+    return "hanging" if kind == "hanging" else "floor"
+
+
+def roll_life(rng, kind, form, residents=()):
+    """The find's role, its answer to a poke, and a trait it notices (one a
+    resident really has, when there are residents with traits)."""
+    g = role_group(kind, form)
+    roles = ROLES[g]
+    if form == "furniture":
+        role = "stage"
+    elif form == "scenery":
+        role = rng.choice(("weathervane", "lamp", "stage"))
+    else:
+        role = rng.choice(sorted(roles))
+    said, trait, how = roles[role]
+    have = [t for _, ts in residents for t in ts if t != trait]
+    notices = rng.choice(have) if have and rng.random() < 0.7 else rng.choice(
+        ("critter", "bug", "bird", "food", "light", "wet", "shiny", "plant", "music", "flyer"))
+    return {"role": role, "said": said, "trait": trait, "how": how,
+            "poke": rng.choice(POKES[g]), "notices": notices}
+
+
+def residents_of(req, st):
+    """[(name, [traits])] of what is in the person's jar now: its records'
+    traits where the server has them, names alone for built-ins."""
+    out, seen = [], set()
+    for i in (req or {}).get("injar", [])[:12]:
+        raw = st.get(jar.NS, "rec/%d" % i)
+        if raw is None:
+            continue
+        try:
+            it = jar.decode(raw)
+        except ValueError:
+            continue
+        from . import jarvm3
+        words = set(jarvm3.GROUPS["trait"])            # v3's words: v2's are a subset
+        out.append((it["name"], [t for t in it["tags"].split(",") if t in words]))
+        seen.add(it["name"].lower())
+    for n in (req or {}).get("jar", [])[:12]:
+        if n.lower() not in seen:
+            out.append((n, []))
+            seen.add(n.lower())
+    return out
+
+
+def recent_finds(st, n_names=RECENT_NAMES, n_concepts=RECENT):
+    """(names, first sentences) of the newest items made, newest first: the
+    DM is shown the sentences so a chapter's nouns do not come back in every
+    stock, and a new name may not repeat one (two Clover Ants, 2026-10-15)."""
+    names, said = [], []
+    top = jar.ID_BASE + int(st.get(jar.NS, "next_id") or 0)
+    for i in range(top, max(jar.ID_BASE, top - n_names * 2), -1):
+        if len(names) >= n_names:
+            break
+        raw = st.get(jar.NS, "rec/%d" % i)
+        if raw is None:
+            continue
+        try:
+            names.append(jar.decode(raw)["name"])
+        except ValueError:
+            continue
+        if len(said) < n_concepts:
+            c = concept_of(i, st)
+            if c and c.get("concept"):
+                said.append(_short(c["concept"]))
+    return names, said
+
+
 def slot_of(kind, form):
     return SLOT_WORDS[form if form in ("furniture", "scenery", "part") else kind]
 
@@ -117,14 +308,15 @@ TIER_WORDS = {
 
 
 def dm_prompt(search, activity, tier_name, earlier=(), kind="floor", form=None,
-              residents=(), tie=""):
+              residents=(), tie="", life=None):
     """Everything the DM is told about one find. It never sees the item
     format, the enums, the player or the script language; `residents` are
     one-line descriptions of what already lives in the jar."""
     lines = ["You invent things. " + DM_WORLD, ""]
     if search:
         lines.append("Tibbs's day, in his words -- the setting it came out of, not a list of "
-                     "what to make; it need not be what he went looking for:\n\"%s\"" % search)
+                     "what to make; it need not be what he went looking for. Borrow at most one "
+                     "small thing from it; the rest is yours:\n\"%s\"" % search)
     if residents:
         lines += ["", "Already living in the terrarium:"] + ["- %s" % r for r in residents]
     lines += [
@@ -134,14 +326,19 @@ def dm_prompt(search, activity, tier_name, earlier=(), kind="floor", form=None,
     ]
     if is_critter(kind, form):
         lines.append("It is alive -- a real creature, not a toy, ornament or model of one.")
+    if life:
+        lines.append("Its part in the life of the jar: %s When someone pokes it, it %s. It "
+                     "takes notice of anything %s that comes near." % (
+                         life["said"], life["poke"], life["notices"]))
     if tie:
         lines.append("Make it belong with what is there: it %s. Say how they get along -- one "
                      "small moment that happens between them, again and again." % tie)
     elif residents:
         lines.append("It may get along with what is there, or keep to itself.")
     if earlier:
-        lines.append("Already found today, so not these, nor anything like them: %s."
-                     % " / ".join(earlier))
+        lines.append("Already found lately, so not these, nor anything like them -- not the "
+                     "same kind of thing, nor the same motif: %s." % " / ".join(
+                         e.rstrip(".") for e in earlier))
     lines += [
         "Decide what it is first. Say what it is made of only where that is simply what such "
         "a thing is made of.",
@@ -166,13 +363,17 @@ MOTION_SAID = {
                "hop": "hops", "slide": "glides along the ground", "float": "drifts in the air",
                "fly": "flies about"},
     "idle": {"none": "nothing", "sway": "sways", "bob": "bobs up and down",
-             "wobble": "wobbles", "spin": "turns round", "pulse": "swells and shrinks",
+             "wobble": "wobbles",
+             "spin": "the WHOLE picture turns round edge-on, like a coin -- only for a thing "
+                     "that turns whole; never for one on a stand or stalk (its sails or "
+                     "petals turning are frames)",
+             "pulse": "swells and shrinks",
              "flicker": "flickers (two frames, swapped quickly)",
              "blink": "blinks now and then (an extra frame)"},
 }
 
 
-def fitter_prompt(concept, kind, form, activity, tier):
+def fitter_prompt(concept, kind, form, activity, tier, life=None):
     e = jar.enums()
     rules = jar.motion_rules(activity, kind)
     lines = [
@@ -189,6 +390,12 @@ def fitter_prompt(concept, kind, form, activity, tier):
         lines.append(jar.FORM_WORDS[form])
     lines += [
         "%s (%s)" % (ACTIVITY_WORDS[activity], tier[0]),
+    ]
+    if life:
+        lines.append("Keep in intent: %s When poked, it %s. It notices anything %s nearby. "
+                     "Its traits must include %s." % (life["said"], life["poke"],
+                                                       life["notices"], life["trait"]))
+    lines += [
         "",
         "The game sheet:",
         "- name: up to 12 characters; line: a one-line description, up to 32, playful.",
@@ -369,15 +576,67 @@ def behaviour_prompt(sheet, kind, activity, nframes, tier):
 SCRIPT_SRC_V3 = 6000                  # characters of source; the bytes are what is limited
 
 
-def script_tier(kind, form, activity):
-    if is_critter(kind, form):
+def script_tier(kind, form, activity, tier_name=None):
+    """Every v3 find has a script (2026-10-15: "i want things lively"): a
+    critter's and a rare or treasure find's is full, the rest small."""
+    if is_critter(kind, form) or tier_name in ("rare", "treasure"):
         return "full"
-    if activity == "still":
-        return "none"
     return "small"
 
 
-def behaviour_prompt_v3(sheet, kind, activity, nframes, stier, form=None):
+def behaviour_rule_v3(activity, critter):
+    """What its first state does. Nothing moves a v3 item but its script:
+    the device ignores travel for one (jarsim.h), so "it already moves about"
+    left critters standing still."""
+    if critter:
+        return {
+            "still": "It is mostly resting -- dozing, grooming, watching -- in its first state, "
+                     "with a little stir now and then.",
+            "reacts": "It rests in its first state until something happens; then it comes "
+                      "alive and gets about (walk, hop, move to) before it settles again.",
+            "ambles": "It gets about by itself, unhurried: its first state walks, hops or moves "
+                      "it now and then, with rests between. Nothing moves it but its script.",
+            "restless": "It is never still for long: its first state keeps it moving -- walking, "
+                        "hopping, flitting -- with only short rests. Nothing moves it but its "
+                        "script.",
+        }[activity]
+    return {
+        "still": "It stays where it is put, but it is not an ornament: its first state has a "
+                 "small routine (a frame change, a sway, a particle now and then).",
+        "reacts": "It rests in its first state until something happens, then reacts.",
+        "ambles": "It fidgets in place now and then -- sways, frames, a particle -- without "
+                  "leaving its spot.",
+        "restless": "It is busy in place all the time -- frames, sways, shakes -- without "
+                    "leaving its spot.",
+    }[activity]
+
+
+LIVELY_V3 = (
+    "Make it lively and part of the jar, not an ornament:\n"
+    "- It must have `on poke:` and must answer at least one other thing: something near "
+    "(on near TRAIT), a jar-wide signal, a bump, or the jar itself (on time, weather, world, "
+    "berry, chime, shipped).\n"
+    "- A reaction is a change of state that takes time and comes back: go to a state, do "
+    "something you can watch (a move, physics, frames, its sound, particles), then go back to "
+    "its usual state.\n"
+    "- Physics is the best fun, and not only for critters: `physics on`, a fling (vx, vy), "
+    "`roll on` for something round, `wait until grounded and speed < 4`, then `physics off`, "
+    "`angle = 0`, and carry on. A hanging thing stays on its string: no physics or walking "
+    "for it.\n"
+    "- angle and spin turn the WHOLE picture: only for something that turns whole (a ball, a "
+    "tumble). A part that turns or opens -- sails, petals, a lid -- is frames, played.\n"
+    "- Use its sound at its big moment.\n"
+    "- Name states and vars with your own words, never one of the language's (perched, "
+    "state, frame, speed, other, ...).")
+
+
+def signals_text():
+    return "Jar-wide signals, the same words for everything (`signal NAME`, `on signal NAME:`):\n" \
+        + "\n".join("- %s: %s" % (n, w) for n, w in JAR_SIGNALS)
+
+
+def behaviour_prompt_v3(sheet, kind, activity, nframes, stier, form=None, life=None,
+                        residents=()):
     from . import jarvm3
     lines = [
         "Write the behaviour of a thing in a cosy game set inside a glass jar, in JarScript 3.",
@@ -385,14 +644,26 @@ def behaviour_prompt_v3(sheet, kind, activity, nframes, stier, form=None):
         "What it does: %s" % sheet["intent"],
         "It likes to be at %s; it %s." % (sheet["zone"],
                                           MOTION_SAID["travel"][sheet["travel"]]),
-        "Its frames: %d, 16x16 (frame 1 is how it usually looks)%s." % (
-            nframes, ", drawn at twice the size" if form in ("big", "scenery") else ""),
+        "Its frames: %d, 16x16, numbered 1 to %d (frame 1 is how it usually looks): "
+        "`frame 2`, `anim a = 1 2 @ 4`%s." % (
+            nframes, nframes, "; drawn at twice the size" if form in ("big", "scenery") else ""),
     ]
     if sheet.get("traits"):
         lines.append("Its traits: %s." % ", ".join(sheet["traits"]))
+    lines += ["", behaviour_rule_v3(activity, is_critter(kind, form))]
+    if life:
+        lines += ["Its part in the jar's life: %s How: %s." % (life["said"], life["how"]),
+                  "When poked, it %s." % life["poke"],
+                  "It notices anything %s that comes near (on near %s)." % (
+                      life["notices"], life["notices"])]
+    if residents:
+        lines.append("Living in the jar now (react to their traits, never their names): %s." % (
+            "; ".join("%s -- %s" % (n, ", ".join(t)) if t else n for n, t in residents)))
     lines += [
         "",
-        BEHAVIOUR_RULE[activity],
+        LIVELY_V3,
+        "",
+        signals_text(),
         "",
         "- script: the whole script. It must compile to at most %d bytes (about %d lines); "
         "smaller is better. React to traits, never to names. Keep it charming and friendly "
@@ -423,6 +694,14 @@ def _ask(chat, prompt, schema, person, effort, st):
     return ask.ask_shape(chat, prompt, schema, user=person or "pool", limit=None,
                          timeout=STAGE_TIMEOUT, store=st, effort=effort, model=shopkeep.MODEL,
                          cwd=shopkeep.home())
+
+
+def _wear_role(sheet, life):
+    """The role's trait among the sheet's, so others can find it by it."""
+    if not life or "traits" not in sheet:
+        return
+    t = [x for x in sheet["traits"] if x != life["trait"]]
+    sheet["traits"] = [life["trait"]] + t[:3]
 
 
 def combine(sheet, art, beh, kind, form, stier=None):
@@ -458,9 +737,9 @@ def _script_error(raw, form):
         try:
             jarvm3.prepare_script(src, nframes, tier=raw.get("tier", "full"),
                                   scale=2 if form in ("big", "scenery") else 1)
-            return None
         except jarvm3.ScriptError as e:
             return "the script does not work: %s" % e
+        return lively_error(src, raw.get("kind"), form)
     try:
         jarvm.prepare_script(src, nbub=len(raw["bubbles"]), nframes=nframes)
         return None
@@ -468,24 +747,53 @@ def _script_error(raw, form):
         return "the script does not work: %s" % e
 
 
+ANSWERS = re.compile(r"^\s*on\s+(near|signal|bump|hit|land|time|weather|world|berry|chime|"
+                     r"shipped|gift|new|jam)\b", re.M)
+MOVES = re.compile(r"^\s*(walk|hop|move\s+to|physics\s+on)\b", re.M)
+
+
+def lively_error(src, kind, form):
+    """None, or why a v3 script is not lively enough (LIVELY_V3)."""
+    why = []
+    if not re.search(r"^\s*on\s+poke\b", src, re.M):
+        why.append("it has no `on poke:`")
+    if not ANSWERS.search(src):
+        why.append("it answers nothing in the jar (on near, on signal, on bump, on time, "
+                   "on weather, on world, ...)")
+    if kind == "critter" and form != "part" and not MOVES.search(src):
+        why.append("a critter that never moves: walk, hop, move to or physics")
+    return ("the script is not lively enough: %s" % "; ".join(why)) if why else None
+
+
 def make_find(chat, person, kind, tier, form, activity, search, earlier, taken, st, log=None,
-              concept=None, base=None, stier=None):
+              concept=None, base=None, stier=None, life=None, residents=(), tie=""):
     """One find through the stages: (raw, concept, sheet). Drop if it comes
     to nothing. With a `concept` the DM is skipped (a remake: the old idea
     and what was asked for), and `base` is the old picture for the artist."""
     say = log or (lambda s: None)
     if concept is None:
         try:
-            concept = _ask(chat, dm_prompt(search, activity, tier[0], earlier, kind, form),
+            concept = _ask(chat, dm_prompt(search, activity, tier[0], earlier, kind, form,
+                                           ["%s (%s)" % (n, ", ".join(t)) if t else n
+                                            for n, t in residents], tie, life),
                            dm_schema(),
                            person, tier[2], st)["concept"].strip()
         except Exception as e:                          # noqa: BLE001 - the find is dropped
             raise Drop("DM: %s" % e)
-    try:
-        sheet = _ask(chat, fitter_prompt(concept, kind, form, activity, tier),
-                     fitter_schema(kind, form, activity), person, "medium", st)
-    except Exception as e:                              # noqa: BLE001
-        raise Drop("fitter: %s" % e)
+    sheet = None
+    for attempt in range(2):                            # a name a letter long is not a lost find
+        try:
+            sheet = _ask(chat, fitter_prompt(concept, kind, form, activity, tier, life)
+                         + ("" if not attempt else "\n\nThe last answer was refused: %s. Fix "
+                            "that." % last), fitter_schema(kind, form, activity), person,
+                         "medium", st)
+            break
+        except Exception as e:                          # noqa: BLE001
+            last = e
+            say("fitter for a find: %s%s" % (e, "; again" if not attempt else ""))
+    if sheet is None:
+        raise Drop("fitter: %s" % last)
+    _wear_role(sheet, life)
     if sheet.get("note"):
         say("fitter's note on %r: %s" % (sheet["name"], sheet["note"]))
 
@@ -497,7 +805,8 @@ def make_find(chat, person, kind, tier, form, activity, search, earlier, taken, 
         if stier == "none":
             return {"habits": [], "script": ""}         # an idle thing: its motion parts alone
         if stier:
-            p = behaviour_prompt_v3(sheet, kind, activity, sheet["frames"], stier, form) + extra
+            p = behaviour_prompt_v3(sheet, kind, activity, sheet["frames"], stier, form, life,
+                                    residents) + extra
             return dict(_ask(chat, p, behaviour_schema_v3(), person, tier[2], st), habits=[])
         p = behaviour_prompt(sheet, kind, activity, sheet["frames"], tier) + extra
         return _ask(chat, p, behaviour_schema(), person, tier[2], st)
@@ -555,9 +864,10 @@ def make_find(chat, person, kind, tier, form, activity, search, earlier, taken, 
         if parts["sheet"]:
             say("sheet for %r refused: %s" % (sheet["name"], "; ".join(parts["sheet"][:2])))
             try:
-                sheet = _ask(chat, fitter_prompt(concept, kind, form, activity, tier)
+                sheet = _ask(chat, fitter_prompt(concept, kind, form, activity, tier, life)
                              + fix % "; ".join(parts["sheet"][:4]),
                              fitter_schema(kind, form, activity), person, "medium", st)
+                _wear_role(sheet, life)
             except Exception as e:                      # noqa: BLE001
                 raise Drop("fitter, again: %s" % e)
             if len(art["frames"]) != sheet["frames"]:   # the artist must draw to the new sheet
@@ -580,11 +890,14 @@ def make_find(chat, person, kind, tier, form, activity, search, earlier, taken, 
 # ---- a stock's new finds -------------------------------------------------------------------
 
 def generate(chat, person, req, date, store=None, signer=None, now=None, log=None,
-             on_item=None, want=None, kind_at=0, search="", rng=None, force_form=None):
+             on_item=None, want=None, kind_at=0, search="", rng=None, force_form=None,
+             chapter_chance=1.0):
     """jar.generate, in stages: new items for `person` (None: the pool),
     [signed records]. Each find's kind, tier, form and activity are rolled
     first; a find that comes to nothing is dropped, MAX_FAILS of them in
-    all. Fewer than asked for is fewer, not a failure."""
+    all. Fewer than asked for is fewer, not a failure. `chapter_chance`: how
+    often a find is told `search` (Tibbs's chapter: CHAPTER_CHANCE, so one
+    day's nouns are not in every find; an errand or a commission: always)."""
     import random
     st = store or kv.store()
     now = time.time() if now is None else now
@@ -592,6 +905,9 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
     want = jar.ITEMS if want is None else want
     owned = [n.lower() for n in req.get("owned", [])]
     say = log or (lambda s: None)
+    recent_names, recent_said = recent_finds(st)
+    owned += [n.lower() for n in recent_names]
+    residents = residents_of(req, st) if person else []
     if not search:
         say("no search from Tibbs: the DM works from the rolls alone")
     names, concepts, records, fails, last = [], [], [], 0, None
@@ -601,14 +917,18 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
         kind = jar.KIND_PLAN[(kind_at + k) % len(jar.KIND_PLAN)]
         tier = jar.pick_tier(rng, req.get("bribe", 0) if req.get("finds") else 0)
         form = force_form or (jar.roll_form(kind, rng) if jar.v2_on() else None)
-        activity = jar.roll_activity(rng)
+        activity = jar.roll_activity(rng, "critter" if is_critter(kind, form) else kind)
         if form in ("scenery", "furniture") and activity in ("ambles", "restless"):
             activity = "still"                          # a backdrop or a shelf does not wander
         taken = set(owned) | {n.strip().lower() for n in names}
-        stier = script_tier(kind, form, activity) if jar.V3 else None
+        stier = script_tier(kind, form, activity, tier[0]) if jar.V3 else None
+        life = roll_life(rng, kind, form, residents) if jar.V3 else None
+        tie = roll_tie(rng, [n for n, _ in residents])
+        setting = search if rng.random() < chapter_chance else ""
         try:
-            raw, concept, sheet = make_find(chat, person, kind, tier, form, activity, search,
-                                            concepts, taken, st, log, stier=stier)
+            raw, concept, sheet = make_find(chat, person, kind, tier, form, activity, setting,
+                                            concepts + recent_said, taken, st, log, stier=stier,
+                                            life=life, residents=residents, tie=tie)
         except Drop as e:
             fails += 1
             last = e
@@ -621,7 +941,8 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
                                               log, tier[1], form)), signer)
         st.put(jar.NS, "rec/%d" % item_id, rec)
         st.put(jar.NS, "concept/%d" % item_id, json.dumps({
-            "concept": concept, "search": search, "activity": activity,
+            "concept": concept, "search": setting, "activity": activity, "life": life,
+            "tie": tie,
             "intent": sheet.get("intent", ""), "note": sheet.get("note", ""),
             "look": sheet.get("look", "")}).encode())
         if person:

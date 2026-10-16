@@ -786,10 +786,10 @@ def item_schema(form=None, motion=False):
             "script": {"type": "string", "maxLength": SCRIPT_SRC_MAX},
         },
     }
-    if jarvm.V2:
+    if v2_on():
         p = s["properties"]
-        p["traits"] = {"type": "array", "minItems": 1, "maxItems": 4,
-                       "items": {"enum": list(jarvm.GROUPS["trait"])}}
+        p["traits"] = {"type": "array", "minItems": 1, "maxItems": 4,      # v3's 32 with v3
+                       "items": {"enum": list(trait_words())}}
         p["voice"] = {"enum": list(jarvm.GROUPS["sound"]) + ["none"]}
         s["required"] = s["required"] + ["traits"]
         if form == "part":
@@ -878,7 +878,12 @@ def roll_form(kind, rng):
 # three parts, inside the activity's row of MOTION_RULES. The record keeps
 # the parts in bytes 215-217 (apps/jar/jaritem.h), and byte 72 the nearest old
 # movement for a Jar that knows only 208 bytes.
-ACTIVITIES = (("still", 35), ("reacts", 30), ("ambles", 25), ("restless", 10))
+# Lively over still (2026-10-15, the owner: "i want things lively,
+# interacting"): of ten finds in one batch four were still and had no script,
+# and the two critters stood about. A critter is never rolled still, and with
+# JarScript 3 every find has a script.
+ACTIVITIES = (("still", 20), ("reacts", 45), ("ambles", 25), ("restless", 10))
+CRITTER_ACTIVITIES = (("reacts", 20), ("ambles", 50), ("restless", 30))
 TRAVELS = ("none", "crawl", "hop", "slide", "float", "fly")        # byte 215
 IDLES = ("none", "sway", "bob", "wobble", "spin", "pulse", "flicker", "blink")   # 216
 LIVELY = ("calm", "normal", "jittery")                             # byte 217
@@ -901,9 +906,10 @@ def motion_rules(activity, kind="critter"):
     return dict(rules, travel=("none",))
 
 
-def roll_activity(rng):
-    r = rng.randrange(sum(p for _, p in ACTIVITIES))
-    for name, pct in ACTIVITIES:
+def roll_activity(rng, kind=None):
+    table = CRITTER_ACTIVITIES if kind == "critter" else ACTIVITIES
+    r = rng.randrange(sum(p for _, p in table))
+    for name, pct in table:
         if r < pct:
             return name
         r -= pct
@@ -1202,7 +1208,8 @@ def to_item(raw, item_id, made, tags, log=None, price=0, form=None):
 
 
 def generate(chat, person, req, date, store=None, signer=None, now=None, log=None,
-             on_item=None, want=None, kind_at=0, search="", rng=None, force_form=None):
+             on_item=None, want=None, kind_at=0, search="", rng=None, force_form=None,
+             chapter_chance=1.0):
     """New items for `person` (None: for the pool): [signed records], made in
     stages from `search` -- where Tibbs went looking, or a job's description
     (server/jar/jarstages.py: a DM, a fitter, an artist and a behaviour writer).
@@ -1212,7 +1219,8 @@ def generate(chat, person, req, date, store=None, signer=None, now=None, log=Non
     from . import jarstages
     return jarstages.generate(chat, person, req, date, store=store, signer=signer, now=now,
                               log=log, on_item=on_item, want=want, kind_at=kind_at,
-                              search=search, rng=rng, force_form=force_form)
+                              search=search, rng=rng, force_form=force_form,
+                              chapter_chance=chapter_chance)
 
 
 # ---- the pool ------------------------------------------------------------------------------
@@ -1445,6 +1453,11 @@ def deck_take(person, n, store=None):
     return got
 
 
+def _chapter_chance():
+    from . import jarstages
+    return jarstages.CHAPTER_CHANCE
+
+
 def premake(chat, person, store=None, now=None, log=None, wait=False):
     """Fill `person`'s deck to NEW_ITEMS on a thread (in this one with
     wait). False when there is nothing to do or it is already being done."""
@@ -1465,7 +1478,7 @@ def premake(chat, person, store=None, now=None, log=None, wait=False):
                 return
             recs = generate(chat, person, req, _today(now), store=st, now=now, log=say,
                             want=want, kind_at=random.randrange(len(KIND_PLAN)),
-                            search=chapter,
+                            search=chapter, chapter_chance=_chapter_chance(),
                             on_item=lambda k, rec: _deck_push(st, person, decode(rec)["id"]))
             say("%d made ahead" % len(recs))
         except Exception as e:                          # noqa: BLE001 - tried again at the next look
@@ -1586,7 +1599,9 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
         if n_new - len(made) > 0:
             records = generate(chat, person, req, date, store=store, on_item=on_item,
                                want=n_new - len(made), kind_at=batch, log=say_log,
-                               search=search or chapter)
+                               search=search or chapter,
+                               chapter_chance=1.0 if req.get("finds") or asked
+                               else _chapter_chance())
         records = [store.get(NS, "rec/%d" % i) for i in made] + records
         state("ok", at[0])
         sys.stderr.write("jar: %s: %d items for %s (%d his, %d new)\n" % (

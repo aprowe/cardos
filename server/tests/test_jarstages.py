@@ -49,7 +49,7 @@ class Rolls(unittest.TestCase):
             a = jar.roll_activity(rng)
             got[a] = got.get(a, 0) + 1
         want = dict(jar.ACTIVITIES)
-        self.assertEqual(want, {"still": 35, "reacts": 30, "ambles": 25, "restless": 10})
+        self.assertEqual(want, {"still": 20, "reacts": 45, "ambles": 25, "restless": 10})
         for a, pct in want.items():
             self.assertAlmostEqual(100.0 * got[a] / n, pct, delta=1.0, msg=a)
 
@@ -516,7 +516,8 @@ class Stages(unittest.TestCase):
 
         def turn(chat, text, *a, **k):
             return json.dumps(chapter if "next chapter of your story" in text else tibbs)
-        with mock.patch.object(shopkeep, "turn", turn):
+        with mock.patch.object(shopkeep, "turn", turn), \
+                mock.patch.object(jarstages, "CHAPTER_CHANCE", 1.0):
             jar.start_day(None, "alex", {"owned": []})
             for _ in range(300):
                 d = jar.day_state("alex")
@@ -526,6 +527,100 @@ class Stages(unittest.TestCase):
         self.assertEqual(d["state"], "ok")
         self.assertIn("barges dropped", self.stub.prompts["dm"][0])
         self.assertEqual(self.stub.prompts["items"], [])
+
+    def test_a_chapter_is_borrowed_from_now_and_then(self):
+        # 2026-10-15: ten finds from one chapter were 4 windmills and 7 clovers
+        recs = self.gen(want=8, search="Out at Windmill Common.", chapter_chance=0.35,
+                        rng=random.Random(5))
+        told = [p for p in self.stub.prompts["dm"] if "Windmill Common" in p]
+        self.assertTrue(0 < len(told) < len(recs), (len(told), len(recs)))
+        self.assertIn("at most one", told[0])
+
+    def test_recent_finds_are_shown_and_their_names_taken(self):
+        first = jar.decode(self.gen()[0])
+        self.gen()
+        dm = self.stub.prompts["dm"][-1]
+        self.assertIn("Already found lately", dm)
+        self.assertIn("A brass thimble that rings", dm)  # the first find's opening sentence
+        names, said = jarstages.recent_finds(kv.store())
+        self.assertIn(first["name"], names)
+
+
+# ---- lively (2026-10-15) -----------------------------------------------------------------
+
+class Lively(unittest.TestCase):
+
+    def test_every_v3_find_has_a_script_and_critters_are_never_still(self):
+        self.assertEqual(jarstages.script_tier("floor", None, "still"), "small")
+        self.assertEqual(jarstages.script_tier("hanging", None, "still", "treasure"), "full")
+        rng = random.Random(1)
+        self.assertNotIn("still", {jar.roll_activity(rng, "critter") for _ in range(500)})
+
+    def test_the_code_rolls_a_life(self):
+        rng = random.Random(2)
+        seen = set()
+        for _ in range(300):
+            life = jarstages.roll_life(rng, "critter", None)
+            self.assertIn(life["role"], jarstages.ROLES["critter"])
+            self.assertIn(life["poke"], jarstages.POKES["critter"])
+            seen.add(life["role"])
+        self.assertEqual(seen, set(jarstages.ROLES["critter"]))
+        self.assertEqual(jarstages.roll_life(rng, "floor", "furniture")["role"], "stage")
+        self.assertIn(jarstages.roll_life(rng, "hanging", None)["poke"], jarstages.POKES["hanging"])
+        # it notices what really lives there, mostly
+        got = {jarstages.roll_life(rng, "critter", None, [("Rolly", ["shell"])])["notices"]
+               for _ in range(50)}
+        self.assertIn("shell", got)
+
+    def test_the_prompts_carry_it(self):
+        life = jarstages.roll_life(random.Random(4), "critter", None)
+        dm = jarstages.dm_prompt("", "ambles", "common", kind="critter", life=life)
+        self.assertIn(life["poke"], dm)
+        self.assertIn(life["said"], dm)
+        sheet = {"name": "Nib", "line": "a nibbler", "intent": "nibbles", "zone": "garden",
+                 "travel": "crawl", "traits": ["critter"]}
+        beh = jarstages.behaviour_prompt_v3(sheet, "critter", "ambles", 2, "full", None, life,
+                                            [("Rolly", ["bug", "shell"]), ("Sapling", [])])
+        for want in (life["how"], "on poke", "startle", "landed", "Rolly -- bug, shell",
+                     "Nothing moves it but its script", "WHOLE picture"):
+            self.assertIn(want, beh)
+        fit = jarstages.fitter_prompt("A nibbler.", "critter", None, "ambles",
+                                      jar.TIERS[0][:1] + (50, "low", ""), life)
+        self.assertIn("traits must include %s" % life["trait"], fit)
+
+    def test_the_role_trait_is_worn(self):
+        sheet = {"traits": ["cosy", "soft", "sleepy", "plant"]}
+        jarstages._wear_role(sheet, {"trait": "hunter"})
+        self.assertEqual(sheet["traits"], ["hunter", "cosy", "soft", "sleepy"])
+
+    def test_a_script_must_be_lively(self):
+        e = jarstages.lively_error
+        ok = "state a:\n  walk 10\nend\non poke: go a end\non near bug: say \"!\" end\n"
+        self.assertIsNone(e(ok, "critter", None))
+        self.assertIn("on poke", e("state a:\n  walk 10\nend\non near bug: go a end\n",
+                                   "critter", None))
+        self.assertIn("answers nothing", e("state a:\n  walk 10\nend\non poke: go a end\n",
+                                           "critter", None))
+        still = "state a:\n  frame 1\nend\non poke: go a end\non time night: go a end\n"
+        self.assertIn("never moves", e(still, "critter", None))
+        self.assertIsNone(e(still, "floor", None))
+
+    def test_residents_come_with_their_traits(self):
+        d = tempfile.mkdtemp()
+        os.environ["CARDOS_STATE"] = d
+        try:
+            st = kv.store()
+            rec = raw_item("Rolly")
+            it = jar.to_item(dict(rec, traits=["bug", "shell"]), 150, 0, "", None, 50, None)
+            it["tags"] = "bug,shell,common"
+            st.put(jar.NS, "rec/150", jar.encode(it))
+            got = jarstages.residents_of({"injar": [150, 999], "jar": ["Rolly", "Sapling"]}, st)
+            self.assertEqual(got, [("Rolly", ["bug", "shell"]), ("Sapling", [])])
+        finally:
+            kv.close_all()
+            os.environ.pop("CARDOS_STATE", None)
+            shutil.rmtree(d, ignore_errors=True)
+
 
 if __name__ == "__main__":
     if "--fixture" in sys.argv:

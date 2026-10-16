@@ -135,7 +135,8 @@ class Pipeline(unittest.TestCase):
 
     def test_the_code_rolls_the_script_tier(self):
         self.assertEqual(jarstages.script_tier("critter", None, "still"), "full")
-        self.assertEqual(jarstages.script_tier("floor", None, "still"), "none")
+        self.assertEqual(jarstages.script_tier("floor", None, "still"), "small")   # lively
+        self.assertEqual(jarstages.script_tier("floor", None, "still", "rare"), "full")
         self.assertEqual(jarstages.script_tier("floor", None, "reacts"), "small")
         self.assertEqual(jarstages.script_tier("hanging", "furniture", "restless"), "small")
 
