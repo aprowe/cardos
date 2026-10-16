@@ -57,7 +57,7 @@ static const CardApi *vapi;
 #define VI_UTRL     4
 
 enum { VM_NORMAL = 0, VM_INSERT, VM_VISUAL, VM_VLINE, VM_CMD };
-enum { VREQ_NONE = 0, VREQ_OPEN, VREQ_SAVEAS, VREQ_QUIT };
+enum { VREQ_NONE = 0, VREQ_OPEN, VREQ_SAVEAS, VREQ_QUIT, VREQ_TREE, VREQ_RUN };
 
 #define MF_LINE 1
 #define MF_INCL 2
@@ -1514,6 +1514,19 @@ VI_FN void vi_ex(Vim *V, const char *line) {
     V->req = VREQ_QUIT;
     return;
   }
+  if (vi_streq(cmd, "Ex") || vi_streq(cmd, "Explore") || vi_streq(cmd, "Ve") || vi_streq(cmd, "Sex")) {
+    if (vi_modified(V) && !bang) { vi_say(V, 1, "E37: No write since last change (add ! to override)"); return; }
+    V->req = VREQ_TREE;
+    return;
+  }
+  /* :run -- the file, written first, in the Python app (apps/vim/vim.c) */
+  if (vi_streq(cmd, "run") || vi_streq(cmd, "py") || vi_streq(cmd, "python")) {
+    if (!V->path[0]) { vi_say(V, 1, "E32: No file name"); return; }
+    if (hl_lang_for(V->path) != LANG_PY) { vi_say(V, 1, "not a Python file: :run is for .py"); return; }
+    if (vi_modified(V) && vi_save(V, V->path) != 0) return;
+    V->req = VREQ_RUN;
+    return;
+  }
   if (vi_streq(cmd, "e") || vi_streq(cmd, "edit")) {
     char path[VI_PATH];
     if (vi_modified(V) && !bang) { vi_say(V, 1, "E37: No write since last change (add ! to override)"); return; }
@@ -1650,6 +1663,8 @@ static void vis_op(Vim *V, int op) {
   else vi_op_chars(V, op, s, e < vi_len(V) ? e + 1 : e);
 }
 
+static void nm_key(Vim *V, int k);
+
 static void nm_pending(Vim *V, int pend, int k, int cnt, int has) {
   int to, fl, r;
   if (k == VK_ESC) { nm_done(V, 0); return; }
@@ -1717,6 +1732,15 @@ static void nm_pending(Vim *V, int pend, int k, int cnt, int has) {
     nm_done(V, 0);
     return;
   }
+  case ' ':                       /* the leader: space r runs */
+    if (k == 'r') { vi_ex(V, "run"); nm_done(V, 0); return; }
+    {                              /* anything else: space was l */
+      int to2, fl2;
+      if (vi_motion(V, ' ', 0, 1, 0, &to2, &fl2) > 0) { V->cur = to2; vi_setwant(V); }
+    }
+    nm_done(V, 0);
+    nm_key(V, k);
+    return;
   case 'Z':
     if (k == 'Z') vi_ex(V, "x");
     else if (k == 'Q') vi_ex(V, "q!");
@@ -1756,6 +1780,11 @@ static void nm_key(Vim *V, int k) {
   has = V->count1 || V->count;
 
   if (V->pend) { int p = V->pend; V->pend = 0; nm_pending(V, p, k, cnt, has); return; }
+  /* Two of the file tree's own (apps/vim/vimtree.h): - opens it on this
+   * file, as vim-vinegar does; space r runs the file. Only as a command of
+   * their own: d- and 3- are still the motion. */
+  if (fresh && !vis && k == '-') { vi_ex(V, "Ex"); nm_done(V, 0); return; }
+  if (fresh && !vis && k == ' ') { V->pend = ' '; return; }
   if ((k >= '1' && k <= '9') || (k == '0' && V->count)) {
     V->count = V->count * 10 + (k - '0');
     if (V->count > 9999) V->count = 9999;

@@ -674,16 +674,48 @@ only the damage equals a full paint (`VIM_DUMP=dir` writes the screens).
   big-mode block of big_room less 4 KB, up to 96 KB, the pool becoming
   12 KB of undo and 8 KB of register. A file too big is refused, never
   opened in part; a change too big for the undo log empties it and says
-  so. Measured by build_apps: code 24.4 KB, data 23.5 KB, rodata 3.1 KB.
+  so. Measured by build_apps: code 32.5 KB, data 24.5 KB (of 28), rodata
+  4.0 KB (with the tree, below).
 - **Syntax states**: a line's colours depend only on the state the line
   above left (inside a block comment, a triple-quoted string, a fence),
   kept at a checkpoint every 32 lines and invalidated from the edited line
   down, so a paint never scans the file.
-- **:q** cannot close the app (no API does): it closes the file and opens
-  the picker. fn-` leaves. Esc is vim's; wants_text is always yes, so
-  ; , . / are commands and fn makes them arrows.
-- Not tried on a device yet: the big_room a real heap gives, and how a
-  full repaint feels on the panel.
+- **The file tree** (2026-10-16, `apps/vim/vimtree.h`, host-tested). The
+  owner: "view a file tree, open a file, view it, then close back to the
+  file tree at the same spot". Vim with no file (or a folder) is a tree of
+  the card rooted at /: folders first, A-Z, dotfiles hidden (`.` or `gh`),
+  a coloured mark per kind (.py, .c/.h, .md, other). j k gg G ctrl-d
+  ctrl-u H M L move; Enter/o open a file or fold a folder, l unfolds (then
+  steps in), h folds (or goes up), `-` goes up a folder and folds it, `/`
+  finds a name as it is typed (n N), r reads the card again, `:e NAME`
+  makes a file beside the selection, q or :q leaves Vim (api->leave). In a
+  file, `-` or `:Ex` shows the tree on that file (every folder on the way
+  opened, it selected; E37 when it has changes), and :q / :wq / :x go back
+  to the tree with the same folders open, the same row selected and the
+  same scroll -- or, for a file Vim was opened with (from Files), out of
+  Vim, back to the opener. Only the open folders are read, each at most 256
+  entries (a "..." row says it was cut). What is kept is small and in the
+  arena (the open folders' paths in 448 bytes, the selection's path, the
+  scroll); the rows are rebuilt from the card whenever the tree is shown,
+  into the text buffer's memory, which is empty while the tree is up -- so
+  the tree costs the editor no room (data went 23.5 -> 24.5 KB). The state
+  is also `/cache/vimtree`, so the tree is as it was from launch to launch.
+- **Running Python**: `:run` (`:py`), `space r` in a file or on a .py in
+  the tree, writes the file and opens Python on it (`api->run("python",
+  PATH)`); a file that is not .py is said, not run. Python's exit() comes
+  back through the way back (API 48): `CappUi.save` writes the mode (tree,
+  file-from-tree, file), the file, line, column and top line, and the
+  tree's state as a few versioned lines (`vim1 ... .`, at most ~700 bytes
+  of CAPP_SAVE_MAX), writing an unsaved file first; capp_main takes
+  `api->resumed` and reloads the file with the cursor clamped into it. A
+  blob cut short or not ours is refused whole and Vim starts fresh.
+  `space` followed by anything but r is still `l`; `-` with a count or
+  after an operator is still the motion.
+- Esc is vim's; wants_text is always yes, so ; , . / are commands and fn
+  makes them arrows. `:e` alone still opens the OS picker.
+- Not tried on a device yet: the big_room a real heap gives, how a full
+  repaint feels on the panel, how long reading a few open folders takes on
+  the card, and the trip to Python and back (the launcher side of API 48).
 
 **Python: MicroPython 1.24.1 as an app** (2026-10-16, `apps/python/`,
 Make). A REPL (history, tab completion, auto-indent) whose heap is
@@ -1188,10 +1220,12 @@ over, once. An app without `save` comes back fresh as before. `api->leave`
 is fn-` from code -- Vim's `:q`, Python's `exit()` -- acted on once the
 handler returns; -1 outside the launcher. Nothing is kept in RAM: the
 files go when their entry does (`back_clear`, `forget_saved`). Not
-host-tested: launchui is device code. An app's open files close with it
-too (`cardapi_release_files`, a release hook: cardapi.c notes which app
-opened each of the card's 8 slots) -- fn-` never tells an app, and a file
-Python left open held a slot until a restart.
+host-tested: launchui is device code. Users: Vim (its tree and file, see
+the Vim paragraph) and Files (the folder and the row by name,
+`dir_state_save`/`dir_state_load` in `apps/dirmodel.h`, host-tested). An
+app's open files close with it too (`cardapi_release_files`, a release
+hook: cardapi.c notes which app opened each of the card's 8 slots) -- fn-`
+never tells an app, and a file Python left open held a slot until a restart.
 
 **Hub: M5Launcher's firmware catalog** (2026-10-08, `apps/hub.c`, System).
 LauncherHub (api.launcherhub.net, ~700 Cardputer firmwares) through

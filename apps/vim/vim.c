@@ -29,13 +29,28 @@
  *
  * Keys. Vim takes text in every mode (wants_text), so h j k l ; , . /
  * arrive as themselves, and fn with ; , . / are the arrows. Esc (the `
- * key) is vim's Esc; fn-` leaves the app, as everywhere. An app cannot
- * close itself, so :q closes the file and opens the picker for the next.
+ * key) is vim's Esc; fn-` leaves the app, as everywhere.
+ *
+ * The file tree (apps/vim/vimtree.h). Vim opened with no file shows the
+ * card as a tree; Enter on a file edits it, and :q comes back to the tree
+ * with the same folders open and the same row selected. `-` or :Ex from a
+ * file shows the tree on that file. :q on the tree -- or on a file Vim was
+ * opened with, from Files say -- leaves (api->leave, API 48), back to
+ * whoever opened Vim. The tree's rows live in the text buffer's memory,
+ * which is empty whenever the tree is up, so it costs the editor nothing.
+ *
+ * Running Python. :run (or space r) writes a .py file and opens it in the
+ * Python app; Python's exit() comes back here, and CappUi.save /
+ * api->resumed put Vim back as it was: the tree, or the file at the same
+ * line. The same state, without the file, is /cache/vimtree, so the tree
+ * is as it was left from one launch to the next too.
  */
 
 #include "kernel/app/capp.h"
 #include "apps/str.h"
+#include "apps/safefile.h"
 #include "apps/vim/vimcore.h"
+#include "apps/vim/vimtree.h"
 
 static const CardApi *api;
 
@@ -91,6 +106,20 @@ static CRect s_shown = { 0, 0, 240, 135 };
 enum { PICK_NONE = 0, PICK_OPEN, PICK_SAVE };
 static int s_picking;
 
+/* The tree: its kept state, whether it is on screen, and whether :q in the
+ * file goes back to it (the file was opened from it) or leaves Vim. */
+static VTree TR;
+static int s_tree;
+static int s_back_tree;
+#define TREE_CACHE "/cache/vimtree"
+
+#define C_FOLDER   CAPP_RGB(229, 192, 123)
+#define C_PYFILE   CAPP_RGB(152, 195, 121)
+#define C_CFILE    CAPP_RGB(86, 182, 194)
+#define C_MDFILE   CAPP_RGB(214, 220, 232)
+#define C_FILE     CAPP_RGB(120, 128, 145)
+#define C_TREESEL  CAPP_RGB(52, 80, 116)
+
 /* --------------------------------------------------------------- memory --- */
 
 static void setup_memory(void) {
@@ -138,15 +167,109 @@ static void ask_pick(int mode) {
   else vi_say(&V, 1, "a picker is already open");
 }
 
-/* :q. The OS lets nothing but fn-` close an app, so the file closes and the
- * picker offers the next one; cancelled, an empty buffer. */
-static void close_file(void) {
+/* ----------------------------------------------------------------- tree --- */
+
+static int rows_for(CRect c);
+
+/* Scratch for the state as text (at most CAPP_SAVE_MAX): the undo log,
+ * which is empty whenever this is used -- the tree is up (the buffer is
+ * closed), or capp_main has not opened anything yet. */
+static char *state_scratch(void) { return V.u; }
+
+/* The tree's state into /cache/vimtree, for the next launch. Only while
+ * the tree is up: the rows must be there to name the selection. */
+static void tree_keep(void) {
+  VtHead h;
+  SafeFile f;
+  int n;
+  h.mode = 't';
+  h.path[0] = 0;
+  h.line = h.col = h.top = 0;
+  n = vt_state_write(&TR, &h, state_scratch(), CAPP_SAVE_MAX);
+  if (n <= 0 || safe_begin(&f, api, TREE_CACHE) != 0) return;
+  safe_write(&f, state_scratch(), (size_t)n);
+  safe_commit(&f);
+}
+
+static void tree_recall(void) {
+  VtHead h;
+  int fd = safe_open_read(api, TREE_CACHE), n;
+  if (fd < 0) return;
+  n = api->read(fd, state_scratch(), CAPP_SAVE_MAX);
+  api->close(fd);
+  if (n > 0) vt_state_read(&TR, &h, state_scratch(), n);
+}
+
+/* Close the file and show the tree, on `reveal` (its folders opened and it
+ * selected) or as it was. The caller has dealt with unsaved changes. */
+static void show_tree(const char *reveal) {
+  char p[VI_PATH];
+  vi_strcpy(p, reveal ? reveal : "", sizeof p);
   vi_reset(&V);
   V.path[0] = 0;
   V.lang = LANG_PLAIN;
   V.quit_after = 0;
-  vi_say(&V, 0, "closed -- fn-` leaves Vim");
-  ask_pick(PICK_OPEN);
+  V.msg[0] = 0;
+  vt_attach(&TR, V.t.b, V.t.cap);
+  if (p[0]) vt_reveal(&TR, p);
+  TR.vis = rows_for(s_shown);
+  TR.mode = VTM_LIST;
+  vt_build(&TR);
+  s_tree = 1;
+  tree_keep();
+}
+
+/* The file selected in the tree, into the editor. */
+static void tree_open(const char *path) {
+  char p[VI_PATH], m[VI_MSG];
+  CappStat st;
+  vi_strcpy(p, path, sizeof p);
+  if (api->stat(p, &st) == 0 && st.is_dir) {      /* :e FOLDER: shown, not edited */
+    vt_set_open(&TR, p, 1);
+    show_tree(p);
+    return;
+  }
+  tree_keep();
+  vt_remember(&TR);
+  TR.built = 0;                       /* the rows' memory is the text's now */
+  s_tree = 0;
+  if (vi_load(&V, p) != 0) {
+    vi_strcpy(m, V.msg, sizeof m);
+    show_tree(0);
+    vt_say(&TR, 1, m);
+    return;
+  }
+  s_back_tree = 1;
+}
+
+/* The Python app, on `path` (written already). Coming back is the way
+ * back's: CappUi.save below, and api->resumed in capp_main. */
+static void run_python(const char *path) {
+  if (api->run("python", path) != 0) {
+    if (s_tree) vt_say(&TR, 1, "no Python app");
+    else vi_say(&V, 1, "no Python app");
+  }
+}
+
+/* Leave Vim, as fn-` would: 0, or -1 where it cannot (older firmware, a
+ * desktop window). */
+static int leave_vim(void) {
+  if (api->version < 48 || !api->leave) return -1;
+  return api->leave();
+}
+
+/* :q from a file: back to the tree it was opened from, or out of Vim when
+ * it was opened with the file (from Files, say) -- and to the tree on the
+ * file when there is no leaving. */
+static void close_file(void) {
+  char p[VI_PATH];
+  if (!s_back_tree) {
+    if (leave_vim() == 0) { vi_say(&V, 0, "leaving"); return; }
+    vi_strcpy(p, V.path, sizeof p);
+    show_tree(p);
+    return;
+  }
+  show_tree(0);
 }
 
 static void take_request(void) {
@@ -155,6 +278,11 @@ static void take_request(void) {
   if (r == VREQ_OPEN) ask_pick(PICK_OPEN);
   else if (r == VREQ_SAVEAS) ask_pick(PICK_SAVE);
   else if (r == VREQ_QUIT) close_file();
+  else if (r == VREQ_TREE) {
+    char p[VI_PATH];
+    vi_strcpy(p, V.path, sizeof p);
+    show_tree(p);
+  } else if (r == VREQ_RUN) run_python(V.path);
 }
 
 /* -------------------------------------------------------------- painting --- */
@@ -371,11 +499,101 @@ static void paint_popup(CRect c) {
   }
 }
 
+/* ---- the tree's screen: a row a name, a status line, a command line ---- */
+
+static uint16_t kind_colour(const char *name) {
+  int lang = hl_lang_for(name);
+  if (lang == LANG_PY) return C_PYFILE;
+  if (lang == LANG_C) return C_CFILE;
+  if (lang == LANG_MD) return C_MDFILE;
+  return C_FILE;
+}
+
+static void tree_row(CRect c, int r) {
+  int y = c.y + r * ROWH, i = TR.top + r, cols = c.w / CHW, x, ind, n;
+  uint16_t bg = (i == TR.sel) ? C_TREESEL : C_BG, fg;
+  char line[48];
+  const char *name;
+  api->fill(capp_rect(c.x, y, c.w, ROWH), bg);
+  if (i >= TR.nrows) {
+    api->text((int16_t)c.x, (int16_t)y, "~", C_TILDE, bg);
+    return;
+  }
+  name = vt_name(&TR, i);
+  if (i == 0) {                                   /* the root */
+    api->text((int16_t)c.x, (int16_t)y, "/", C_HEAD, bg);
+    return;
+  }
+  ind = (TR.rows[i].depth - 1) * 2;
+  if (ind > cols - 8) ind = cols - 8;
+  x = c.x + ind * CHW;
+  if (TR.rows[i].flags & VTF_CUT) {
+    api->text((int16_t)(x + 2 * CHW), (int16_t)y, "... (more not listed)", C_LINENO, bg);
+    return;
+  }
+  if (vt_is_dir(&TR, i)) {
+    api->text((int16_t)x, (int16_t)y, vt_row_open(&TR, i) ? "v" : ">", C_LINENO, bg);
+    /* a folder: a tab and a body */
+    api->fill(capp_rect(x + CHW, y + 1, 3, 1), C_FOLDER);
+    api->fill(capp_rect(x + CHW, y + 2, 6, 5), C_FOLDER);
+    fg = C_HEAD;
+  } else {
+    /* a page in the colour of its kind */
+    api->fill(capp_rect(x + CHW + 1, y + 1, 4, 6), kind_colour(name));
+    fg = C_TEXT;
+  }
+  n = cols - ind - 3;
+  if (n > (int)sizeof line - 2) n = (int)sizeof line - 2;
+  if (n < 1) return;
+  api->fmt(line, (size_t)n + 1, "%s%s", name, vt_is_dir(&TR, i) ? "/" : "");
+  api->text((int16_t)(x + 3 * CHW), (int16_t)y, line, fg, bg);
+}
+
+static void tree_status(CRect c, int y) {
+  char right[16], left[64];
+  const char *p = TR.selpath;
+  int rw, lw, room;
+  api->fill(capp_rect(c.x, y, c.w, BARH), C_STATUS);
+  api->text((int16_t)c.x, (int16_t)(y + 1), " TREE ", C_BG, C_TYPE);
+  api->fmt(right, sizeof right, "%d/%d ", TR.sel + 1, TR.nrows);
+  rw = (int)api->str_len(right);
+  room = c.w / CHW - 6 - rw - 1;
+  lw = (int)api->str_len(p);
+  if (room < 4) room = 4;
+  if (lw > room) api->fmt(left, sizeof left, " <%s", p + lw - room + 2);   /* the end matters */
+  else api->fmt(left, sizeof left, " %s", p);
+  api->text((int16_t)(c.x + 6 * CHW), (int16_t)(y + 1), left, C_STATUSFG, C_STATUS);
+  api->text((int16_t)(c.x + c.w - rw * CHW), (int16_t)(y + 1), right, C_STATUSFG, C_STATUS);
+}
+
+static void tree_cmdline(CRect c, int y) {
+  char line[48];
+  uint16_t fg = C_TEXT;
+  int n;
+  api->fill(capp_rect(c.x, y, c.w, c.y + c.h - y), C_BG);
+  if (TR.mode == VTM_CMD || TR.mode == VTM_SEARCH)
+    api->fmt(line, sizeof line, "%c%s", TR.mode == VTM_CMD ? ':' : '/', TR.line);
+  else if (TR.msg[0]) { api->fmt(line, sizeof line, "%s", TR.msg); if (TR.msg_err) fg = C_ERR; }
+  else { api->fmt(line, sizeof line, "enter open  h l fold  / find  q quit"); fg = C_LINENO; }
+  n = (int)api->str_len(line);
+  if (n > c.w / CHW - 1) { n = c.w / CHW - 1; line[n] = 0; }
+  api->text((int16_t)c.x, (int16_t)(y + 1), line, fg, C_BG);
+  if (TR.mode != VTM_LIST) api->fill(capp_rect(c.x + n * CHW, y + 1, CHW, 8), C_CURSOR);
+}
+
+static void tree_paint(CRect c) {
+  int rows = rows_for(c), r, sy = c.y + rows * ROWH;
+  for (r = 0; r < rows; r++) tree_row(c, r);
+  tree_status(c, sy);
+  tree_cmdline(c, sy + BARH);
+}
+
 static void app_paint(void *st, CRect c) {
   CRect area = api->paint_area();
   int rows = rows_for(c), r, sy = c.y + rows * ROWH;
   (void)st;
   s_shown = c;
+  if (s_tree) { tree_paint(c); return; }
   for (r = 0; r < rows; r++) {
     int y = c.y + r * ROWH;
     if (y + ROWH <= area.y || y >= area.y + area.h) continue;
@@ -404,6 +622,20 @@ static int app_key(void *st, uint8_t k) {
   int pop0 = V.cpop, a0 = vb_line_of(&V.t, V.vanchor), r, same = 1, rows;
   uint8_t st0[VI_ROWS_MAX + 1];
   (void)st;
+  if (s_tree) {
+    /* The tree repaints whole (nothing marked), which the OS composes off
+     * the panel. What changes the kept state is kept on the card. */
+    int open0 = TR.openlen, dots0 = TR.dots, what;
+    TR.vis = rows_for(s_shown);
+    what = vt_key(&TR, k);
+    if (what == VT_OPEN) tree_open(TR.out);
+    else if (what == VT_RUN) { tree_keep(); run_python(TR.out); }
+    else if (what == VT_QUIT) {
+      tree_keep();
+      if (leave_vim() != 0) vt_say(&TR, 0, "fn-` leaves Vim");
+    } else if (TR.openlen != open0 || TR.dots != dots0) tree_keep();
+    return 1;
+  }
   rows = vi_rows(&V);
   for (r = 0; r <= rows; r++) st0[r] = V.row_st[r];
   V.chg_lo = 0x7FFFFFFF;
@@ -412,6 +644,7 @@ static int app_key(void *st, uint8_t k) {
 
   vi_key(&V, k);
   if (V.req) take_request();
+  if (s_tree) return 1;                   /* the tree now: all of it */
 
   for (r = 0; r <= rows; r++) if (st0[r] != V.row_st[r]) same = 0;
   /* Everything, when the screen moved or the shape of the text did. */
@@ -448,27 +681,79 @@ static int app_tick(void *st, uint32_t now) {
   what = s_picking;
   s_picking = PICK_NONE;
   if (r == 1) {
-    if (what == PICK_OPEN) vi_load(&V, path);
+    if (what == PICK_OPEN && s_tree) tree_open(path);
+    else if (what == PICK_OPEN) vi_load(&V, path);
     else if (vi_save(&V, path) == 0 && V.quit_after) close_file();
   }
   V.quit_after = 0;
-  vi_layout(&V);
+  if (!s_tree) vi_layout(&V);
   return 1;
+}
+
+/* The way back (API 48): Vim is let go because it opened another app --
+ * Python, from :run. What it needs to come back as it was: the tree's
+ * state, and the file and where in it. A file with changes is written
+ * first (:run did already). */
+static int app_save(void *st, void *buf, size_t n) {
+  VtHead h;
+  (void)st;
+  h.mode = 't';
+  h.path[0] = 0;
+  h.line = h.col = h.top = 0;
+  if (!s_tree && V.path[0]) {
+    if (vi_modified(&V)) vi_save(&V, V.path);
+    h.mode = s_back_tree ? 'b' : 'e';
+    vi_strcpy(h.path, V.path, VT_PATH);
+    h.line = vi_line(&V);
+    h.col = vi_col(&V);
+    h.top = V.top;
+  }
+  return vt_state_write(&TR, &h, (char *)buf, (int)n);
+}
+
+/* Coming back: the file again (it may have changed on disk; the cursor is
+ * kept inside it), or the tree. 0, or -1 when there was nothing to take. */
+static int resume(void) {
+  VtHead h;
+  int n, L, s, e;
+  if (api->version < 48 || !api->resumed) return -1;
+  n = api->resumed(state_scratch(), CAPP_SAVE_MAX);
+  if (n <= 0 || vt_state_read(&TR, &h, state_scratch(), n) != 0) return -1;
+  if (h.mode == 't' || !h.path[0]) { show_tree(0); return 0; }
+  if (vi_load(&V, h.path) != 0) { show_tree(h.path); return 0; }
+  s_back_tree = h.mode == 'b';
+  L = h.line > vi_last(&V) ? vi_last(&V) : h.line;
+  s = vb_line_start(&V.t, L);
+  e = vb_line_end(&V.t, L);
+  V.cur = s + (h.col < e - s ? h.col : e - s);
+  vi_clamp(&V);
+  vi_setwant(&V);
+  V.top = h.top > L ? L : h.top;
+  return 0;
 }
 
 static int app_wants_text(void *st) { (void)st; return !s_picking; }
 
-enum { ACT_SAVE = 1, ACT_SAVEAS, ACT_OPEN };
+enum { ACT_SAVE = 1, ACT_SAVEAS, ACT_OPEN, ACT_TREE, ACT_RUN };
 
 static const CappAction VIM_ACTIONS[] = {
   { "save",   "Write (:w)",      "File", 0, ACT_SAVE },
   { "saveas", "Write as...",     "File", 0, ACT_SAVEAS },
   { "open",   "Open... (:e)",    "File", 0, ACT_OPEN },
+  { "tree",   "File tree (-)",   "File", 0, ACT_TREE },
+  { "run",    "Run in Python (:run)", "File", 0, ACT_RUN },
 };
 
 static int app_action(void *st, int a) {
   (void)st;
-  if (a == ACT_SAVE) vi_ex(&V, "w");
+  if (s_tree) {
+    if (a == ACT_OPEN) ask_pick(PICK_OPEN);
+    else if (a == ACT_RUN && vt_ex(&TR, "run") == VT_RUN) { tree_keep(); run_python(TR.out); }
+    return 1;
+  }
+  if (a == ACT_TREE) vi_ex(&V, "Ex");
+  else if (a == ACT_RUN) vi_ex(&V, "run");
+  else if (a == ACT_SAVE) vi_ex(&V, "w");
   else if (a == ACT_SAVEAS) V.req = VREQ_SAVEAS;
   else if (a == ACT_OPEN) vi_ex(&V, "e");
   if (V.req) take_request();
@@ -493,8 +778,14 @@ const CappInfo capp_info = {
   "Changes\nd c y\twith a motion; dd cc yy\nx X r s S\tchars\nD C Y\tto the end\n"
   "p P\tput\nJ\tjoin\n>> <<\tindent\n~\tcase\nu ctrl-r\tundo, redo\n.\trepeat\n"
   "Insert\nctrl-n ctrl-p\tcomplete\ntab\tcomplete after a word\nctrl-w ctrl-u\tdelete back\n"
-  "Ex\n:w :q :wq :x\twrite, close\n:e PATH\topen; :e alone, the picker\n:N\tline N\n"
-  ":s/a/b/g\tthis line; :%s all\n:set nu nonu\tline numbers; sw= ts= et ic\n",
+  "Ex\n:w :wq :x\twrite; and close\n:q\tclose: back to the tree, or out\n"
+  ":e PATH\topen; :e alone, the picker\n:N\tline N\n"
+  ":run :py\twrite, run in Python\nspace r\tthe same\n- :Ex\tthe tree, on this file\n"
+  ":s/a/b/g\tthis line; :%s all\n:set nu nonu\tline numbers; sw= ts= et ic\n"
+  "Tree\nj k gg G\tmove; ctrl-d ctrl-u\nenter o\topen a file, fold a folder\n"
+  "l h\tunfold, fold (or up)\n-\tup a folder, folded\n/ n N\tfind a name\n"
+  ". gh\tdotfiles\nr\tread the card again\nspace r :run\trun a .py\n"
+  ":e NAME\tnew file here\nq :q\tleave Vim\n",
   0, 0
 };
 
@@ -504,15 +795,27 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   api = a;
   vapi = a;
   setup_memory();
-  if (argc > 1 && argv[1][0]) {
+  vt_init(&TR);
+  s_tree = s_back_tree = 0;
+  if (resume() == 0) {
+    /* back from the app it opened, as it was */
+  } else if (argc > 1 && argv[1][0]) {
     char path[VI_PATH];
+    CappStat st;
     vi_resolve(&V, argv[1], path, sizeof path);
-    vi_load(&V, path);
+    if (api->stat(path, &st) == 0 && st.is_dir) {    /* a folder: the tree, on it */
+      tree_recall();
+      vt_set_open(&TR, path, 1);
+      show_tree(path);
+    } else {
+      vi_load(&V, path);
+    }
   } else {
-    ask_pick(PICK_OPEN);
+    tree_recall();
+    show_tree(0);
   }
-  if (!s_bigblock && !V.msg_err && !V.msg[0]) vi_say(&V, 0, "small buffer: no room for big mode");
-  vi_layout(&V);
+  if (!s_tree && !s_bigblock && !V.msg_err && !V.msg[0]) vi_say(&V, 0, "small buffer: no room for big mode");
+  if (!s_tree) vi_layout(&V);
 
   UI.paint = app_paint;
   UI.key = app_key;
@@ -521,6 +824,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.actions = VIM_ACTIONS;
   UI.nactions = (uint8_t)(sizeof VIM_ACTIONS / sizeof VIM_ACTIONS[0]);
   UI.action = app_action;
+  UI.save = app_save;
   api->ui(&UI);
   return 0;
 }

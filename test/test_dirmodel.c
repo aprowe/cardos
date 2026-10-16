@@ -88,3 +88,33 @@ void test_dirmodel_what_opens_what(void) {
   dir_kind("README", &how, &app);
   CHECK(how == DIR_OPEN_APP && !strcmp(app, "edit"));
 }
+
+/* The way back: the folder and the row, by name, round trip; anything else
+ * is refused and changes nothing. */
+void test_dirmodel_state_round_trip(void) {
+  char buf[CAPP_SAVE_MAX];
+  int n, sel = -1, top = -1, cut;
+  card();
+  dir_go(&DA, &DL, "/home");
+  n = dir_state_save(&DA, &DL, 3, 2, buf, sizeof buf);       /* beta.img */
+  CHECK(n > 0);
+  CHECK(!strcmp(buf, "files1\n/home\nbeta.img\n2\n"));
+  dir_go(&DA, &DL, "/");
+  CHECK_EQ(dir_state_load(&DA, &DL, buf, n, &sel, &top), 0);
+  CHECK(!strcmp(DL.cwd, "/home"));
+  CHECK_EQ(sel, 3);
+  CHECK_EQ(top, 2);
+  /* the file went meanwhile: the folder, the first row */
+  DA.remove("/home/beta.img");
+  CHECK_EQ(dir_state_load(&DA, &DL, buf, n, &sel, &top), 0);
+  CHECK_EQ(sel, 0);
+  CHECK_EQ(top, 0);
+  /* cut short, garbled, or a folder that is gone */
+  dir_go(&DA, &DL, "/");
+  for (cut = 0; cut < n; cut++) CHECK_EQ(dir_state_load(&DA, &DL, buf, cut, &sel, &top), -1);
+  CHECK_EQ(dir_state_load(&DA, &DL, "files1\nrel\nx\n0\n", 16, &sel, &top), -1);
+  CHECK_EQ(dir_state_load(&DA, &DL, "files1\n/nope\nx\n0\n", 18, &sel, &top), -1);
+  CHECK_EQ(dir_state_load(&DA, &DL, "files2\n/home\nx\n0\n", 18, &sel, &top), -1);
+  CHECK(!strcmp(DL.cwd, "/"));
+  CHECK_EQ(dir_state_save(&DA, &DL, 0, 0, buf, 8), 0);
+}
