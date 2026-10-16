@@ -9,6 +9,7 @@
 #include "tinytest.h"
 #include "fakeapi.h"
 #include "apps/vim/vimcore.h"
+#include "apps/vim/vimtree.h"
 
 static Vim V;
 static char T[16384], U[4096], R[2048];
@@ -162,7 +163,7 @@ void test_vim_motion_lines_and_screen(void) {
   CHECK_EQ(line(), 4);
   CHECK_EQ(V.top, 0);
   k("+");   AT(5, 2);
-  k("-");   AT(4, 0);
+  k("1-");  AT(4, 0);                /* - alone is the file tree */
   k("50%"); CHECK_EQ(line(), 20);
 }
 
@@ -662,4 +663,309 @@ void test_vim_view_follows_the_cursor(void) {
   CHECK_EQ(V.top, 0);
   k("20Gzt");
   CHECK_EQ(V.top, 19);
+}
+
+/* ---------------------------------------------------------- the tree --- */
+
+static VTree TT;
+static char TMEM[16384];
+
+static void tree_card(void) {
+  fakeapi_init(&A);
+  fakefs_mem(&A);
+  vapi = &A;
+  fakefs_put("/home/b.py", "print(1)\n");
+  fakefs_put("/home/a.c", "int x;\n");
+  fakefs_put("/home/Zed/x.md", "# x\n");
+  fakefs_put("/home/.hidden", "h");
+  fakefs_put("/apps/vim/vim.c", "v");
+  fakefs_put("/readme.md", "r");
+  memset(&TT, 0, sizeof TT);
+  vt_init(&TT);
+  TT.vis = 5;
+  vt_attach(&TT, TMEM, sizeof TMEM);
+  vt_build(&TT);
+}
+
+static void tk(const char *s) { while (*s) vt_key(&TT, (uint8_t)*s++); }
+static const char *sel_path(void) {
+  static char p[VT_PATH];
+  vt_path(&TT, TT.sel, p, sizeof p);
+  return p;
+}
+#define ROW_IS(i, s) CHECK(strcmp(vt_name(&TT, i), s) == 0)
+
+void test_vim_tree_lists_folders_first_and_hides_dotfiles(void) {
+  tree_card();
+  CHECK_EQ(TT.nrows, 4);                          /* / apps home readme.md */
+  ROW_IS(0, "/");
+  ROW_IS(1, "apps");
+  ROW_IS(2, "home");
+  ROW_IS(3, "readme.md");
+  CHECK(vt_is_dir(&TT, 1) && !vt_is_dir(&TT, 3));
+  tk("jj");                                       /* home */
+  CHECK(strcmp(sel_path(), "/home") == 0);
+  vt_key(&TT, VK_ENTER);
+  CHECK_EQ(TT.nrows, 7);
+  ROW_IS(3, "Zed");                               /* folders first ... */
+  ROW_IS(4, "a.c");                               /* ... then A-Z */
+  ROW_IS(5, "b.py");
+  CHECK_EQ(TT.rows[4].depth, 2);
+  CHECK(vt_is_open(&TT, "/home"));
+  tk(".");                                        /* the dotfile shows */
+  CHECK_EQ(TT.nrows, 8);
+  ROW_IS(4, ".hidden");
+  CHECK(strcmp(sel_path(), "/home") == 0);        /* the selection stays */
+  tk("gh");
+  CHECK_EQ(TT.nrows, 7);
+}
+
+void test_vim_tree_folds_and_moves(void) {
+  tree_card();
+  tk("jjl");                                      /* l unfolds home */
+  CHECK_EQ(TT.nrows, 7);
+  tk("l");                                        /* again: into it */
+  CHECK(strcmp(sel_path(), "/home/Zed") == 0);
+  tk("l");                                        /* Zed unfolds */
+  CHECK_EQ(TT.nrows, 8);
+  tk("j");
+  CHECK(strcmp(sel_path(), "/home/Zed/x.md") == 0);
+  tk("h");                                        /* on a file: to its folder */
+  CHECK(strcmp(sel_path(), "/home/Zed") == 0);
+  tk("h");                                        /* on an open folder: folds */
+  CHECK_EQ(TT.nrows, 7);
+  CHECK(!vt_is_open(&TT, "/home/Zed"));
+  tk("ll");                                       /* Zed unfolds; into it */
+  tk("-");                                        /* -: up a folder, folded */
+  CHECK(strcmp(sel_path(), "/home/Zed") == 0);
+  CHECK_EQ(TT.nrows, 7);
+  tk("G");
+  CHECK(strcmp(sel_path(), "/readme.md") == 0);
+  tk("gg");
+  CHECK_EQ(TT.sel, 0);
+  tk("3j");
+  CHECK_EQ(TT.sel, 3);
+  /* closing home forgets Zed inside it too */
+  tk("ll");
+  CHECK(vt_is_open(&TT, "/home/Zed"));
+  tk("gg");
+  tk("jj");
+  vt_key(&TT, VK_ENTER);
+  CHECK(!vt_is_open(&TT, "/home"));
+  CHECK(!vt_is_open(&TT, "/home/Zed"));
+  CHECK_EQ(TT.nrows, 4);
+  CHECK(strcmp(sel_path(), "/home") == 0);
+}
+
+/* Open a file, the rows' memory goes to the editor, and coming back finds
+ * the same folders open, the same row selected and the same scroll. */
+void test_vim_tree_comes_back_at_the_same_spot(void) {
+  int sel, top, n;
+  tree_card();
+  TT.vis = 3;
+  tk("jjl");
+  tk("jjj");                                      /* b.py */
+  CHECK(strcmp(sel_path(), "/home/b.py") == 0);
+  sel = TT.sel;
+  top = TT.top;
+  CHECK(top > 0);
+  n = TT.nrows;
+  CHECK_EQ(vt_key(&TT, VK_ENTER), VT_OPEN);
+  CHECK(strcmp(TT.out, "/home/b.py") == 0);
+  vt_remember(&TT);
+  memset(TMEM, 'x', sizeof TMEM);                 /* the editor had it */
+  vt_attach(&TT, TMEM, sizeof TMEM);
+  vt_build(&TT);
+  CHECK_EQ(TT.nrows, n);
+  CHECK_EQ(TT.sel, sel);
+  CHECK_EQ(TT.top, top);
+  /* gone from the card meanwhile: the nearest folder above it */
+  vt_remember(&TT);
+  A.remove("/home/b.py");
+  vt_attach(&TT, TMEM, sizeof TMEM);
+  vt_build(&TT);
+  CHECK(strcmp(sel_path(), "/home") == 0);
+  /* - from a file: every folder on the way opened, the file selected */
+  vt_init(&TT);
+  TT.vis = 5;
+  vt_reveal(&TT, "/apps/vim/vim.c");
+  vt_attach(&TT, TMEM, sizeof TMEM);
+  vt_build(&TT);
+  CHECK(strcmp(sel_path(), "/apps/vim/vim.c") == 0);
+  CHECK(vt_is_open(&TT, "/apps") && vt_is_open(&TT, "/apps/vim"));
+  CHECK(TT.sel >= TT.top && TT.sel < TT.top + TT.vis);
+}
+
+void test_vim_tree_search_and_commands(void) {
+  tree_card();
+  tk("jjl");
+  tk("/b.p");                                     /* as it is typed */
+  CHECK(strcmp(sel_path(), "/home/b.py") == 0);
+  vt_key(&TT, VK_ENTER);
+  CHECK_EQ(TT.mode, VTM_LIST);
+  tk("gg/ZZZ\r");
+  CHECK(strstr(TT.msg, "E486") != NULL);
+  CHECK_EQ(TT.sel, 0);
+  tk("/a\r");                                     /* apps, then a.c, home ... */
+  CHECK(strcmp(sel_path(), "/apps") == 0);
+  tk("n");
+  CHECK(strcmp(sel_path(), "/home/a.c") == 0);
+  tk("N");
+  CHECK(strcmp(sel_path(), "/apps") == 0);
+  tk("/x");
+  vt_key(&TT, VK_ESC);                            /* esc: back where it was */
+  CHECK(strcmp(sel_path(), "/apps") == 0);
+  /* :run and space r want a .py; :q and q leave; :e makes a file here */
+  CHECK_EQ(vt_key(&TT, 'q'), VT_QUIT);
+  tk(":run");
+  CHECK_EQ(vt_key(&TT, VK_ENTER), VT_NONE);
+  CHECK(strstr(TT.msg, "Python") != NULL);
+  tk("/b.py\r ");
+  CHECK_EQ(vt_key(&TT, 'r'), VT_RUN);
+  CHECK(strcmp(TT.out, "/home/b.py") == 0);
+  tk(":e new.py");
+  CHECK_EQ(vt_key(&TT, VK_ENTER), VT_OPEN);
+  CHECK(strcmp(TT.out, "/home/new.py") == 0);
+  tk(":q");
+  CHECK_EQ(vt_key(&TT, VK_ENTER), VT_QUIT);
+  tk(":nonsense\r");
+  CHECK(strstr(TT.msg, "E492") != NULL);
+}
+
+/* A folder bigger than can be read at once is cut, and says so; rows that
+ * do not fit are left out, and said. */
+void test_vim_tree_caps_big_folders(void) {
+  static char small[900];
+  int i, cut = 0;
+  tree_card();
+  for (i = 0; i < 9; i++) {
+    char p[32];
+    snprintf(p, sizeof p, "/big/f%d.txt", i);
+    fakefs_put(p, "x");
+  }
+  vt_init(&TT);
+  TT.vis = 5;
+  vt_attach(&TT, small, sizeof small);
+  CHECK_EQ(TT.maxent, 6);
+  vt_set_open(&TT, "/big", 1);
+  vt_build(&TT);
+  CHECK(!TT.full);
+  for (i = 0; i < TT.nrows; i++) cut += (TT.rows[i].flags & VTF_CUT) != 0;
+  CHECK_EQ(cut, 1);
+  CHECK_EQ(TT.nrows, 1 + 4 + 6 + 1);              /* / apps big(6 ...) home readme */
+  CHECK(TT.rows[2 + 7].flags & VTF_CUT);
+  vt_key(&TT, VK_ENTER);                          /* on / : nothing happens */
+  /* rows and names that run out: full, said, and the tree still works */
+  vt_attach(&TT, small, sizeof small);
+  TT.front = 40;
+  vt_build(&TT);
+  CHECK(TT.full);
+  CHECK(strstr(TT.msg, "too many rows") != NULL);
+  CHECK(TT.nrows >= 1);
+  tk("jjjkG");
+  CHECK_EQ(TT.sel, TT.nrows - 1);
+}
+
+void test_vim_tree_state_round_trip(void) {
+  static char buf[CAPP_SAVE_MAX];
+  static VTree T2;
+  VtHead h, h2;
+  int n, cut;
+  tree_card();
+  tk("jjl.jj");
+  TT.top = 1;
+  memset(&h, 0, sizeof h);
+  h.mode = 'b';
+  strcpy(h.path, "/home/a.c");
+  h.line = 12; h.col = 4; h.top = 3;
+  n = vt_state_write(&TT, &h, buf, sizeof buf);
+  CHECK(n > 0 && n < (int)sizeof buf);
+  CHECK(strncmp(buf, "vim1\n", 5) == 0);
+  memset(&T2, 0, sizeof T2);
+  vt_init(&T2);
+  CHECK_EQ(vt_state_read(&T2, &h2, buf, n), 0);
+  CHECK_EQ(h2.mode, 'b');
+  CHECK(strcmp(h2.path, "/home/a.c") == 0);
+  CHECK_EQ(h2.line, 12); CHECK_EQ(h2.col, 4); CHECK_EQ(h2.top, 3);
+  CHECK(strcmp(T2.selpath, TT.selpath) == 0);
+  CHECK_EQ(T2.top, 1);
+  CHECK_EQ(T2.dots, 1);
+  CHECK(vt_is_open(&T2, "/home"));
+  CHECK_EQ(T2.openlen, TT.openlen);
+  /* every cut-short copy is refused, and changes nothing */
+  for (cut = 0; cut < n; cut++) {
+    vt_init(&T2);
+    vt_set_open(&T2, "/keep", 1);
+    CHECK_EQ(vt_state_read(&T2, &h2, buf, cut), -1);
+    CHECK(vt_is_open(&T2, "/keep") && T2.openlen == 6);
+  }
+  /* garbage, another version, a bad line */
+  CHECK_EQ(vt_state_read(&T2, &h2, "\x01\x02garbage", 9), -1);
+  CHECK_EQ(vt_state_read(&T2, &h2, "vim2\nm t\n.\n", 11), -1);
+  CHECK_EQ(vt_state_read(&T2, &h2, "vim1\nm q\n.\n", 11), -1);
+  CHECK_EQ(vt_state_read(&T2, &h2, "vim1\nm t\nz 1\n.\n", 15), -1);
+  CHECK_EQ(vt_state_read(&T2, &h2, "vim1\nm t\nc 1 x 2\n.\n", 19), -1);
+  CHECK_EQ(vt_state_read(&T2, &h2, "vim1\nm t\no rel\n.\n", 17), -1);
+  CHECK_EQ(vt_state_read(&T2, &h2, "vim1\nm t\n.\nextra", 16), -1);
+  CHECK_EQ(vt_state_read(&T2, &h2, "vim1\n.\n", 7), -1);          /* no mode */
+  CHECK(vt_is_open(&T2, "/keep"));
+  CHECK_EQ(vt_state_read(&T2, &h2, "vim1\nm t\n.\n", 11), 0);    /* the least */
+  CHECK(!vt_is_open(&T2, "/keep"));
+  /* too small a buffer: nothing, rather than half */
+  CHECK_EQ(vt_state_write(&TT, &h, buf, 20), 0);
+  /* the most there can be still fits the way back's 1 KB */
+  {
+    VtHead big;
+    memset(&big, 0, sizeof big);
+    big.mode = 'e';
+    memset(big.path, 'p', VT_PATH - 1);
+    big.path[0] = '/';
+    vt_init(&T2);
+    memset(T2.selpath, 's', VT_PATH - 1);
+    T2.selpath[0] = '/';
+    T2.selpath[VT_PATH - 1] = 0;
+    while (T2.openlen + 40 <= VT_OPENSZ) {
+      char p[40];
+      snprintf(p, sizeof p, "/folder/number/%023d", T2.openlen);
+      vt_set_open(&T2, p, 1);
+    }
+    CHECK(vt_state_write(&T2, &big, buf, CAPP_SAVE_MAX) > 0);
+  }
+}
+
+/* The editor's side: - and :Ex, :run and space r. */
+void test_vim_tree_and_run_from_a_file(void) {
+  setup("");
+  fakefs_put("/home/a.py", "x = 1\n");
+  fakefs_put("/home/a.c", "int x;\n");
+  vi_load(&V, "/home/a.py");
+  k("-");
+  CHECK_EQ(V.req, VREQ_TREE);
+  V.req = 0;
+  k("x-");
+  CHECK_EQ(V.req, VREQ_NONE);
+  CHECK(strstr(V.msg, "E37") != NULL);
+  k(":Ex!\r");
+  CHECK_EQ(V.req, VREQ_TREE);
+  V.req = 0;
+  /* :run writes first */
+  k(":run\r");
+  CHECK_EQ(V.req, VREQ_RUN);
+  CHECK(strcmp(fakefs_get("/home/a.py"), " = 1\n") == 0);
+  CHECK(!vi_modified(&V));
+  V.req = 0;
+  k(" r");
+  CHECK_EQ(V.req, VREQ_RUN);
+  V.req = 0;
+  /* space is still l when r does not follow; 2- is still the motion */
+  k("0 x");
+  CHECK(strcmp(txt(), " 1") == 0 || strcmp(txt(), "  1") == 0);
+  vi_load(&V, "/home/a.c");
+  k(":py\r");
+  CHECK_EQ(V.req, VREQ_NONE);
+  CHECK(strstr(V.msg, "not a Python file") != NULL);
+  setup("one\ntwo\nthree");
+  k("G2-");
+  CHECK_EQ(line(), 0);
+  CHECK_EQ(V.req, VREQ_NONE);
 }

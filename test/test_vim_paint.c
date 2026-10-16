@@ -126,12 +126,32 @@ static int key_and_check(int k) {
 static void keys(const char *s) { while (*s) key_and_check((uint8_t)*s++); }
 
 static int s_room = -1;                /* big-mode room, when not fakeapi's */
+static int s_keep_card;                /* boot on the card as it is */
+static char s_resume[CAPP_SAVE_MAX];   /* what api->resumed hands over at boot */
+static int s_resume_n;
+static char s_ran[2][VT_PATH];         /* the last api->run */
+static int v_run(const char *name, const char *args) {
+  snprintf(s_ran[0], sizeof s_ran[0], "%s", name);
+  snprintf(s_ran[1], sizeof s_ran[1], "%s", args ? args : "");
+  return 0;
+}
 static void boot(const char *path, const char *text) {
+  CardApi old = VAPI;
   fakeapi_init(&VAPI);
-  fakefs_mem(&VAPI);
+  if (!s_keep_card) fakefs_mem(&VAPI);
+  else {                               /* the same card: its table, unreset */
+    VAPI.open = old.open; VAPI.read = old.read; VAPI.write = old.write;
+    VAPI.seek = old.seek; VAPI.close = old.close; VAPI.list = old.list;
+    VAPI.list_ex = old.list_ex; VAPI.stat = old.stat; VAPI.mkdir = old.mkdir;
+    VAPI.remove = old.remove; VAPI.rename = old.rename;
+  }
   if (s_room >= 0) fakeapi_big_room = s_room;
   VAPI.fill = v_fill; VAPI.frame = v_frame; VAPI.text = v_text; VAPI.ui = v_ui;
   VAPI.paint_area = v_area; VAPI.damage = v_damage; VAPI.pick = v_pick;
+  VAPI.run = v_run;
+  memcpy(fakeapi_resume, s_resume, sizeof s_resume);
+  fakeapi_resume_n = s_resume_n;
+  s_resume_n = 0;
   if (text) fakefs_put(path, text);
   memset(&V, 0, sizeof V);
   s_picking = 0;
@@ -222,25 +242,157 @@ void test_vim_paint_damage_repaints_what_changed(void) {
   CHECK_EQ(unset(), 0);
 }
 
-void test_vim_paint_opens_the_picker_with_no_file(void) {
-  s_pick_mode = -1;
-  boot(0, 0);
-  CHECK_EQ(s_pick_mode, CAPP_PICK_OPEN);
-  CHECK(s_picking);
-  CHECK(!VUI.wants_text(VUI.state));
-  CHECK_EQ(unset(), 0);
-  dump("empty");
-}
-
-void test_vim_paint_write_with_no_name_asks_and_q_closes(void) {
+void test_vim_paint_write_with_no_name_asks_and_q_leaves(void) {
   boot("/home/n.txt", "abc");
   keys(":q\r");
-  CHECK_EQ(s_pick_mode, CAPP_PICK_OPEN);           /* closed: the picker for the next */
-  CHECK_EQ(V.path[0], 0);
-  s_picking = 0;
+  CHECK_EQ(fakeapi_left, 1);                      /* opened with a file: :q leaves */
+  CHECK(!s_tree);
   s_pick_mode = -1;
+  V.path[0] = 0;                                  /* an unnamed buffer */
   keys("ihi\x1b:w\r");
   CHECK_EQ(s_pick_mode, CAPP_PICK_SAVE);
+  CHECK_EQ(s_bad, 0);
+}
+
+static const char *tree_sel(void) {
+  static char p[VT_PATH];
+  vt_path(&TR, TR.sel, p, sizeof p);
+  return p;
+}
+
+static void tree_files(void) {
+  fakefs_put("/home/proj/main.py", "def f():\n    return 1\n\nprint(f())\n");
+  fakefs_put("/home/proj/util.py", "x = 2\n");
+  fakefs_put("/home/proj/notes.md", "# notes\n");
+  fakefs_put("/home/proj/lib/a.c", "int a;\n");
+  fakefs_put("/home/proj/lib/a.h", "int a;\n");
+  fakefs_put("/home/readme.txt", "hi\n");
+  fakefs_put("/home/.secret", "s\n");
+}
+
+/* No file: the tree. Open a folder, a file, :q back to the same row. */
+void test_vim_paint_the_tree_and_back_to_it(void) {
+  int sel, top, i;
+  boot(0, 0);
+  tree_files();
+  key_and_check('r');                             /* read the card again */
+  CHECK(s_tree);
+  CHECK(VUI.wants_text(VUI.state));
+  CHECK_EQ(unset(), 0);
+  for (i = 0; i < TR.nrows && strcmp(tree_sel(), "/home") != 0; i++) key_and_check('j');
+  CHECK(strcmp(tree_sel(), "/home") == 0);
+  key_and_check(VK_ENTER);
+  keys("jl");                                     /* proj, open */
+  CHECK(strcmp(tree_sel(), "/home/proj") == 0);
+  keys("jl");                                     /* lib, open */
+  CHECK(strcmp(tree_sel(), "/home/proj/lib") == 0);
+  dump("tree");
+  CHECK(fakefs_get("/cache/vimtree") != NULL);    /* kept for the next launch */
+  CHECK(strstr(fakefs_get("/cache/vimtree"), "o /home/proj/lib\n") != NULL);
+  keys("/main\r");
+  CHECK(strcmp(tree_sel(), "/home/proj/main.py") == 0);
+  sel = TR.sel;
+  top = TR.top;
+  key_and_check(VK_ENTER);
+  CHECK(!s_tree);
+  CHECK(strcmp(V.path, "/home/proj/main.py") == 0);
+  CHECK_EQ(V.lang, LANG_PY);
+  dump("tree_file");
+  keys("jx");
+  keys(":q\r");
+  CHECK(!s_tree);                                 /* E37 */
+  CHECK(strstr(V.msg, "E37") != NULL);
+  keys(":wq\r");
+  CHECK(s_tree);                                  /* back, at the same spot */
+  CHECK_EQ(TR.sel, sel);
+  CHECK_EQ(TR.top, top);
+  CHECK(vt_is_open(&TR, "/home/proj/lib"));
+  CHECK(strstr(fakefs_get("/home/proj/main.py"), "():\n   return 1\n") != NULL);
+  /* - from a file: the tree on that file */
+  keys("k");
+  key_and_check(VK_ENTER);                        /* lib/a.h ... or whatever is above */
+  CHECK(!s_tree);
+  keys("-");
+  CHECK(s_tree);
+  CHECK_EQ(TR.sel, sel - 1);
+  /* :e on a folder shows it rather than editing it */
+  keys(":e /home/proj\r");
+  CHECK(s_tree);
+  CHECK(strcmp(tree_sel(), "/home/proj") == 0);
+  /* q on the tree leaves Vim */
+  fakeapi_left = 0;
+  keys("q");
+  CHECK_EQ(fakeapi_left, 1);
+  CHECK_EQ(s_bad, 0);
+  CHECK_EQ(unset(), 0);
+}
+
+/* :run writes the file and opens Python on it; Vim is asked for its state
+ * on the way out and comes back as it was. */
+void test_vim_paint_run_python_and_come_back(void) {
+  static char saved[CAPP_SAVE_MAX];
+  int n, i;
+  boot(0, 0);
+  tree_files();
+  key_and_check('r');
+  for (i = 0; i < TR.nrows && strcmp(tree_sel(), "/home") != 0; i++) key_and_check('j');
+  keys("ljl/util\r");
+  CHECK(strcmp(tree_sel(), "/home/proj/util.py") == 0);
+  key_and_check(VK_ENTER);
+  keys("A + 1\x1b");
+  CHECK(vi_modified(&V));
+  s_ran[0][0] = 0;
+  keys(":run\r");
+  CHECK(strcmp(s_ran[0], "python") == 0);
+  CHECK(strcmp(s_ran[1], "/home/proj/util.py") == 0);
+  CHECK(strcmp(fakefs_get("/home/proj/util.py"), "x = 2 + 1\n") == 0);
+  keys(":e notes.md\r");                          /* not .py: said, not run */
+  s_ran[0][0] = 0;
+  keys(" r");
+  CHECK_EQ(s_ran[0][0], 0);
+  CHECK(strstr(V.msg, "not a Python file") != NULL);
+  keys(":e util.py\r");
+  keys("o# more\x1b");
+  /* the launcher asks for the state as Python opens */
+  n = VUI.save(VUI.state, saved, sizeof saved);
+  CHECK(n > 0 && n <= CAPP_SAVE_MAX);
+  CHECK(!vi_modified(&V));                        /* written on the way out */
+  CHECK(strstr(saved, "m b\n") != NULL);
+  CHECK(strstr(saved, "f /home/proj/util.py\n") != NULL);
+  CHECK(strstr(saved, "c 1 ") != NULL);
+  /* Python runs and leaves; Vim starts again with what it saved */
+  memcpy(s_resume, saved, (size_t)n);
+  s_resume_n = n;
+  s_keep_card = 1;
+  boot(0, 0);
+  s_keep_card = 0;
+  CHECK(!s_tree);
+  CHECK(strcmp(V.path, "/home/proj/util.py") == 0);
+  CHECK_EQ(vi_line(&V), 1);
+  CHECK(s_back_tree);
+  CHECK_EQ(unset(), 0);
+  dump("resumed");
+  keys(":q\r");                                  /* and its tree is still there */
+  CHECK(s_tree);
+  CHECK(strcmp(tree_sel(), "/home/proj/util.py") == 0);
+  CHECK(vt_is_open(&TR, "/home/proj"));
+  /* from the tree too: run, save, come back to the tree */
+  keys(" r");
+  CHECK(strcmp(s_ran[1], "/home/proj/util.py") == 0);
+  n = VUI.save(VUI.state, saved, sizeof saved);
+  CHECK(strstr(saved, "m t\n") != NULL);
+  memcpy(s_resume, saved, (size_t)n);
+  s_resume_n = n;
+  s_keep_card = 1;
+  boot(0, 0);
+  s_keep_card = 0;
+  CHECK(s_tree);
+  CHECK(strcmp(tree_sel(), "/home/proj/util.py") == 0);
+  /* garbage handed back: a fresh start, nothing broken */
+  memcpy(s_resume, "vim1\nm b\nf /x", 14);
+  s_resume_n = 14;
+  boot(0, 0);
+  CHECK(s_tree);
   CHECK_EQ(s_bad, 0);
 }
 

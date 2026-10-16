@@ -202,4 +202,52 @@ static DIR_OPT const char *dir_move_here(const CardApi *api, DirList *d, const c
   return r == 0 ? "moved" : "could not move it";
 }
 
+/* ---- the way back (API 48) ----------------------------------------------
+ *
+ * Files opens a file in another app and is let go; coming back it should be
+ * in the same folder on the same row. Its CappUi.save writes
+ * "files1\nCWD\nNAME\nTOP\n" -- the selected entry by name, since the
+ * folder may have changed meanwhile -- and dir_state_load puts it back. */
+
+/* The length written, or 0 when it did not fit. */
+static DIR_OPT int dir_state_save(const CardApi *api, const DirList *d, int sel, int top,
+                                  char *buf, int n) {
+  const char *name = (sel >= 0 && sel < d->n) ? dir_at(d, sel)->name : "";
+  int len;
+  if (n < 16) return 0;
+  api->fmt(buf, (size_t)n, "files1\n%s\n%s\n%d\n", d->cwd, name, top);
+  len = (int)api->str_len(buf);
+  return len >= n - 1 ? 0 : len;
+}
+
+/* 0, with the folder read and *sel and *top set; -1 for anything that is
+ * not what dir_state_save wrote, or a folder that is gone (nothing then
+ * changes). */
+static DIR_OPT int dir_state_load(const CardApi *api, DirList *d, const char *buf, int n,
+                                  int *sel, int *top) {
+  char cwd[DIR_PATH_MAX], name[CAPP_NAME_MAX + 1];
+  const char *p = buf, *end = buf + n;
+  int i, t = 0, any = 0;
+  CappStat st;
+  if (n < 7 || !str_starts(buf, "files1\n")) return -1;
+  p += 7;
+  for (i = 0; p < end && *p != '\n'; p++) { if (i >= DIR_PATH_MAX - 1) return -1; cwd[i++] = *p; }
+  if (p >= end || !i || cwd[0] != '/') return -1;
+  cwd[i] = 0;
+  p++;
+  for (i = 0; p < end && *p != '\n'; p++) { if (i >= CAPP_NAME_MAX) return -1; name[i++] = *p; }
+  if (p >= end) return -1;
+  name[i] = 0;
+  p++;
+  for (; p < end && *p >= '0' && *p <= '9'; p++) { if (t < 100000) t = t * 10 + (*p - '0'); any = 1; }
+  if (!any || p + 1 != end || *p != '\n') return -1;
+  if (api->stat(cwd, &st) != 0 || !st.is_dir) return -1;
+  api->mem_cpy(d->cwd, cwd, sizeof cwd);
+  dir_reload(api, d);
+  *sel = 0;
+  for (i = 0; i < d->n; i++) if (str_same(dir_at(d, i)->name, name)) { *sel = i; break; }
+  *top = t > *sel ? *sel : t;
+  return 0;
+}
+
 #endif /* CARDOS_DIRMODEL_H */

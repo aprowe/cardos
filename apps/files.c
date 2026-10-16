@@ -573,6 +573,24 @@ const CappInfo capp_info = {
   sizeof ACTIONS / sizeof ACTIONS[0],
 };
 
+/* The way back (API 48): opening a file lets Files go; coming back, the
+ * same folder on the same row (apps/dirmodel.h has the format). */
+static int app_save(void *st, void *buf, size_t n) {
+  (void)st;
+  return dir_state_save(api, &F.d, F.sel, F.top, (char *)buf, (int)n);
+}
+
+static void resume(void) {
+  char buf[256];
+  int n, sel, top;
+  if (api->version < 48 || !api->resumed) return;
+  n = api->resumed(buf, sizeof buf);
+  if (n > 0 && dir_state_load(api, &F.d, buf, n, &sel, &top) == 0) {
+    F.sel = sel;
+    F.top = top;
+  }
+}
+
 static CappUi UI;
 
 int capp_main(const CardApi *a, int argc, char **argv) {
@@ -587,6 +605,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
       api->fmt(F.d.cwd, sizeof F.d.cwd, "%s", argv[1]);
   }
   reload();
+  resume();
   toolbar_init(api, ACTIONS, NACT, ICONS, 2);
 
   UI.paint = app_paint;
@@ -598,6 +617,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   UI.nactions = NACT;
   UI.action = app_action;
   UI.command = app_command;
+  UI.save = app_save;
   api->ui(&UI);
   return 0;
 }
