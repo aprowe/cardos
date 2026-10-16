@@ -91,11 +91,34 @@ static void api_pixels(CRect r, const uint16_t *px) {
   }
 }
 
-static int api_open(const char *p, int f)             { return fs_open(p, f); }
+/* Which app opened each file (2026-10-16). An app closed by fn-` is never
+ * told, and a file it left open (Python's open() without a close) held one
+ * of the card's FS_MAX_OPEN slots until a restart. Now its files go with it
+ * (cardapi_release_files, a capprun_on_release hook from src/main.c). */
+static const void *s_fd_owner[FS_MAX_OPEN];
+
+static int api_open(const char *p, int f) {
+  int fd = fs_open(p, f);
+  if (fd >= 0 && fd < FS_MAX_OPEN) s_fd_owner[fd] = capprun_executing();
+  return fd;
+}
 static int api_read(int fd, void *b, size_t n)        { return fs_read(fd, b, n); }
 static int api_write(int fd, const void *b, size_t n) { return fs_write(fd, b, n); }
 static int api_seek(int fd, int32_t o, int w)         { return fs_seek(fd, o, w); }
-static void api_close(int fd)                         { fs_close(fd); }
+static void api_close(int fd) {
+  if (fd >= 0 && fd < FS_MAX_OPEN) s_fd_owner[fd] = NULL;
+  fs_close(fd);
+}
+
+void cardapi_release_files(const void *owner) {
+  int fd;
+  if (!owner) return;
+  for (fd = 0; fd < FS_MAX_OPEN; fd++)
+    if (s_fd_owner[fd] == owner) {
+      s_fd_owner[fd] = NULL;
+      fs_close(fd);
+    }
+}
 
 /* Flattened listing: names packed into a caller-supplied array of fixed-width
  * slots, so a program needs no allocator and no knowledge of FsEntry. */

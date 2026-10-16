@@ -1749,6 +1749,10 @@ void app_main(void) {
   capprun_on_release(link_release_owner);    /* the ESP-NOW link, its partner told */
   capprun_on_release(power_release_owner);   /* the screen, if it held it on */
   {
+    extern void cardapi_release_files(const void *owner);
+    capprun_on_release(cardapi_release_files);   /* files it left open */
+  }
+  {
     /* Big-app mode (kernel/app/bigmode.h): the heap it takes from, what it
      * lets go of on entering, and its blocks freed with the app. */
     static const BigHeap heap = { big_heap_alloc, big_heap_free, big_heap_largest, big_heap_total };

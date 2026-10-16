@@ -1188,7 +1188,10 @@ over, once. An app without `save` comes back fresh as before. `api->leave`
 is fn-` from code -- Vim's `:q`, Python's `exit()` -- acted on once the
 handler returns; -1 outside the launcher. Nothing is kept in RAM: the
 files go when their entry does (`back_clear`, `forget_saved`). Not
-host-tested: launchui is device code.
+host-tested: launchui is device code. An app's open files close with it
+too (`cardapi_release_files`, a release hook: cardapi.c notes which app
+opened each of the card's 8 slots) -- fn-` never tells an app, and a file
+Python left open held a slot until a restart.
 
 **Hub: M5Launcher's firmware catalog** (2026-10-08, `apps/hub.c`, System).
 LauncherHub (api.launcherhub.net, ~700 Cardputer firmwares) through
