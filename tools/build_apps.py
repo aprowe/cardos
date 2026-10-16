@@ -593,6 +593,55 @@ def seed_name(stem):
     return "%s/%s.capp" % (folder, stem) if folder else "%s.capp" % stem
 
 
+# Apps built from more than their one source (2026-10-16, the Python app):
+# every .c under `dirs` (relative to the repo) compiled with `include` on the
+# path and `defines`, and linked against the toolchain's libc, libm and
+# libgcc. Only these: everything else links against nothing. check_image
+# still refuses an unresolved symbol, so a library function that would need
+# the C library's system layer (malloc, files, reentrancy) fails the build
+# rather than the device. Warnings are not errors in sources that are not
+# ours.
+MULTI = {
+    "python": {
+        "dirs": ["apps/python/mp/py"],     # gc_collect is the app's own
+        "include": ["apps/python", "apps/python/mp"],
+        "defines": ["-DNDEBUG"],
+    },
+}
+MULTI_DROP = ("-nostdinc", "-Werror", "-Wall", "-Wextra")
+
+
+def toolchain_lib(name):
+    """The esp32s3 build of one of the toolchain's libraries."""
+    return run([GCC, "-print-file-name=" + name]).strip()
+
+
+def compile_multi(name, src, out_dir):
+    spec = MULTI[name]
+    flags = [f for f in CFLAGS if f not in MULTI_DROP]
+    for d in spec["include"]:
+        flags += ["-I", os.path.join(ROOT, d)]
+    flags += spec.get("defines", [])
+    objdir = os.path.join(out_dir, name + ".objs")
+    os.makedirs(objdir, exist_ok=True)
+    srcs = [src]
+    for d in spec["dirs"]:
+        full = os.path.join(ROOT, d)
+        srcs += [os.path.join(full, f) for f in sorted(os.listdir(full)) if f.endswith(".c")]
+    objs = []
+    for s in srcs:
+        obj = os.path.join(objdir, os.path.splitext(os.path.basename(s))[0] + ".o")
+        if not os.path.exists(obj) or os.path.getmtime(obj) < max(
+                os.path.getmtime(s), os.path.getmtime(os.path.join(ROOT, spec["include"][0],
+                                                                    "mpconfigport.h"))) \
+                or s == src:
+            run([GCC] + flags + ["-c", s, "-o", obj])
+        objs.append(obj)
+    libs = ["--start-group"] + [toolchain_lib(l) for l in ("libc.a", "libm.a", "libgcc.a")] + \
+        ["--end-group"]
+    return objs, libs
+
+
 def compile_link(src, out_dir=OUT):
     """Compile and link one app; the .capp's path. Linked -n (no page
     alignment): the constants are a third segment, and page-aligned
@@ -601,9 +650,13 @@ def compile_link(src, out_dir=OUT):
     name = os.path.splitext(os.path.basename(src))[0]
     obj = os.path.join(out_dir, name + ".o")
     elf = os.path.join(out_dir, name + ".capp")
-    run([GCC] + CFLAGS + ["-isystem", gcc_include_dir(), "-c", src, "-o", obj])
+    if name in MULTI:
+        objs, libs = compile_multi(name, src, out_dir)
+    else:
+        run([GCC] + CFLAGS + ["-isystem", gcc_include_dir(), "-c", src, "-o", obj])
+        objs, libs = [obj], []
     run([LD, "-q", "-n", "-T", os.path.join(APPS, "capp.ld"),
-         "--gc-sections", "-o", elf, obj])
+         "--gc-sections", "-o", elf] + objs + libs)
     return elf
 
 
