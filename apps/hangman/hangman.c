@@ -2,9 +2,13 @@
  *
  * One player types a secret -- a word or a short phrase -- while the screen
  * shows only dots, passes the device over, and the other guesses a letter at
- * a time. Six misses finish the little figure on the gallows: head, body,
- * two arms, two legs. Find every letter first and the rope is cut and he
- * stands on the grass, arms up.
+ * a time. Six misses finish the man on the gallows: head, body, two arms,
+ * two legs. Find every letter first and he is cut down and stands on the
+ * platform, arms up.
+ *
+ * The picture is an old photograph of an empty gallows on a film set, and
+ * the man is drawn for it -- both made by tools/make_hangman.py into
+ * apps/hangman/hangman_art.h (5.6 KB of photograph, 1.3 KB of man).
  *
  * A point to the guesser for a word found, to the setter for a figure
  * finished, and then the other player sets the next word. The score is for
@@ -15,7 +19,7 @@
  *
  * Every repaint is a whole one, composed off the panel by the OS (no damage
  * marks): a key changes the word, the figure, the letters tried and a line
- * of text, and the screen is a few dozen fills.
+ * of text. The picture is 124 rows sent with api->pixels.
  *
  * The rules are apps/hangman/hangman.h, host-tested in test/test_hangman.c;
  * the screen in test/test_hangman_paint.c.
@@ -26,27 +30,18 @@
 #include "apps/footer.h"
 #include "apps/confirm.h"
 #include "apps/hangman/hangman.h"
+#include "apps/hangman/hangman_art.h"
 
 static const CardApi *api;
 
-#define C_BG      CAPP_RGB(26, 30, 44)
-#define C_PANEL   CAPP_RGB(36, 42, 60)
-#define C_TEXT    CAPP_RGB(236, 238, 244)
-#define C_DIM     CAPP_RGB(140, 148, 168)
-#define C_WARN    CAPP_RGB(240, 120, 100)
-#define C_GOOD    CAPP_RGB(120, 210, 130)
-#define C_ACCENT  CAPP_RGB(255, 204, 82)
-#define C_WOOD    CAPP_RGB(160, 108, 62)
-#define C_WOOD_D  CAPP_RGB(112, 72, 40)
-#define C_ROPE    CAPP_RGB(214, 192, 140)
-#define C_GRASS   CAPP_RGB(92, 168, 92)
-#define C_GRASS_D CAPP_RGB(60, 120, 64)
-#define C_SKIN    CAPP_RGB(252, 212, 172)
-#define C_INK     CAPP_RGB(44, 32, 36)
-#define C_CHEEK   CAPP_RGB(244, 146, 156)
-#define C_SHIRT   CAPP_RGB(96, 164, 232)
-#define C_LEGS    CAPP_RGB(70, 88, 150)
-#define C_GHOST   CAPP_RGB(150, 150, 160)
+/* Sepia, to sit beside the photograph. */
+#define C_BG      CAPP_RGB(30, 22, 16)
+#define C_PANEL   CAPP_RGB(56, 42, 30)
+#define C_TEXT    CAPP_RGB(240, 228, 204)
+#define C_DIM     CAPP_RGB(164, 142, 112)
+#define C_WARN    CAPP_RGB(214, 104, 72)
+#define C_GOOD    CAPP_RGB(164, 190, 104)
+#define C_ACCENT  CAPP_RGB(230, 184, 104)
 
 /* The word on the right: one cell per character. */
 #define WX     96
@@ -79,25 +74,9 @@ static void say(const char *s, uint16_t colour, uint32_t ms) {
   G.msg_until = ms ? api->ticks_ms() + ms : 0;
 }
 
-/* ---- the figure -------------------------------------------------------------- */
+/* ---- the picture ----------------------------------------------------------- */
 
 static void box(int x, int y, int w, int h, uint16_t c) { api->fill(capp_rect(x, y, w, h), c); }
-
-/* A line two pixels thick. */
-static void line(int x0, int y0, int x1, int y1, uint16_t c) {
-  int dx = x1 > x0 ? x1 - x0 : x0 - x1, sx = x0 < x1 ? 1 : -1;
-  int dy = y1 > y0 ? y0 - y1 : y1 - y0, sy = y0 < y1 ? 1 : -1;
-  int err = dx + dy;
-  for (;;) {
-    box(x0, y0, 2, 2, c);
-    if (x0 == x1 && y0 == y1) break;
-    {
-      int e2 = 2 * err;
-      if (e2 >= dy) { err += dy; x0 += sx; }
-      if (e2 <= dx) { err += dx; y0 += sy; }
-    }
-  }
-}
 
 static void disc(int cx, int cy, int r, uint16_t c) {
   int dy;
@@ -108,62 +87,48 @@ static void disc(int cx, int cy, int r, uint16_t c) {
   }
 }
 
-/* The gallows, the ground under it and the rope. */
-static void paint_gallows(void) {
-  int x;
-  box(0, 112, 92, 12, C_GRASS_D);
-  box(0, 112, 92, 2, C_GRASS);
-  for (x = 3; x < 92; x += 7) box(x, 110, 1, 2, C_GRASS);         /* tufts */
-  box(14, 8, 5, 104, C_WOOD);                                      /* the post */
-  box(18, 8, 1, 104, C_WOOD_D);
-  box(14, 6, 52, 5, C_WOOD);                                       /* the beam */
-  box(14, 10, 52, 1, C_WOOD_D);
-  line(19, 26, 33, 11, C_WOOD_D);                                  /* the brace */
-  box(6, 108, 22, 4, C_WOOD_D);                                    /* the foot */
-  box(60, 11, 2, 12, C_ROPE);
-}
+static uint16_t ROW[HA_W];
 
-/* The figure with `parts` of its six, hanging from the rope at dy = 0 or
- * standing on the grass, arms up, at dy = 34. `dead` crosses the eyes and
- * greys him. */
-static void paint_figure(int parts, int dy, int dead) {
-  int cx = 61, hy = 30 + dy;
-  uint16_t shirt = dead ? C_GHOST : C_SHIRT, legs = dead ? C_GHOST : C_LEGS;
-  int up = dy != 0;                                 /* arms raised */
-  if (parts >= 2) {                                 /* the body */
-    box(cx - 4, hy + 8, 9, 18, C_INK);
-    box(cx - 3, hy + 9, 7, 16, shirt);
+/* The photograph, and the man over it: `parts` of his six hanging from the
+ * noose (head, coat, arms, legs, in the order a miss adds them; `dead`
+ * lets the head fall), or, cut down (`free`), standing on the platform with
+ * his arms up. Composed a row at a time and sent whole, only the rows the
+ * paint was asked for. */
+static void paint_scene(int parts, int free, int dead) {
+  static const uint8_t hang[6] = { HA_HEAD, HA_TORSO, HA_ARM_L, HA_ARM_R, HA_LEG_L, HA_LEG_R };
+  static const uint8_t stand[6] = { HA_HEAD_FREE, HA_TORSO, HA_UP_L, HA_UP_R, HA_STAND_L, HA_STAND_R };
+  uint8_t list[6];
+  int n = 0, i, x, y, nx, ny, y0, y1;
+  CRect area = api->paint_area();
+  /* Drawn back to front: legs, coat, arms, then the head over the collar. */
+  static const uint8_t order[6] = { 4, 5, 1, 2, 3, 0 };
+  for (i = 0; i < 6; i++) {
+    int k = order[i];
+    if (free) list[n++] = stand[k];
+    else if (k < parts) list[n++] = k == 0 && dead ? HA_HEAD_DEAD : hang[k];
   }
-  if (parts >= 3) line(cx - 4, hy + 11, cx - 13, up ? hy - 1 : hy + 22, C_INK);
-  if (parts >= 4) line(cx + 4, hy + 11, cx + 13, up ? hy - 1 : hy + 22, C_INK);
-  if (parts >= 5) {
-    line(cx - 2, hy + 25, cx - 8, hy + 43, legs);
-    box(cx - 11, hy + 43, 4, 2, C_INK);
-  }
-  if (parts >= 6) {
-    line(cx + 1, hy + 25, cx + 7, hy + 43, legs);
-    box(cx + 7, hy + 43, 4, 2, C_INK);
-  }
-  if (parts >= 1) {                                 /* the head, over the neck */
-    disc(cx, hy, 8, C_INK);
-    disc(cx, hy, 7, dead ? C_GHOST : C_SKIN);
-    if (dead) {
-      line(cx - 5, hy - 3, cx - 2, hy, C_INK); line(cx - 5, hy, cx - 2, hy - 3, C_INK);
-      line(cx + 2, hy - 3, cx + 5, hy, C_INK); line(cx + 2, hy, cx + 5, hy - 3, C_INK);
-      box(cx - 3, hy + 4, 7, 1, C_INK);
-    } else {
-      box(cx - 4, hy - 2, 2, 2, C_INK);
-      box(cx + 3, hy - 2, 2, 2, C_INK);
-      box(cx - 6, hy + 1, 2, 2, C_CHEEK);
-      box(cx + 5, hy + 1, 2, 2, C_CHEEK);
-      if (up || parts < 4) {                        /* a smile */
-        box(cx - 2, hy + 4, 5, 1, C_INK);
-        box(cx - 3, hy + 3, 1, 1, C_INK);
-        box(cx + 3, hy + 3, 1, 1, C_INK);
-      } else {                                      /* worried */
-        box(cx - 1, hy + 3, 3, 3, C_INK);
+  nx = free ? HA_STAND_X : HA_HANG_X;
+  ny = free ? HA_STAND_Y : HA_HANG_Y;
+  y0 = area.y > 0 ? area.y : 0;
+  y1 = area.y + area.h < HA_H ? area.y + area.h : HA_H;
+  for (y = y0; y < y1; y++) {
+    const uint8_t *src = ha_photo + y * (HA_W / 2);
+    for (x = 0; x < HA_W; x += 2) {
+      ROW[x] = ha_pal[src[x / 2] >> 4];
+      ROW[x + 1] = ha_pal[src[x / 2] & 15];
+    }
+    for (i = 0; i < n; i++) {
+      const HaPiece *p = &ha_piece[list[i]];
+      int py = y - (ny + p->dy), px0 = nx + p->dx;
+      const uint8_t *row;
+      if (py < 0 || py >= p->h) continue;
+      row = ha_px + p->at + py * ((p->w + 1) / 2);
+      for (x = 0; x < p->w; x++) {
+        int v = x & 1 ? row[x / 2] & 15 : row[x / 2] >> 4;
+        if (v && px0 + x >= 0 && px0 + x < HA_W) ROW[px0 + x] = ha_pal[v];
       }
     }
+    api->pixels(capp_rect(0, y, HA_W, 1), ROW);
   }
 }
 
@@ -196,9 +161,8 @@ static void paint_play(CRect c) {
   int i, over = G.screen == S_OVER, setter = G.rsetter, guesser = 1 - setter;
   int x;
 
-  paint_gallows();
-  if (over && G.h.state == HM_WON) paint_figure(6, 34, 0);
-  else paint_figure(over ? 6 : G.h.misses, 0, over);
+  if (over && G.h.state == HM_WON) paint_scene(6, 1, 0);
+  else paint_scene(over ? 6 : G.h.misses, 0, over);
 
   /* The players, the guesser first. */
   api->fmt(b, sizeof b, "%s %d", G.m.name[guesser], G.m.score[guesser]);
@@ -249,8 +213,7 @@ static void centred(int f, int y, const char *s, uint16_t fg, CRect c) {
 static void paint_score(CRect c) {
   char b[32];
   int i;
-  paint_gallows();
-  paint_figure(6, 34, 0);
+  paint_scene(6, 1, 0);
   centred(G.f_big, 6, "Hangman", C_ACCENT, capp_rect(92, 0, c.w - 92, 20));
   for (i = 0; i < 2; i++) {
     CRect col = capp_rect(96 + i * 72, 0, 70, 0);
@@ -307,8 +270,7 @@ static void paint_secret(CRect c) {
 
 static void paint_hand(CRect c) {
   char b[48];
-  paint_gallows();
-  paint_figure(0, 0, 0);
+  paint_scene(0, 0, 0);
   api->fmt(b, sizeof b, "Pass it to %s", G.m.name[1 - G.m.setter]);
   centred(G.f_big, 40, b, C_ACCENT, capp_rect(92, 0, c.w - 92, 0));
   centred(G.f_ui, 62, "then press enter", C_DIM, capp_rect(92, 0, c.w - 92, 0));

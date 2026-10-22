@@ -530,6 +530,15 @@ on the score screen names the players. The score is the session's: nothing
 is saved. Rules in `apps/hangman/hangman.h` (`test/test_hangman.c`), the
 screen in `test/test_hangman_paint.c` (`HANGMAN_DUMP=dir`). Neither game
 marks damage: every repaint is whole and composed off the panel.
+Since 2026-10-21 the left panel is an old sepia photograph: the empty
+gallows on the Fort Bravo film set (CC0, Wikimedia Commons; the crop is
+`tools/hangman/gallows.jpg`), toned, grained, vignetted and dithered to 15
+tones, with a man in hat and coat drawn by `tools/make_hangman.py` in
+pieces (hanging, head fallen, standing with arms up) over it -- no real
+person is in it. The script writes `apps/hangman/hangman_art.h` (7 KB of
+constants); `--preview F.png` draws the poses. `paint_scene` composes a row
+at a time through `api->pixels` (which `test/fakescreen.h` now has), and
+the app's colours went sepia to match.
 
 **More than one person on the server** (2026-10-06, branch `accounts`).
 `server/accounts.py`: `CARDOS_STATE/accounts.json` holds people (PBKDF2

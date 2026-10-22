@@ -107,10 +107,15 @@ static void fs_text_font(int fi, int16_t x, int16_t y, const char *s, uint16_t f
     pen += g.adv;
   }
 }
+static void fs_pixels(CRect r, const uint16_t *p) {
+  int x, y;
+  for (y = 0; y < r.h; y++) for (x = 0; x < r.w; x++) fs_put(r.x + x, r.y + y, p[y * r.w + x]);
+}
 static void fs_ui(const CappUi *ui) { fakescreen_ui = *ui; }
 
 static void fakescreen_install(CardApi *a) {
   a->fill = fs_fill; a->frame = fs_frame; a->text = fs_text; a->ui = fs_ui;
+  a->pixels = fs_pixels;
   a->font_load = fs_font_load; a->text_font = fs_text_font;
   a->text_width = fs_text_width; a->font_height = fs_font_height;
 }
