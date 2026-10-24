@@ -141,6 +141,13 @@ static void run_job(BgJob job) {
     }
     else post("wifi: %s", wifi_status());
     break;
+  /* The notify poll's own rejoin (kernel/sys/notify.c), every few minutes
+   * while the launcher is up and the radio is not: a note on the launcher
+   * each time would be a note nobody asked for. */
+  case BG_WIFI_QUIET:
+    if (!wifi_is_connected() && wifi_connect_saved(20000) == 0 && !clock_synced())
+      bg_submit(BG_TIME_SYNC);
+    break;
   default:
     break;
   }

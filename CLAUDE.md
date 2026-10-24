@@ -564,9 +564,16 @@ banner is up, `draw_reserve_top(24)` narrows every clip below it, so apps
 (api->pixels included) and shells draw around it; the launcher's own direct
 blits start below `notify_covers()`.
 Two kinds of source. **Polled**: Chat, and the server's own notes (a finished Build, a Claude reply from /talk, new artifacts published to the store: apps "Build", "Claude", "Update") -- `GET /notify/poll?chat=ID&me=NAME`
-(server/msg.py) every 30 s while WiFi is already up, through
+(server/msg.py) every 30 s while WiFi is up, through
 `httpq_poll_as`, which only hands a reply to the request's owner (apps use
-it too: the first to poll used to take any reply). **Scheduled**:
+it too: the first to poll used to take any reply). With WiFi down -- an
+app let it go, or nothing has joined since boot -- the poll asks
+`cardos-bg` to rejoin (`BG_WIFI_QUIET`, no launcher note), at most every
+10 min and only from the launcher or the clock, so what came while the
+device was off arrives without an `update` or Chat to bring the radio up
+(2026-10-24). What a poll brings is stacked: `nq_stack` keeps one unread
+entry per app with a count ("Chat  arty  +2"), and one banner and chime
+per poll. **Scheduled**:
 `notify_at(app, key, seconds, title, text, ring)` / `notify_cancel` (key
 "*" is all of an app's), 32 waiting, by the wall clock when known (then
 kept in /cache/notify.sched through a restart), dropped if the app is on

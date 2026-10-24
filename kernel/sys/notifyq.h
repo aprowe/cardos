@@ -20,6 +20,7 @@ typedef struct {
   char     text[NQ_TEXT];
   uint32_t at;                 /* seconds since the epoch, or uptime if no clock */
   uint8_t  read;
+  uint8_t  count;              /* how many it stands for: 1, or more once stacked */
 } NqItem;
 
 /* Newest first. */
@@ -30,6 +31,10 @@ typedef struct {
 
 void nq_init(Nq *q);
 void nq_push(Nq *q, const char *app, const char *title, const char *text, uint32_t at);
+/* As nq_push, but an unread one from `app` already in the list is taken
+ * out and counted into this one: one Chat, one Update, however many came.
+ * The newest's words are kept; `count` says how many it stands for. */
+void nq_stack(Nq *q, const char *app, const char *title, const char *text, uint32_t at);
 void nq_remove(Nq *q, int i);
 int  nq_unread(const Nq *q);
 void nq_read_all(Nq *q);

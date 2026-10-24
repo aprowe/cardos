@@ -14,6 +14,7 @@
 #include "kernel/ui/app.h"
 #include "kernel/drv/keyboard.h"
 #include "kernel/sys/power.h"
+#include "kernel/sys/bg.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,6 +28,8 @@ static const char *TAG = "notify";
 #define BANNER_H     24
 #define BANNER_MS    4500
 #define CHAT_EVERY   30000
+#define WIFI_EVERY   600000               /* the poll's own rejoin, at most this often */
+#define WIFI_FIRST   45000                /* after boot's clock sync has had its go */
 #define CHAT_SEEN    "/cache/chat.seen"   /* also written by apps/chat.c */
 #define CHAT_NAME    "/config/chat.txt"
 #define NOTE_SEEN    "/cache/note.seen"
@@ -64,6 +67,12 @@ static uint16_t accent(const char *app) {
 
 /* ---- the banner ------------------------------------------------------------ */
 
+/* "Chat  Arty", or "Chat  Arty  +2" for one standing for three. */
+static void head_text(char *out, size_t n, const NqItem *it) {
+  if (it->count > 1) snprintf(out, n, "%s  %s  +%d", it->app, it->title, it->count - 1);
+  else snprintf(out, n, "%s  %s", it->app, it->title);
+}
+
 static Rect R(int x, int y, int w, int h) {
   Rect r;
   r.x = (int16_t)x; r.y = (int16_t)y; r.w = (int16_t)w; r.h = (int16_t)h;
@@ -72,12 +81,12 @@ static Rect R(int x, int y, int w, int h) {
 
 static void banner_body(void) {
   const NqItem *it = &s_q.it[0];
-  char head[NQ_APP + NQ_TITLE + 8];
+  char head[NQ_APP + NQ_TITLE + 12];
   uint16_t a = accent(it->app);
   draw_rect(R(0, 0, DISPLAY_W, BANNER_H), C_BG);
   draw_rect(R(0, 0, 3, BANNER_H), a);
   draw_rect(R(0, BANNER_H - 1, DISPLAY_W, 1), C_EDGE);
-  snprintf(head, sizeof head, "%s  %s", it->app, it->title);
+  head_text(head, sizeof head, it);
   draw_text_ellipsis(8, 3, DISPLAY_W - 12, head, a, C_BG);
   draw_text_ellipsis(8, 13, DISPLAY_W - 12, it->text, C_FG, C_BG);
 }
@@ -118,8 +127,8 @@ void notify_log(const char *app, const char *title, const char *text) {
   ESP_LOGI(TAG, "%s: %s: %s", app, title, text);
 }
 
-void notify_post(const char *app, const char *title, const char *text) {
-  notify_log(app, title, text);
+/* The banner and the chime for whatever is newest in the list. */
+static void show_newest(void) {
   if (s_center) return;                     /* it is in the list in front of them */
   if (power_asleep()) {
     /* No banner on a sleeping screen: the clock lists it, and only fn-o,
@@ -133,6 +142,11 @@ void notify_post(const char *app, const char *title, const char *text) {
   banner_paint();
   blip(BLIP_NOTIFY);
   if (s_repaint && ui_shell() == UI_LAUNCHER && !shell_running_app()) s_repaint();  /* the bar's dot */
+}
+
+void notify_post(const char *app, const char *title, const char *text) {
+  notify_log(app, title, text);
+  show_newest();
 }
 
 void notify_opened(const char *app) {
@@ -156,7 +170,7 @@ int notify_covers(void) { return s_banner && !s_center ? BANNER_H : 0; }
 /* ---- Chat: one request every half minute, while WiFi is up -------------------- */
 
 static int      s_chat_seen = -2;       /* -2 not read yet; -1 never asked */
-static uint32_t s_chat_next;
+static uint32_t s_chat_next, s_wifi_next = WIFI_FIRST;
 static int      s_chat_busy;
 static char     s_reply[1024];
 static const char s_owner = 0;          /* our name in the request slot */
@@ -207,14 +221,24 @@ static void note_seen_save(int id) {
   fs_close(fd);
 }
 
+/* What a poll brings is stacked, one per app however many came -- a device
+ * back on after a day is told "Chat +4", not five banners -- and announced
+ * once, after the whole reply is read. */
+static int s_fresh;
+
+static void stack(const char *app, const char *title, const char *text, int quiet) {
+  nq_stack(&s_q, app, title, text, stamp());
+  ESP_LOGI(TAG, "%s: %s: %s", app, title, text);
+  if (!quiet) s_fresh = 1;
+}
+
 static void each_note(void *ctx, NqStr app, NqStr title, NqStr text) {
   char a[NQ_APP], t[NQ_TITLE], x[NQ_TEXT];
   (void)ctx;
   snprintf(a, sizeof a, "%.*s", (int)app.n, app.s);
   snprintf(t, sizeof t, "%.*s", (int)title.n, title.s);
   snprintf(x, sizeof x, "%.*s", (int)text.n, text.s);
-  if (on_screen(a)) notify_log(a, t, x);       /* the app showed it already */
-  else notify_post(a, t, x);
+  stack(a, t, x, on_screen(a));                /* on screen: the app showed it already */
 }
 
 static void each_message(void *ctx, const char *name, size_t nl, const char *text, size_t tl) {
@@ -223,7 +247,7 @@ static void each_message(void *ctx, const char *name, size_t nl, const char *tex
   if (chat_on_screen()) return;                /* the app is showing it */
   snprintf(who, sizeof who, "%.*s", (int)nl, name);
   snprintf(what, sizeof what, "%.*s", (int)tl, text);
-  notify_post("Chat", who, what);
+  stack("Chat", who, what, 0);
 }
 
 static void url_enc(char *out, size_t n, const char *s) {
@@ -253,13 +277,27 @@ static void chat_tick(uint32_t now) {
                            s_note_seen >= 0 ? each_note : NULL, &nl, NULL);
       if (last >= 0 && last != s_chat_seen && notify_chat_on()) { s_chat_seen = last; chat_seen_save(last); }
       if (nl >= 0 && nl != s_note_seen) { s_note_seen = nl; note_seen_save(nl); }
+      if (s_fresh) { s_fresh = 0; show_newest(); }
     }
     return;
   }
   if ((int32_t)(now - s_chat_next) < 0) return;
   s_chat_next = now + CHAT_EVERY;
   /* Not only for Chat: the server's own notes (a Build done) come this way. */
-  if (!wifi_is_connected() || httpq_active() || !fs_mounted()) return;
+  if (!wifi_is_connected()) {
+    /* Nothing else brings the radio back once an app has let it go, and a
+     * device switched on goes no further than the boot's clock sync -- so
+     * what came while it was off waited for the next `update` or Chat. From
+     * the launcher or the clock only: an app on screen may have let it go
+     * for the memory. Quietly, and seldom, for a device with no network. */
+    if (!shell_running_app() && update_base()[0] && (int32_t)(now - s_wifi_next) >= 0) {
+      s_wifi_next = now + WIFI_EVERY;
+      bg_submit(BG_WIFI_QUIET);
+      s_chat_next = now + 15000;               /* look again once it has joined */
+    }
+    return;
+  }
+  if (httpq_active() || !fs_mounted()) return;
   {
     char url[256], name[24], me[64], b[16];
     const char *base = update_base(), *tok = update_token();
@@ -297,11 +335,11 @@ static void center_paint(void) {
   top = s_sel >= rows ? s_sel - rows + 1 : 0;
   for (i = top, y = 15; i < s_q.n && i - top < rows; i++, y += 20) {
     const NqItem *it = &s_q.it[i];
-    char head[NQ_APP + NQ_TITLE + 8];
+    char head[NQ_APP + NQ_TITLE + 12];
     uint16_t bg = i == s_sel ? C_SEL : C_BG;
     draw_rect(R(0, y, DISPLAY_W, 20), bg);
     draw_rect(R(0, y, 3, 20), accent(it->app));
-    snprintf(head, sizeof head, "%s  %s", it->app, it->title);
+    head_text(head, sizeof head, it);
     draw_text_ellipsis(8, y + 2, DISPLAY_W - 12, head, accent(it->app), bg);
     draw_text_ellipsis(8, y + 11, DISPLAY_W - 12, it->text, it->read ? C_DIM : C_FG, bg);
   }

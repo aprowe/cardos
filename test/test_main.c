@@ -700,6 +700,7 @@ void test_notes_deleting_here_deletes_there_and_the_other_way(void);
 void test_notes_a_note_deleted_there_but_changed_here_comes_back(void);
 void test_notes_the_hash_is_the_servers(void);
 void test_notifyq_list_keeps_the_newest(void);
+void test_notifyq_stacks_one_per_app(void);
 void test_notifyq_reads_notes(void);
 void test_notifyq_reads_the_poll_reply(void);
 void test_ovl_starts_with_0_live_and_none_without_overlays(void);
@@ -1895,6 +1896,7 @@ int main(void) {
   RUN(test_notes_the_hash_is_the_servers);
   printf("-- notifyq --\n");
   RUN(test_notifyq_list_keeps_the_newest);
+  RUN(test_notifyq_stacks_one_per_app);
   RUN(test_notifyq_reads_notes);
   RUN(test_notifyq_reads_the_poll_reply);
   printf("-- ovl --\n");

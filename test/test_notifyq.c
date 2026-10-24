@@ -27,6 +27,27 @@ void test_notifyq_list_keeps_the_newest(void) {
   CHECK_EQ((int)strlen(q.it[0].app), NQ_APP - 1);       /* cut, not overrun */
 }
 
+void test_notifyq_stacks_one_per_app(void) {
+  Nq q;
+  nq_init(&q);
+  nq_stack(&q, "Chat", "arty", "one", 1);
+  nq_stack(&q, "Update", "available", "timer: run update", 2);
+  nq_stack(&q, "Chat", "bo", "two", 3);
+  nq_stack(&q, "Chat", "arty", "three", 4);
+  CHECK_EQ(q.n, 2);                                       /* one Chat, one Update */
+  CHECK(!strcmp(q.it[0].app, "Chat"));
+  CHECK(!strcmp(q.it[0].text, "three"));                  /* the newest's words */
+  CHECK_EQ(q.it[0].count, 3);
+  CHECK_EQ(q.it[1].count, 1);
+  nq_read_app(&q, "Chat");                                /* read: the next starts afresh */
+  nq_stack(&q, "Chat", "bo", "four", 5);
+  CHECK_EQ(q.n, 3);
+  CHECK_EQ(q.it[0].count, 1);
+  CHECK_EQ(nq_unread(&q), 2);
+  nq_push(&q, "Calendar", "Dentist", "in 10 min", 6);     /* push still counts one */
+  CHECK_EQ(q.it[0].count, 1);
+}
+
 static char names[3][16], texts[3][32];
 static int got;
 static void each(void *ctx, const char *name, size_t nl, const char *text, size_t tl) {

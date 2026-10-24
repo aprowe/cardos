@@ -22,7 +22,20 @@ void nq_push(Nq *q, const char *app, const char *title, const char *text, uint32
   copy(it->text, sizeof it->text, text);
   it->at = at;
   it->read = 0;
+  it->count = 1;
   q->n++;
+}
+
+void nq_stack(Nq *q, const char *app, const char *title, const char *text, uint32_t at) {
+  int i, count = 1;
+  for (i = 0; i < q->n; i++)
+    if (!q->it[i].read && !strcmp(q->it[i].app, app)) {
+      count += q->it[i].count;
+      nq_remove(q, i);
+      break;                                  /* there is never more than one */
+    }
+  nq_push(q, app, title, text, at);
+  q->it[0].count = (uint8_t)(count > 255 ? 255 : count);
 }
 
 void nq_remove(Nq *q, int i) {
