@@ -685,6 +685,67 @@ class Library(unittest.TestCase):
 
 # ---- over HTTP ----------------------------------------------------------------------------------------------
 
+class Midi(unittest.TestCase):
+    """The NYT Midi from nytmidi.org: today's and the week's, kept as DATE-midi."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        os.environ["CARDOS_STATE"] = self.dir
+        crossword._invalidate()
+        self.asked = []
+
+    def tearDown(self):
+        os.environ.pop("CARDOS_STATE", None)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def site(self, today, missing=()):
+        def fetch(url):
+            self.asked.append(url)
+            name = url[len(crossword.MIDI_URL):-len(".json")]
+            day = today if name == "today" else name
+            if day in missing:
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+            return nyt_json(FIX_ROWS, FIX_ACROSS, FIX_DOWN, publicationDate=day, title="Heart")
+        return fetch
+
+    def ids(self):
+        return [e["id"] for e in crossword.index()]
+
+    def test_today_and_the_week_before_are_kept_beside_the_dailies(self):
+        crossword.add(small("2026-10-27"))
+        added, removed = crossword.midi_refresh(self.site("2026-10-27"), log=lambda s: None)
+        self.assertEqual(len(added), 7)
+        self.assertEqual(removed, [])
+        self.assertEqual(self.ids(), ["2026-10-21-midi", "2026-10-22-midi", "2026-10-23-midi",
+                                      "2026-10-24-midi", "2026-10-25-midi", "2026-10-26-midi",
+                                      "2026-10-27", "2026-10-27-midi"])
+        self.assertIn("title Midi: Heart\n", crossword.load("2026-10-27-midi"))
+        self.assertNotIn("Midi", crossword.load("2026-10-27"))    # the daily is untouched
+
+    def test_the_next_day_adds_one_and_drops_the_oldest(self):
+        crossword.midi_refresh(self.site("2026-10-27"), log=lambda s: None)
+        self.asked.clear()
+        added, removed = crossword.midi_refresh(self.site("2026-10-28"), log=lambda s: None)
+        self.assertEqual(added, ["2026-10-28-midi"])
+        self.assertEqual(removed, ["2026-10-21-midi"])
+        self.assertEqual(self.asked, [crossword.MIDI_URL + "today.json"])  # nothing fetched twice
+        self.assertEqual(len(self.ids()), 7)
+
+    def test_a_day_the_site_lacks_is_skipped_and_asked_again_later(self):
+        said = []
+        added, _ = crossword.midi_refresh(self.site("2026-10-27", missing={"2026-10-24"}), log=said.append)
+        self.assertNotIn("2026-10-24-midi", added)
+        self.assertEqual(len(added), 6)
+        self.assertTrue(any("2026-10-24" in s for s in said))
+        added, _ = crossword.midi_refresh(self.site("2026-10-27"), log=lambda s: None)
+        self.assertEqual(added, ["2026-10-24-midi"])
+
+    def test_only_midis_are_dropped(self):
+        crossword.add(small("2020-01-01"))
+        crossword.midi_refresh(self.site("2026-10-27"), log=lambda s: None)
+        self.assertIn("2020-01-01", self.ids())
+
+
 class Routes(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()

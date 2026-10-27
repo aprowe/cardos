@@ -42,6 +42,10 @@ loader refuses -- more than 21 by 21, more than 240 entries, more than 8 KB
 of clue text, a square in no word, a clue that is not the grid's next --
 so nothing is stored that the device could not open.
 
+The NYT Midi is fetched by the server itself, from nytmidi.org, every hour
+it runs: today's and the six days before, as DATE-midi, older ones deleted
+(`midi_refresh`; `python -m server.crossword midi` runs it once).
+
 Puzzles are kept as CARDOS_STATE/crosswords/ID.xw, that very text. They are
 shared by everyone who can reach the server, not one person's. `add` stores
 one; `convert` reads the two kinds of file puzzles are found in:
@@ -727,8 +731,9 @@ def _write(path, text):
         raise
 
 
-def add(pz, replace=False, dry=False):
-    """Keep a puzzle, under its print date. 'added', 'replaced', or
+def add(pz, replace=False, dry=False, pid=None):
+    """Keep a puzzle, under its print date (or pid, for a series beside the
+    dailies: the Midi's are DATE-midi). 'added', 'replaced', or
     'duplicate' -- a puzzle already there is left as it was unless replace.
     (A file there that is not a puzzle is no puzzle to keep: it is replaced.)
     With dry, say which and write nothing."""
@@ -737,10 +742,11 @@ def add(pz, replace=False, dry=False):
         raise ValueError("a puzzle needs a print date to be kept under")
     text = to_text(pz)
     parse_text(text)                       # never keep what the device would refuse
-    path = puzzle_path(day)
+    pid = pid or day
+    path = puzzle_path(pid)
     with _lock:
         had = os.path.exists(path)
-        if had and not replace and _head(path, day):
+        if had and not replace and _head(path, pid):
             return "duplicate"
         if not dry:
             _write(path, text)
@@ -1129,13 +1135,99 @@ def main(argv=None, out=None, err=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["import"]:
         return import_main(argv[1:], out, err)
+    if argv == ["midi"]:
+        midi_refresh(log=lambda s: print(s, file=out or sys.stdout))
+        return 0
     usage = ("usage: python -m server.crossword import PATH [PATH ...] "
-             "[--dry-run] [--replace] [--date D] [--state DIR] [-v | -q]")
+             "[--dry-run] [--replace] [--date D] [--state DIR] [-v | -q]\n"
+             "       python -m server.crossword midi     (this week's NYT Midi, now)")
     if argv in (["-h"], ["--help"]):
         print(usage, file=out or sys.stdout)
         return 0
     print(usage, file=err or sys.stderr)
     return 2
+
+
+# ---- the NYT Midi, fetched every day -----------------------------------------------------------------------
+#
+# nytmidi.org serves the Times' Midi (between the Mini and the daily) as the
+# Times' own JSON: /puzzle/today.json, and /puzzle/DATE.json for days gone.
+# The owner asked for each day's added and a week of them kept, rolling. The
+# week is counted from the date today.json says, not this machine's clock, so
+# the server's zone and the Times' do not have to agree. Kept as DATE-midi,
+# which sorts just after a daily of the same date and never takes its place;
+# the title says Midi, since the app's list shows only date and title.
+
+MIDI_URL = "https://www.nytmidi.org/puzzle/"
+MIDI_KEEP = 7                   # days kept, today among them
+MIDI_EVERY = 3600               # seconds between looks
+MIDI_SUFFIX = "-midi"
+
+
+def _fetch_json(url):
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (CardOS server)"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = r.read(MAX_IN + 1)
+    if len(data) > MAX_IN:
+        raise ValueError("%s is too big to be a crossword" % url)
+    return json.loads(data.decode("utf-8"))
+
+
+def _midi_puzzle(j):
+    pz = from_json(j)
+    if not pz.get("date"):
+        raise ValueError("a Midi with no publicationDate")
+    title = pz.get("title") or ""
+    pz["title"] = plain("Midi: " + title if title else "Midi", TITLE_MAX)
+    return pz
+
+
+def midi_refresh(fetch=None, log=None):
+    """Today's Midi and any of the last week's missing, then forget what is
+    older than a week. Returns (added ids, removed ids). One day that fails
+    is logged and skipped; today.json failing raises."""
+    fetch = fetch or _fetch_json
+    log = log or (lambda s: print("crossword: " + s))
+    pz = _midi_puzzle(fetch(MIDI_URL + "today.json"))
+    today = datetime.date.fromisoformat(pz["date"])
+    oldest = (today - datetime.timedelta(days=MIDI_KEEP - 1)).isoformat()
+    added = []
+    if add(pz, pid=pz["date"] + MIDI_SUFFIX) == "added":
+        added.append(pz["date"] + MIDI_SUFFIX)
+    for back in range(1, MIDI_KEEP):
+        day = (today - datetime.timedelta(days=back)).isoformat()
+        pid = day + MIDI_SUFFIX
+        if os.path.exists(puzzle_path(pid)):
+            continue
+        try:
+            old = _midi_puzzle(fetch(MIDI_URL + day + ".json"))
+            if old["date"] != day:
+                raise ValueError("asked for %s, given %s" % (day, old["date"]))
+            if add(old, pid=pid) == "added":
+                added.append(pid)
+        except Exception as e:             # a day the site lacks is not the week's end
+            log("midi %s: %s" % (day, e))
+    removed = [e["id"] for e in index()
+               if e["id"].endswith(MIDI_SUFFIX) and e["id"][:-len(MIDI_SUFFIX)] < oldest]
+    for pid in removed:
+        remove(pid)
+    if added or removed:
+        log("midi: added %s; removed %s" % (" ".join(added) or "none", " ".join(removed) or "none"))
+    return added, removed
+
+
+def start_midi(every=MIDI_EVERY):
+    """Look for a new Midi now and every hour after, on a thread of its own."""
+    def loop():
+        import time
+        while True:
+            try:
+                midi_refresh()
+            except Exception as e:
+                print("crossword: midi: %s" % e)
+            time.sleep(every)
+    threading.Thread(target=loop, name="midi", daemon=True).start()
 
 
 # ---- routes ----------------------------------------------------------------------------------------------
