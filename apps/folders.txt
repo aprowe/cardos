@@ -56,3 +56,4 @@ gamenight Games
 wordle    Games
 hangman   Games
 pain      Plan
+lamp      Make

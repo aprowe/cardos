@@ -38,7 +38,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAPP_API_VERSION 49
+#define CAPP_API_VERSION 50
 
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
@@ -289,6 +289,13 @@ typedef struct {
   int16_t ax, ay, az;    /* milli-g */
   int16_t gx, gy, gz;    /* tenths of a degree a second */
 } CappMotion;
+
+/* Infrared protocols for CardApi.ir_send; kernel/sys/irproto.h has the
+ * timings. NEC: an address (<= 0xFF standard, above that 16-bit extended)
+ * and an 8-bit command, as IRremote and IRDB write them. NEC_MSB: the
+ * 32-bit value older tools printed ("0xF7C03F"), in `cmd`. */
+#define CAPP_IR_NEC      1
+#define CAPP_IR_NEC_MSB  2
 
 /* One directory entry, as list_ex hands it over. Fixed-width on purpose: an
  * app has no allocator, so the caller holds the array. */
@@ -1082,6 +1089,20 @@ typedef struct {
    * Python's input(), and its print and time.sleep. */
   void (*repaint_now)(void);
   int  (*key_wait)(int ms);
+
+  /* ---- infrared out (API 50) ----
+   *
+   * The IR LED on G44, which both Cardputers have: send what a remote
+   * sends. There is no receiver, so a remote cannot be learned -- the codes
+   * come from a table. ir_send: a code of a CAPP_IR_* protocol and
+   * `repeats` repeat frames after it, as a held button sends (0..50, each
+   * 108 ms). ir_raw: `n` durations in microseconds, alternating, a mark
+   * first, marks modulated at carrier_hz (38000 for most remotes). Both
+   * block until sent -- a NEC press is 108 ms -- and return 0, -1 the
+   * transmitter failed, -2 a code or argument it cannot send, -4 no
+   * memory. kernel/drv/irtx.h. */
+  int (*ir_send)(int proto, uint32_t addr, uint32_t cmd, int repeats);
+  int (*ir_raw)(const uint32_t *us, int n, uint32_t carrier_hz);
 } CardApi;
 
 /* The descriptor, read by the loader without executing anything. Must be a

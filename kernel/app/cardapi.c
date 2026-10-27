@@ -15,6 +15,7 @@
 #include "kernel/net/http.h"
 #include "kernel/drv/imu.h"
 #include "kernel/sys/midi.h"
+#include "kernel/drv/irtx.h"
 #include "kernel/net/httpq.h"
 #include "kernel/sys/notify.h"
 #include "kernel/net/wifi.h"
@@ -627,6 +628,10 @@ static int api_notify(const char *title, const char *text) {
   return 0;
 }
 
+static int api_ir_send(int proto, uint32_t addr, uint32_t cmd, int repeats) {
+  return irtx_code(proto, addr, cmd, repeats);
+}
+
 static const CardApi API = {
   CAPP_API_VERSION,
   api_fill, api_frame, api_bevel, api_text, api_pixels,
@@ -678,6 +683,8 @@ static const CardApi API = {
   api_resumed,
   api_repaint_now,
   api_key_wait,
+  api_ir_send,
+  irtx_send,
 };
 
 const CardApi *cardos_api(void) { return &API; }

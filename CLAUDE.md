@@ -794,6 +794,26 @@ saves and `api->run("python", PATH)`.
   tools/python_host_test.sh`. Measured by build_apps: code 102.1 KB, data
   14.7 KB, rodata 21.7 KB. Not yet run on a device with files.
 
+**Infrared out, and Lamp** (2026-10-26, API 50). Both Cardputers have an
+IR LED on G44 and no receiver: the device sends what a remote sends but
+cannot learn one. `kernel/sys/irproto.c` turns a code into mark/space
+microseconds (NEC as address+command, or the old 32-bit MSB-first form;
+host-tested, `test/test_irproto.c`); `kernel/drv/irtx.c` plays them on an
+RMT channel at a 38 kHz carrier, made on first use, splitting durations
+over 32767 us. `api->ir_send(proto, addr, cmd, repeats)` and
+`api->ir_raw(us, n, hz)`, both blocking; `ir nec ADDR CMD` / `ir msb CODE`
+in the console. `apps/lamp/` (Make) is a remote for LED lamps and strips:
+models are text (`apps/lamp/lampmodel.h`, host-tested) -- the 24-key
+(NEC 0xEF00) and 44-key (NEC 0x00) RGB remotes built in, more in
+`/config/lamps.txt` -- the choice kept in `/config/lamp.txt`, and `f`
+tries each model in turn and asks whether the lamp reacted. The owner's
+lamp answered the 24-key address with its buttons elsewhere (colours that
+were modes), so `c` (or Enter after a find) maps a lamp: each code 00-FF
+on the model's address is sent and the person picks what it did from 21
+switches and colours (`LM_OPTS`); every pick rewrites a "My lamp" model in
+lamps.txt (`lm_map_text`, `lm_replace`, host-tested). Checked on the
+device (2026-10-26).
+
 **The Bluetooth radio comes down after a print** unless Bluetooth is set
 to start at boot (`bt_radio_down`, run on cardos-bg after the job). Before,
 one print left 67 KB held for the uptime, and Todo could not load beside it.
@@ -1041,7 +1061,7 @@ file manager needed (16), `damage`/`paint_area` (17), then actions,
 and the `http_start`/`http_poll` pair (18 to 22), the agent table (23), and
 `share_start`/`share_stop`/`share_status`/`share_take_log` (24 — the share
 branch and master both called themselves 23, so the merge bumped it), and
-`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36), `motion` (37), `midi` (38), `notify` (39), `notify_at`/`notify_cancel` (40), `update_apply_progress` (41), `firmware_boot` (42), `link` (43), `sig_verify` (44), `paint_direct` (45), `overlay`/`overlay_live` (46), which came with constants moving to their own link origin, `big_alloc`/`big_room` (47, big-app mode), `leave`/`resumed` on CardApi with `save` on CappUi (48, the way back: below), and `repaint_now`/`key_wait` (49: an app whose own code runs long -- Python -- drawn and given keys meanwhile; `os_key_wait` in src/main.c reads keys as the loop does, not the serial link). A new capp_info flag bit (`CAPP_PAINT_DIRECT`) is not an API change; neither is clamping what `http_poll` returns.
+`print`/`print_status` (25), `key_repeat` (26), `pick`/`pick_poll` (27), `audio` (28), and `proxy` (29) -- the address the kernel resolved, because Build, Web and Screen had been talking to the compiled-in laptop while the OS talked to `env PROXY`. Then commands (30): `CappParam`, and `about`/`params`/`cmd` at the end of `CappAction`, `commands` on `CappInfo`, `command` on `CappUi`, `headless`/`command_done` -- see `docs/superpowers/specs/2026-09-23-app-commands-design.md`. Then fonts (31): `font_load`, `font_free`, `text_font`, `text_width`, `font_height`, `print_fonts`. Then the screen (32): `keep_awake`, `wake`. Then `run_command` (33): one app running another's command. Then `shell` (34): a console line, its output captured -- Dashboard Link's terminal. Then `button` on CappUi (35) and `http_upload` (36), `motion` (37), `midi` (38), `notify` (39), `notify_at`/`notify_cancel` (40), `update_apply_progress` (41), `firmware_boot` (42), `link` (43), `sig_verify` (44), `paint_direct` (45), `overlay`/`overlay_live` (46), which came with constants moving to their own link origin, `big_alloc`/`big_room` (47, big-app mode), `leave`/`resumed` on CardApi with `save` on CappUi (48, the way back: below), and `ir_send`/`ir_raw` (50, the IR LED), and `repaint_now`/`key_wait` (49: an app whose own code runs long -- Python -- drawn and given keys meanwhile; `os_key_wait` in src/main.c reads keys as the loop does, not the serial link). A new capp_info flag bit (`CAPP_PAINT_DIRECT`) is not an API change; neither is clamping what `http_poll` returns.
 
 **Fonts are files an app asks for** (2026-09-23). The 6x8 console font is
 still compiled in and still the default; anything nicer is a `.cfnt` in

@@ -61,6 +61,8 @@
 #include "kernel/net/httpq.h"
 #include "kernel/ui/fontres.h"
 #include "kernel/sys/midi.h"
+#include "kernel/drv/irtx.h"
+#include "kernel/sys/irproto.h"
 #include "kernel/net/update.h"
 #include "kernel/sys/power.h"
 #include "kernel/drv/battery.h"
@@ -333,6 +335,27 @@ static int do_command(const char *rest) {
   return 1;
 }
 
+static void cmd_ir(char *arg) {
+  char *w[4] = {0}, *save = NULL;
+  unsigned long v[3] = {0};
+  int n = 0, rc;
+  for (char *t = arg ? strtok_r(arg, " ", &save) : NULL; t && n < 4;
+       t = strtok_r(NULL, " ", &save))
+    w[n++] = t;
+  for (int i = 1; i < n; i++) v[i - 1] = strtoul(w[i], NULL, 0);
+  if (n >= 3 && !strcmp(w[0], "nec")) {
+    rc = irtx_code(IR_NEC, (uint32_t)v[0], (uint32_t)v[1], n >= 4 ? (int)v[2] : 0);
+  } else if (n >= 2 && !strcmp(w[0], "msb")) {
+    rc = irtx_code(IR_NEC_MSB, 0, (uint32_t)v[0], n >= 3 ? (int)v[1] : 0);
+  } else {
+    con_write("ir nec ADDR CMD [REPEATS]   e.g. ir nec 0xEF00 3\n"
+              "ir msb CODE [REPEATS]       e.g. ir msb 0xF7C03F\n");
+    return;
+  }
+  con_printf("%s\n", rc == 0 ? "sent" : rc == -2 ? "not a code that protocol carries"
+                                       : "the IR transmitter failed");
+}
+
 static void run_builtin(const char *line, char *arg) {
   if (!strcmp(line, "help"))        cmd_help();
   else if (!strcmp(line, "log"))    cmd_log(arg);
@@ -346,6 +369,9 @@ static void run_builtin(const char *line, char *arg) {
     else con_printf("accel %d %d %d mg\ngyro  %d %d %d (0.1 dps)\n",
                     s.ax, s.ay, s.az, s.gx, s.gy, s.gz);
   }
+  /* A remote's code out of the IR LED, to try one by hand:
+   * `ir nec ADDR CMD [REPEATS]` or `ir msb 0xF7C03F [REPEATS]`. */
+  else if (!strcmp(line, "ir")) cmd_ir(arg);
   /* The verbs the running app offers, and a way to run one.
    *
    * This is the point of the `id` field in CappAction: the same table that
@@ -519,7 +545,7 @@ static void run_builtin(const char *line, char *arg) {
  * half-remembered a name. */
 static const char *const COMMANDS[] = {
   "apps", "boot", "boot!", "bootinfo", "cat", "cd", "clear", "df", "desk",
-  "echo", "flip", "get", "gui", "help", "launch", "log", "ls", "mem", "mkdir", "motion",
+  "echo", "flip", "get", "gui", "help", "ir", "launch", "log", "ls", "mem", "mkdir", "motion",
   "battery", "defaults", "listen", "mouse", "pwd", "reboot", "rm",
   "run", "time",
   "safe",

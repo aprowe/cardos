@@ -48,6 +48,10 @@ extern char     fakeapi_resume[1024]; /* what resumed() hands back, once ... */
 extern int      fakeapi_resume_n;     /* ... this many bytes of it */
 extern int      fakeapi_repaints;     /* how many times repaint_now() was called */
 extern const char *fakeapi_keys;      /* what key_wait() hands out, in order */
+extern int      fakeapi_ir_sends;     /* ir_send() calls, and the last one's arguments */
+extern int      fakeapi_ir_proto;
+extern uint32_t fakeapi_ir_addr, fakeapi_ir_cmd;
+extern int      fakeapi_ir_repeats;
 extern char     fakeapi_out[4096];    /* what out() and out_line() wrote */
 extern CRect    fakeapi_screen;       /* what paint_area() returns: 240x135 */
 

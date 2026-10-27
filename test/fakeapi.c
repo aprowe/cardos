@@ -171,6 +171,20 @@ static int d_key_wait(int ms) {
   if (fakeapi_keys && *fakeapi_keys) return (uint8_t)*fakeapi_keys++;
   return -1;
 }
+/* API 50: what ir_send was asked last, and how many times. */
+int      fakeapi_ir_sends;
+int      fakeapi_ir_proto;
+uint32_t fakeapi_ir_addr, fakeapi_ir_cmd;
+int      fakeapi_ir_repeats;
+static int d_ir_send(int proto, uint32_t addr, uint32_t cmd, int repeats) {
+  fakeapi_ir_sends++;
+  fakeapi_ir_proto = proto;
+  fakeapi_ir_addr = addr;
+  fakeapi_ir_cmd = cmd;
+  fakeapi_ir_repeats = repeats;
+  return 0;
+}
+static int d_ir_raw(const uint32_t *us, int n, uint32_t hz) { (void)us; (void)n; (void)hz; return 0; }
 static int d_resumed(void *buf, size_t n) {
   int k = fakeapi_resume_n < (int)n ? fakeapi_resume_n : (int)n;
   if (k > 0) memcpy(buf, fakeapi_resume, (size_t)k);
@@ -266,6 +280,8 @@ void fakeapi_init(CardApi *a) {
   a->leave = d_leave;
   a->repaint_now = d_repaint_now;
   a->key_wait = d_key_wait;
+  a->ir_send = d_ir_send;
+  a->ir_raw = d_ir_raw;
   fakeapi_repaints = 0;
   fakeapi_keys = 0;
   a->resumed = d_resumed;

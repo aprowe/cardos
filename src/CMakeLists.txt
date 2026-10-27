@@ -7,6 +7,8 @@ idf_component_register(
     "../kernel/drv/board.c"
     "../kernel/drv/es8311.c"
     "../kernel/drv/imu.c"
+    "../kernel/drv/irtx.c"
+    "../kernel/sys/irproto.c"
     "../kernel/drv/usbdisk.c"
     "../kernel/sys/blip.c"
     "../kernel/sys/notify.c"
@@ -110,6 +112,7 @@ idf_component_register(
     app_update
     esp_timer
     esp_driver_usb_serial_jtag
+    esp_driver_rmt
     bt
     esp_hid
     nvs_flash
