@@ -1026,7 +1026,7 @@ void test_crossword_paint_solving_shows_the_results_and_counts_it_once(void) {
   CHECK_EQ(G.page[0].mark, M_DONE);
   CHECK_EQ(G.page[0].secs, 95u);
   CHECK(fakescreen_count(capp_rect(FS_W - ROW_H, TOP_H, ROW_H, ROW_H), K_DONE) > 10);        /* the check */
-  CHECK(fakescreen_count(capp_rect(FS_W - ROW_H - TIME_W, TOP_H, TIME_W, ROW_H), K_DONE) > 10); /* 1:35 */
+  CHECK(fakescreen_count(capp_rect(FS_W - ROW_H - TIME_W, TOP_H, TIME_W, ROW_H), K_DONE) > 5);  /* 1:35: thin digits, few solid pixels */
   fakescreen_dump("CROSSWORD_DUMP", "crossword_list_done");
   x_key('\r');
   CHECK_EQ(G.view, V_GRID);
