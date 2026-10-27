@@ -55,4 +55,5 @@ iron      Games
 gamenight Games
 wordle    Games
 hangman   Games
+crossword Games
 pain      Plan
