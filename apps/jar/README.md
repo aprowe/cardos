@@ -41,6 +41,24 @@ sunset; the jar moves its clock so they fall in dawn and dusk, tints the sky,
 dims everything in front by the hour and the weather (glowing items light
 their corner), draws rain, snow and lightning, and fires `on weather rainy:`.
 
+**Jar's friends are the platform's** (2026-10-27). Jar had its own list --
+friend codes, `friends/NAME` in srv/jar, one-sided adds -- and now uses
+`server/friends.py`, the friendship every app shares: a gift (`/jar/gift`)
+or a thank-you (`/jar/thanks`) goes only between two people who are
+friends there (`friends.are_friends`), and Tibbs hears of `friends_of`.
+Jar Post's Friends screen reads `GET /friends` (friend, asked, or "wants
+you"), `A` asks someone by their account name (`/friends/ask`), Enter on
+one who asked says yes; the list stays Jar's own (gifting goes friend,
+then thing, then note, which a picker over the app would not shorten), so
+apps/social.h's picker is not used and the data block did not grow. For the
+jar.capp already on devices the old routes stay, as translations:
+`/jar/me` lists platform friends as `mutual` and your asks as `waiting`,
+`/jar/friend?code=` is `friends.ask` of the code's owner, `/jar/unfriend`
+is `friends.drop`. `python -m apps.jar.server migrate-friends` turns the old
+lists into platform friendships once (both had added: friends; one had:
+an ask), notifies nobody and leaves the old lists in place. A gift is still
+only ever something a person chose to send.
+
 **The living jar** (2026-10-11, branch `jar-living` until API 46 is on
 main; design in docs/superpowers/specs/2026-10-11-jar-living-world-design.md).
 - **Language v2** (apps/jar/jarvm.def, both machines, cross-checked fixtures):

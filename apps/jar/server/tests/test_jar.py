@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
     os.path.abspath(__file__)))))))
 
 from http.server import ThreadingHTTPServer
-from server import accounts, app, ask, kv, people, sign
+from server import accounts, app, ask, friends, kv, people, sign
 from apps.jar import server as jar
 from apps.jar.server import jarvm, shopkeep
 from server import chat as chatmod
@@ -1724,7 +1724,49 @@ class Routes(unittest.TestCase):
         self.assertEqual(list(self.me(self.alex)[2]), ["sam"])
         self.assertEqual(self.req("POST", "/jar/unfriend?name=sam", self.alex), (200, "ok\n"))
         self.assertEqual(self.me(self.alex)[2], {})
-        self.assertEqual(self.me(self.sam)[2]["alex"][2], "waiting")
+        self.assertEqual(self.me(self.sam)[2], {})          # the platform's: gone both ways
+
+    def test_old_routes_are_the_platforms_friends(self):
+        # a code asked through the old route is the platform's ask
+        self.befriend(self.alex, self.sam)
+        self.assertEqual(friends.relations("alex"), {"sam": "asked"})
+        self.assertEqual(friends.relations("sam"), {"alex": "asking"})
+        s, body = self.req("GET", "/friends", self.sam)
+        self.assertEqual(body.split("\t")[:3], ["alex", "alex", "asking"])
+        # said yes on the platform (the dashboard, or a newer jar.capp)
+        self.assertEqual(self.req("POST", "/friends/ask?who=alex", self.sam), (200, "ok friend\n"))
+        self.assertEqual(self.me(self.alex)[2]["sam"][2], "mutual")
+        self.assertEqual(self.me(self.sam)[2]["alex"][2], "mutual")
+        # friends made only on the platform show in the old list too
+        self.assertEqual(self.req("POST", "/friends/ask?who=kit", self.alex), (200, "ok asked\n"))
+        self.assertEqual(self.me(self.alex)[2]["kit"][2], "waiting")
+        self.assertEqual(self.me(self.kit)[2], {})          # an ask of you is not in the old list
+        self.assertEqual(self.befriend(self.kit, self.alex), (200, "ok alex mutual\n"))
+        self.assertEqual(self.req("POST", "/friends/drop?who=sam", self.alex), (200, "ok\n"))
+        self.assertNotIn("sam", self.me(self.alex)[2])
+
+    def test_migrate_friends(self):
+        st = kv.store()
+        st.put(jar.NS, "friends/alex", b"sam\nkit\nghost\nalex")
+        st.put(jar.NS, "friends/sam", b"alex")
+        st.put(jar.NS, "friends/ghost", b"alex")             # no such account
+        self.assertEqual(jar.migrate_friends(st), {"friend": 1, "asked": 1})
+        self.assertEqual(friends.relations("alex"), {"sam": "friend", "kit": "asked"})
+        self.assertEqual(friends.relations("kit"), {"alex": "asking"})
+        self.assertEqual(st.get(jar.NS, "friends/alex"), b"sam\nkit\nghost\nalex")   # kept
+        self.assertEqual(jar.migrate_friends(st), {"friend": 0, "asked": 0})          # once
+        # an ask kit had already made on the platform meets alex's old add
+        friends.drop("alex", "kit")
+        self.req("POST", "/friends/ask?who=alex", self.kit)
+        self.assertEqual(jar.migrate_friends(st), {"friend": 1, "asked": 0})
+        self.assertEqual(friends.relations("kit"), {"alex": "friend"})
+        # and a platform friendship is never made less by it
+        st.put(jar.NS, "friends/sam", b"")
+        friends.drop("alex", "sam")
+        self.req("POST", "/friends/ask?who=sam", self.alex)
+        self.req("POST", "/friends/ask?who=alex", self.sam)
+        jar.migrate_friends(st)
+        self.assertTrue(friends.are_friends("alex", "sam"))
 
     def gift(self, frm, to, rec, note="for you"):
         return self.req("POST", "/jar/gift?to=" + to, frm,
@@ -1736,8 +1778,9 @@ class Routes(unittest.TestCase):
         rec = self.item(self.alex, 0)
         item_id = jar.decode(rec)["id"]
         # not friends both ways yet
-        self.assertEqual(self.gift(self.alex, "sam", rec)[0], 403)
-        self.befriend(self.sam, self.alex)
+        self.assertEqual(self.gift(self.alex, "sam", rec),
+                         (403, "error sam and you are not friends\n"))
+        self.assertEqual(self.req("POST", "/friends/ask?who=alex", self.sam), (200, "ok friend\n"))
         self.assertEqual(self.gift(self.alex, "sam", rec, "for you\tsam"), (200, "ok\n"))
         self.assertEqual(kv.store().get(jar.NS, "own/%d" % item_id), b"sam")
         s, body = self.req("GET", "/q/peek?q=jar.gifts", self.sam)

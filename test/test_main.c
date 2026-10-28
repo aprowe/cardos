@@ -968,6 +968,7 @@ void test_jaritem_old_movement_gives_parts(void);
 void test_jaritem_old_record_has_no_parts(void);
 void test_jaritem_motion_parts_match_the_server(void);
 void test_jarpost_friends_list_add_and_name(void);
+void test_jarpost_an_old_friends_copy_still_reads(void);
 void test_jarpost_a_gift_leaves_only_when_the_server_has_it(void);
 void test_jarpost_hand_made_things_do_not_travel(void);
 void test_jarpost_collects_checks_and_opens_parcels(void);
@@ -2260,6 +2261,7 @@ int main(void) {
   RUN(test_jaritem_motion_parts_match_the_server);
   printf("-- jarpost --\n");
   RUN(test_jarpost_friends_list_add_and_name);
+  RUN(test_jarpost_an_old_friends_copy_still_reads);
   RUN(test_jarpost_a_gift_leaves_only_when_the_server_has_it);
   RUN(test_jarpost_hand_made_things_do_not_travel);
   RUN(test_jarpost_collects_checks_and_opens_parcels);

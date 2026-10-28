@@ -7,7 +7,9 @@ server's own namespace srv/jar, which a device can read but never write:
 
     code/CODE        -> NAME           a friend code, made on first use
     codeof/NAME      -> CODE
-    friends/NAME     -> names, one a line: whom NAME has added
+    friends/NAME     -> names, one a line: whom NAME had added -- Jar's own
+                        friends before the platform's; read only by
+                        `python -m apps.jar.server migrate-friends`, and kept
     next_id          a counter; an item's id is ID_BASE + it
     own/ID           -> NAME           the ledger: who holds item ID
     day/NAME         -> JSON           today's stock: state, date, tags, n
@@ -16,6 +18,14 @@ server's own namespace srv/jar, which a device can read but never write:
 Asking Claude goes through ask.ask_shape, signing through sign.sign, the
 inbox is the store's own queues (jar.gifts, jar.thanks) read with /q/peek
 and /q/ack, and names and last-seen come from server/people.py.
+
+Friends are the platform's (server/friends.py), the same friendship every
+app uses: a gift or a thank-you goes only between two people who are
+friends there. /jar/me, /jar/friend and /jar/unfriend are kept for the
+jar.capp already on devices, as translations: /jar/me lists the platform's
+friends ("mutual") and the asks you made ("waiting"), /jar/friend?code=
+is friends.ask of the code's owner, /jar/unfriend is friends.drop. A newer
+jar.capp reads /friends and asks with /friends/ask.
 
 The item record is apps/jar/jaritem.h's, byte for byte: encode() and decode()
 below mirror jitem_encode and jitem_decode, and the enums (kinds,
@@ -31,8 +41,8 @@ Routes (all "device_or_dash"; a refusal is "error WHY\\n" with its status):
 
     GET  /jar/me                "code CODE\\n" "name DISPLAY\\n", then
                                 "friend NAME\\tDISPLAY\\tLAST_SEEN\\tSTATE\\n"
-    POST /jar/friend?code=CODE  "ok NAME mutual|waiting\\n"
-    POST /jar/unfriend?name=N   "ok\\n"
+    POST /jar/friend?code=CODE  "ok NAME mutual|waiting\\n"   (friends.ask)
+    POST /jar/unfriend?name=N   "ok\\n"                        (friends.drop)
     POST /jar/day               body: garden/shelf/owned/tz lines
                                 -> "pending\\n" | "ok DATE\\n"
     GET  /jar/day               "pending\\n" | "ok DATE\\ntags A, B\\nitems N\\n"
@@ -55,7 +65,7 @@ import time
 import urllib.request
 
 from . import shopkeep
-from server import accounts, ask, kv, people, sign, wire
+from server import accounts, ask, friends, kv, people, sign, wire
 from . import jarvm, jarpatch, jarevents
 from server.kv import kv_route, KVError, NotAllowed, NotFound
 from server.routes import arg
@@ -120,7 +130,6 @@ def pick_tier(rng, bribe=0):
 
 SCRIPT_SRC_MAX = 1200         # a script's source, as Claude writes it
 STOCK_TTL = 3 * 86400
-FRIENDS_MAX = 64
 NOTE_MAX = 24
 CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"     # no I L O 0 1
 CODE_LEN = 6
@@ -1572,7 +1581,7 @@ def _make_day(chat, person, req, date, store, batch, base, n_pick, n_new, seed, 
         rng.shuffle(pool)
         chapter = shopkeep.maybe_chapter(chat, store, log=say_log)
         told["say"], mine, search = shopkeep.stock_turn(
-            chat, person, pool[:POOL_SHOWN], n_pick, n_new, friends_of(person, store),
+            chat, person, pool[:POOL_SHOWN], n_pick, n_new, friends.friends_of(person),
             store=store, log=say_log, commission=req.get("ask") if req.get("finds") else None,
             bribe=req.get("bribe", 0) if req.get("finds") else 0)
         with _day_lock:                                 # his picks, if still free
@@ -1780,20 +1789,56 @@ def code_for(person, store=None):
 
 
 def friends_of(person, store=None):
+    """The platform's friends of a person (server/friends.py): both said yes."""
+    return friends.friends_of(person)
+
+
+def mutual(a, b, store=None):
+    return friends.are_friends(a, b)
+
+
+def _old_friends_of(person, store=None):
+    """Jar's own list from before the platform's: whom `person` had added."""
     raw = (store or kv.store()).get(NS, "friends/" + person) or b""
     return [n for n in raw.decode().split("\n") if n]
 
 
-def _set_friends(person, names, store=None):
+def migrate_friends(store=None):
+    """Jar's old friendships into the platform's, once (it is safe again):
+    two people who had added each other become friends; one who had added
+    another, who had not added back, has asked them. Nothing is taken
+    away -- a platform friendship stays one -- nobody is notified, and
+    Jar's old lists stay where they were. {"friend": N, "asked": N}, pairs."""
     st = store or kv.store()
-    if names:
-        st.put(NS, "friends/" + person, "\n".join(names).encode())
-    else:
-        st.delete(NS, "friends/" + person)
-
-
-def mutual(a, b, store=None):
-    return b in friends_of(a, store) and a in friends_of(b, store)
+    if not accounts.enabled():
+        return {"friend": 0, "asked": 0}
+    users = set(accounts.users())
+    old = {}
+    for key, _, _ in st.list(NS, "friends/", limit=100000):
+        person = key[len("friends/"):]
+        if person in users:
+            old[person] = [n for n in _old_friends_of(person, st) if n in users and n != person]
+    made = {"friend": 0, "asked": 0}
+    with st.lock:
+        for a in sorted(old):
+            for b in old[a]:
+                both = a in old.get(b, ())
+                if both and a > b:
+                    continue                        # the pair, once
+                mine, theirs = friends._read(st, a), friends._read(st, b)
+                if mine.get(b) == "friend":
+                    continue
+                if both or mine.get(b) == "asking":   # b had asked a on the platform
+                    mine[b], theirs[a] = "friend", "friend"
+                    made["friend"] += 1
+                elif mine.get(b) is None:
+                    mine[b], theirs[a] = "asked", "asking"
+                    made["asked"] += 1
+                else:
+                    continue                        # already asked
+                friends._write(st, a, mine)
+                friends._write(st, b, theirs)
+    return made
 
 
 def _display(person):
@@ -1811,22 +1856,23 @@ def _chat_ok(h):
 
 @kv_route
 def get_me(h, args):
-    """your friend code, your name, your friends"""
+    """your friend code, your name, your friends (for jar.capp before /friends)"""
     me = kv.me()
     st = kv.store()
     out = ["code %s\n" % code_for(me, st), "name %s\n" % _display(me)[0]]
-    rows = {n: (d, s) for n, d, s in people.listing()}
-    for f in friends_of(me, st):
-        if _person(f) is None:
-            continue
-        d, s = rows.get(f, (f, 0))
-        out.append("friend %s\t%s\t%d\t%s\n" % (f, d, s, "mutual" if mutual(me, f, st) else "waiting"))
+    # the old list was whom you added: friends, and the asks you made. An
+    # ask made of you is not in it -- the old app would call it "waiting"
+    # and refuse to send; adding their code says yes.
+    for f, d, state, s in friends.listing(me):
+        if state in ("friend", "asked") and _person(f) is not None:
+            out.append("friend %s\t%s\t%d\t%s\n" % (f, d, s, "mutual" if state == "friend"
+                                                        else "waiting"))
     h.text("".join(out))
 
 
 @kv_route
 def post_friend(h, args):
-    """add a friend by their code"""
+    """ask a friend by their Jar friend code (for jar.capp before /friends)"""
     me = kv.me()
     st = kv.store()
     code = re.sub(r"[\s-]", "", arg(args, "code")).upper()
@@ -1838,28 +1884,22 @@ def post_friend(h, args):
         raise NotFound("no one has that code")
     if who == me:
         raise KVError("that is your own code")
-    with _day_lock:
-        names = friends_of(me, st)
-        if who not in names:
-            if len(names) >= FRIENDS_MAX:
-                raise kv.Full("%d friends at most" % FRIENDS_MAX)
-            names.append(who)
-            _set_friends(me, names, st)
-            if mutual(me, who, st):
-                shopkeep.note("%s and %s are friends now." % (shopkeep.display(me),
-                                                              shopkeep.display(who)), st)
-    h.text("ok %s %s\n" % (who, "mutual" if mutual(me, who, st) else "waiting"))
+    was = friends.are_friends(me, who)
+    state = friends.ask(me, who)
+    if state == "friend" and not was:
+        shopkeep.note("%s and %s are friends now." % (shopkeep.display(me),
+                                                      shopkeep.display(who)), st)
+    h.text("ok %s %s\n" % (who, "mutual" if state == "friend" else "waiting"))
 
 
 @kv_route
 def post_unfriend(h, args):
-    """stop being someone's friend"""
+    """stop being someone's friend (for jar.capp before /friends/drop)"""
     me = kv.me()
     who = arg(args, "name")
     if not who:
         raise KVError("name= is whom")
-    with _day_lock:
-        _set_friends(me, [n for n in friends_of(me) if n != who])
+    friends.drop(me, who)
     h.text("ok\n")
 
 
@@ -2088,7 +2128,7 @@ def post_talk(h, args):
                                       town.words(who, p, d, have, beds)))
                        if context else None)
         started = shopkeep.say(h.chat, me, body,
-                               [f for f in friends_of(me) if mutual(me, f)], context=context,
+                               friends.friends_of(me), context=context,
                                on_deal=on_deal, who=who)
     except ValueError as e:
         raise KVError(str(e))
@@ -2394,8 +2434,8 @@ def post_gift(h, args):
         owner = st.get(NS, "own/%d" % item_id)
         if owner is None or owner.decode() != me:
             raise NotAllowed("that item is not yours")
-        if not mutual(me, to, st):
-            raise NotAllowed("%s and you have not both added each other" % to)
+        if not friends.are_friends(me, to):
+            raise NotAllowed("%s and you are not friends" % to)
         msg = bytearray(message(rec))
         msg[10] |= F_GIFT
         _put_str(msg, 192, wire.flat(_display(me)[0], WHO_LEN, ascii=True) or me, WHO_LEN)
@@ -2420,8 +2460,8 @@ def post_thanks(h, args):
         raise NotFound("no such person")
     if not raw.isdigit():
         raise KVError("id= is the item's number")
-    if not mutual(me, to, st):
-        raise NotAllowed("%s and you have not both added each other" % to)
+    if not friends.are_friends(me, to):
+        raise NotAllowed("%s and you are not friends" % to)
     st.push(to, THANKS_Q, ("%s\t%d" % (me, int(raw))).encode())
     h.text("ok\n")
 
@@ -2456,18 +2496,23 @@ def main(argv=None):
     lists it; `ban N`, `unban N` and `bans` are the bans. `v3convert [--dry]
     [--id N] [--limit N]` rewrites what people hold in JarScript 3 (keeping
     each original), `v3undo [--id N]` puts the originals back
-    (apps/jar/server/v3convert.py)."""
+    (apps/jar/server/v3convert.py). `migrate-friends` makes Jar's old
+    friends the platform's (migrate_friends), once; Jar's lists are kept."""
     import argparse
     from server.chat import ChatService
     ap = argparse.ArgumentParser(prog="python -m apps.jar.server")
     ap.add_argument("what", choices=["seed", "pool", "ban", "unban", "bans", "v3convert",
-                                     "v3undo"])
+                                     "v3undo", "migrate-friends"])
     ap.add_argument("n", type=int, nargs="?", default=20)
     ap.add_argument("--claude-cli", default=None)
     ap.add_argument("--dry", action="store_true")
     ap.add_argument("--id", type=int, action="append")
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args(argv)
+    if args.what == "migrate-friends":
+        got = migrate_friends()
+        print("%d friendships, %d asks" % (got["friend"], got["asked"]))
+        return
     if args.what == "v3undo":
         from . import v3convert
         print("%d put back" % v3convert.undo(args.id))

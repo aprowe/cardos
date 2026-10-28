@@ -7,10 +7,16 @@
  *
  * THE SERVER (spec step 6; apps/jar/server/__init__.py), one request at a time, never
  * blocking, the device's own token on each:
- *   GET  /jar/me                  "code CODE", "name NAME", and a
- *                                 "friend NAME\tDISPLAY\tLAST_SEEN\tmutual|waiting"
- *                                 a line; kept in /var/jar/friends.txt
- *   POST /jar/friend?code=CODE    "ok NAME mutual|waiting"
+ *   GET  /friends                 the platform's friends (server/friends.py),
+ *                                 the same as every app's: a line a person,
+ *                                 "NAME\tDISPLAY\tfriend|asked|asking\tLAST_SEEN";
+ *                                 kept in /var/jar/friends.txt. A gift goes
+ *                                 only to a "friend". (Jar had its own list,
+ *                                 /jar/me and friend codes; the server still
+ *                                 answers those for older jar.capps.)
+ *   POST /friends/ask?who=NAME    "ok asked" or "ok friend": A asks someone by
+ *                                 their account name, Enter on an "asking"
+ *                                 row says yes
  *   POST /people/name             the display name (8 at most) as the body
  *   POST /jar/gift?to=NAME        "NOTE\nBASE64RECORD\n" -> "ok". Postage
  *                                 is taken when it goes and given back if
@@ -47,7 +53,7 @@
 
 enum { V_FRIENDS = 0, V_GIFT, V_MAIL, V_CARD, V_PICK, V_TALK, V_TOWN };
 #define PK_MAX 64
-enum { IN_NONE = 0, IN_CODE, IN_NAME, IN_NOTE, IN_TALK };
+enum { IN_NONE = 0, IN_ASK, IN_NAME, IN_NOTE, IN_TALK };
 enum { N_ME = N_APP + 8, N_FRIEND, N_NAME, N_GIFT, N_PEEK, N_ACK, N_THANKS, N_SAY, N_HEAR, N_DEAL, N_ANSWER, N_JOBS };
 
 /* The lane (apps/jar/server/shopkeep.py's CAST): who you can talk to in the Town. */
@@ -75,8 +81,15 @@ static int TK_N, TK_PENDING;
 static uint32_t TK_AGAIN;
 
 #define F_MAX 16
+#define F_ACCT 24                        /* an account name, as server/accounts.py allows */
 
-typedef struct { char name[JI_WHO + 1], disp[JI_WHO + 1]; uint32_t seen; uint8_t mutual; } Friend;
+/* mutual: both said yes (a gift may go); asking: they asked, Enter says yes;
+ * neither: you asked, and they have not answered. */
+typedef struct {
+  char name[F_ACCT + 1], disp[JI_WHO + 1];
+  uint32_t seen;
+  uint8_t mutual, asking;
+} Friend;
 
 typedef struct {
   JMail m[JST_MAIL_MAX];
@@ -86,8 +99,8 @@ typedef struct {
   int view, in, inlen;
   char input[TK_SAY + 1];
   char note[JST_NOTE + 1];
-  /* friends, from /jar/me */
-  char code[16], me[JI_WHO + 1];
+  /* friends, from /friends */
+  char me[JI_WHO + 1], asked[F_ACCT + 1];
   Friend fr[F_MAX];
   int nfr, me_ok;
   /* a gift: 0 choose a friend, 1 the note, 2 sure?, 3 posting */
@@ -130,30 +143,45 @@ static int unopened(void) {
 
 /* ---- friends ----------------------------------------------------------------------- */
 
-/* /jar/me's reply (or the copy kept for offline) into the list. */
+/* /friends's reply (or the copy kept for offline) into the list:
+ * "NAME\tDISPLAY\tSTATE\tLAST_SEEN". A copy an older Jar kept, /jar/me's
+ * "friend NAME\tDISPLAY\tLAST_SEEN\tmutual|waiting" (and "name ME"), still
+ * reads, until the first answer replaces it. */
 static void parse_me(const char *p) {
   G.nfr = 0;
   for (; *p; p = tsv_next_line(p)) {
-    if (str_starts(p, "code ")) tsv_field(p + 5, 0, G.code, sizeof G.code);
-    else if (str_starts(p, "name ")) tsv_field(p + 5, 0, G.me, sizeof G.me);
-    else if (str_starts(p, "friend ") && G.nfr < F_MAX) {
-      Friend *f = &G.fr[G.nfr];
-      char b[16];
-      const char *q = b;
-      tsv_field(p + 7, 0, f->name, sizeof f->name);
-      tsv_field(p + 7, 1, f->disp, sizeof f->disp);
-      tsv_field(p + 7, 2, b, sizeof b);
-      f->seen = str_uint(&q);
-      tsv_field(p + 7, 3, b, sizeof b);
-      f->mutual = (uint8_t)str_same(b, "mutual");
-      if (f->name[0]) G.nfr++;
-    }
+    Friend *f = &G.fr[G.nfr];
+    int old = str_starts(p, "friend ");
+    const char *l = old ? p + 7 : p;
+    char b[16];
+    const char *q = b;
+    if (str_starts(p, "name ")) { tsv_field(p + 5, 0, G.me, sizeof G.me); continue; }
+    if (G.nfr >= F_MAX || str_starts(p, "code ")) continue;
+    tsv_field(l, 0, f->name, sizeof f->name);
+    tsv_field(l, 1, f->disp, sizeof f->disp);
+    tsv_field(l, old ? 2 : 3, b, sizeof b);
+    f->seen = str_uint(&q);
+    tsv_field(l, old ? 3 : 2, b, sizeof b);
+    f->mutual = (uint8_t)(str_same(b, "friend") || str_same(b, "mutual"));
+    f->asking = (uint8_t)str_same(b, "asking");
+    if (f->name[0] && (f->mutual || f->asking || str_same(b, "asked") || str_same(b, "waiting")))
+      G.nfr++;
   }
 }
 
 static void fetch_me(void) {
   if (U.net) return;
-  if (send(N_ME, "GET", "/jar/me", 0) == 0) net_status("asking after your friends");
+  if (send(N_ME, "GET", "/friends", 0) == 0) net_status("asking after your friends");
+}
+
+/* Ask NAME to be friends on the server -- or say yes, when they asked. */
+static void ask_friend(const char *name) {
+  char path[112], q[80];
+  if (U.net) { say("Busy: try again"); return; }
+  ji_copy(G.asked, name, (int)sizeof G.asked);
+  url_enc(q, sizeof q, G.asked);
+  api->fmt(path, sizeof path, "/friends/ask?who=%s", q);
+  if (send(N_FRIEND, "POST", path, 0) == 0) net_status("asking");
 }
 
 static int mutual_n(void) {
@@ -417,22 +445,20 @@ static void net_reply(int n) {
     G.me_ok = 1;
     jst_put(api, JST_FRIENDS, NET, n);
     return;
-  case N_FRIEND: {
-    char name[JI_WHO + 1], *c;
+  case N_FRIEND:
     net_status("");
-    if (n < 0) { failed("Adding", n); return; }
-    if (refused("Adding")) return;
-    tsv_field(NET + (NET[2] ? 3 : 2), 0, name, sizeof name);
-    for (c = name; *c; c++) if (*c == ' ') { *c = 0; break; }
-    api->fmt(U.msg, sizeof U.msg, "%s: %s", name, str_contains(NET, "mutual", 0) ? "friends now" : "waiting for them");
+    if (n < 0) { failed("Asking", n); return; }
+    if (refused("Asking")) return;
+    api->fmt(U.msg, sizeof U.msg, "%s: %s", G.asked,
+             str_starts(NET, "ok friend") ? "friends now" : "asked, waiting for a yes");
     U.msg_until = api->ticks_ms() + 5000;
     fetch_me();
     return;
-  }
   case N_NAME:
     net_status("");
     if (n < 0) { failed("Name", n); return; }
     if (refused("Name")) return;
+    ji_copy(G.me, G.input, (int)sizeof G.me);
     say("Name changed");
     fetch_me();
     return;
@@ -481,24 +507,26 @@ static void paint_friends(void) {
   char b[48], s[16];
   box(0, BAR, SW, BODY, C_BG);
   box(4, BAR + 3, SW - 8, 20, C_PANEL);
-  api->fmt(b, sizeof b, "You: %s", G.me[0] ? G.me : "(no name yet)");
+  if (G.me[0]) api->fmt(b, sizeof b, "You: %s", G.me);
+  else api->fmt(b, sizeof b, "Friends, as in every app");
   text(8, BAR + 5, b, C_TEXT, C_PANEL);
-  api->fmt(b, sizeof b, "your friend code: %s", G.code[0] ? G.code : "?");
-  text(8, BAR + 14, b, C_GOLD, C_PANEL);
+  text(8, BAR + 14, "A asks by name, Ent says yes", C_GOLD, C_PANEL);
   if (!G.nfr)
-    wrapped(8, BAR + 30, G.code[0] ? "No friends yet. Give them your code; A adds theirs. Gifts flow once both have."
-                                   : "Not heard from the server yet.", 37, 4, C_DIM, C_BG);
+    wrapped(8, BAR + 30, G.me_ok ? "No friends yet. A asks someone by their name on the server; "
+                                   "gifts go once they say yes." : "Not heard from the server yet.",
+            37, 4, C_DIM, C_BG);
   for (i = 0; i < G.nfr && i < 9; i++) {
     const Friend *f = &G.fr[i];
     int y = BAR + 27 + i * 9, on = i == G.fsel;
     uint16_t bg = on ? C_PANEL : C_BG;
     if (on) box(4, y - 1, SW - 8, 9, C_PANEL);
     textn(8, y, who(f), 12, on ? C_GOLD : C_TEXT, bg);
-    text(86, y, f->mutual ? "friends" : "waiting", f->mutual ? C_TRAIT : C_DIM, bg);
+    text(86, y, f->mutual ? "friends" : f->asking ? "wants you" : "asked",
+         f->mutual ? C_TRAIT : f->asking ? C_PINK : C_DIM, bg);
     ago(f->seen, s, sizeof s);
     text(SW - 6 - slen(s) * 6, y, s, C_DIM, bg);
   }
-  if (G.in == IN_CODE) input_box("Their friend code:", G.input);
+  if (G.in == IN_ASK) input_box("Their name on the server:", G.input);
   else if (G.in == IN_NAME) input_box("Your name, up to 8:", G.input);
 }
 
@@ -769,7 +797,7 @@ static void paint_gift(void) {
   if (G.gift_step == 0) {
     text(8, BAR + 30, "To which friend?", C_DIM, C_BG);
     if (!n) wrapped(8, BAR + 42, U.net ? "Asking the server..." :
-                    "No friends who have added you back yet: Esc, then F.", 37, 3, C_DIM, C_BG);
+                    "No friends who have said yes yet: Esc, then F.", 37, 3, C_DIM, C_BG);
     for (i = 0; i < n && i < 7; i++) {
       int y = BAR + 40 + i * 10, on = i == G.gift_sel;
       if (on) box(6, y - 1, SW - 12, 10, C_PANEL);
@@ -862,14 +890,12 @@ static int key_input(int k, int max) {
 
 static int key_friends(int k) {
   if (G.in) {
-    char path[64], q[40];
     if (k == CAPP_KEY_ESC) { G.in = IN_NONE; return 1; }
-    if (key_input(k, G.in == IN_CODE ? 12 : JST_DNAME)) return 1;
+    if (G.in == IN_ASK && k >= 'A' && k <= 'Z') k += 'a' - 'A';    /* account names are */
+    if (key_input(k, G.in == IN_ASK ? F_ACCT : JST_DNAME)) return 1;
     if (G.inlen && U.net) { say("Busy: try again"); return 1; }
-    if (G.inlen && G.in == IN_CODE) {
-      url_enc(q, sizeof q, G.input);
-      api->fmt(path, sizeof path, "/jar/friend?code=%s", q);
-      if (send(N_FRIEND, "POST", path, 0) == 0) net_status("adding");
+    if (G.inlen && G.in == IN_ASK) {
+      ask_friend(G.input);
     } else if (G.inlen) {
       jst_clean(G.input);
       if (send(N_NAME, "POST", "/people/name", G.input) == 0) net_status("renaming");
@@ -881,14 +907,15 @@ static int key_friends(int k) {
   case CAPP_KEY_UP:   if (G.fsel > 0) G.fsel--; return 1;
   case CAPP_KEY_DOWN: if (G.fsel < G.nfr - 1) G.fsel++; return 1;
   case CAPP_KEY_ENTER: case 'g': case 'G':
-    if (G.fsel >= G.nfr) { say("Add a friend first: A"); return 1; }
-    if (!G.fr[G.fsel].mutual) { say("They have not added you back yet"); return 1; }
+    if (G.fsel >= G.nfr) { say("Ask a friend first: A"); return 1; }
+    if (G.fr[G.fsel].asking) { ask_friend(G.fr[G.fsel].name); return 1; }   /* yes */
+    if (!G.fr[G.fsel].mutual) { say("They have not said yes yet"); return 1; }
     load_pick();
     if (!G.npk) { say("Nothing to send: buy from the shop first"); return 1; }
     pick_card();
     G.view = V_PICK;
     return 1;
-  case 'a': case 'A': start_input(IN_CODE); return 1;
+  case 'a': case 'A': start_input(IN_ASK); return 1;
   case 'n': case 'N': case 'e': case 'E': start_input(IN_NAME); return 1;
   case 'r': case 'R': fetch_me(); return 1;
   case 'm': case 'M': go_mail(); return 1;
