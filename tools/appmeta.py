@@ -118,6 +118,19 @@ def read_meta(src):
     return out
 
 
+def app_dirs():
+    """Where apps are: this repository's apps/, then each folder in
+    CARDOS_APP_DIRS (separated by os.pathsep) -- another repository's apps,
+    laid out the same way. The build, the server's plugins and /update all
+    look here, so an app kept in a repo of its own is found like any other."""
+    out = [APPS]
+    for d in (os.environ.get("CARDOS_APP_DIRS") or "").split(os.pathsep):
+        d = d.strip()
+        if d and os.path.isdir(d) and os.path.normcase(os.path.abspath(d)) not in                 [os.path.normcase(x) for x in out]:
+            out.append(os.path.abspath(d))
+    return out
+
+
 def sources(apps_dir=APPS):
     """Every app's source: every .c directly in apps_dir, and every .c
     directly in a folder of it. One level only."""
@@ -139,11 +152,11 @@ def sources(apps_dir=APPS):
 
 
 def apps(*dirs):
-    """{stem: App} for every app under each of dirs (apps/ by default):
-    another repo's apps folder is just one more. Two sources with one
+    """{stem: App} for every app under each of dirs (app_dirs() by
+    default): another repo's apps folder is just one more. Two sources with one
     stem are refused -- the .capp is named by the stem."""
     out = {}
-    for d in dirs or (APPS,):
+    for d in dirs or app_dirs():
         for src in sources(d):
             stem = os.path.splitext(os.path.basename(src))[0]
             if stem in out:
@@ -163,7 +176,7 @@ def folders(*dirs):
 def icon_files(*dirs):
     """Every NAME.icon.txt under the app folders, sorted."""
     out = []
-    for d in dirs or (APPS,):
+    for d in dirs or app_dirs():
         for top, subs, files in os.walk(d):
             subs[:] = [s for s in subs if s not in ("mp", "test", "tools", "server")]
             out += [os.path.join(top, f) for f in files if f.endswith(".icon.txt")]
@@ -173,7 +186,7 @@ def icon_files(*dirs):
 def plugin_dirs(*dirs):
     """{app folder name: path} for every apps/NAME/server/__init__.py."""
     out = {}
-    for d in dirs or (APPS,):
+    for d in dirs or app_dirs():
         for f in sorted(os.listdir(d)):
             p = os.path.join(d, f, "server")
             if os.path.isfile(os.path.join(p, "__init__.py")):

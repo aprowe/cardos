@@ -39,6 +39,8 @@ A plugin that fails to import is left out with a line on stderr: one app's
 broken plugin must not take the server, and every other app, down with it.
 """
 import importlib
+import importlib.machinery
+import importlib.util
 import os
 import sys
 
@@ -49,6 +51,34 @@ if ROOT not in sys.path:
 from tools import appmeta  # noqa: E402
 
 _loaded = None
+
+
+def _import(name, path):
+    """apps.NAME.server for this repository's apps; a plugin in another
+    repository's apps folder (CARDOS_APP_DIRS) is imported from where it is,
+    as cardos_apps.NAME.server, its own relative imports intact."""
+    inside = os.path.normcase(os.path.abspath(path)).startswith(
+        os.path.normcase(os.path.join(ROOT, "apps")) + os.sep)
+    if inside:
+        return importlib.import_module("apps.%s.server" % name)
+    full = "cardos_apps.%s.server" % name
+    if full in sys.modules:
+        return sys.modules[full]
+    for pkg in ("cardos_apps", "cardos_apps." + name):        # empty parents
+        if pkg not in sys.modules:
+            m = importlib.util.module_from_spec(importlib.machinery.ModuleSpec(pkg, None, is_package=True))
+            m.__path__ = []
+            sys.modules[pkg] = m
+    spec = importlib.util.spec_from_file_location(
+        full, os.path.join(path, "__init__.py"), submodule_search_locations=[path])
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[full] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        del sys.modules[full]
+        raise
+    return mod
 
 
 def _prefixes(name, metas):
@@ -77,7 +107,7 @@ def load(dirs=None, strict=False):
     out, claimed = {}, {}
     for name, path in appmeta.plugin_dirs(*(dirs or ())).items():
         try:
-            mod = importlib.import_module("apps.%s.server" % name)
+            mod = _import(name, path)
             routes = getattr(mod, "ROUTES", [])
             pre = _prefixes(name, metas)
             for r in routes:

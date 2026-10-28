@@ -771,14 +771,16 @@ def app_sources(*dirs):
 USAGE = """usage: python tools/build_apps.py [--apps DIR ...] [--release]
 
     --apps DIR   build the apps in DIR as well as apps/ (another repo's apps
-                 folder, laid out the same way; may be given more than once)
+                 folder, laid out the same way; may be given more than once).
+                 CARDOS_APP_DIRS (tools/appmeta.py) names such folders for
+                 every build, and for the server, at once
     --release    only the apps marked `@app release core`: what a CardOS
                  release carries"""
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    dirs, release = [APPS], False
+    dirs, release = list(appmeta.app_dirs()), False
     while argv:
         a = argv.pop(0)
         if a == "--apps" and argv:
