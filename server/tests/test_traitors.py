@@ -35,18 +35,34 @@ class Parse(unittest.TestCase):
         self.assertEqual(len(s["gone"]), 2)
         self.assertEqual(len(s["log"]), 2)
 
-    def test_the_prompt_names_each_target_and_keeps_secrets_rules(self):
+    def test_the_opening_prompt_gives_roles_and_suspicions_and_keeps_secrets(self):
         s = traitors.parse(BODY)
+        self.assertEqual(s["mode"], "open")
         p = traitors.prompt_for(s)
         self.assertIn("Ingrid (seat 2) is secretly a Traitor", p)
-        self.assertIn("banish Agatha", p)                  # Ingrid's vote
         self.assertIn("Corvin (seat 3) is Faithful", p)
-        self.assertIn("banish Ingrid", p)                  # Corvin's vote
+        self.assertIn("Suspects Ingrid most", p)           # Corvin's suspicion
         self.assertIn("Lucan (banished, was Faithful)", p)
+        self.assertIn("People (not computers): Alex, Agatha", p)
+        self.assertIn("opening line for each", p)
         self.assertIn("Nobody may state anyone's secret role", p)
         schema = traitors.schema_for(s)
         ask.check_schema(schema)
         self.assertEqual(schema["properties"]["lines"]["minItems"], 2)
+
+    def test_a_reply_answers_the_last_thing_said_and_may_lean(self):
+        s = traitors.parse("mode reply\n" + BODY + "say 0 Ingrid was on the spoiled crew. Explain, Ingrid.\n")
+        self.assertEqual(s["mode"], "reply")
+        self.assertEqual(s["talk"], [{"seat": 0, "text": "Ingrid was on the spoiled crew. Explain, Ingrid."}])
+        p = traitors.prompt_for(s)
+        self.assertIn("Alex: Ingrid was on the spoiled crew", p)
+        self.assertIn("Answer the last thing said (by Alex)", p)
+        schema = traitors.schema_for(s)
+        ask.check_schema(schema)
+        self.assertEqual(schema["properties"]["lines"]["minItems"], 1)
+        self.assertEqual(schema["properties"]["lines"]["maxItems"], 2)
+        self.assertEqual(sorted(schema["properties"]["leans"]["items"]["properties"]["target"]["enum"]),
+                         [0, 2, 3, 4])
 
 
 class Answer(unittest.TestCase):
@@ -77,11 +93,13 @@ class Answer(unittest.TestCase):
     def test_a_good_run_keeps_the_lines(self):
         s = traitors.parse(BODY)
         saved = ask.ask_shape
-        ask.ask_shape = lambda *a, **k: {"lines": [{"seat": 2, "text": "Agatha."}, {"seat": 3, "text": "Ingrid."}]}
+        ask.ask_shape = lambda *a, **k: {"lines": [{"seat": 3, "text": "Ingrid."}, {"seat": 2, "text": "Agatha."}],
+                                         "leans": [{"seat": 3, "target": 2}, {"seat": 2, "target": 2}]}
         try:
             traitors._jobs.put("j2", ("pending", None))
             traitors._run("j2", None, s, None)
-            self.assertEqual(traitors._jobs.get("j2"), ("ok", "2\tAgatha.\n3\tIngrid.\n"))
+            # An opening comes in the speakers' order; a lean on oneself is dropped.
+            self.assertEqual(traitors._jobs.get("j2"), ("ok", "2\tAgatha.\n3\tIngrid.\nlean\t3\t2\n"))
         finally:
             ask.ask_shape = saved
 

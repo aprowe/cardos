@@ -201,6 +201,38 @@ void test_traitors_who_wins(void) {
   CHECK_EQ(T.winner, TR_TRAITOR);
 }
 
+void test_traitors_the_table_talks_until_every_person_is_ready_and_talk_moves_votes(void) {
+  uint8_t human[TR_N] = { 1, 2, 0, 0, 0, 0, 0 };
+  int s;
+  tr_new(&T, 31, human);
+  tr_seats("FFTFFFT");
+  tr_enter(&T, TR_TABLE);
+  CHECK(T.talk_open);
+  CHECK_EQ(tr_need(&T, 0), TR_ASK_TALK);
+  CHECK_EQ(tr_need(&T, 1), TR_ASK_TALK);
+  for (s = 2; s < TR_N; s++) CHECK_EQ(T.vote[s], -1);   /* the computers have not decided */
+  CHECK(!tr_ready(&T));
+  /* Talk persuades: every computer now leans hard toward seat 6. */
+  for (s = 2; s < TR_N; s++) tr_lean(&T, s, 6, 1500);
+  {
+    int before = T.sus[0][3];
+    tr_lean(&T, 0, 3, 1500);                          /* a person's mind is not the game's to move */
+    CHECK_EQ(T.sus[0][3], before);
+  }
+  CHECK_EQ(tr_act(&T, 0, 1), 1);                      /* one ready... */
+  CHECK(T.talk_open);
+  CHECK_EQ(tr_need(&T, 0), TR_ASK_NONE);
+  CHECK_EQ(tr_act(&T, 1, 1), 1);                      /* ...and the other: the vote is on */
+  CHECK(!T.talk_open);
+  CHECK_EQ(tr_need(&T, 0), TR_ASK_SEAT);
+  for (s = 3; s < 6; s++) CHECK_EQ(T.vote[s], 6);     /* the Faithful computers were persuaded */
+  /* With nobody to talk, the table goes straight to the vote. */
+  T.alive[0] = T.alive[1] = 0;
+  tr_enter(&T, TR_TABLE);
+  CHECK(!T.talk_open);
+  CHECK(T.vote[2] >= 0);
+}
+
 void test_traitors_a_view_keeps_secrets_and_survives_the_wire(void) {
   uint8_t human[TR_N] = { 1, 2, 0, 0, 0, 0, 0 };
   uint8_t wire[TV_WIRE];

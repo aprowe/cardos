@@ -16,8 +16,11 @@
  *               counted, never told apart: one lead coin spoils the mission.
  *               A clean mission puts gold in the pot and gives its leader a
  *               shield to hand to someone else.
- *   the round   everyone names someone; the most named is banished and their
- *   table       role shown (a tie banishes nobody).
+ *   the round   first the talk: people say what they think, the computers
+ *   table       answer, and whoever is persuaded leans (tr_lean). When every
+ *               person still in the game says they are ready, the computers
+ *               decide, and everyone names someone; the most named is
+ *               banished and their role shown (a tie banishes nobody).
  *   night       the Traitors murder a Faithful who holds no shield; the
  *               shield is spent either way. Breakfast says who.
  *
@@ -85,7 +88,8 @@ enum {
   TR_ASK_CREW,      /* a bit mask of tr_crew_size() seats, the leader among them */
   TR_ASK_YESNO,     /* 1 yes, 0 no */
   TR_ASK_COIN,      /* 0 gold, 1 lead (a Faithful's lead is gold) */
-  TR_ASK_SEAT       /* a seat: the shield's, the banished's, the murdered's */
+  TR_ASK_SEAT,      /* a seat: the shield's, the banished's, the murdered's */
+  TR_ASK_TALK       /* the round table is talking: say something, or 1 when ready to vote */
 };
 
 typedef struct {
@@ -94,6 +98,8 @@ typedef struct {
   int8_t   role[TR_N];
   uint8_t  alive[TR_N], human[TR_N], shown[TR_N];   /* shown: role made public */
   uint8_t  acked[TR_N];
+  uint8_t  ready[TR_N];                /* the table talk: this person is ready to vote */
+  uint8_t  talk_open;                  /* the round table is still talking */
   int      leader, rejects, spoiled, clean, pot;
   uint8_t  crew;                       /* bit mask */
   int8_t   vote[TR_N];                 /* crew vote 0/1, table vote a seat; -1 none */
@@ -169,7 +175,10 @@ static TR_OPT int tr_need(const Tr *t, int s) {
   case TR_VOTE:    return t->alive[s] && t->vote[s] < 0 ? TR_ASK_YESNO : TR_ASK_NONE;
   case TR_VAULT:   return tr_in(t->crew, s) && t->coin[s] < 0 ? TR_ASK_COIN : TR_ASK_NONE;
   case TR_SHIELD:  return s == t->leader && t->shield < 0 ? TR_ASK_SEAT : TR_ASK_NONE;
-  case TR_TABLE:   return t->alive[s] && t->vote[s] < 0 ? TR_ASK_SEAT : TR_ASK_NONE;
+  case TR_TABLE:
+    if (!t->alive[s]) return TR_ASK_NONE;
+    if (t->talk_open) return t->human[s] && !t->ready[s] ? TR_ASK_TALK : TR_ASK_NONE;
+    return t->vote[s] < 0 ? TR_ASK_SEAT : TR_ASK_NONE;
   case TR_NIGHT:
     /* A person who is a Traitor chooses; the computer Traitors defer to them. */
     if (!t->alive[s] || t->role[s] != TR_TRAITOR || t->pick[s] >= 0) return TR_ASK_NONE;
@@ -180,7 +189,7 @@ static TR_OPT int tr_need(const Tr *t, int s) {
 
 static TR_OPT int tr_ready(const Tr *t) {
   int s;
-  if (t->phase == TR_OVER) return 0;
+  if (t->phase == TR_OVER || (t->phase == TR_TABLE && t->talk_open)) return 0;
   for (s = 0; s < TR_N; s++) if (tr_need(t, s) != TR_ASK_NONE) return 0;
   return 1;
 }
@@ -195,6 +204,12 @@ static TR_OPT int tr_can_pick(const Tr *t, int s, int target) {
   }
   return 0;
 }
+
+/* What the talk did: `o` now suspects `target` more (by > 0) or less. The
+ * app calls it with what Claude says changed minds, or, offline, for a name
+ * a person said. A computer Traitor's suspicion moves too: it plays to the
+ * herd, and it is part of the herd. */
+static TR_OPT void tr_lean(Tr *t, int o, int target, int by);
 
 /* ---- the computer's choices ---- */
 
@@ -333,8 +348,16 @@ static TR_OPT void tr_enter(Tr *t, int phase) {
     if (!t->human[t->leader]) t->shield = tr_ai_shield(t, t->leader);
     break;
   case TR_TABLE:
+    /* The talk first, while a person is there to talk; the computers decide
+     * when it closes (tr_close_talk). */
     t->banished = -1;
-    for (s = 0; s < TR_N; s++) if (t->alive[s] && !t->human[s]) t->vote[s] = (int8_t)tr_ai_table(t, s);
+    t->talk_open = 0;
+    for (s = 0; s < TR_N; s++) {
+      t->ready[s] = 0;
+      if (t->alive[s] && t->human[s]) t->talk_open = 1;
+    }
+    if (!t->talk_open)
+      for (s = 0; s < TR_N; s++) if (t->alive[s] && !t->human[s]) t->vote[s] = (int8_t)tr_ai_table(t, s);
     break;
   case TR_NIGHT: {
     int people = 0, v;
@@ -376,6 +399,19 @@ static TR_OPT void tr_new(Tr *t, uint32_t seed, const uint8_t human[TR_N]) {
   tr_enter(t, TR_ROLES);
 }
 
+static TR_OPT void tr_lean(Tr *t, int o, int target, int by) {
+  if (o < 0 || o >= TR_N || target < 0 || target >= TR_N || t->human[o]) return;
+  tr_bump(t, o, target, by);
+}
+
+/* The talk is over: the computers make up their minds, and the vote is on. */
+static TR_OPT void tr_close_talk(Tr *t) {
+  int s;
+  if (t->phase != TR_TABLE || !t->talk_open) return;
+  t->talk_open = 0;
+  for (s = 0; s < TR_N; s++) if (t->alive[s] && !t->human[s]) t->vote[s] = (int8_t)tr_ai_table(t, s);
+}
+
 /* A person's answer. 1 taken, 0 not wanted or not allowed. */
 static TR_OPT int tr_act(Tr *t, int s, int v) {
   switch (tr_need(t, s)) {
@@ -393,6 +429,14 @@ static TR_OPT int tr_act(Tr *t, int s, int v) {
   case TR_ASK_COIN:
     t->coin[s] = (int8_t)(v && t->role[s] == TR_TRAITOR ? 1 : 0);
     return 1;
+  case TR_ASK_TALK: {
+    int k, all = 1;
+    if (v != 1) return 0;
+    t->ready[s] = 1;
+    for (k = 0; k < TR_N; k++) if (t->alive[k] && t->human[k] && !t->ready[k]) all = 0;
+    if (all) tr_close_talk(t);
+    return 1;
+  }
   case TR_ASK_SEAT:
     if (!tr_can_pick(t, s, v)) return 0;
     if (t->phase == TR_SHIELD) t->shield = v;

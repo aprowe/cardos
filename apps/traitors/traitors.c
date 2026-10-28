@@ -44,7 +44,8 @@ static const CardApi *api;
 
 #define HALL_H    92                  /* the castle; the words under it */
 #define PANEL_Y   HALL_H
-#define TALK_MAX  6
+#define TALK_MAX  8
+#define CHAT_N    40
 #define SAY_MAX   112
 #define LOG_N     14
 #define LOG_W     96
@@ -90,18 +91,26 @@ static struct {
   int      seen_phase;                 /* the phase the narration last spoke of */
 
   char     name[TR_N][NAME_W];
-  char     say[SAY_MAX];               /* the castle's line, or a speaker's */
+  char     say[SAY_MAX];               /* the last line in the room, for the hall's panel */
   int      say_seat;                   /* -1 the castle */
-  struct { int seat; char text[SAY_MAX]; } talk[TALK_MAX];
-  int      ntalk, italk;
-  uint32_t talk_at;
+  struct { int8_t seat; char text[SAY_MAX]; } chat[CHAT_N];   /* the room, a ring */
+  int      nchat;                      /* lines ever said; the newest is nchat - 1 */
+  int      table_from;                 /* where this round table's talk began */
+  struct { int8_t seat; char text[SAY_MAX]; } queue[TALK_MAX];  /* computers waiting to speak */
+  int      nq, typing;                 /* typing: the seat "is typing...", or -1 */
+  uint32_t q_at;
+  int      chat_view, scroll;          /* the room on screen; lines scrolled back */
+  char     input[SAY_MAX - 8];
+  int      ilen;
+  int      was_open;                   /* the table's talk was open last tick */
+  int      seen_need, seen_view_phase; /* the view as the last tick left it */
 
   char     log[LOG_N][LOG_W];          /* the host's account of the game, for Claude */
   int      nlog;
-  int      tk;                         /* TK_*: the talk request */
+  int      tk, tk_mode, want_reply;    /* TK_*: the talk request; open or reply; a reply owed */
   uint32_t tk_at, tk_until;
   char     tk_id[16];
-  char     body[1600];
+  char     body[3000];
   char     reply[1000];
 
   int      f_ui, f_uib;
@@ -132,14 +141,6 @@ static void send_line(int seat, const char *s) {
   G.L->send(b, n + 2);
 }
 
-/* The castle says something: on this screen, to the guest, and in the log. */
-static void castle(const char *s) {
-  api->fmt(G.say, sizeof G.say, "%s", s);
-  G.say_seat = -1;
-  logf_(s);
-  send_line(-1, s);
-}
-
 /* "A, B and C" for a mask of seats. */
 static void list_names(uint8_t m, char *out, int n) {
   int s, k = 0, total = tr_bits(m), at = 0;
@@ -153,12 +154,78 @@ static void list_names(uint8_t m, char *out, int n) {
   }
 }
 
-/* ---- the table talk ------------------------------------------------------------ */
+/* ---- the chat room ------------------------------------------------------------
+ *
+ * One transcript for the game: the castle's announcements and everyone's
+ * words, a seat each (-1 the castle). The host keeps the game's account and
+ * sends each line to the guest as it is said, so both rooms read the same.
+ * A computer's line waits in a queue first, with "NAME is typing..." for a
+ * moment as long as the line, so they speak one after another as people do. */
+
+static void chat_add(int seat, const char *text) {
+  int i = G.nchat % CHAT_N;
+  G.chat[i].seat = (int8_t)seat;
+  api->fmt(G.chat[i].text, SAY_MAX, "%s", text);
+  G.nchat++;
+  G.scroll = 0;                                   /* back to the newest */
+  api->fmt(G.say, sizeof G.say, "%s", text);
+  G.say_seat = seat;
+}
+
+/* The castle says something: in the room, to the guest, and in the log. */
+static void castle(const char *s) {
+  chat_add(-1, s);
+  logf_(s);
+  send_line(-1, s);
+}
+
+static void send_typing(int seat) {
+  uint8_t b[2];
+  if (!G.net || !G.host || !G.L || G.L->state() != CAPP_LINK_CONNECTED) return;
+  b[0] = 'Y';
+  b[1] = (uint8_t)(seat < 0 ? 255 : seat);
+  G.L->send(b, 2);
+}
+
+static void queue_add(int seat, const char *text) {
+  if (G.nq >= TALK_MAX || !text[0]) return;
+  G.queue[G.nq].seat = (int8_t)seat;
+  api->fmt(G.queue[G.nq].text, SAY_MAX, "%s", text);
+  G.nq++;
+}
+
+/* The host lets the queue speak, a line at a time. 1 to repaint. */
+static int queue_tick(uint32_t now) {
+  int i, len;
+  if (!G.nq) return 0;
+  if (!G.q_at) {
+    len = (int)api->str_len(G.queue[0].text);
+    G.q_at = now + 700u + (uint32_t)(len * 22 > 2600 ? 2600 : len * 22);
+    G.typing = G.queue[0].seat;
+    send_typing(G.typing);
+    return 1;
+  }
+  if ((int32_t)(now - G.q_at) < 0) return 0;
+  chat_add(G.queue[0].seat, G.queue[0].text);
+  logf_(G.queue[0].text);
+  send_line(G.queue[0].seat, G.queue[0].text);
+  for (i = 1; i < G.nq; i++) {
+    G.queue[i - 1].seat = G.queue[i].seat;
+    api->fmt(G.queue[i - 1].text, SAY_MAX, "%s", G.queue[i].text);
+  }
+  G.nq--;
+  G.q_at = 0;
+  G.typing = -1;
+  if (!G.nq) send_typing(-1);
+  return 1;
+}
+
+/* ---- what the computers say ------------------------------------------------------ */
 
 static const char *const FAITH_LINES[] = {
   "I keep coming back to %s. Something is off.",
-  "My vote is %s. I hope I am wrong.",
-  "%s has been far too quiet tonight.",
+  "My eye is on %s. I hope I am wrong.",
+  "%s has been far too quiet.",
   "Every road leads back to %s for me.",
 };
 static const char *const TRAIT_LINES[] = {
@@ -167,42 +234,65 @@ static const char *const TRAIT_LINES[] = {
   "%s, your story does not add up.",
   "Faithful, open your eyes: %s.",
 };
+static const char *const DEFEND_LINES[] = {
+  "Me? I was nowhere near that chest.",
+  "That is a reach, and you know it.",
+  "Accuse me if you like. You will see.",
+  "Interesting that you point at me so fast.",
+};
+static const char *const MURMUR_LINES[] = {
+  "Hm. Go on.",
+  "I hear you. I am not sure yet.",
+  "Maybe. Let us see how the vote falls.",
+};
 
-static void talk_add(int seat, const char *text) {
-  if (G.ntalk >= TALK_MAX) return;
-  G.talk[G.ntalk].seat = seat;
-  api->fmt(G.talk[G.ntalk].text, SAY_MAX, "%s", text);
-  G.ntalk++;
+/* The seat a computer suspects most, for its words. */
+static int top_suspect(int s) {
+  return tr_best(&G.t, s, tr_alive_mask(&G.t) & (uint8_t)~(1 << s), 0, 0);
 }
 
-/* The computers' own words, for when Claude cannot be asked. */
-static void talk_fallback(void) {
-  int s;
-  char line[SAY_MAX];
-  G.ntalk = G.italk = 0;
-  for (s = 0; s < TR_N; s++) {
-    int target;
-    const char *form;
-    if (!G.t.alive[s] || G.t.human[s]) continue;
-    target = G.t.vote[s];
-    if (target < 0 || target >= TR_N) continue;
-    form = G.t.role[s] == TR_TRAITOR ? TRAIT_LINES[tr_roll(&G.t, 4)] : FAITH_LINES[tr_roll(&G.t, 4)];
-    api->fmt(line, sizeof line, form, G.name[target]);
-    talk_add(s, line);
+/* Case-blind: does `text` mention the name? */
+static int mentions(const char *text, const char *name) {
+  int i, k, n = (int)api->str_len(name);
+  for (i = 0; text[i]; i++) {
+    for (k = 0; k < n; k++) {
+      char a = text[i + k], b = name[k];
+      if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+      if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+      if (a != b) break;
+    }
+    if (k == n) return 1;
   }
+  return 0;
 }
 
-static void talk_send_all(void) {
-  int i;
-  for (i = 0; i < G.ntalk; i++) send_line(G.talk[i].seat, G.talk[i].text);
-}
-
-static void talk_ready(void) {
-  G.tk = TK_DONE;
-  G.italk = 0;
-  G.talk_at = 0;
-  G.hold = 0;
-  talk_send_all();
+/* The computers' own words, for when Claude cannot be asked: openings, or
+ * an answer to the last thing a person said -- the named defend themselves,
+ * and a name said leans two of the others toward it. */
+static void talk_fallback(int mode, const char *last) {
+  int s, n = 0, named = -1;
+  char line[SAY_MAX];
+  if (mode == 0) {
+    for (s = 0; s < TR_N; s++) {
+      int target;
+      if (!G.t.alive[s] || G.t.human[s]) continue;
+      target = top_suspect(s);
+      if (target < 0) continue;
+      api->fmt(line, sizeof line, G.t.role[s] == TR_TRAITOR ? TRAIT_LINES[tr_roll(&G.t, 4)]
+                                                             : FAITH_LINES[tr_roll(&G.t, 4)], G.name[target]);
+      queue_add(s, line);
+    }
+    return;
+  }
+  for (s = 0; s < TR_N; s++)
+    if (G.t.alive[s] && last && mentions(last, G.name[s])) { named = s; break; }
+  if (named >= 0 && !G.t.human[named]) queue_add(named, DEFEND_LINES[tr_roll(&G.t, 4)]);
+  for (s = 0; s < TR_N && named >= 0 && n < 2; s++)
+    if (s != named && G.t.alive[s] && !G.t.human[s] && tr_roll(&G.t, 2)) { tr_lean(&G.t, s, named, 200); n++; }
+  if (named < 0 || G.t.human[named]) {
+    for (s = tr_roll(&G.t, TR_N); ; s = (s + 1) % TR_N)
+      if (G.t.alive[s] && !G.t.human[s]) { queue_add(s, MURMUR_LINES[tr_roll(&G.t, 3)]); break; }
+  }
 }
 
 /* A name with no spaces, for the request's lines. */
@@ -212,51 +302,72 @@ static void token(const char *s, char *out, int n) {
   out[k] = 0;
 }
 
-/* Ask the server for the computers' words: who they are (in secret), whom
- * each will vote for, and what has happened. */
-static void talk_start(void) {
-  int s, at = 0, i;
+static const char *last_said(void) {
+  int i;
+  for (i = G.nchat - 1; i >= 0 && i >= G.nchat - CHAT_N; i--)
+    if (G.chat[i % CHAT_N].seat >= 0 && G.t.human[(int)G.chat[i % CHAT_N].seat]) return G.chat[i % CHAT_N].text;
+  return 0;
+}
+
+/* Ask the server for the computers' words: mode 0 the round table's
+ * openings, 1 an answer to what was just said. What it is told: who they
+ * are (in secret), whom each suspects, what has happened, and the talk. */
+static void talk_request(int mode) {
+  int s, at = 0, i, from;
   char url[160], nm[NAME_W];
-  G.ntalk = G.italk = 0;
-  G.hold = 1;
-  if (!(api->caps_ok() & CAPP_CAP_PROXY)) { talk_fallback(); talk_ready(); return; }
-  at += api->fmt(G.body + at, sizeof G.body - (size_t)at, "round %d\n", G.t.round);
+  if (G.tk == TK_POST || G.tk == TK_WAIT || G.tk == TK_POLL) { if (mode) G.want_reply = 1; return; }
+  G.tk_mode = mode;
+  if (!(api->caps_ok() & CAPP_CAP_PROXY)) { talk_fallback(mode, last_said()); return; }
+  G.hold = 1;                                     /* "..." in the room until they answer */
+  at += api->fmt(G.body + at, sizeof G.body - (size_t)at, "mode %s\nround %d\n", mode ? "reply" : "open",
+                 G.t.round);
   for (s = 0; s < TR_N; s++) {
     token(G.name[s], nm, sizeof nm);
-    if (G.t.alive[s] && !G.t.human[s]) {
-      int sus = tr_best(&G.t, s, tr_alive_mask(&G.t) & (uint8_t)~(1 << s), 0, 0);
-      at += api->fmt(G.body + at, sizeof G.body - (size_t)at, "seat %d %s %s %d %d\n", s, nm,
-                     G.t.role[s] == TR_TRAITOR ? "traitor" : "faithful", G.t.vote[s], sus);
-    } else if (G.t.alive[s]) {
+    if (G.t.alive[s] && !G.t.human[s])
+      at += api->fmt(G.body + at, sizeof G.body - (size_t)at, "seat %d %s %s -1 %d\n", s, nm,
+                     G.t.role[s] == TR_TRAITOR ? "traitor" : "faithful", top_suspect(s));
+    else if (G.t.alive[s])
       at += api->fmt(G.body + at, sizeof G.body - (size_t)at, "person %d %s\n", s, nm);
-    } else {
+    else
       at += api->fmt(G.body + at, sizeof G.body - (size_t)at, "gone %d %s %s\n", s, nm,
                      !G.t.shown[s] ? "murdered" : G.t.role[s] == TR_TRAITOR ? "banished-traitor"
                                                                            : "banished-faithful");
-    }
   }
   for (i = 0; i < G.nlog; i++)
     at += api->fmt(G.body + at, sizeof G.body - (size_t)at, "log %s\n", G.log[i]);
+  from = G.nchat - 16 > G.table_from ? G.nchat - 16 : G.table_from;
+  if (from < G.nchat - CHAT_N) from = G.nchat - CHAT_N;
+  for (i = from; i < G.nchat; i++)
+    if (G.chat[i % CHAT_N].seat >= 0)
+      at += api->fmt(G.body + at, sizeof G.body - (size_t)at, "say %d %s\n", G.chat[i % CHAT_N].seat,
+                     G.chat[i % CHAT_N].text);
   api->fmt(url, sizeof url, "%s/traitors/talk", api->proxy());
   if (api->http_start("POST", url, G.body, "text/plain", "", 20000) != 0) {
-    talk_fallback();
-    talk_ready();
+    G.hold = 0;
+    talk_fallback(mode, last_said());
     return;
   }
   G.tk = TK_POST;
   G.tk_until = api->ticks_ms() + 45000;
 }
 
-/* "ok" then "SEAT\tTEXT" lines: the talk. 0 if it was not that. */
+/* "ok", then "SEAT\tTEXT" a speaker and "lean\tSEAT\tTARGET" a mind changed.
+ * The number of lines queued. */
 static int talk_parse(const char *r) {
   const char *p = r;
   char line[SAY_MAX];
+  int n = 0;
   if (!str_starts(p, "ok")) return 0;
   while (*p && *p != '\n') p++;
-  G.ntalk = 0;
   while (*p) {
     int seat, k = 0;
     if (*p == '\n') p++;
+    if (str_starts(p, "lean\t")) {
+      int o = p[5] - '0', target = p[7] - '0';
+      if (p[6] == '\t' && o >= 0 && o < TR_N && target >= 0 && target < TR_N) tr_lean(&G.t, o, target, 300);
+      while (*p && *p != '\n') p++;
+      continue;
+    }
     if (*p < '0' || *p > '9') break;
     seat = *p - '0';
     p++;
@@ -265,9 +376,16 @@ static int talk_parse(const char *r) {
     while (*p && *p != '\n' && k < SAY_MAX - 1) line[k++] = *p++;
     line[k] = 0;
     while (*p && *p != '\n') p++;
-    if (seat < TR_N && G.t.alive[seat] && !G.t.human[seat]) talk_add(seat, line);
+    if (seat < TR_N && G.t.alive[seat] && !G.t.human[seat]) { queue_add(seat, line); n++; }
   }
-  return G.ntalk > 0;
+  return n;
+}
+
+static void talk_done(int ok) {
+  if (!ok) talk_fallback(G.tk_mode, last_said());
+  G.tk = TK_DONE;
+  G.hold = 0;
+  if (G.want_reply) { G.want_reply = 0; talk_request(1); }
 }
 
 /* The request, a step a tick. 1 if anything changed on screen. */
@@ -275,7 +393,7 @@ static int talk_tick(uint32_t now) {
   int n;
   char url[200];
   if (G.tk != TK_POST && G.tk != TK_WAIT && G.tk != TK_POLL) return 0;
-  if ((int32_t)(now - G.tk_until) > 0) { talk_fallback(); talk_ready(); return 1; }
+  if ((int32_t)(now - G.tk_until) > 0) { talk_done(0); return 1; }
   if (G.tk == TK_WAIT) {
     if ((int32_t)(now - G.tk_at) < 0) return 0;
     api->fmt(url, sizeof url, "%s/traitors/talk?id=%s", api->proxy(), G.tk_id);
@@ -285,40 +403,33 @@ static int talk_tick(uint32_t now) {
   }
   n = api->http_poll(G.reply, sizeof G.reply);
   if (n == CAPP_HTTP_PENDING) return 0;
-  if (n < 0) { talk_fallback(); talk_ready(); return 1; }
+  if (n < 0) { talk_done(0); return 1; }
   G.reply[n < (int)sizeof G.reply ? n : (int)sizeof G.reply - 1] = 0;
   if (G.tk == TK_POST) {
     int k = 0;
     while (G.reply[k] && G.reply[k] != '\n' && k < (int)sizeof G.tk_id - 1) { G.tk_id[k] = G.reply[k]; k++; }
     G.tk_id[k] = 0;
-    if (!k || str_starts(G.reply, "error")) { talk_fallback(); talk_ready(); return 1; }
+    if (!k || str_starts(G.reply, "error")) { talk_done(0); return 1; }
     G.tk = TK_WAIT;
     G.tk_at = now + 1500;
     return 0;
   }
   if (str_starts(G.reply, "pending")) { G.tk = TK_WAIT; G.tk_at = now + 1200; return 0; }
-  if (!talk_parse(G.reply)) talk_fallback();
-  talk_ready();
+  talk_done(talk_parse(G.reply) > 0);
   return 1;
 }
 
-/* The talk on screen, a line at a time: 4 s each, or Enter. 1 to repaint. */
-static int talk_show(uint32_t now) {
-  if (G.italk >= G.ntalk) return 0;
-  if (G.talk_at && (int32_t)(now - G.talk_at) < 0) return 0;
-  api->fmt(G.say, sizeof G.say, "%s", G.talk[G.italk].text);
-  G.say_seat = G.talk[G.italk].seat;
-  G.italk++;
-  G.talk_at = now + 4000;
-  return 1;
+/* A person (this one, or the guest) said something. */
+static void person_says(int seat, const char *text) {
+  chat_add(seat, text);
+  logf_(text);
+  send_line(seat, text);
+  talk_request(1);
 }
 
-/* The table talk is still going: being written, waiting to be shown, or
- * its last line still on screen. Nobody answers until it is done. */
+/* The computers are still speaking: being written, or waiting their turn. */
 static int talking(void) {
-  if (G.v.phase != TR_TABLE) return 0;
-  if (G.hold || G.italk < G.ntalk) return 1;
-  return G.say_seat >= 0 && G.talk_at && (int32_t)(api->ticks_ms() - G.talk_at) < 0;
+  return G.hold || G.nq > 0 || G.typing >= 0;
 }
 
 /* ---- the host: narration, and telling the guest ---------------------------------- */
@@ -412,15 +523,27 @@ static void after_next(void) {
   if (G.t.phase != G.seen_phase) {
     G.seen_phase = G.t.phase;
     narrate(G.t.phase);
-    if (G.t.phase == TR_TABLE) talk_start();
+    if (G.t.phase == TR_TABLE) {
+      G.table_from = G.nchat;
+      G.chat_view = 1;
+      G.was_open = G.t.talk_open;
+      talk_request(0);
+    }
   }
 }
 
 /* The host settles a phase once everything is in, after a pause for the show. */
 static int host_tick(uint32_t now) {
   int changed = talk_tick(now);
-  if (G.t.phase == TR_OVER || !tr_ready(&G.t) || G.hold) { G.next_at = 0; if (changed) publish(); return changed; }
-  if (G.t.phase == TR_TABLE && G.italk < G.ntalk) return changed;   /* let them speak first */
+  changed |= queue_tick(now);
+  if (G.t.phase == TR_TABLE && G.was_open && !G.t.talk_open) {
+    G.was_open = 0;
+    castle("Enough talk. Everyone votes.");
+    changed = 1;
+  }
+  if (changed) publish();
+  if (G.t.phase == TR_OVER || !tr_ready(&G.t) || G.hold) { G.next_at = 0; return changed; }
+  if (G.t.phase == TR_TABLE && talking()) return changed;           /* let them finish speaking */
   if (!G.next_at) {
     int pace = G.t.phase == TR_PROPOSE || G.t.phase == TR_VAULT || G.t.phase == TR_NIGHT ? 1600 : 700;
     G.next_at = now + (uint32_t)pace;
@@ -442,7 +565,11 @@ static void new_game(void) {
   if (G.net) human[1] = 2;
   tr_new(&G.t, api->ticks_ms() * 2654435761u + 17, human);
   G.nlog = 0;
-  G.ntalk = G.italk = 0;
+  G.nchat = G.nq = G.q_at = G.scroll = G.ilen = 0;
+  G.input[0] = 0;
+  G.typing = -1;
+  G.chat_view = 0;
+  G.want_reply = 0;
   G.hold = 0;
   G.tk = TK_IDLE;
   G.seen_phase = TR_ROLES;
@@ -570,7 +697,7 @@ static void paint_seat(int s) {
   portrait(s, x, y, !alive);
   if (traitor_known) { edge = C_BLOOD; has_edge = 1; }
   if (v->need == TR_ASK_CREW && tr_in(G.pick, s)) { edge = C_PICK; has_edge = 1; }
-  if (pickable(s) && s == G.cur && !talking()) { edge = C_CURSOR; has_edge = 1; }
+  if (pickable(s) && s == G.cur) { edge = C_CURSOR; has_edge = 1; }
   if (has_edge) frame(x - 1, y - 1, TA_FACE + 2, TA_FACE + 2, edge);
   if (!alive) icon((v->shown >> s) & 1 ? ((v->traitors >> s) & 1 ? TA_CLOAK : TA_SKULL) : TA_DAGGER,
                    x + 5, y + 6);
@@ -701,16 +828,154 @@ static void paint_panel(CRect c) {
   icon(G.v.my_role == TR_TRAITOR ? TA_CLOAK : TA_SHIELD, 229, PANEL_Y + 20);
 }
 
+/* ---- painting: the chat room --------------------------------------------------- */
+
+#define CH_TOP    14                  /* under the title */
+#define CH_IN_H   15                  /* the line being typed */
+#define CH_LH     13
+
+/* A portrait at half size: every other pixel. */
+static void mini_face(int s, int x, int y, int grey) {
+  uint16_t px[10 * 10];
+  int r, c;
+  for (r = 0; r < 10; r++)
+    for (c = 0; c < 10; c++) {
+      int i = (r * 2) * TA_FACE + c * 2;
+      uint8_t b = TA_FACES[s][i / 2];
+      int v = b >> 4;
+      if (grey && v > 1) v = 13;
+      px[r * 10 + c] = TA_PAL[v];
+    }
+  api->pixels(capp_rect(x, y, 10, 10), px);
+}
+
+/* Break `s` into lines of at most `w` pixels in font f: the starts and
+ * lengths, at most `max` of them. A word too long breaks inside. */
+static int wrap(int f, const char *s, int w, int *start, int *len, int max) {
+  char buf[SAY_MAX];
+  int n = 0, p = 0, total = (int)api->str_len(s);
+  while (p < total && n < max) {
+    int cut = total - p, b;
+    while (s[p] == ' ') p++;
+    cut = total - p;
+    for (;;) {
+      api->fmt(buf, sizeof buf, "%.*s", cut, s + p);
+      if (api->text_width(f, buf) <= w || cut <= 1) break;
+      for (b = cut - 1; b > 0 && s[p + b] != ' '; b--) {}
+      cut = b > 0 ? b : cut - 1;
+    }
+    start[n] = p;
+    len[n] = cut;
+    n++;
+    p += cut;
+  }
+  return n;
+}
+
+/* One message, its bottom at `bottom`; its top, or `top` if it would not
+ * fit above it (then it is not drawn). */
+static int paint_message(int i, int bottom, int top) {
+  int seat = G.chat[i % CHAT_N].seat, st[5], ln[5], n, k, h, x, y, w;
+  const char *text = G.chat[i % CHAT_N].text;
+  char who[NAME_W + 2], buf[SAY_MAX];
+  int castle_line = seat < 0;
+  if (castle_line) {
+    n = wrap(G.f_ui, text, 228, st, ln, 4);
+    h = n * CH_LH + 3;
+    if (bottom - h < top) return top;
+    y = bottom - h + 1;
+    api->fill(capp_rect(0, bottom - h, 240, 1), CAPP_RGB(46, 34, 52));
+    for (k = 0; k < n; k++) {
+      api->fmt(buf, sizeof buf, "%.*s", ln[k], text + st[k]);
+      api->text_font(G.f_ui, 6, (int16_t)(y + 1 + k * CH_LH), buf, C_DIM, C_PANEL);
+    }
+    return bottom - h;
+  }
+  api->fmt(who, sizeof who, "%s ", G.name[seat]);
+  w = api->text_width(G.f_uib, who);
+  /* the name opens the first line; the words wrap under it from x 16 */
+  n = wrap(G.f_ui, text, 222, st, ln, 5);
+  if (n && api->text_width(G.f_ui, text) + w > 222) {
+    /* re-wrap so the first line leaves room for the name */
+    int s0[5], l0[5], m;
+    m = wrap(G.f_ui, text, 222 - w, s0, l0, 1);
+    if (m) {
+      st[0] = s0[0]; ln[0] = l0[0];
+      n = 1 + wrap(G.f_ui, text + st[0] + ln[0], 222, st + 1, ln + 1, 4);
+      for (k = 1; k < n; k++) st[k] += st[0] + ln[0];
+    }
+  }
+  h = (n ? n : 1) * CH_LH + 3;
+  if (h < 13) h = 13;
+  if (bottom - h < top) return top;
+  y = bottom - h + 2;
+  x = 16;
+  mini_face(seat, 3, y + 1, 0);
+  api->text_font(G.f_uib, (int16_t)x, (int16_t)y, who,
+                 seat == G.me ? C_GOLD : ((G.v.traitors >> seat) & 1) ? C_BLOOD : C_PICK, C_PANEL);
+  for (k = 0; k < n; k++) {
+    api->fmt(buf, sizeof buf, "%.*s", ln[k], text + st[k]);
+    api->text_font(G.f_ui, (int16_t)(k == 0 ? x + w : x), (int16_t)(y + k * CH_LH), buf, C_TEXT, C_PANEL);
+  }
+  return bottom - h;
+}
+
+static void paint_chat(CRect c) {
+  int bottom = c.h - FOOT_H - CH_IN_H, i, skipped = 0;
+  char b[SAY_MAX + 4], title[40];
+  /* the title */
+  api->fill(capp_rect(0, 0, 240, CH_TOP), C_NIGHT);
+  api->fmt(title, sizeof title, G.v.phase == TR_TABLE ? "The round table" : "Round %d", G.v.round);
+  api->text_font(G.f_uib, 6, 0, title, C_GOLD, C_NIGHT);
+  api->text(170, 3, "tab: hall", C_DIM, C_NIGHT);
+  api->fill(capp_rect(0, CH_TOP - 1, 240, 1), C_EDGE);
+  /* the messages, newest at the bottom, scrolled back by `scroll` */
+  api->fill(capp_rect(0, CH_TOP, 240, bottom - CH_TOP), C_PANEL);
+  if (G.typing >= 0 && G.typing < TR_N && !G.scroll) {
+    api->fmt(b, sizeof b, "%s is typing...", G.name[G.typing]);
+    api->text_font(G.f_ui, 16, (int16_t)(bottom - CH_LH - 1), b, C_DIM, C_PANEL);
+    bottom -= CH_LH + 1;
+  } else if (G.hold && !G.scroll) {
+    api->text_font(G.f_ui, 16, (int16_t)(bottom - CH_LH - 1), "...", C_DIM, C_PANEL);
+    bottom -= CH_LH + 1;
+  }
+  for (i = G.nchat - 1; i >= 0 && i >= G.nchat - CHAT_N; i--) {
+    int top;
+    if (skipped < G.scroll) { skipped++; continue; }
+    top = paint_message(i, bottom, CH_TOP);
+    if (top == CH_TOP && bottom != CH_TOP) break;
+    bottom = top;
+    if (bottom <= CH_TOP) break;
+  }
+  /* the line being typed */
+  {
+    int y = c.h - FOOT_H - CH_IN_H;
+    api->fill(capp_rect(0, y, 240, CH_IN_H), CAPP_RGB(36, 26, 42));
+    api->fill(capp_rect(0, y, 240, 1), C_EDGE);
+    if (G.ilen) {
+      api->fmt(b, sizeof b, "%s_", G.input);
+      /* the end of it, if it is longer than the line */
+      while (api->text_width(G.f_ui, b) > 228 && b[0]) api->fmt(b, sizeof b, "%s", b + 1);
+      api->text_font(G.f_ui, 6, (int16_t)(y + 1), b, C_TEXT, CAPP_RGB(36, 26, 42));
+    } else {
+      api->text_font(G.f_ui, 6, (int16_t)(y + 1),
+                     G.v.need == TR_ASK_TALK ? "say something  (enter alone: ready)"
+                                             : "say something...",
+                     C_DIM, CAPP_RGB(36, 26, 42));
+    }
+  }
+}
+
 /* The footer: what this seat is asked, in keys. */
 static const char *hint(void) {
   static char b[48];
   const TrView *v = &G.v;
   if (G.asking) return "leave this game? y / n";
   if (G.screen == SC_GAME && G.v.phase == TR_OVER) return G.host ? "enter play again  esc leave" : "esc leave";
-  if (talking()) return G.hold ? "they are thinking..." : "enter next";
   if (G.sent) return "waiting...";
   switch (v->need) {
-  case TR_ASK_ACK: return "enter go on";
+  case TR_ASK_ACK: return "enter go on  tab chat";
+  case TR_ASK_TALK: return "the table is talking: tab";
   case TR_ASK_CREW:
     api->fmt(b, sizeof b, "space pick %d of %d  enter send", tr_bits(G.pick), v->crew_size);
     return b;
@@ -791,7 +1056,10 @@ static void app_paint(void *st, CRect c) {
   (void)st;
   if (G.screen == SC_TITLE) paint_title(c);
   else if (G.screen == SC_LOBBY) paint_lobby(c);
-  else paint_game(c);
+  else if (G.chat_view) {
+    paint_chat(c);
+    footer_paint(api, c, G.ilen ? "enter say it  esc clear" : "type  enter say  tab hall");
+  } else paint_game(c);
 }
 
 /* ---- answering ------------------------------------------------------------------- */
@@ -829,6 +1097,45 @@ static void leave_game(void) {
   G.asking = 0;
 }
 
+/* Something typed into the room, or said. */
+static void say_it(void) {
+  if (!G.ilen) return;
+  if (G.host) person_says(G.me, G.input);
+  else if (G.L && G.L->state() == CAPP_LINK_CONNECTED) {
+    uint8_t b[2 + SAY_MAX];
+    int n = G.ilen;
+    b[0] = 'C';
+    api->mem_cpy(b + 1, G.input, (size_t)n);
+    G.L->send(b, n + 1);
+  }
+  G.ilen = 0;
+  G.input[0] = 0;
+  G.scroll = 0;
+}
+
+static int key_chat(uint8_t k) {
+  int lines = G.nchat < CHAT_N ? G.nchat : CHAT_N;
+  if (k == CAPP_KEY_ESC) {
+    if (G.ilen) { G.ilen = 0; G.input[0] = 0; }
+    else G.chat_view = 0;
+    return 1;
+  }
+  if (k == CAPP_KEY_UP) { if (G.scroll < lines - 1) G.scroll++; return 1; }
+  if (k == CAPP_KEY_DOWN) { if (G.scroll > 0) G.scroll--; return 1; }
+  if (k == CAPP_KEY_BACK) { if (G.ilen) G.input[--G.ilen] = 0; return 1; }
+  if (k == CAPP_KEY_ENTER) {
+    if (api->key_repeat()) return 1;
+    if (G.ilen) say_it();
+    else if (G.v.need == TR_ASK_TALK && !G.sent) answer(1);      /* ready to vote */
+    return 1;
+  }
+  if (k >= 32 && k < 127 && G.ilen < (int)sizeof G.input - 1) {
+    G.input[G.ilen++] = (char)k;
+    G.input[G.ilen] = 0;
+  }
+  return 1;
+}
+
 static int key_game(uint8_t k) {
   const TrView *v = &G.v;
   if (G.asking) {
@@ -837,8 +1144,13 @@ static int key_game(uint8_t k) {
     else if (a == CONFIRM_NO) G.asking = 0;
     return 1;
   }
+  if (k == '\t') {                                 /* the hall, or the room */
+    G.chat_view = !G.chat_view;
+    G.scroll = 0;
+    return 1;
+  }
+  if (G.chat_view) return key_chat(k);
   if (k == CAPP_KEY_ESC) {
-    if (G.italk < G.ntalk) { G.italk = G.ntalk; G.talk_at = 0; return 1; }   /* hurry them */
     if (v->phase == TR_OVER) { leave_game(); return 1; }
     G.asking = 1;
     return 1;
@@ -849,11 +1161,11 @@ static int key_game(uint8_t k) {
     if (k == CAPP_KEY_ENTER && G.host) new_game();
     return 1;
   }
-  if (talking()) {
-    if (k == CAPP_KEY_ENTER || k == ' ') G.talk_at = api->ticks_ms();    /* the next line now */
+  if (G.sent) return 1;
+  if (v->need == TR_ASK_TALK) {                    /* the table is talking: that is the room */
+    if (k == CAPP_KEY_ENTER) G.chat_view = 1;
     return 1;
   }
-  if (G.sent) return 1;
   switch (v->need) {
   case TR_ASK_ACK:
     if (k == CAPP_KEY_ENTER || k == ' ') answer(0);
@@ -906,8 +1218,10 @@ static void start_game(int net, int host) {
   G.cur = G.me;
   G.say[0] = 0;
   G.say_seat = -1;
-  G.ntalk = G.italk = 0;
-  G.talk_at = 0;
+  G.nchat = G.nq = G.q_at = G.scroll = G.ilen = 0;
+  G.input[0] = 0;
+  G.typing = -1;
+  G.chat_view = 0;
   set_names();
   if (host) new_game();
   else {
@@ -915,7 +1229,7 @@ static void start_game(int net, int host) {
     G.v.me = (uint8_t)G.me;
     G.v.alive = 0x7F;
     G.v.round = 1;
-    api->fmt(G.say, sizeof G.say, "Waiting for the host...");
+    chat_add(-1, "Waiting for the host...");
   }
 }
 
@@ -998,20 +1312,26 @@ static int net_tick(void) {
     if (G.host && b[0] == 'A' && n >= 3) {
       if (tr_act(&G.t, 1, b[1] | (b[2] << 8))) { publish(); G.next_at = 0; }
       redraw = 1;
+    } else if (G.host && b[0] == 'C' && n >= 2 && G.t.human[1]) {
+      b[n] = 0;
+      person_says(1, (const char *)b + 1);
+      redraw = 1;
     } else if (!G.host && b[0] == 'S') {
       int was = G.v.phase, need = G.v.need;
       if (tv_unpack(b, n, &G.v) == 0) {
         G.hold = n > 31 ? b[31] : 0;
         if (G.v.phase != was || G.v.need != need) { G.sent = 0; G.pick = 0; }
         if (G.v.need == TR_ASK_CREW && !G.pick) G.pick = (uint8_t)(1 << G.me);
-        if (G.v.phase == TR_TABLE && was != TR_TABLE) { G.ntalk = G.italk = 0; }
         redraw = 1;
       }
     } else if (!G.host && b[0] == 'T' && n >= 2) {
       int seat = b[1] == 255 ? -1 : b[1];
       b[n] = 0;
-      if (seat >= 0 && seat < TR_N) talk_add(seat, (const char *)b + 2);
-      else { api->fmt(G.say, sizeof G.say, "%s", (const char *)b + 2); G.say_seat = -1; }
+      chat_add(seat < TR_N ? seat : -1, (const char *)b + 2);
+      if (seat == G.typing) G.typing = -1;
+      redraw = 1;
+    } else if (!G.host && b[0] == 'Y' && n >= 2) {
+      G.typing = b[1] < TR_N ? b[1] : -1;
       redraw = 1;
     }
   }
@@ -1019,17 +1339,22 @@ static int net_tick(void) {
 }
 
 static int app_tick(void *st, uint32_t now) {
-  int redraw = 0, need = G.v.need, phase = G.v.phase;
+  int redraw = 0, need = G.seen_need, phase = G.seen_view_phase;
   (void)st;
   if (G.L && (G.screen == SC_LOBBY || G.net)) redraw |= net_tick();
   if (G.screen != SC_GAME) return redraw;
   if (G.host) redraw |= host_tick(now);
-  redraw |= talk_show(now);
   if (G.v.phase != phase || G.v.need != need) {
     if (G.v.need == TR_ASK_CREW) G.pick = (uint8_t)(1 << G.me);
+    if (G.v.need == TR_ASK_TALK) G.chat_view = 1;             /* the round table opens the room */
+    if (need == TR_ASK_TALK && G.v.need != TR_ASK_TALK) G.chat_view = 0;   /* and the vote, the hall */
     cursor_home();
     redraw = 1;
   }
+  /* What the last tick saw: an answer given in a key handler changes the
+   * view before any tick does, and must still count as a change. */
+  G.seen_need = G.v.need;
+  G.seen_view_phase = G.v.phase;
   return redraw;
 }
 
@@ -1050,13 +1375,17 @@ const CappInfo capp_info = {
   "\tTraitors gold or lead. One lead spoils it\n"
   "shield\ta clean mission's leader gives one;\n"
   "\tit stops one murder\n"
-  "table\teveryone names someone: most banished\n"
+  "table\tthe talk, then everyone names someone:\n"
+  "\tthe most named is banished\n"
   "night\tthe Traitors murder a Faithful\n"
   "\n"
   "Faithful win when no Traitor is left.\n"
   "Traitors win at two spoiled missions, or\n"
   "as many as the Faithful.\n"
   "\n"
+  "tab\tthe room: everyone's words; type to talk,\n"
+  "\tenter says it. At the round table, enter\n"
+  "\ton an empty line: ready to vote\n"
   "arrows\tchoose a seat\n"
   "space\tpick for a crew\n"
   "enter\tsettle, go on, next line\n"
@@ -1067,7 +1396,7 @@ const CappInfo capp_info = {
 
 static CappUi UI;
 
-static int app_wants_text(void *st) { (void)st; return 0; }
+static int app_wants_text(void *st) { (void)st; return G.screen == SC_GAME && G.chat_view; }
 
 int capp_main(const CardApi *a, int argc, char **argv) {
   (void)argc; (void)argv;

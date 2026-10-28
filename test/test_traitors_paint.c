@@ -18,11 +18,12 @@
 
 static CardApi TA;
 
-/* A server: the POST gives an id, one poll is pending, the next has the talk. */
+/* A server: a POST gives an id, its first poll is pending, the next has the
+ * talk -- every computer's opening, or for a reply Corvin's answer and a lean. */
 static struct {
-  int   on, polls, posts;
-  char  body[1600];
-  char  reply[400];
+  int   on, polls, posts, reply_mode;
+  char  body[3000];
+  char  reply[600];
 } TS;
 
 static int ts_caps_none(void) { return 0; }
@@ -31,12 +32,18 @@ static int ts_start(const char *m, const char *u, const char *b, const char *ct,
   (void)ct; (void)bearer; (void)ms;
   if (!strcmp(m, "POST")) {
     TS.posts++;
+    TS.polls = 0;
     snprintf(TS.body, sizeof TS.body, "%s", b ? b : "");
+    TS.reply_mode = strstr(TS.body, "mode reply") != NULL;
     snprintf(TS.reply, sizeof TS.reply, "j1\n");
   } else if (strstr(u, "id=j1")) {
     int s, at;
     if (TS.polls++ == 0) { snprintf(TS.reply, sizeof TS.reply, "pending\n"); return 0; }
     at = snprintf(TS.reply, sizeof TS.reply, "ok\n");
+    if (TS.reply_mode) {
+      snprintf(TS.reply + at, sizeof TS.reply - (size_t)at, "3\tCorvin answers you.\nlean\t2\t3\n");
+      return 0;
+    }
     for (s = 0; s < TR_N; s++)
       if (G.t.alive[s] && !G.t.human[s])
         at += snprintf(TS.reply + at, sizeof TS.reply - (size_t)at, "%d\tThe server speaks for %s.\n", s, G.name[s]);
@@ -77,9 +84,27 @@ static void t_tick(unsigned ms) {
   fakescreen_paint();
 }
 
-/* Whatever the screen asks, the obvious answer. */
+static void t_type(const char *s) {
+  for (; *s; s++) t_key((uint8_t)*s);
+}
+
+/* Whatever the screen asks, the obvious answer: at a round table, one
+ * line said and then ready. */
+static int T_SAID;
 static void t_answer(void) {
-  if (talking()) { t_key(CAPP_KEY_ENTER); return; }
+  if (G.v.need == TR_ASK_TALK) {
+    if (talking()) return;                          /* let them speak */
+    if (!G.chat_view) t_key('\t');
+    if (T_SAID != G.v.round) {
+      T_SAID = G.v.round;
+      t_type("I think Corvin is lying");
+      t_key(CAPP_KEY_ENTER);
+    } else {
+      t_key(CAPP_KEY_ENTER);                        /* empty: ready to vote */
+    }
+    return;
+  }
+  if (G.chat_view) t_key('\t');                    /* the hall, for anything else */
   switch (G.v.need) {
   case TR_ASK_ACK: t_key(CAPP_KEY_ENTER); break;
   case TR_ASK_YESNO: t_key('y'); break;
@@ -111,6 +136,7 @@ static int t_play(const char *dump_prefix) {
 
 void test_traitors_paint_the_title_then_a_game_alone_to_the_end(void) {
   int seen;
+  T_SAID = 0;
   t_boot(0);
   CHECK_EQ(G.screen, SC_TITLE);
   CHECK_EQ(fakescreen_unset(), 0);
@@ -133,24 +159,55 @@ void test_traitors_paint_the_title_then_a_game_alone_to_the_end(void) {
   CHECK_EQ(G.v.phase, TR_ROLES);
 }
 
-void test_traitors_paint_the_talk_comes_from_the_server_with_secrets_only_there(void) {
-  int i;
+void test_traitors_paint_the_round_table_is_a_chat_room_with_the_server(void) {
+  int i, n0, before;
+  T_SAID = 0;
   t_boot(1);
   t_key(CAPP_KEY_ENTER);
-  for (i = 0; i < 400 && !(G.v.phase == TR_TABLE && TS.polls >= 2); i++) { t_answer(); t_tick(900); }
+  for (i = 0; i < 400 && G.v.phase != TR_TABLE && G.v.phase != TR_OVER; i++) {
+    if (G.v.need == TR_ASK_TALK) break;
+    t_answer();
+    t_tick(900);
+  }
   if (G.v.phase == TR_OVER) return;               /* the game ended before a table: a rare deal */
+  CHECK_EQ(G.v.phase, TR_TABLE);
+  CHECK(G.chat_view);                               /* the round table opens the room */
+  CHECK(fakescreen_ui.wants_text(fakescreen_ui.state));
+  /* The opening request names every computer's role -- to the server only. */
   CHECK_EQ(TS.posts, 1);
-  /* The request names every computer's role -- to the server only. */
-  CHECK(strstr(TS.body, "round 1\n") != NULL);
-  CHECK(strstr(TS.body, " traitor ") != NULL || strstr(TS.body, "person") != NULL);
+  CHECK(strstr(TS.body, "mode open\n") != NULL);
   CHECK(strstr(TS.body, "person 0 Morwen") != NULL);
-  t_tick(100);
-  CHECK(G.ntalk > 0);
-  CHECK(strstr(G.talk[0].text, "The server speaks for") != NULL);
-  /* Lines show one at a time; nobody votes while they do. */
-  CHECK(talking());
+  /* They type, then speak, one at a time. */
+  n0 = G.nchat;
+  for (i = 0; i < 40 && talking(); i++) {
+    t_tick(500);
+    if (G.typing >= 0) { CHECK_EQ(fakescreen_unset(), 0); fakescreen_dump("TRAITORS_DUMP", "traitors_typing"); }
+  }
+  CHECK(!talking());
+  CHECK(G.nchat - n0 >= 3);
+  CHECK(strstr(G.chat[(G.nchat - 1) % CHAT_N].text, "The server speaks for") != NULL);
+  /* Say something: it goes in the room, and the server is asked to answer it. */
+  before = G.t.sus[2][3];
+  t_type("Corvin was on that crew");
+  CHECK(!strcmp(G.input, "Corvin was on that crew"));
+  t_key(CAPP_KEY_ENTER);
+  CHECK_EQ(G.ilen, 0);
+  CHECK_EQ(G.chat[(G.nchat - 1) % CHAT_N].seat, 0);
+  CHECK_EQ(TS.posts, 2);
+  CHECK(strstr(TS.body, "mode reply\n") != NULL);
+  CHECK(strstr(TS.body, "say 0 Corvin was on that crew\n") != NULL);
+  CHECK(talking());                                 /* "..." while they think */
+  for (i = 0; i < 40 && talking(); i++) t_tick(500);
+  CHECK(!strcmp(G.chat[(G.nchat - 1) % CHAT_N].text, "Corvin answers you."));
+  CHECK(G.t.sus[2][3] > before);                  /* the lean moved a mind */
   CHECK_EQ(fakescreen_unset(), 0);
-  fakescreen_dump("TRAITORS_DUMP", "traitors_talk");
+  fakescreen_dump("TRAITORS_DUMP", "traitors_chat");
+  /* Enter on nothing: ready, and with nobody else to wait for, the vote. */
+  t_key(CAPP_KEY_ENTER);
+  t_tick(100);
+  CHECK(!G.t.talk_open);
+  CHECK_EQ(G.v.need, TR_ASK_SEAT);
+  CHECK(!G.chat_view);                              /* back to the hall to choose */
 }
 
 void test_traitors_paint_a_traitor_sees_the_other_and_a_faithful_nobody(void) {
