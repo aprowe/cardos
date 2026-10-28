@@ -11,6 +11,29 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.26.0 -- 2026-10-27
+
+Firmware and apps (`update all`), and the server. The release that makes
+an app one folder.
+
+- **An app is one folder**: its source says its launcher folder and kind
+  (`@app folder Games`, `@app release core|extra`), and keeps its colour
+  icon (`NAME.icon.txt`), host tests (`test/`), generators (`tools/`), a
+  README, and any server code as a **plugin** (`apps/NAME/server/`, loaded
+  by `server/plugins.py`). `apps/folders.txt` is gone. Moved to plugins:
+  Crossword, Jar (with Jar Lab), Chat, Wiki, MIDI, Hub, Traitors, and --
+  with their dashboard pages -- Notes, Photos, Music and Toggl.
+  `CARDOS_APP_DIRS` builds and serves apps from outside this repository.
+- **Apps outlive a firmware**: an app built for API V loads on firmware F
+  when `CAPP_API_MIN <= V <= F`, so an app update no longer needs the
+  firmware it was built with, and an old app survives a new firmware.
+- **Friends**: mutual, on the dashboard (/dash/friends, People). Friends
+  can read each other's `pub/` data and play in rooms. **Wordle** shows
+  friends' results for the day and `s` sends yours to Chat; **Wordloom**
+  is a two-player word game between friends, played through rooms; Jar's
+  friends are the platform's.
+- **Traitors: The Game** is a folder app with its talk as a plugin.
+
 ## v0.25.1 -- 2026-10-27
 
 Firmware and apps (`update os`, then `update apps`), and the server.
