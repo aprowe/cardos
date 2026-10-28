@@ -11,6 +11,33 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.25.0 -- 2026-10-27
+
+Firmware and apps (`update all`), and the server. API 50: every `.capp`
+is rebuilt, and an app from before this is refused by this firmware (and
+one from after by older firmware) -- update both together.
+
+- **Crossword** (Games). A library of puzzles on the server, played on
+  the device, with the list in tabs: **Full** (dailies), **Midi** and
+  **Themed** (made here, undated -- The Traitors is the first). The
+  server fetches the NYT Midi from nytmidi.org every hour and keeps a
+  week; `tools/wordhint_nyt.py`, run on the laptop, adds the NYT daily
+  from wordhint.net and keeps a week. Three views, ctrl-l to change:
+  side (the whole grid, the clue in a column beside it), big, and zoom
+  (edge to edge, the clue bar as tall as the clue). Arrows only move;
+  space or tab turns; enter is the next word.
+- **Infrared out, and Lamp** (Make): a remote for LED lamps and strips,
+  which finds and maps a lamp's codes (API 50).
+- **Python** (Make): MicroPython 1.24.1 as an app -- a REPL, files run
+  from the card, `open()`, `import`, `input()` (API 49).
+- **Vim** (Make): a modal editor with motions, completion, colours, and a
+  file tree; `:run` opens Python on the file.
+- **Wordle** and **Hangman** (Games), and **Pain**, a pain tracker.
+- **The way back keeps each app's place** (API 48); an app's open files
+  close with it; an app's code may be 256 KB.
+- **Colour icons travel with `update apps`**; notifications catch up after
+  the device was off, one per app.
+
 ## v0.24.0 -- 2026-10-15
 
 Firmware and apps (`update all`), and the server. Its headline is
