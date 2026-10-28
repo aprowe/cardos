@@ -5,21 +5,22 @@ browser; everything it shows comes from here, and everything it does goes
 through here or through server/files.py (the card). Behind the dashboard's
 cookie, like every /dash route, never the device's bearer.
 
-    GET  /dash/api/state         the session, device, Google, Toggl, the
-                                 server's services, what is published
+    GET  /dash/api/state         the session, device, Google, the server's
+                                 services, what is published, and each
+                                 plugin's dash_state() under its name (Toggl)
+    GET  /dash/api/plugins       the plugins' DASH_VIEWS and DASH_CARDS, their
+                                 HTML and script inline (server/plugins.py)
     POST /dash/api/google/forget sign out of Google (revokes)
-    POST /dash/api/toggl/token   {"token": ...}: check it with Toggl, keep it
-    POST /dash/api/toggl/forget
     POST /dash/api/logout
 
-/state asks Toggl what is running, which counts against Toggl's hourly
-quota -- the page fetches it on load and after an action, never on a timer.
+/state asks Toggl what is running (apps/toggl/server), which counts against
+Toggl's hourly quota -- the page fetches it on load and after an action,
+never on a timer.
 The device's link, which does change by the second, is /dash/files/status.
 """
 import json
 import os
 import sys
-import time
 
 from . import dash
 
@@ -65,6 +66,13 @@ def _body_json(h):
         raise ValueError("not JSON")
 
 
+# What a plugin's dashboard routes use (server/plugins.py): its route
+# function as fn(h, args) behind the cookie, a JSON reply, a JSON body.
+api = _api
+reply = _json
+body_json = _body_json
+
+
 # ---- the parts of the state --------------------------------------------------------
 
 def session_state(h):
@@ -108,26 +116,6 @@ def google_state():
     st.update(ok=ok, why="" if ok else why, email=c.get("email") or "",
               calendar="calendar" in scope, tasks="tasks" in scope,
               signed_in_at=c.get("issued_at"), client_mismatch=c.get("client_id") != cid)
-    return st
-
-
-def toggl_state():
-    from . import toggl
-    c = toggl.load()
-    st = {"connected": bool(c), "name": "", "since": None, "running": None}
-    if not c:
-        return st
-    st.update(name=c.get("name") or "", since=c.get("saved_at"))
-    try:
-        cur = toggl.current()
-        if cur:
-            st["running"] = {"description": toggl.clean(cur.get("description")),
-                             "project": toggl.clean(toggl.projects().get(cur.get("project_id"), "")),
-                             "start": toggl.epoch(cur["start"])}
-    except toggl.TogglError as e:
-        st["error"] = e.why
-    except Exception as e:                      # the network
-        st["error"] = "could not ask Toggl: %s" % e
     return st
 
 
@@ -179,9 +167,18 @@ def updates_state(h):
 @_api
 def get_state(h, args):
     """everything the dashboard shows"""
-    _json(h, {"session": session_state(h), "device": device_state(),
-              "google": google_state(), "toggl": toggl_state(),
-              "server": server_state(h), "updates": updates_state(h)})
+    st = {"session": session_state(h), "device": device_state(),
+          "google": google_state(), "server": server_state(h), "updates": updates_state(h)}
+    from . import plugins
+    st.update(plugins.dash_states(skip=st))     # Toggl's, under "toggl"
+    _json(h, st)
+
+
+@_api
+def get_plugins(h, args):
+    """the pages and cards the apps' plugins add to the dashboard"""
+    from . import plugins
+    _json(h, plugins.dash_parts())
 
 
 @_api
@@ -200,77 +197,6 @@ def post_google_forget(h, args):
             msg = ("Signed out here, but revoking failed (%s); revoke it at "
                    "myaccount.google.com/permissions." % e)
     _json(h, {"ok": True, "msg": msg})
-
-
-@_api
-def post_toggl_token(h, args):
-    """check a Toggl token and keep it"""
-    from . import toggl
-    try:
-        token = (_body_json(h).get("token") or "").strip()
-    except ValueError as e:
-        _json(h, {"error": str(e)}, 400)
-        return
-    if not token:
-        _json(h, {"error": "Paste a token first."}, 400)
-        return
-    try:
-        name, wid = toggl.check_token(token)
-    except toggl.TogglError as e:
-        _json(h, {"error": e.why}, 400)
-        return
-    # Merged, not replaced: the targets live in the same file.
-    toggl.update(lambda c: c.update(token=token, name=name, workspace=wid,
-                                    saved_at=int(time.time())))
-    sys.stderr.write("dash: toggl connected\n")
-    _json(h, {"ok": True, "name": name})
-
-
-@_api
-def get_toggl_targets(h, args):
-    """the Toggl targets, their progress, and the projects to pick from"""
-    from . import toggl
-    try:
-        off = int((args.get("off") or ["0"])[0])
-    except ValueError:
-        off = 0
-    try:
-        names = toggl.projects()
-        prog = toggl.progress(off)
-    except toggl.TogglError as e:
-        _json(h, {"error": e.why}, 400)
-        return
-    _json(h, {"projects": [{"id": k, "name": v, "color": toggl.color(k)}
-                           for k, v in sorted(names.items(), key=lambda kv: kv[1].lower())],
-              "targets": [{"project": t["project"], "name": names.get(t["project"], "?"),
-                           "color": toggl.color(t["project"]), "kind": t["kind"],
-                           "hours": t["hours"], "since": t.get("since"), "done": done}
-                          for t, done in prog]})
-
-
-@_api
-def post_toggl_target(h, args):
-    """set or (hours 0) remove a Toggl target"""
-    from . import toggl
-    try:
-        b = _body_json(h)
-        toggl.set_target(b.get("project"), b.get("kind", "week"), b.get("hours", 0),
-                         b.get("since"))
-    except toggl.TogglError as e:
-        _json(h, {"error": e.why}, 400)
-        return
-    except (ValueError, TypeError) as e:
-        _json(h, {"error": str(e)}, 400)
-        return
-    _json(h, {"ok": True})
-
-
-@_api
-def post_toggl_forget(h, args):
-    """disconnect Toggl"""
-    from . import toggl
-    toggl.forget()
-    _json(h, {"ok": True})
 
 
 def post_logout(h, path, args):
@@ -482,9 +408,6 @@ ROUTES = [
     ("POST", "/dash/api/claude/forget", post_claude_forget, "dash"),
     ("GET", "/dash/api/state", get_state, "dash"),
     ("POST", "/dash/api/google/forget", post_google_forget, "dash"),
-    ("POST", "/dash/api/toggl/token", post_toggl_token, "dash"),
-    ("POST", "/dash/api/toggl/forget", post_toggl_forget, "dash"),
-    ("GET", "/dash/api/toggl/targets", get_toggl_targets, "dash"),
-    ("POST", "/dash/api/toggl/target", post_toggl_target, "dash"),
+    ("GET", "/dash/api/plugins", get_plugins, "dash"),
     ("POST", "/dash/api/logout", post_logout, "open"),
 ]

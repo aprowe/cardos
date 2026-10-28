@@ -739,7 +739,7 @@ static void print_show_status(void) {
 /* One text file, as the document it is: the markup is line-oriented and
  * markdown-shaped, so a note prints as written. 6 KB is a long receipt. */
 /* The whole file, up to PRINT_FILE_MAX. It was 6 KB, which cut a photo off
- * after a few rows: one dithered for the paper (server/photos.py) is about
+ * after a few rows: one dithered for the paper (apps/photo/server) is about
  * 20-30 KB of `%%` lines. And handed over, not copied: two copies of a
  * photo's 32 KB did not fit beside Photos, and the print said "no memory"
  * before it started. */

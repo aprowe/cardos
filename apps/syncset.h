@@ -14,7 +14,7 @@
  *
  * Header-only, static helpers, the same arrangement as apps/safefile.h.
  * Host-tested in test/test_syncset.c, and through the apps in
- * test/test_music.c and test/test_photo.c.
+ * apps/music/test/test_music.c and apps/photo/test/test_photo.c.
  */
 #ifndef CARDOS_SYNCSET_H
 #define CARDOS_SYNCSET_H

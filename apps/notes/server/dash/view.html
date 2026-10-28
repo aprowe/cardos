@@ -1,0 +1,29 @@
+<style>
+.notes{display:grid;grid-template-columns:minmax(180px,260px) 1fr;gap:12px;align-items:stretch}
+@media (max-width:700px){.notes{grid-template-columns:1fr}}
+.notes-list{padding:6px;max-height:min(62vh,560px);overflow-y:auto}
+.notes-list button{display:block;width:100%;text-align:left;border:0;background:none;color:var(--ink);padding:8px 10px;border-radius:6px;cursor:pointer;font:inherit}
+.notes-list button:hover{background:var(--panel2)}
+.notes-list button.on{background:var(--accent-soft);color:var(--ink)}
+.notes-list .t{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.notes-list .w{display:block;font-size:12px;color:var(--ink3)}
+.notes-ed{display:flex;flex-direction:column;padding:0;overflow:hidden}
+.notes-ed textarea{flex:1;min-height:min(56vh,500px);border:0;resize:vertical;background:transparent;color:var(--ink);font:14px/1.55 var(--mono);padding:14px;outline:none}
+.notes-bar{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--line)}
+.notes-bar .grow{flex:1}
+</style>
+<div class="sec-head">
+  <div><span class="lab">on the server</span><h2>Notes</h2></div>
+  <div class="side-info"><span id="note-state" class="faint"></span><button class="btn sm" data-act="note-new">New note</button></div>
+</div>
+<div class="notes">
+  <div class="panel notes-list" id="notes-list"></div>
+  <div class="panel notes-ed">
+    <textarea id="note-text" spellcheck="true" placeholder="Pick a note, or start a new one. The first line is its title."></textarea>
+    <div class="notes-bar"><span class="faint" id="note-meta"></span>
+      <span class="grow"></span>
+      <button class="btn sm" data-act="note-delete">Delete</button>
+      <button class="btn sm primary" data-act="note-save">Save</button></div>
+  </div>
+</div>
+<p class="faint term-note">Kept on the server. The Notes app on the device keeps a copy of each as a file and syncs it; Ctrl-S saves here.</p>

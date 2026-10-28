@@ -239,7 +239,7 @@ class Api(Server):
             self.assertEqual(self.api(path, body)[0], 403, path)
 
     def test_state_has_every_part(self):
-        from server import toggl
+        from apps.toggl import server as toggl
         toggl.forget()
         code, _, st = self.api("/dash/api/state", cookie=self.login())
         self.assertEqual(code, 200)
@@ -251,8 +251,23 @@ class Api(Server):
         self.assertEqual(set(st["server"]), {"version", "claude", "session", "builds", "voice"})
         self.assertIn("apps", st["updates"])
 
+    def test_the_apps_pages_and_cards(self):
+        # server/plugins.py: DASH_VIEWS and DASH_CARDS, fragments inline.
+        self.assertEqual(self.api("/dash/api/plugins")[0], 403)
+        code, _, p = self.api("/dash/api/plugins", cookie=self.login())
+        self.assertEqual(code, 200)
+        views = {v["id"]: v for v in p["views"]}
+        self.assertLessEqual({"notes", "photos", "music"}, set(views))
+        self.assertEqual([v["order"] for v in p["views"]], sorted(v["order"] for v in p["views"]))
+        self.assertIn('id="notes-list"', views["notes"]["html"])
+        self.assertIn("dashPlugin('notes'", views["notes"]["js"])
+        self.assertTrue(views["music"]["icon"].startswith("<path"))
+        cards = {c["id"]: c for c in p["cards"]}
+        self.assertEqual(cards["toggl"]["view"], "accounts")
+        self.assertIn('id="toggl"', cards["toggl"]["html"])
+
     def test_toggl_token_is_checked_then_kept_then_forgotten(self):
-        from server import toggl
+        from apps.toggl import server as toggl
         seen = []
 
         def fake_check(token):
