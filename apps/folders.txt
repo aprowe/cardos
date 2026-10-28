@@ -58,3 +58,4 @@ hangman   Games
 crossword Games
 pain      Plan
 lamp      Make
+traitors  Games

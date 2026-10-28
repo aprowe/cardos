@@ -27,10 +27,10 @@
 
 /* 24 was too few by 2026-10-01: the server listed 28 and the rest were
  * dropped unseen. Anything past this is counted in `dropped`. */
-#define MANIFEST_MAX_APPS 48
+#define MANIFEST_MAX_APPS 64          /* 48 was full on 2026-10-27, with Crossword and Lamp */
 #define MANIFEST_NAME_MAX 16
 /* 52 icons on 2026-10-16: every app's, generic, the folders' and firmware. */
-#define MANIFEST_MAX_ICONS 64
+#define MANIFEST_MAX_ICONS 80
 /* "folder-" and a folder, or an app's name as the launcher keeps it (19). */
 #define MANIFEST_ICON_NAME_MAX 24
 

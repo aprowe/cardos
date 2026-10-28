@@ -27,7 +27,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 
-from . import accounts, agent, ask, chat, crossword, m5hub, daily, dash, dashapi, files, google, jar, kv, midi, msg, music, notes, people, photos, shots, sign, talk, toggl, tz, updates, voice, wiki
+from . import accounts, agent, ask, chat, crossword, m5hub, daily, dash, dashapi, files, google, jar, kv, midi, msg, music, notes, people, photos, shots, sign, talk, toggl, traitors, tz, updates, voice, wiki
 from .jar import jarlab
 from .chat import ROOT as ROOT_DIR
 
@@ -130,7 +130,7 @@ ALL_ROUTES = _normalise(SERVER_ROUTES + chat.ROUTES + agent.ROUTES + m5hub.ROUTE
                         voice.ROUTES + shots.ROUTES + tz.ROUTES + dash.ROUTES + dashapi.ROUTES +
                         google.ROUTES + files.ROUTES + toggl.ROUTES + notes.ROUTES + daily.ROUTES + photos.ROUTES + music.ROUTES + midi.ROUTES + talk.ROUTES + msg.ROUTES +
                         kv.ROUTES + people.ROUTES + ask.ROUTES + sign.ROUTES + jar.ROUTES + jarlab.ROUTES + wiki.ROUTES +
-                        crossword.ROUTES + _screen_routes())
+                        crossword.ROUTES + traitors.ROUTES + _screen_routes())
 
 
 def find_route(method, path):
