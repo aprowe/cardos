@@ -1,4 +1,5 @@
-/* Jar Post on the host: friends (the list, adding by code, a name), sending
+/* Jar Post on the host: friends (the platform's list, asking by name, saying
+ * yes, a name, an old /jar/me copy still read), sending
  * a gift (postage, the item leaving only on "ok", the postage back when it
  * does not), and the post (parcels collected, checked, acknowledged; a
  * forged one dropped; opening one; a thank-you), against a stand-in server.
@@ -40,10 +41,15 @@ static uint32_t ITEM_ID;
 static int post_server(const char *m, const char *path, const char *body, char *out, int cap) {
   if (OFFLINE) return -1;
   if (!strcmp(path, "/jar/pubkey")) return snprintf(out, (size_t)cap, "%s\n", JF_PUBHEX);
-  if (!strcmp(path, "/jar/me")) return snprintf(out, (size_t)cap, "%s", ME);
-  if (!strncmp(path, "/jar/friend?code=", 17)) {
-    strcat(ME, "friend sam\tSam\t0\twaiting\n");
-    return snprintf(out, (size_t)cap, "ok sam waiting\n");
+  if (!strcmp(path, "/friends")) return snprintf(out, (size_t)cap, "%s", ME);
+  if (!strcmp(path, "/friends/ask?who=bo")) {        /* bo had asked: now friends */
+    char *b = strstr(ME, "bo\tBo\tasking");
+    if (b) memcpy(b + 6, "friend", 6);
+    return snprintf(out, (size_t)cap, "ok friend\n");
+  }
+  if (!strncmp(path, "/friends/ask?who=", 17)) {
+    strcat(ME, "samantha_r\tSam\tasked\t0\n");
+    return snprintf(out, (size_t)cap, "ok asked\n");
   }
   if (!strcmp(path, "/people/name")) return snprintf(out, (size_t)cap, "ok\n");
   if (!strncmp(path, "/jar/gift?to=", 13)) return GIFT_OK ? snprintf(out, (size_t)cap, "ok\n") : -500;
@@ -138,8 +144,7 @@ static void card(uint32_t coins) {
   OFFER[0] = DEAL_BODY[0] = DEAL_PATH[0] = 0;
   ITEM_GOOD = 1;
   ITEM_ID = 0;
-  snprintf(ME, sizeof ME, "code K7Q2XP\nname Alex\nfriend maya\tMaya\t%u\tmutual\nfriend bo\tBo\t0\twaiting\n",
-           T0 - 3 * 3600);
+  snprintf(ME, sizeof ME, "maya\tMaya\tfriend\t%u\nbo\tBo\tasking\t0\n", T0 - 3 * 3600);
   fakeapi_epoch = T0;
   fakeapi_ticks = 1000;
   jst_dirs(&A);
@@ -186,25 +191,34 @@ void test_jarpost_friends_list_add_and_name(void) {
   card(0);
   launch("friends");
   tick(20);
-  CHECK_EQ(jf_count("/jar/me"), 1);
-  CHECK(strcmp(G.code, "K7Q2XP") == 0);
-  CHECK(strcmp(G.me, "Alex") == 0);
+  CHECK_EQ(jf_count("/friends"), 1);
+  CHECK_EQ(jf_count("/jar/me"), 0);
   CHECK_EQ(G.nfr, 2);
-  CHECK(G.fr[0].mutual && !G.fr[1].mutual);
+  CHECK(G.fr[0].mutual && !G.fr[1].mutual && G.fr[1].asking);
+  CHECK(G.fr[0].seen == T0 - 3 * 3600);
   CHECK(fakefs_exists("/var/jar/friends.txt"));
   shot("p01_friends");
-  /* add by code */
+  /* bo asked: Enter on bo says yes */
+  key(CAPP_KEY_DOWN);
+  key(CAPP_KEY_ENTER);
+  CHECK_EQ(jf_count("/friends/ask?who=bo"), 1);
+  tick(20);
+  CHECK(strstr(U.msg, "friends now") != 0);
+  tick(20);
+  CHECK(G.fr[1].mutual && !G.fr[1].asking);
+  /* ask someone by their account name: lower case, as accounts are */
   key('a');
   CHECK(post_wants_text(0));                 /* ; , . / are letters while typing */
-  type("zz9;");
+  type("Samantha_R;");
   shot("p02_add");
   key(CAPP_KEY_ENTER);
   CHECK(!post_wants_text(0));
-  CHECK_EQ(jf_count("/jar/friend?code=zz9%3B"), 1);
+  CHECK_EQ(jf_count("/friends/ask?who=samantha_r%3B"), 1);
   tick(20);
-  CHECK(strstr(U.msg, "sam") != 0);
+  CHECK(strstr(U.msg, "samantha_r") != 0);
   tick(20);
   CHECK_EQ(G.nfr, 3);                        /* asked again */
+  CHECK(strcmp(G.fr[2].name, "samantha_r") == 0 && !G.fr[2].mutual && !G.fr[2].asking);
   /* a name: eight at most */
   key('n');
   type("Alexandra");
@@ -222,6 +236,23 @@ void test_jarpost_friends_list_add_and_name(void) {
   CHECK(U.msg[0] != 0);
   key(CAPP_KEY_ESC);
   CHECK(strcmp(RAN, "Jar Factory") == 0);
+}
+
+/* A copy an older Jar kept of /jar/me reads until /friends answers. */
+void test_jarpost_an_old_friends_copy_still_reads(void) {
+  card(0);
+  OFFLINE = 1;
+  {
+    static const char old[] = "code K7Q2XP\nname Alex\nfriend maya\tMaya\t123\tmutual\n"
+                              "friend bo\tBo\t0\twaiting\n";
+    jst_put(&A, JST_FRIENDS, old, (int)strlen(old));
+  }
+  launch("friends");
+  tick(20);
+  CHECK_EQ(G.nfr, 2);
+  CHECK(strcmp(G.me, "Alex") == 0);
+  CHECK(strcmp(G.fr[0].name, "maya") == 0 && G.fr[0].mutual && G.fr[0].seen == 123);
+  CHECK(strcmp(G.fr[1].disp, "Bo") == 0 && !G.fr[1].mutual && !G.fr[1].asking);
 }
 
 /* ---- gifts -------------------------------------------------------------------------------- */
@@ -364,13 +395,15 @@ void test_jarpost_offline_the_post_says_so(void) {
 void test_jarpost_a_gift_starts_from_a_friend(void) {
   const JfReq *r;
   card(100);
+  strcpy(strstr(ME, "bo\tBo\t"), "bo\tBo\tasked\t0\n");
   launch("friends");
   tick(20);
   CHECK_EQ(G.nfr, 2);
-  key(CAPP_KEY_DOWN);                         /* Bo has not added us back */
+  key(CAPP_KEY_DOWN);                         /* we asked Bo, who has not said yes */
   key(CAPP_KEY_ENTER);
   CHECK_EQ(G.view, V_FRIENDS);
-  CHECK(strstr(U.msg, "not added you back") != 0);
+  CHECK(strstr(U.msg, "not said yes") != 0);
+  CHECK_EQ(jf_count("/friends/ask"), 0);
   key(CAPP_KEY_UP);
   shot("p20_friends_pick");
   key(CAPP_KEY_ENTER);                        /* Maya: which of your things? */
