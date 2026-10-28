@@ -430,7 +430,7 @@ void test_crossword_space_turns_the_direction_where_there_is_a_word(void) {
   CHECK_EQ(P1.dir, XW_DOWN);
 }
 
-void test_crossword_arrows_move_turn_and_stop_at_black_squares(void) {
+void test_crossword_arrows_move_without_turning_and_stop_at_black_squares(void) {
   load_fix(&P1);
   CHECK_EQ(xw_arrow(&P1, 0, 1), XW_R_MOVE);
   CHECK_EQ(P1.cur, 1);
@@ -439,10 +439,9 @@ void test_crossword_arrows_move_turn_and_stop_at_black_squares(void) {
   CHECK_EQ(P1.cur, 3);
   CHECK_EQ(xw_arrow(&P1, 0, 1), 0);               /* (0,4) is black, then the edge */
   CHECK_EQ(P1.cur, 3);
-  CHECK_EQ(xw_arrow(&P1, 1, 0), XW_R_DIR);        /* across the direction: turn first */
-  CHECK_EQ(P1.dir, XW_DOWN); CHECK_EQ(P1.cur, 3);
-  CHECK_EQ(xw_arrow(&P1, 1, 0), XW_R_MOVE);
+  CHECK_EQ(xw_arrow(&P1, 1, 0), XW_R_MOVE);       /* across the direction: it moves, no turn */
   CHECK_EQ(P1.cur, 8);
+  CHECK_EQ(P1.dir, XW_ACROSS);                    /* (1,3) has an across word: still across */
   CHECK_EQ(xw_arrow(&P1, -1, 0), XW_R_MOVE);
   CHECK_EQ(P1.cur, 3);
   CHECK_EQ(xw_arrow(&P1, -1, 0), 0);              /* the top edge */
@@ -453,9 +452,7 @@ void test_crossword_arrows_move_turn_and_stop_at_black_squares(void) {
   CHECK_EQ(xw_arrow(&P1, -1, 0), 0);              /* (0,4) is black */
   CHECK_EQ(P1.cur, 9);
   xw_goto(&P1, 21);                               /* (4,1) */
-  CHECK_EQ(xw_arrow(&P1, 0, -1), XW_R_DIR);       /* turn to across */
-  CHECK_EQ(P1.dir, XW_ACROSS);
-  CHECK_EQ(xw_arrow(&P1, 0, -1), 0);              /* (4,0) is black */
+  CHECK_EQ(xw_arrow(&P1, 0, -1), 0);              /* (4,0) is black: nothing, not a turn */
   CHECK_EQ(P1.cur, 21);
 
   /* Not an arrow. */
@@ -477,11 +474,11 @@ void test_crossword_arrows_jump_over_black_squares(void) {
   CHECK_EQ(xw_arrow(&P1, 0, -1), XW_R_MOVE);
   CHECK_EQ(P1.cur, 0);
   CHECK_EQ(xw_arrow(&P1, 0, -1), 0);
-  /* At (0,0), which has both, down turns and then goes. */
-  CHECK_EQ(xw_arrow(&P1, 1, 0), XW_R_DIR);
-  CHECK_EQ(P1.dir, XW_DOWN);
-  CHECK_EQ(xw_arrow(&P1, 1, 0), XW_R_MOVE);
+  /* At (0,0), which has both, down goes at once; (1,0) has only a down
+   * word, so there the direction follows. */
+  CHECK_EQ(xw_arrow(&P1, 1, 0), XW_R_MOVE | XW_R_DIR);
   CHECK_EQ(P1.cur, 5);
+  CHECK_EQ(P1.dir, XW_DOWN);
   /* (1,0) has no across word: right does not turn, it jumps the black middle. */
   CHECK_EQ(xw_arrow(&P1, 0, 1), XW_R_MOVE);
   CHECK_EQ(P1.cur, 9);

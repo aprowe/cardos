@@ -740,6 +740,17 @@ class Midi(unittest.TestCase):
         added, _ = crossword.midi_refresh(self.site("2026-10-27"), log=lambda s: None)
         self.assertEqual(added, ["2026-10-24-midi"])
 
+    def test_the_list_is_split_into_the_apps_tabs(self):
+        crossword.add(small("2026-10-26"))
+        crossword.add(small("2026-10-27"), pid="2026-10-27-nyt")
+        crossword.midi_refresh(self.site("2026-10-27"), log=lambda s: None)
+        midi = [e["id"] for e in crossword.select(kind="midi")]
+        full = [e["id"] for e in crossword.select(kind="full")]
+        self.assertEqual(len(midi), 7)
+        self.assertTrue(all(i.endswith("-midi") for i in midi))
+        self.assertEqual(full, ["2026-10-27-nyt", "2026-10-26"])
+        self.assertEqual(len(crossword.select()), 9)
+
     def test_only_midis_are_dropped(self):
         crossword.add(small("2020-01-01"))
         crossword.midi_refresh(self.site("2026-10-27"), log=lambda s: None)

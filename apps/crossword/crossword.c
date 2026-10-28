@@ -14,9 +14,12 @@
  *
  *   letters       go into the square, and the cursor moves on; backspace
  *                 clears a letter, or steps back and clears the one before
- *   arrows        move, turning across or down first where the square has a
- *                 word that way; space turns; tab and enter go to the next
+ *   arrows        move, and never turn (the owner's choice, 2026-10-27);
+ *                 space or tab turns across or down; enter goes to the next
  *                 word, at its first empty square
+ *   ctrl-l        the next view: side (the whole grid, the clue in a column
+ *                 beside it -- the first), big (large squares, the clue under
+ *                 them), zoom (edge to edge, scrolling); kept for next time
  *   ctrl-c        check -- letters are typed here, so c and h cannot be
  *   ctrl-r        reveal -- commands; each asks "letter, word or puzzle?" in
  *                 the footer, and revealing the puzzle asks y/n. The same
@@ -78,6 +81,19 @@ static const CardApi *api;
 #define INDEX_PATH  PUZ_DIR "/index.txt"
 #define SAVE_DIR    CAPP_VAR "/crossword"
 #define STATS_PATH  SAVE_DIR "/stats.txt"
+#define VIEW_PATH   SAVE_DIR "/view.txt"     /* the view last chosen (side, big, zoom), then the tab */
+
+enum { LAY_SIDE, LAY_BIG, LAY_ZOOM, LAY_N };
+
+/* The list's tabs: which puzzles. The Midi is kept by the server as
+ * DATE-midi; a puzzle whose id is not a date (traitors) is Themed, made for
+ * this library and printed nowhere; everything else -- the dailies, old and
+ * new -- is Full. server/crossword.py's kind_of says the same. */
+enum { KIND_FULL, KIND_MIDI, KIND_THEMED, KIND_N };
+static const char *const KIND_TAB[KIND_N] = { "Full", "Midi", "Themed" };
+static const char *const KIND_ARG[KIND_N] = { "full", "midi", "themed" };
+#define MIDI_SUFFIX "-midi"
+static const char *const LAY_NAME[LAY_N] = { "side", "big", "zoom" };
 
 #define SAVE_MS     15000                /* progress is written this often while it is changing */
 #define IDLE_MS     180000               /* no key for this long: the clock stops, at the last key */
@@ -93,6 +109,11 @@ static const CardApi *api;
 #define ROW_H       15
 #define MARGIN      6
 #define CELL        14                   /* a square's pitch: 13 inside and the line */
+#define CELL_MIN    8                    /* the side view's smallest square: a letter, no number */
+#define CELL_NUM    13                   /* the smallest that has room for a number above the letter */
+#define COL_MIN     100                  /* the side view's clue column is never narrower */
+#define CELL_ZOOM   32                   /* the zoom view's biggest square */
+#define CELL_SIDE   24                   /* the side view's: a mini in big letters, the column still wide */
 #define TIME_W      46
 
 /* The list. */
@@ -159,6 +180,7 @@ static struct {
   int      more_older, more_newer;      /* there may be puzzles past either end of the window */
   int      online;                      /* the server answered, so the list comes from it */
   int      local;                       /* the window is from the card's index */
+  int      kind;                        /* KIND_*: the tab */
   int      qwd;                         /* only this weekday, 0 Monday .. 6; 7 for all */
   char     qto[11];                     /* nothing printed after this date; "" for no limit */
   int      net, net_go;                 /* a list request in flight, and which way it was asked */
@@ -174,6 +196,8 @@ static struct {
   int      have_pz;
   char     cur_id[ID_MAX];
   int      ox, oy;                      /* the first column and row on screen */
+  int      lay;                         /* LAY_*: which view of the grid */
+  int      cross_ci;                    /* the crossing clue the side column shows */
   const char *cl_text;                  /* the clue (in pz's pool), its label and its wrapping */
   char     cl_label[24];
   int      cl_lw;
@@ -490,7 +514,14 @@ static int lookup_one(Entry *e) {
 
 /* ---- the card's index of puzzles ----------------------------------------------------------------- */
 
+static int kind_of(const char *id) {
+  int n = (int)api->str_len(id), k = (int)sizeof MIDI_SUFFIX - 1;
+  if (id[0] < '0' || id[0] > '9') return KIND_THEMED;
+  return n >= k && !str_cmp(id + n - k, MIDI_SUFFIX) ? KIND_MIDI : KIND_FULL;
+}
+
 static int entry_ok(const Entry *e) {
+  if (kind_of(e->id) != G.kind) return 0;
   if (G.qwd != 7 && e->wd != G.qwd) return 0;
   if (G.qto[0] && (!e->date[0] || str_cmp(e->date, G.qto) > 0)) return 0;
   return 1;
@@ -626,7 +657,7 @@ static void list_request(int go) {
     damage_all();
     return;
   }
-  k = api->fmt(url, sizeof url, "%s/crossword/list?limit=%d", api->proxy(), PAGE_N);
+  k = api->fmt(url, sizeof url, "%s/crossword/list?limit=%d&kind=%s", api->proxy(), PAGE_N, KIND_ARG[G.kind]);
   if (G.qwd != 7) k += api->fmt(url + k, sizeof url - (size_t)k, "&weekday=%d", G.qwd);
   if (G.qto[0]) k += api->fmt(url + k, sizeof url - (size_t)k, "&to=%s", G.qto);
   if (go == GO_OLDER && G.npage)
@@ -840,33 +871,100 @@ static void stats_save(void) {
   safe_commit(&f);
 }
 
+/* Which view, kept across launches: the side view unless another was chosen. */
+static void view_load(void) {
+  char buf[16];
+  int fd, n;
+  G.lay = LAY_SIDE;
+  fd = safe_open_read(api, VIEW_PATH);
+  if (fd < 0) return;
+  n = api->read(fd, buf, sizeof buf - 1);
+  api->close(fd);
+  buf[n > 0 ? n : 0] = 0;
+  if (buf[0] == 'b') G.lay = LAY_BIG;
+  else if (buf[0] == 'z') G.lay = LAY_ZOOM;
+  for (n = 0; buf[n] && buf[n] != '\n'; n++) {}
+  G.kind = KIND_FULL;
+  if (buf[n] == '\n' && buf[n + 1] == 'm') G.kind = KIND_MIDI;
+  if (buf[n] == '\n' && buf[n + 1] == 't') G.kind = KIND_THEMED;
+}
+
+static void view_save(void) {
+  SafeFile f;
+  api->mkdir(CAPP_VAR);
+  api->mkdir(SAVE_DIR);
+  if (safe_begin(&f, api, VIEW_PATH) != 0) return;
+  safe_line(&f, LAY_NAME[G.lay]);
+  safe_line(&f, "\n");
+  safe_line(&f, KIND_ARG[G.kind]);
+  safe_line(&f, "\n");
+  safe_commit(&f);
+}
+
 /* ---- the grid's geometry ------------------------------------------------------------------------------- */
 
 typedef struct {
   CRect area;                    /* the grid's part of the screen */
-  int   bar_y, bar_h;            /* the clue bar */
+  int   bar_y, bar_h;            /* the clue bar (the big view; 0 high in the side view) */
+  CRect col;                     /* the clue column (the side view; empty in the big one) */
+  int   cs;                      /* a square's pitch */
   int   vcols, vrows;            /* squares that fit */
   int   nc, nr;                  /* squares shown */
   int   gx0, gy0;                /* where the first shown square is */
 } Geo;
 
+/* Three views, ctrl-l from one to the next:
+ *   side  the grid against the left edge in the biggest squares that show it
+ *         whole (CELL_SIDE down to CELL_MIN, so a daily fits and only a Sunday
+ *         scrolls), the clue and the one crossing it in a column down the right
+ *   big   CELL squares, centred, the clue on a two-line bar under them
+ *   zoom  squares as wide as the screen allows (up to CELL_ZOOM), so the grid
+ *         runs edge to edge -- 240 is 15 sixteens and 10 twenty-fours -- and
+ *         scrolls up and down; the clue on one line under it. The closing
+ *         line on the right falls off the screen when the grid is exactly as
+ *         wide as it. */
 static void geometry(Geo *g) {
   CRect c = G.have_at ? G.at : capp_rect(0, 0, 240, 135);
-  int gw, gh;
-  g->bar_h = 2 * G.lh + 4;
-  g->bar_y = c.y + c.h - FOOT_H - g->bar_h;
-  g->area = capp_rect(c.x, c.y, c.w, g->bar_y - c.y);
-  g->vcols = (c.w - 1) / CELL;
-  g->vrows = (g->area.h - 1) / CELL;
+  int gw, gh, h = c.h - FOOT_H, pw = G.pz.w > 0 ? G.pz.w : 1, ph = G.pz.h > 0 ? G.pz.h : 1;
+  if (G.lay == LAY_SIDE) {
+    int byh = (h - 1) / ph, byw = (c.w - COL_MIN - 1) / pw;
+    g->cs = byh < byw ? byh : byw;
+    if (g->cs > CELL_SIDE) g->cs = CELL_SIDE;
+    if (g->cs < CELL_MIN) g->cs = CELL_MIN;
+    g->bar_h = 0;
+    g->bar_y = c.y + h;
+    g->area = capp_rect(c.x, c.y, c.w - COL_MIN, h);
+    g->vcols = (g->area.w - 1) / g->cs;
+  } else {
+    g->cs = CELL;
+    if (G.lay == LAY_ZOOM) {
+      g->cs = c.w / pw;
+      if (g->cs > CELL_ZOOM) g->cs = CELL_ZOOM;
+      if (g->cs < CELL) g->cs = CELL;
+    }
+    g->bar_h = (G.lay == LAY_ZOOM ? 1 : 2) * G.lh + 4;
+    g->bar_y = c.y + h - g->bar_h;
+    g->area = capp_rect(c.x, c.y, c.w, g->bar_y - c.y);
+    g->vcols = (G.lay == LAY_ZOOM && pw * g->cs == c.w ? c.w : c.w - 1) / g->cs;
+  }
+  g->vrows = (g->area.h - 1) / g->cs;
   if (g->vcols < 1) g->vcols = 1;
   if (g->vrows < 1) g->vrows = 1;
   g->nc = G.pz.w - G.ox < g->vcols ? G.pz.w - G.ox : g->vcols;
   g->nr = G.pz.h - G.oy < g->vrows ? G.pz.h - G.oy : g->vrows;
   if (g->nc < 1) g->nc = 1;
   if (g->nr < 1) g->nr = 1;
-  gw = g->nc * CELL + 1;
-  gh = g->nr * CELL + 1;
-  g->gx0 = g->area.x + (g->area.w - gw) / 2;
+  gw = g->nc * g->cs + 1;
+  gh = g->nr * g->cs + 1;
+  if (G.lay == LAY_SIDE) {
+    g->area.w = gw;
+    g->col = capp_rect(c.x + gw, c.y, c.w - gw, h);
+    g->gx0 = c.x;
+  } else {
+    if (gw > g->area.w) gw = g->area.w;
+    g->col = capp_rect(c.x + c.w, c.y, 0, 0);
+    g->gx0 = g->area.x + (g->area.w - gw) / 2;
+  }
   g->gy0 = g->area.y + (g->area.h - gh) / 2;
 }
 
@@ -918,14 +1016,16 @@ static void damage_word(int ci) {
   c0 = cl->cell % G.pz.w;
   nc = cl->dir == XW_ACROSS ? cl->len : 1;
   nr = cl->dir == XW_DOWN ? cl->len : 1;
-  damage_in_area(&g, g.gx0 + (c0 - G.ox) * CELL, g.gy0 + (r0 - G.oy) * CELL, nc * CELL + 1, nr * CELL + 1);
+  damage_in_area(&g, g.gx0 + (c0 - G.ox) * g.cs, g.gy0 + (r0 - G.oy) * g.cs, nc * g.cs + 1, nr * g.cs + 1);
 }
 
+/* The clue's place: the bar, or the side view's column. */
 static void damage_bar(void) {
   Geo g;
   if (!G.have_at) return;
   geometry(&g);
-  damage_rect(G.at.x, g.bar_y, G.at.w, g.bar_h);
+  if (G.lay != LAY_SIDE) damage_rect(G.at.x, g.bar_y, G.at.w, g.bar_h);
+  else damage_rect(g.col.x, g.col.y, g.col.w, g.col.h);
 }
 
 /* ---- the clue under the grid -------------------------------------------------------------------------- */
@@ -1195,15 +1295,31 @@ static void open_entry(int i) {
 
 /* The bar across the top: the name, which filters are on, and on the right
  * what is going on (a status) or where the list comes from. */
+/* The tabs, where the name was: the one shown in bold with a blue line
+ * under it. Each is drawn above its two rows of underline, so nothing is
+ * filled and then written over. Their width. */
+static int paint_tabs(CRect c, int h) {
+  int i, x = c.x;
+  for (i = 0; i < KIND_N; i++) {
+    int on = i == G.kind, w = (i ? 6 : MARGIN) + str_w(on, KIND_TAB[i], 99) + 6;
+    box_text(on, x, c.y, w, h - 2, i ? 6 : MARGIN, 0, KIND_TAB[i], on ? L_TEXT : L_DIM, L_BAR);
+    api->fill(capp_rect(x, c.y + h - 2, w, 2), L_BAR);
+    if (on) api->fill(capp_rect(x + (i ? 4 : MARGIN - 2), c.y + h - 2, w - (i ? 6 : MARGIN - 2) - 2, 2), K_PLAY);
+    x += w;
+  }
+  return x - c.x;
+}
+
 static void paint_top(CRect c) {
   char filt[40], shown[40], right[48];
-  int aw = MARGIN + str_w(1, "Crossword", 99) + 10, rw, h = TOP_H - 1;
+  int aw, rw, h = TOP_H - 1;
   describe_filter(filt, sizeof filt);
   if (G.status[0]) fit(0, G.status, c.w / 2, right, sizeof right);
   else api->fmt(right, sizeof right, "%s", G.local ? "on the card" : G.online ? "online" : "");
   rw = str_w(0, right, 99) + 12;
+  aw = paint_tabs(c, h) + 8;
+  api->fill(capp_rect(c.x + aw - 8, c.y, 8, h), L_BAR);
   fit(0, filt, c.w - aw - rw - 4, shown, sizeof shown);
-  box_text(1, c.x, c.y, aw, h, MARGIN, 0, "Crossword", L_TEXT, L_BAR);
   box_text(0, c.x + aw, c.y, c.w - aw - rw, h, 0, 0, shown, L_DIM, L_BAR);
   box_text(0, c.x + c.w - rw, c.y, rw, h, 0, 1, right, G.status[0] && G.bad ? L_BAD : L_DIM, L_BAR);
   api->fill(capp_rect(c.x, c.y + h, c.w, 1), L_RULE);
@@ -1282,30 +1398,47 @@ static void paint_list(CRect c) {
   }
   if (G.ask == ASK_FORGET) api->fmt(foot, sizeof foot, "forget your progress here? y/n");
   else if (G.prompting) api->fmt(foot, sizeof foot, "go to: %s_  enter go  esc", G.pbuf);
-  else api->fmt(foot, sizeof foot, "enter open  g date  w day  tab stats");
+  else api->fmt(foot, sizeof foot, "enter open  tab kind  w day  s stats");
   footer_paint(api, c, foot);
 }
 
 /* ---- painting: the grid ----------------------------------------------------------------------------------------- */
 
-/* One square, a CELL by CELL blit built here: its background (tinted if it is in
+/* One square, a cs by cs blit built here: its background (tinted if it is in
  * the word, brighter if it is the cursor's), the grid line along its top and
- * left, the ring if it is circled, its number, and its letter. */
-static void paint_cell(int idx, int x, int y) {
-  uint16_t px[CELL * CELL];
+ * left, the ring if it is circled, its number where there is room for one
+ * (cs >= CELL_NUM), and its letter, drawn bigger in the zoom view's big
+ * squares. Static, since a zoomed square is 2 KB of pixels. */
+static uint16_t s_px[CELL_ZOOM * CELL_ZOOM];
+
+static void paint_cell(int idx, int x, int y, int cs) {
+  uint16_t *px = s_px;
   const XwCell *q = &G.pz.cell[idx];
-  int i, r, c, num;
+  int i, r, c, num, n = cs * cs;
   if (!q->sol) {
-    for (i = 0; i < CELL * CELL; i++) px[i] = G_BLOCK;
+    for (i = 0; i < n; i++) px[i] = G_BLOCK;
   } else {
     uint16_t bg = idx == G.pz.cur ? G_CUR : xw_in_cur_word(&G.pz, idx) ? G_WORD : G_WHITE;
-    for (i = 0; i < CELL * CELL; i++) px[i] = bg;
-    for (i = 0; i < CELL; i++) { px[i] = G_LINE; px[i * CELL] = G_LINE; }
-    if (q->fl & XW_F_CIRCLE)
-      for (r = 0; r < 13; r++)
-        for (c = 0; c < 13; c++)
-          if ((RING[r] >> (12 - c)) & 1) px[(1 + r) * CELL + 1 + c] = G_RING;
-    num = xw_number_at(&G.pz, idx);
+    int numbered = cs >= CELL_NUM, sc = cs >= 30 ? 3 : cs >= 22 ? 2 : 1, top, left;
+    for (i = 0; i < n; i++) px[i] = bg;
+    for (i = 0; i < cs; i++) { px[i] = G_LINE; px[i * cs] = G_LINE; }
+    if (q->fl & XW_F_CIRCLE) {
+      if (cs == CELL) {
+        for (r = 0; r < 13; r++)
+          for (c = 0; c < 13; c++)
+            if ((RING[r] >> (12 - c)) & 1) px[(1 + r) * cs + 1 + c] = G_RING;
+      } else {
+        /* In doubled units, so the centre falls between pixels as the
+         * square's inside does: a ring a pixel or so thick. */
+        int ctr = cs + 1, ro = (cs - 1) * (cs - 1), ri = (cs - 4) * (cs - 4);
+        for (r = 1; r < cs; r++)
+          for (c = 1; c < cs; c++) {
+            int dx = 2 * c + 1 - ctr, dy = 2 * r + 1 - ctr, d2 = dx * dx + dy * dy;
+            if (d2 <= ro && d2 >= ri) px[r * cs + c] = G_RING;
+          }
+      }
+    }
+    num = numbered ? xw_number_at(&G.pz, idx) : 0;
     if (num) {
       char d[4];
       int nd = 0, k;
@@ -1315,58 +1448,113 @@ static void paint_cell(int idx, int x, int y) {
       for (k = 0; k < nd; k++)
         for (r = 0; r < 5; r++)
           for (c = 0; c < 3; c++)
-            if ((DIGIT[(int)d[k]][r] >> (2 - c)) & 1) px[(1 + r) * CELL + 2 + k * 4 + c] = G_NUM;
+            if ((DIGIT[(int)d[k]][r] >> (2 - c)) & 1 && 2 + k * 4 + c < cs) px[(1 + r) * cs + 2 + k * 4 + c] = G_NUM;
     }
     if (q->ent >= 'A' && q->ent <= 'Z') {
       uint16_t ink = (q->fl & XW_F_WRONG) ? G_WRONG : (q->fl & XW_F_REVEALED) ? G_GIVEN : G_INK;
-      for (r = 0; r < 7; r++)
-        for (c = 0; c < 5; c++)
-          if ((LETTER[q->ent - 'A'][r] >> (4 - c)) & 1) px[(6 + r) * CELL + 5 + c] = ink;
+      int lw = 5 * sc, lh = 7 * sc;
+      top = numbered ? 6 + (cs - 6 - lh) / 2 : 1 + (cs - 1 - lh) / 2;
+      left = (cs - lw + 1) / 2;
+      for (r = 0; r < lh; r++)
+        for (c = 0; c < lw; c++)
+          if ((LETTER[q->ent - 'A'][r / sc] >> (4 - c / sc)) & 1) px[(top + r) * cs + left + c] = ink;
     }
   }
-  api->pixels(capp_rect(x, y, CELL, CELL), px);
+  api->pixels(capp_rect(x, y, cs, cs), px);
 }
 
 static void paint_cells(const Geo *g, CRect c) {
   CRect pa = api->paint_area();
-  int r, col;
+  int r, col, cs = g->cs;
   if (pa.w <= 0 || pa.h <= 0) pa = c;
   for (r = 0; r < g->nr; r++) {
-    int y = g->gy0 + r * CELL;
-    if (y + CELL <= pa.y || y >= pa.y + pa.h) continue;
+    int y = g->gy0 + r * cs;
+    if (y + cs <= pa.y || y >= pa.y + pa.h) continue;
     for (col = 0; col < g->nc; col++) {
-      int x = g->gx0 + col * CELL;
-      if (x + CELL <= pa.x || x >= pa.x + pa.w) continue;
-      paint_cell((G.oy + r) * G.pz.w + G.ox + col, x, y);
+      int x = g->gx0 + col * cs;
+      if (x + cs <= pa.x || x >= pa.x + pa.w) continue;
+      paint_cell((G.oy + r) * G.pz.w + G.ox + col, x, y, cs);
     }
   }
 }
 
+/* A line of text cut to fit `w` with "..". */
+static void cut_line(char *ln, int n, int w) {
+  int maxw = w - str_w(0, "..", 2);
+  while (n > 0 && str_w(0, ln, n) > maxw) n--;
+  ln[n++] = '.';
+  ln[n++] = '.';
+  ln[n] = 0;
+}
+
 /* The clue bar: a rule, the label in bold and the clue's first line, then its
- * second. */
+ * second -- in the zoom view only the first, cut with ".." if there is more. */
 static void paint_bar(CRect c, const Geo *g) {
   char ln[220];
-  int y = g->bar_y, k, n, lh = G.lh, w = c.w - 8;
+  int y = g->bar_y, k, n, lh = G.lh, w = c.w - 8, nl = G.lay == LAY_ZOOM ? 1 : 2;
   api->fill(capp_rect(c.x, y, c.w, 1), L_RULE);
   api->fill(capp_rect(c.x, y + 1, c.w, 1), B_BG);
   y += 2;
   box_text(1, c.x, y, 4 + G.cl_lw, lh, 4, 0, G.cl_label, B_LABEL, B_BG);
-  for (k = 0; k < 2; k++) {
+  for (k = 0; k < nl; k++) {
     n = G.cl_len[k] < (int)sizeof ln - 4 ? G.cl_len[k] : (int)sizeof ln - 4;
     api->mem_cpy(ln, G.cl_text + G.cl_off[k], (size_t)n);
     ln[n] = 0;
-    if (k == 1 && G.cl_cut) {
-      int maxw = w - str_w(0, "..", 2);
-      while (n > 0 && str_w(0, ln, n) > maxw) n--;
-      ln[n++] = '.';
-      ln[n++] = '.';
-      ln[n] = 0;
-    }
+    if (k == nl - 1 && (G.cl_cut || (nl == 1 && G.cl_len[1] > 0)))
+      cut_line(ln, n, k == 0 ? w - G.cl_lw : w);
     if (k == 0) box_text(0, c.x + 4 + G.cl_lw, y, c.w - 4 - G.cl_lw, lh, 0, 0, ln, B_TEXT, B_BG);
     else box_text(0, c.x, y, c.w, lh, 4, 0, ln, B_TEXT, B_BG);
     y += lh;
   }
   api->fill(capp_rect(c.x, y, c.w, 2), B_BG);
+}
+
+/* Text wrapped down the side column from y, no lower than `bottom`; the last
+ * line that fits is cut with ".." if there is more. Where the next line goes. */
+static int column_text(const CRect *col, int y, int bottom, const char *s, uint16_t fg) {
+  char ln[220];
+  int p = 0, off, len, lh = G.lh, w = col->w - 8;
+  while (s[p] && y + lh <= bottom) {
+    int next = wrap_one(s, p, w, &off, &len), more;
+    if (len > (int)sizeof ln - 4) len = (int)sizeof ln - 4;
+    api->mem_cpy(ln, s + off, (size_t)len);
+    ln[len] = 0;
+    p = next;
+    while (s[p] == ' ') p++;
+    more = s[p] != 0;
+    if (more && y + 2 * lh > bottom) cut_line(ln, len, w);
+    box_text(0, col->x + 1, y, col->w - 1, lh, 4, 0, ln, fg, B_BG);
+    y += lh;
+  }
+  return y;
+}
+
+/* The side view's column: a rule down its left, the clue's label in bold and
+ * its words wrapped under it; then, dimmed, the clue that crosses at the
+ * cursor, in what room is left. */
+static void paint_column(const Geo *g) {
+  const CRect *col = &g->col;
+  int y = col->y + 3, bottom = col->y + col->h - 2, lh = G.lh, cross;
+  char label[24];
+  if (col->w <= 0) return;
+  api->fill(capp_rect(col->x, col->y, 1, col->h), L_RULE);
+  api->fill(capp_rect(col->x + 1, col->y, col->w - 1, 3), B_BG);
+  if (G.cl_label[0]) {
+    box_text(1, col->x + 1, y, col->w - 1, G.lhb, 4, 0, G.cl_label, B_LABEL, B_BG);
+    y += G.lhb;
+    y = column_text(col, y, bottom, G.cl_text, B_TEXT);
+  }
+  cross = xw_clue_at(&G.pz, G.pz.cur, 1 - G.pz.dir);
+  if (cross >= 0 && y + 6 + G.lhb + lh <= bottom) {
+    api->fill(capp_rect(col->x + 1, y, col->w - 1, 6), B_BG);
+    y += 6;
+    api->fmt(label, sizeof label, "%d-%s", G.pz.clue[cross].num,
+             G.pz.clue[cross].dir == XW_ACROSS ? "Across" : "Down");
+    box_text(1, col->x + 1, y, col->w - 1, G.lhb, 4, 0, label, L_DIM, B_BG);
+    y += G.lhb;
+    y = column_text(col, y, bottom, xw_clue_text(&G.pz, cross), L_DIM);
+  }
+  if (y < col->y + col->h) api->fill(capp_rect(col->x + 1, y, col->w - 1, col->y + col->h - y), B_BG);
 }
 
 /* The footer with something at each end: hints or a message on the left, the
@@ -1394,7 +1582,7 @@ static void paint_foot(CRect c, const char *left, uint16_t lfg, const char *righ
  * check or reveal, else the keys; and the time. */
 static void grid_foot(CRect c) {
   char t[16], right[24];
-  const char *left = "tab next  ^c check  ^r reveal";
+  const char *left = "^c check  ^r reveal  ^l view";
   uint16_t fg = FOOT_FG;
   if (G.ask == ASK_CHECK) left = "check: l letter  w word  p puzzle";
   else if (G.ask == ASK_REVEAL) left = "reveal: l letter  w word  p puzzle";
@@ -1414,8 +1602,9 @@ static void paint_grid(CRect c) {
   Geo g;
   int gw, gh;
   geometry(&g);
-  gw = g.nc * CELL + 1;
-  gh = g.nr * CELL + 1;
+  gw = g.nc * g.cs + 1;
+  gh = g.nr * g.cs + 1;
+  if (g.gx0 + gw > g.area.x + g.area.w) gw = g.area.x + g.area.w - g.gx0;   /* zoom: the closing line is off the edge */
   /* The margins round the grid, in pieces: the squares are not painted over. */
   if (g.gy0 > g.area.y) api->fill(capp_rect(g.area.x, g.area.y, g.area.w, g.gy0 - g.area.y), G_MARGIN);
   if (g.gy0 + gh < g.area.y + g.area.h)
@@ -1424,9 +1613,10 @@ static void paint_grid(CRect c) {
   if (g.gx0 + gw < g.area.x + g.area.w)
     api->fill(capp_rect(g.gx0 + gw, g.gy0, g.area.x + g.area.w - g.gx0 - gw, gh), G_MARGIN);
   paint_cells(&g, c);
-  api->fill(capp_rect(g.gx0 + g.nc * CELL, g.gy0, 1, gh), G_LINE);
-  api->fill(capp_rect(g.gx0, g.gy0 + g.nr * CELL, gw, 1), G_LINE);
-  paint_bar(c, &g);
+  if (g.gx0 + g.nc * g.cs < g.area.x + g.area.w) api->fill(capp_rect(g.gx0 + g.nc * g.cs, g.gy0, 1, gh), G_LINE);
+  api->fill(capp_rect(g.gx0, g.gy0 + g.nr * g.cs, gw, 1), G_LINE);
+  if (G.lay == LAY_SIDE) paint_column(&g);
+  else paint_bar(c, &g);
   grid_foot(c);
 }
 
@@ -1680,7 +1870,13 @@ static int key_list(uint8_t k) {
   case CAPP_KEY_ENTER:
     if (!api->key_repeat()) open_entry(G.sel);
     return 1;
-  case '\t':
+  case '\t':                                    /* the next tab: Full, Midi, Themed */
+    if (api->key_repeat()) return 1;
+    G.kind = (G.kind + 1) % KIND_N;
+    view_save();
+    reload_first();
+    return 1;
+  case 's': case 'S':
     if (api->key_repeat()) return 1;
     G.stats_from = V_LIST;
     G.today = today_day();
@@ -1743,17 +1939,27 @@ static int nothing(void) {
  * word it is in, and the clue bar if the clue changed. A scroll is the whole
  * grid. */
 static void refresh_cursor(int old) {
-  int ci = xw_cur_clue(&G.pz);
+  int ci = xw_cur_clue(&G.pz), cross = xw_clue_at(&G.pz, G.pz.cur, 1 - G.pz.dir);
   if (scroll_to_cursor()) {
     damage_all();
   } else {
     damage_word(old);
     damage_word(ci);
   }
-  if (ci != old) {
-    clue_layout();
-    damage_bar();
-  }
+  if (ci != old) clue_layout();
+  /* The side column shows the crossing clue too, which changes along a word. */
+  if (ci != old || (G.lay == LAY_SIDE && cross != G.cross_ci)) damage_bar();
+  G.cross_ci = cross;
+}
+
+/* ctrl-l: the next view. The view is kept for next time. */
+static void next_layout(void) {
+  G.lay = (G.lay + 1) % LAY_N;
+  G.ox = G.oy = 0;
+  scroll_to_cursor();
+  clue_layout();
+  view_save();
+  damage_all();
 }
 
 /* An arrow in the grid: the cursor moves or turns. */
@@ -1807,9 +2013,7 @@ static int key_grid(uint8_t k) {
     if (api->key_repeat()) return 1;
     if (G.pz.solved) { G.today = today_day(); G.view = V_DONE; damage_all(); return 1; }
     return jump(xw_next_word(&G.pz, 1), old);
-  case '\t':
-    if (api->key_repeat()) return 1;
-    return jump(xw_next_word(&G.pz, 1), old);
+  case '\t':                                        /* tab turns, as space does (the owner's choice) */
   case ' ':
     if (api->key_repeat()) return 1;
     return jump(xw_toggle(&G.pz), old);
@@ -1919,7 +2123,7 @@ static int app_tick(void *st, uint32_t now) {
 /* ---- actions: the same things from a chord or from fn-space -------------------------------------------------------------------- */
 
 enum { ACT_CHECK = 1, ACT_CHECK_LETTER, ACT_CHECK_WORD, ACT_CHECK_ALL,
-       ACT_REVEAL, ACT_REVEAL_LETTER, ACT_REVEAL_WORD, ACT_REVEAL_ALL, ACT_RESET };
+       ACT_REVEAL, ACT_REVEAL_LETTER, ACT_REVEAL_WORD, ACT_REVEAL_ALL, ACT_RESET, ACT_LAYOUT };
 
 /* Letters are typed in the grid, so check and reveal are ctrl chords -- c and
  * h cannot be both -- that ask how much; fn-space has every size outright.
@@ -1934,6 +2138,7 @@ static const CappAction ACTIONS[] = {
   { "reveal.word",   "Reveal word",   "Puzzle", 0, ACT_REVEAL_WORD },
   { "reveal.puzzle", "Reveal puzzle", "Puzzle", 0, ACT_REVEAL_ALL },
   { "reset",         "Start over",    "Puzzle", 0x0E, ACT_RESET },           /* ctrl-n */
+  { "layout",        "Next view",     "View",   0x0C, ACT_LAYOUT },          /* ctrl-l: side, big, zoom */
 };
 #define NACT ((int)(sizeof ACTIONS / sizeof ACTIONS[0]))
 
@@ -1943,6 +2148,7 @@ static int app_action(void *st, int a) {
   if (G.view != V_GRID || !G.have_pz) return 0;      /* only a puzzle on screen has these */
   note_activity(api->ticks_ms());
   if (G.ask) end_ask();
+  if (a == ACT_LAYOUT) { next_layout(); return 1; }  /* a solved grid has views too */
   if (a == ACT_RESET) { ask_begin(ASK_RESET); return 1; }
   if (G.pz.solved) { say_msg("already solved", 0); return 1; }
   switch (a) {
@@ -1979,13 +2185,14 @@ const CappInfo capp_info = {
   "r\task the server again\n"
   "o\tonly the card's puzzles, or the server's\n"
   "d\tforget what you did on a puzzle\n"
-  "tab\tyour statistics\n"
+  "tab\tthe next tab: Full, Midi, Themed\n"
+  "s\tyour statistics\n"
   "\tin a puzzle:\n"
   "letters\ttype; bksp clears or steps back\n"
-  "arrows\tmove, turning first if the word\n"
-  "\tgoes the other way\n"
-  "space\tturn across or down\n"
-  "tab\tthe next word (enter too)\n"
+  "arrows\tmove; they never turn\n"
+  "space\tturn across or down (tab too)\n"
+  "enter\tthe next word\n"
+  "ctrl-l\tthe next view: side, big, zoom\n"
   "ctrl-c\tcheck a letter, word or puzzle\n"
   "ctrl-r\treveal one: no best time then\n"
   "ctrl-n\tstart the puzzle over\n"
@@ -2005,6 +2212,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   G.f_num = api->font_load("num30");
   measure_fonts();
   stats_load();
+  view_load();
   G.view = V_LIST;
   G.qwd = 7;
   G.online = (api->caps_ok() & CAPP_CAP_PROXY) != 0;

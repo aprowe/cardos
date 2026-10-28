@@ -11,6 +11,9 @@ compact line format apps/crossword/xwcore.h reads.
                        sat,sun
           after=ID     the last id of the page before; the next page starts
                        after it in the order asked for
+          kind=        full, midi or themed: the app's tabs (the Midi is
+                       DATE-midi, themed an id that is not a date, full the
+                       rest); all kinds unless asked
           limit=       lines to a page, 50 unless asked, 80 at most (each line
                        is at most about 75 bytes; the device's buffer is 8 KB)
         An empty reply is the end. A puzzle's id is its print date.
@@ -738,7 +741,9 @@ def add(pz, replace=False, dry=False, pid=None):
     (A file there that is not a puzzle is no puzzle to keep: it is replaced.)
     With dry, say which and write nothing."""
     day = pz.get("date") or ""
-    if not _ISO.match(day) or not parse_date(day):
+    if pid and kind_of(pid) == "themed" and not day:
+        pass                               # a themed puzzle is kept by name, and has no date
+    elif not _ISO.match(day) or not parse_date(day):
         raise ValueError("a puzzle needs a print date to be kept under")
     text = to_text(pz)
     parse_text(text)                       # never keep what the device would refuse
@@ -846,11 +851,26 @@ def index():
     return found
 
 
-def select(weekdays=None, lo="", hi="", after="", order="new", limit=LIST_DEFAULT):
+KINDS = ("full", "midi", "themed")
+
+
+def kind_of(pid):
+    """The app's tab a puzzle is under: the Midi; themed, a puzzle made for
+    this library whose id is a name, not a date (traitors); or the full-size
+    rest. apps/crossword/crossword.c's kind_of says the same."""
+    if not pid[:1].isdigit():
+        return "themed"
+    return "midi" if pid.endswith(MIDI_SUFFIX) else "full"
+
+
+def select(weekdays=None, lo="", hi="", after="", order="new", limit=LIST_DEFAULT, kind=""):
     """The puzzles a list page holds. weekdays a set of 0-6; lo and hi dates
     (inclusive, YYYY-MM-DD) -- a puzzle with no date is in no range; after an
-    id, the page before's last; order 'new' or 'old'."""
+    id, the page before's last; order 'new' or 'old'; kind one of KINDS, or
+    '' for every kind."""
     out = index()
+    if kind:
+        out = [e for e in out if kind_of(e["id"]) == kind]
     if weekdays is not None:
         out = [e for e in out if e["weekday"] in weekdays]
     if lo or hi:
@@ -1320,7 +1340,7 @@ def put_text(text, pid, keep=0):
     pz = parse_text(text)
     status = add(pz, replace=True, pid=pid)
     removed = []
-    if keep and pid[:10] == pz.get("date"):
+    if keep and pz.get("date") and pid[:10] == pz["date"]:
         oldest = (datetime.date.fromisoformat(pz["date"]) - datetime.timedelta(days=keep - 1)).isoformat()
         removed = prune(pid[10:], oldest)
     return status, removed
@@ -1387,8 +1407,11 @@ def get_list(h, args):
     after = arg(args, "after")
     if after and not _ID.match(after):
         raise ValueError("after= is a puzzle id")
+    kind = arg(args, "kind") or ""
+    if kind and kind not in KINDS:
+        raise ValueError("kind= is full, midi or themed")
     page = select(_weekdays(arg(args, "weekday")), _bound(arg(args, "from"), False),
-                  _bound(arg(args, "to"), True), after, order, _limit(args))
+                  _bound(arg(args, "to"), True), after, order, _limit(args), kind)
     h.text("".join("%s\t%s\t%s\t%dx%d\t%s\n" % (
         e["id"], e["date"], DAYS[e["weekday"]] if e["weekday"] >= 0 else "",
         e["w"], e["h"], wire.flat(e["title"], LIST_TITLE, ascii=True)) for e in page))

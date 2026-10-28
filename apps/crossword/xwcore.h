@@ -633,16 +633,10 @@ static XW_OPT int xw_step(Xw *p, int dr, int dc) {
   return XW_R_MOVE | xw_fix_dir(p);
 }
 
-/* An arrow key: across the current direction it turns first if the square has
- * a word that way, else it moves. */
+/* An arrow key: it always moves, never turns first -- space turns (the
+ * owner's choice, 2026-10-27). The direction changes only where the square
+ * moved to has no word the old way. */
 static XW_OPT int xw_arrow(Xw *p, int dr, int dc) {
-  int axis;
-  if (!p->ready || (dr != 0) == (dc != 0)) return 0;
-  axis = dc != 0 ? XW_ACROSS : XW_DOWN;
-  if (axis != p->dir && xw_clue_at(p, p->cur, axis) >= 0) {
-    p->dir = axis;
-    return XW_R_DIR;
-  }
   return xw_step(p, dr, dc);
 }
 

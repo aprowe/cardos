@@ -78,18 +78,23 @@ static const char X_MINI[] = X_MINI_TEXT;
 /* A 21x21 grid with no black square, every clue long: 21 across, 21 down,
  * numbered 1-21 along the top and 22-41 down the left side. */
 static char X_BIG[12000];
-static void x_build_big(void) {
+/* An n by n grid of A's, every clue the long one. */
+static void x_build_sq(int n) {
   int r, c, at = 0;
-  at += sprintf(X_BIG + at, "xw 1\ntitle Big Sunday\ndate 1993-11-14\nsize 21 21\n");
-  for (r = 0; r < 21; r++) {
+  at += sprintf(X_BIG + at, "xw 1\ntitle Big Sunday\ndate 1993-11-14\nsize %d %d\n", n, n);
+  for (r = 0; r < n; r++) {
     at += sprintf(X_BIG + at, "row ");
-    for (c = 0; c < 21; c++) X_BIG[at++] = 'A';
+    for (c = 0; c < n; c++) X_BIG[at++] = 'A';
     X_BIG[at++] = '\n';
   }
-  for (r = 0; r < 21; r++) at += sprintf(X_BIG + at, "A %d %s\n", r ? 21 + r : 1, X_LONG_CLUE);
-  for (c = 0; c < 21; c++) at += sprintf(X_BIG + at, "D %d %s\n", c + 1, X_LONG_CLUE);
+  for (r = 0; r < n; r++) at += sprintf(X_BIG + at, "A %d %s\n", r ? n + r : 1, X_LONG_CLUE);
+  for (c = 0; c < n; c++) at += sprintf(X_BIG + at, "D %d %s\n", c + 1, X_LONG_CLUE);
   at += sprintf(X_BIG + at, "end\n");
   X_BIG[at] = 0;
+}
+
+static void x_build_big(void) {
+  x_build_sq(21);
 }
 
 /* A full page of the list: forty puzzles, December 28 back to November 17
@@ -238,6 +243,7 @@ static void x_init(void) {
   XA.damage = x_damage;
   fakeapi_screen = X_ALL;
   X_NDMG = X_BAD = X_UNSET = 0;
+  fakefs_put(VIEW_PATH, "big\n");          /* these tests measure the big view; the side view has its own */
 }
 
 /* The app opened, and painted once. Files and the script are put in place first. */
@@ -304,7 +310,7 @@ static void x_open_mini(void) {
 static CRect x_cell(int r, int c) {
   Geo g;
   geometry(&g);
-  return capp_rect(g.gx0 + (c - G.ox) * CELL, g.gy0 + (r - G.oy) * CELL, CELL, CELL);
+  return capp_rect(g.gx0 + (c - G.ox) * g.cs, g.gy0 + (r - G.oy) * g.cs, g.cs, g.cs);
 }
 
 /* A file of the repository, found beside this file's folder. */
@@ -381,7 +387,7 @@ void test_crossword_paint_the_list_comes_from_the_server_and_fills_the_screen(vo
   XN.wait = 2;
   x_start();
   CHECK_EQ(XN.starts, 1);
-  CHECK(!strcmp(XN.url, "http://srv/crossword/list?limit=40"));
+  CHECK(!strcmp(XN.url, "http://srv/crossword/list?limit=40&kind=full"));
   CHECK(G.online);
   CHECK_EQ(G.net, NET_LIST);
   CHECK_EQ(G.npage, 0);
@@ -455,7 +461,7 @@ void test_crossword_paint_the_list_filters_by_weekday_and_date_through_the_serve
   CHECK_EQ(x_key('w'), 1);
   CHECK_EQ(G.qwd, 0);
   CHECK_EQ(XN.starts, 2);
-  CHECK(!strcmp(XN.url, "http://srv/crossword/list?limit=40&weekday=0"));
+  CHECK(!strcmp(XN.url, "http://srv/crossword/list?limit=40&kind=full&weekday=0"));
   CHECK_EQ(G.npage, 0);
   CHECK_EQ(fakescreen_unset(), 0);                  /* loading, with nothing to list */
   x_tick(10);
@@ -475,7 +481,7 @@ void test_crossword_paint_the_list_filters_by_weekday_and_date_through_the_serve
   x_key('\r');
   CHECK(!G.prompting);
   CHECK(!strcmp(G.qto, "1993-11-30"));              /* a month is up to its last day */
-  CHECK(!strcmp(XN.url, "http://srv/crossword/list?limit=40&weekday=0&to=1993-11-30"));
+  CHECK(!strcmp(XN.url, "http://srv/crossword/list?limit=40&kind=full&weekday=0&to=1993-11-30"));
   x_tick(10);
   CHECK_EQ(G.npage, 1);
   CHECK(!fakescreen_ui.wants_text(fakescreen_ui.state));
@@ -496,7 +502,7 @@ void test_crossword_paint_the_list_filters_by_weekday_and_date_through_the_serve
   x_key('a');
   CHECK_EQ(G.qwd, 7);
   CHECK_EQ(G.qto[0], 0);
-  CHECK(!strcmp(XN.url, "http://srv/crossword/list?limit=40"));
+  CHECK(!strcmp(XN.url, "http://srv/crossword/list?limit=40&kind=full"));
   x_tick(10);
   CHECK_EQ(G.npage, 9);
   x_clean();
@@ -956,7 +962,8 @@ void test_crossword_paint_a_grid_bigger_than_the_screen_scrolls_after_the_cursor
   CHECK_EQ(G.ox, 21 - g.vcols);
   CHECK_EQ(G.oy, 0);
   CHECK(fakescreen_count(x_cell(0, 20), G_CUR) > 120);        /* a two-digit number takes some of it */
-  /* Down: the first press turns to the down word, the rest walk it. */
+  /* Space turns to the down word; arrows only move, so the rest walk it. */
+  x_key(' ');
   for (i = 0; i < 21; i++) x_key(CAPP_KEY_DOWN);
   CHECK_EQ(G.pz.cur / 21, 20);
   CHECK_EQ(G.pz.dir, XW_DOWN);
@@ -968,12 +975,200 @@ void test_crossword_paint_a_grid_bigger_than_the_screen_scrolls_after_the_cursor
   x_clean();
 }
 
+/* A 15x15 daily, opened in the view the card says. */
+static void x_open_daily(const char *view) {
+  x_init();
+  fakefs_put(VIEW_PATH, view);
+  XA.caps_ok = xn_caps_none;
+  x_build_sq(15);
+  fakefs_put(INDEX_PATH, "1993-11-15\t1993-11-15\tMon\t15x15\tA Daily\n");
+  fakefs_put(PUZ_DIR "/1993-11-15.xw", X_BIG);
+  x_start();
+  x_ticks(3, 10);
+  x_key('\r');
+}
+
+void test_crossword_paint_the_side_view_shows_a_daily_whole_and_its_clues_beside_it(void) {
+  Geo g;
+  int i;
+  x_open_daily("side\n");
+  CHECK_EQ(G.view, V_GRID);
+  CHECK_EQ(G.lay, LAY_SIDE);
+  geometry(&g);
+  CHECK_EQ(g.cs, CELL_MIN);                           /* 15 eights and a line: 121 of 124 */
+  CHECK_EQ(g.nc, 15);
+  CHECK_EQ(g.nr, 15);
+  CHECK_EQ(g.gx0, 0);                                 /* against the left edge: no gutter */
+  CHECK_EQ(g.col.x, 15 * CELL_MIN + 1);
+  CHECK_EQ(g.col.w, FS_W - g.col.x);
+  CHECK_EQ(fakescreen_count(capp_rect(0, g.gy0, g.col.x, 15 * CELL_MIN + 1), G_MARGIN), 0);
+  /* The clue, long enough here to fill the column; the crossing clue gets
+   * what room is left, which for this one is none. */
+  CHECK(fakescreen_count(g.col, B_LABEL) > 0);
+  CHECK(fakescreen_count(g.col, B_TEXT) > 100);
+  CHECK(fakescreen_count(x_cell(0, 0), G_CUR) > 30);
+  CHECK_EQ(fakescreen_unset(), 0);
+  fakescreen_dump("CROSSWORD_DUMP", "crossword_side");
+
+  /* Arrows move and never turn; the column's crossing clue follows the cursor. */
+  for (i = 0; i < 3; i++) CHECK_EQ(x_key(CAPP_KEY_RIGHT), 1);
+  CHECK_EQ(G.pz.dir, XW_ACROSS);
+  CHECK_EQ(x_key(CAPP_KEY_DOWN), 1);
+  CHECK_EQ(G.pz.dir, XW_ACROSS);
+  CHECK_EQ(G.pz.cur, 15 + 3);
+  CHECK_EQ(G.cross_ci, xw_clue_at(&G.pz, G.pz.cur, XW_DOWN));
+  /* Tab turns, as space does; Enter is the next word. */
+  x_key('\t');
+  CHECK_EQ(G.pz.dir, XW_DOWN);
+  x_key(' ');
+  CHECK_EQ(G.pz.dir, XW_ACROSS);
+  x_key('\r');
+  CHECK_EQ(G.pz.cur / 15, 2);
+  x_clean();
+}
+
+void test_crossword_paint_the_side_column_shows_the_crossing_clue_dimmed(void) {
+  Geo g;
+  x_init();
+  fakefs_put(VIEW_PATH, "side\n");
+  XA.caps_ok = xn_caps_none;
+  fakefs_put(INDEX_PATH, X_MINI_LINE);
+  fakefs_put(X_PUZ, X_MINI);
+  x_start();
+  x_ticks(3, 10);
+  x_key('\r');
+  geometry(&g);
+  CHECK_EQ(g.cs, CELL_SIDE);                          /* a mini in big squares */
+  CHECK_EQ(g.gx0, 0);
+  CHECK(g.col.w >= COL_MIN);
+  CHECK(fakescreen_count(g.col, B_TEXT) > 30);       /* 1-Across: Catch with the ears */
+  CHECK(fakescreen_count(g.col, L_DIM) > 30);        /* 1-Down: Listen up */
+  CHECK_EQ(fakescreen_unset(), 0);
+  fakescreen_dump("CROSSWORD_DUMP", "crossword_side_mini");
+  /* Along the word the crossing clue changes, and only the column and the
+   * squares are repainted -- and match a whole paint (x_clean). */
+  x_key(CAPP_KEY_RIGHT);
+  CHECK_EQ(G.cross_ci, xw_clue_at(&G.pz, 1, XW_DOWN));
+  x_clean();
+}
+
+void test_crossword_paint_tab_switches_full_and_midi_on_the_server_and_the_card(void) {
+  const char *v;
+  /* Online: the tab is the server's kind=. */
+  x_init();
+  XN.list = X_MINI_LINE;
+  x_start();
+  x_ticks(3, 10);
+  CHECK_EQ(G.kind, KIND_FULL);
+  CHECK(strstr(XN.url, "&kind=full") != NULL);
+  XN.list = "2026-10-27-midi\t2026-10-27\tTue\t10x9\tMidi: License Plate Game\n";
+  CHECK_EQ(x_key('\t'), 1);
+  x_ticks(3, 10);
+  CHECK_EQ(G.kind, KIND_MIDI);
+  CHECK(strstr(XN.url, "&kind=midi") != NULL);
+  CHECK_EQ(G.npage, 1);
+  CHECK(!strcmp(G.page[0].id, "2026-10-27-midi"));
+  CHECK(fakescreen_count(capp_rect(0, TOP_H - 3, 80, 2), K_PLAY) > 20);   /* the tab's blue line */
+  CHECK_EQ(fakescreen_unset(), 0);
+  fakescreen_dump("CROSSWORD_DUMP", "crossword_tab_midi");
+  v = fakefs_get(VIEW_PATH);
+  CHECK(v && !strcmp(v, "big\nmidi\n"));             /* x_init chose the big view */
+  x_clean();
+
+  /* Offline: the card's index is split the same way -- a name that is not a
+   * date is Themed -- and the tab is kept. */
+  x_init();
+  fakefs_put(VIEW_PATH, "side\nmidi\n");
+  XA.caps_ok = xn_caps_none;
+  fakefs_put(INDEX_PATH, "traitors\t\t\t15x15\tThe Traitors\n"
+                         "2026-10-27-midi\t2026-10-27\tTue\t10x9\tMidi: A\n"
+                         "1993-11-21\t1993-11-21\tSun\t5x5\tMini Heart\n");
+  x_start();
+  x_ticks(3, 10);
+  CHECK_EQ(G.kind, KIND_MIDI);
+  CHECK_EQ(G.npage, 1);
+  CHECK(!strcmp(G.page[0].id, "2026-10-27-midi"));
+  x_key('\t');
+  x_ticks(3, 10);
+  CHECK_EQ(G.kind, KIND_THEMED);
+  CHECK_EQ(G.npage, 1);
+  CHECK(!strcmp(G.page[0].id, "traitors"));
+  CHECK_EQ(fakescreen_unset(), 0);
+  fakescreen_dump("CROSSWORD_DUMP", "crossword_tab_themed");
+  x_key('\t');
+  x_ticks(3, 10);
+  CHECK_EQ(G.kind, KIND_FULL);
+  CHECK_EQ(G.npage, 1);
+  CHECK(!strcmp(G.page[0].id, "1993-11-21"));
+  x_clean();
+}
+
+void test_crossword_paint_ctrl_l_goes_side_big_zoom_and_is_kept(void) {
+  Geo g;
+  const char *v;
+  x_open_daily("side\n");
+  CHECK_EQ(x_act(ACT_LAYOUT), 1);
+  CHECK_EQ(G.lay, LAY_BIG);
+  v = fakefs_get(VIEW_PATH);
+  CHECK(v && !strcmp(v, "big\nfull\n"));
+  geometry(&g);
+  CHECK_EQ(g.cs, CELL);
+  CHECK(g.nr < 15);                                   /* the big view scrolls a daily */
+  CHECK_EQ(fakescreen_unset(), 0);
+
+  /* Zoom: sixteens, edge to edge, scrolling up and down. */
+  CHECK_EQ(x_act(ACT_LAYOUT), 1);
+  CHECK_EQ(G.lay, LAY_ZOOM);
+  geometry(&g);
+  CHECK_EQ(g.cs, 16);
+  CHECK_EQ(g.nc, 15);
+  CHECK_EQ(g.gx0, 0);
+  CHECK(g.nr < 15);
+  CHECK_EQ(fakescreen_count(capp_rect(0, g.gy0, FS_W, g.nr * 16), G_MARGIN), 0);
+  CHECK(fakescreen_count(capp_rect(0, g.bar_y, FS_W, g.bar_h), B_LABEL) > 0);
+  CHECK_EQ(fakescreen_unset(), 0);
+  fakescreen_dump("CROSSWORD_DUMP", "crossword_zoom");
+  x_key(CAPP_KEY_DOWN);
+  x_key(CAPP_KEY_DOWN);
+  CHECK_EQ(G.pz.cur, 30);
+  v = fakefs_get(VIEW_PATH);
+  CHECK(v && !strcmp(v, "zoom\nfull\n"));
+
+  /* And round to the side view again; leaving and coming back keeps it. */
+  CHECK_EQ(x_act(ACT_LAYOUT), 1);
+  CHECK_EQ(G.lay, LAY_SIDE);
+  x_key(CAPP_KEY_ESC);
+  x_key('\r');
+  CHECK_EQ(G.lay, LAY_SIDE);
+  x_clean();
+}
+
+void test_crossword_paint_the_zoom_view_draws_a_mini_in_big_letters(void) {
+  Geo g;
+  x_init();
+  fakefs_put(VIEW_PATH, "zoom\n");
+  XA.caps_ok = xn_caps_none;
+  fakefs_put(INDEX_PATH, X_MINI_LINE);
+  fakefs_put(X_PUZ, X_MINI);
+  x_start();
+  x_ticks(3, 10);
+  x_key('\r');
+  geometry(&g);
+  CHECK_EQ(g.cs, CELL_ZOOM);
+  x_key('h');
+  CHECK(fakescreen_count(x_cell(0, 0), G_INK) > 40);  /* an H at twice the size */
+  CHECK(fakescreen_count(x_cell(2, 2), G_RING) > 30);
+  CHECK_EQ(fakescreen_unset(), 0);
+  fakescreen_dump("CROSSWORD_DUMP", "crossword_zoom_mini");
+  x_clean();
+}
+
 /* ---- finishing -------------------------------------------------------------------------------------- */
 
 void test_crossword_paint_solving_shows_the_results_and_counts_it_once(void) {
   const char *s;
   x_open_mini();
-  x_keys("HEAR\tEMBER\tABUSE\tRESIN\tREN");
+  x_keys("HEAR\rEMBER\rABUSE\rRESIN\rREN");
   CHECK_EQ(G.view, V_GRID);
   CHECK(!G.pz.solved);
   fakeapi_ticks += 95000;                            /* a minute and thirty-five seconds on the clock */
@@ -1046,7 +1241,7 @@ void test_crossword_paint_a_solve_with_some_letters_given_is_helped_and_sets_no_
   CHECK(!strcmp(G.msg, "revealed: no best time now"));
   CHECK_EQ(fakescreen_count(x_cell(0, 0), G_GIVEN), 17);     /* a given letter is blue */
   CHECK_EQ(fakescreen_count(x_cell(0, 0), G_INK), 0);
-  x_keys("\tEMBER\tABUSE\tRESIN\tREND");
+  x_keys("\rEMBER\rABUSE\rRESIN\rREND");
   CHECK_EQ(G.view, V_DONE);
   CHECK_EQ(G.done_new, XWS_NOT_BEST);
   CHECK_EQ(G.st.helped, 1);
@@ -1185,7 +1380,7 @@ void test_crossword_paint_the_statistics_are_read_back_and_drawn(void) {
   CHECK_EQ(G.st.helped, 1);
   CHECK_EQ(G.st.streak, 3);
 
-  x_key('\t');
+  x_key('s');                                        /* s is the statistics; tab is the list's tabs */
   CHECK_EQ(G.view, V_STATS);
   CHECK_EQ(G.today, today);
   CHECK_EQ(xws_streak_now(&G.st, G.today), 3);
@@ -1200,7 +1395,7 @@ void test_crossword_paint_the_statistics_are_read_back_and_drawn(void) {
 
   /* A day later the streak is over, though the file still says three. */
   fakeapi_now.day = 11;
-  x_key('\t');
+  x_key('s');
   CHECK_EQ(G.today, today + 2);
   CHECK_EQ(xws_streak_now(&G.st, G.today), 0);
   CHECK_EQ(fakescreen_unset(), 0);
@@ -1212,7 +1407,7 @@ void test_crossword_paint_the_statistics_are_read_back_and_drawn(void) {
   x_start();
   CHECK_EQ(G.st.solved[0], 0);
   CHECK_EQ(G.st.streak, 0);
-  x_key('\t');
+  x_key('s');
   CHECK_EQ(fakescreen_unset(), 0);
   x_clean();
 }
