@@ -11,6 +11,22 @@ To release: add a section here, commit, `git tag -a vX.Y.Z -m "..."`, then
 `bash tools/deploy_droplet.sh sync`, which pushes the tags to GitHub and the
 droplet so its builds carry the same version.
 
+## v0.25.1 -- 2026-10-27
+
+Firmware and apps (`update os`, then `update apps`), and the server.
+
+- **Traitors: The Game** (Games). Seven contestants at the castle, two of
+  them Traitors; alone with six computer players, or two people on two
+  Cardputers (ESP-NOW, no router). Each round: a mission (the leader's team
+  voted on, then played straight or sabotaged in secret; a clean one adds
+  to the prize pot and wins a shield), the round table, a murder in the
+  night. The round table is a chat room: type (or speak) and the others
+  answer, written by Claude through the server, and what is said changes
+  who they vote for.
+- **`update` can list 64 apps and 80 icons** (it was 48 and 64; the server
+  had 48). Firmware older than this skips apps past the 48th: `update os`
+  first.
+
 ## v0.25.0 -- 2026-10-27
 
 Firmware and apps (`update all`), and the server. API 50: every `.capp`
