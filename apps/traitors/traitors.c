@@ -223,27 +223,27 @@ static int queue_tick(uint32_t now) {
 /* ---- what the computers say ------------------------------------------------------ */
 
 static const char *const FAITH_LINES[] = {
-  "I keep coming back to %s. Something is off.",
-  "My eye is on %s. I hope I am wrong.",
-  "%s has been far too quiet.",
-  "Every road leads back to %s for me.",
+  "Honestly? My gut says %s. Something's off.",
+  "I'm going with %s. I really hope I'm wrong.",
+  "%s has been way too quiet.",
+  "Every time I think it through I land on %s.",
 };
 static const char *const TRAIT_LINES[] = {
-  "Look at %s. Always near the trouble.",
-  "I trust everyone here but %s.",
-  "%s, your story does not add up.",
-  "Faithful, open your eyes: %s.",
+  "Look at %s. Always around when it goes wrong.",
+  "I trust everyone at this table except %s.",
+  "%s, your story doesn't add up for me.",
+  "Faithfuls, wake up. It's %s.",
 };
 static const char *const DEFEND_LINES[] = {
-  "Me? I was nowhere near that chest.",
-  "That is a reach, and you know it.",
-  "Accuse me if you like. You will see.",
-  "Interesting that you point at me so fast.",
+  "Me? I played that mission straight, I swear.",
+  "That's such a reach and you know it.",
+  "Vote me out then. You'll see I'm Faithful.",
+  "Funny how fast you pointed at me.",
 };
 static const char *const MURMUR_LINES[] = {
-  "Hm. Go on.",
-  "I hear you. I am not sure yet.",
-  "Maybe. Let us see how the vote falls.",
+  "Okay. Keep going.",
+  "I hear you. I'm not sure yet.",
+  "Maybe. Let's see how the vote goes.",
 };
 
 /* The seat a computer suspects most, for its words. */
@@ -333,6 +333,8 @@ static void talk_request(int mode) {
                      !G.t.shown[s] ? "murdered" : G.t.role[s] == TR_TRAITOR ? "banished-traitor"
                                                                            : "banished-faithful");
   }
+  for (s = 0; s < TR_N; s++)
+    at += api->fmt(G.body + at, sizeof G.body - (size_t)at, "bio %d %s\n", s, TA_BIO[s]);
   for (i = 0; i < G.nlog; i++)
     at += api->fmt(G.body + at, sizeof G.body - (size_t)at, "log %s\n", G.log[i]);
   from = G.nchat - 16 > G.table_from ? G.nchat - 16 : G.table_from;
@@ -434,62 +436,73 @@ static int talking(void) {
 
 /* ---- the host: narration, and telling the guest ---------------------------------- */
 
+/* The pot, in dollars: TR_GOLD a crew member is $500 a unit. */
+static int pot_k(int pot) { return pot / 2; }
+
+/* A contestant says something themselves -- the banished, revealing. */
+static void speak_as(int seat, const char *text) {
+  chat_add(seat, text);
+  logf_(text);
+  send_line(seat, text);
+}
+
+/* What the host says as each part of the day begins. */
 static void narrate(int phase) {
   char a[80], b[SAY_MAX];
   Tr *t = &G.t;
   int s, yes = 0, no = 0;
   switch (phase) {
   case TR_PROPOSE:
-    api->fmt(b, sizeof b, "Round %d. %s leads the mission.", t->round, G.name[t->leader]);
+    api->fmt(b, sizeof b, "Round %d. %s leads today's mission.", t->round, G.name[t->leader]);
     castle(b);
     break;
   case TR_VOTE:
     list_names(t->crew, a, sizeof a);
-    api->fmt(b, sizeof b, "%s names the crew: %s.", G.name[t->leader], a);
+    api->fmt(b, sizeof b, "%s picks %s. Does the group agree?", G.name[t->leader], a);
     castle(b);
     break;
   case TR_VOTED:
     for (s = 0; s < TR_N; s++) { if (t->vote[s] == 1) yes++; else if (t->vote[s] == 0) no++; }
-    if (t->sent) api->fmt(b, sizeof b, "The crew goes, %d to %d.", yes, no);
-    else api->fmt(b, sizeof b, "Turned down, %d to %d. That is %d of %d.", yes, no, t->rejects + 1,
-                  TR_REJECTS);
+    if (t->sent) api->fmt(b, sizeof b, "The team goes, %d votes to %d.", yes, no);
+    else api->fmt(b, sizeof b, "Rejected, %d to %d. That's %d of %d.", yes, no, t->rejects + 1, TR_REJECTS);
     castle(b);
     break;
   case TR_VAULT:
-    castle("The crew go down to the vault. Each drops a coin in the chest.");
+    castle("The mission begins. Each of them, in secret: play it straight, or sabotage.");
     break;
   case TR_RESULT:
-    if (t->lead < 0) api->fmt(b, sizeof b, "Three crews refused: the mission is spoiled.");
-    else if (t->lead == 0) api->fmt(b, sizeof b, "The chest: all gold. %d to the pot.", TR_GOLD * tr_bits(t->crew));
-    else api->fmt(b, sizeof b, "The chest: %d lead coin%s. The mission is spoiled.", t->lead,
-                  t->lead == 1 ? "" : "s");
+    if (t->lead < 0) api->fmt(b, sizeof b, "Three teams rejected. No mission, no money.");
+    else if (t->lead == 0)
+      api->fmt(b, sizeof b, "A clean mission. $%d,000 goes in the prize pot.", pot_k(TR_GOLD * tr_bits(t->crew)));
+    else api->fmt(b, sizeof b, "Sabotage. %d of them didn't play it straight. Nothing for the pot.", t->lead);
     castle(b);
     break;
   case TR_SHIELD:
-    api->fmt(b, sizeof b, "%s has a shield to give.", G.name[t->leader]);
+    api->fmt(b, sizeof b, "%s, you've won a shield. Who gets it?", G.name[t->leader]);
     castle(b);
     break;
   case TR_TABLE:
     if (t->shield >= 0) {
-      api->fmt(b, sizeof b, "%s holds the shield. Now, the round table.", G.name[t->shield]);
+      api->fmt(b, sizeof b, "%s has a shield tonight. Please, take your seats at the round table.",
+               G.name[t->shield]);
       castle(b);
-    } else castle("The round table. Who is a Traitor?");
+    } else castle("Please, take your seats at the round table.");
     break;
   case TR_TABLED:
-    if (t->banished < 0) castle("A tie. Nobody is banished tonight.");
+    if (t->banished < 0) castle("A tie. Nobody leaves the castle tonight.");
     else {
-      api->fmt(b, sizeof b, "%s is banished... and was %s", G.name[t->banished],
-               t->role[t->banished] == TR_TRAITOR ? "a TRAITOR!" : "Faithful.");
+      api->fmt(b, sizeof b, "%s, you have been banished. Tell them who you are.", G.name[t->banished]);
       castle(b);
+      speak_as(t->banished, t->role[t->banished] == TR_TRAITOR ? "I am... a Traitor." : "I am... a Faithful.");
     }
     break;
   case TR_NIGHT:
     castle("Night falls. The Traitors meet in the turret.");
     break;
   case TR_BREAKFAST:
-    if (t->murdered < 0) castle("Everyone comes down to breakfast.");
+    if (t->murdered < 0) castle("Everyone made it to breakfast. The Traitors didn't strike.");
     else {
-      api->fmt(b, sizeof b, "%s does not come down to breakfast. Murdered.", G.name[t->murdered]);
+      api->fmt(b, sizeof b, "One of you won't be joining us for breakfast. %s was murdered.", G.name[t->murdered]);
       castle(b);
     }
     break;
@@ -497,8 +510,10 @@ static void narrate(int phase) {
     uint8_t all = 0;
     for (s = 0; s < TR_N; s++) if (t->role[s] == TR_TRAITOR) all |= (uint8_t)(1 << s);
     list_names(all, a, sizeof a);
-    api->fmt(b, sizeof b, "%s win! The Traitors were %s.",
-             t->winner == TR_FAITHFUL ? "The Faithful" : "The Traitors", a);
+    if (t->winner == TR_FAITHFUL)
+      api->fmt(b, sizeof b, "The Faithful win, and split $%d,000. The Traitors were %s.", pot_k(t->pot), a);
+    else
+      api->fmt(b, sizeof b, "The Traitors win, and take all $%d,000. They were %s.", pot_k(t->pot), a);
     castle(b);
     break;
   }
@@ -538,7 +553,7 @@ static int host_tick(uint32_t now) {
   changed |= queue_tick(now);
   if (G.t.phase == TR_TABLE && G.was_open && !G.t.talk_open) {
     G.was_open = 0;
-    castle("Enough talk. Everyone votes.");
+    castle("Time's up. It's time to vote.");
     changed = 1;
   }
   if (changed) publish();
@@ -574,7 +589,7 @@ static void new_game(void) {
   G.tk = TK_IDLE;
   G.seen_phase = TR_ROLES;
   G.next_at = 0;
-  castle("Welcome to the castle. Seven guests; two are Traitors.");
+  castle("Welcome to the castle. Seven of you. Among you, two Traitors.");
   publish();
 }
 
@@ -644,7 +659,7 @@ static void icon(int which, int x, int y) {
       int v = px[r * TA_ICON + c], s = c;
       if (v == 0xFF) { c++; continue; }
       while (c < TA_ICON && px[r * TA_ICON + c] == v) c++;
-      if (y + r >= 0 && x + s >= 0) api->fill(capp_rect(x + s, y + r, c - s, 1), TA_PAL[v]);
+      if (y + r >= 0 && x + s >= 0) api->fill(capp_rect(x + s, y + r, c - s, 1), TA_IPAL[v]);
     }
   }
 }
@@ -656,11 +671,7 @@ static void portrait(int s, int x, int y, int grey) {
   for (i = 0; i < TA_FACE * TA_FACE; i++) {
     uint8_t b = TA_FACES[s][i / 2];
     int v = i & 1 ? b & 15 : b >> 4;
-    if (grey && v > 1) {
-      /* the palette's own greys, by how light it was */
-      static const uint8_t GREY[16] = { 0, 1, 13, 12, 1, 12, 1, 1, 12, 12, 13, 13, 1, 12, 12, 13 };
-      v = GREY[v];
-    }
+    if (grey && v > 1) v = v == 4 || v == 9 ? 1 : 12;   /* gone: grey, the darks black */
     px[i] = TA_PAL[v];
   }
   api->pixels(capp_rect(x, y, TA_FACE, TA_FACE), px);
@@ -744,7 +755,7 @@ static void paint_table(void) {
   for (i = 0; i < v->clean; i++, x += 12) icon(TA_GOLD, x, 49);
   for (i = 0; i < v->spoiled; i++, x += 12) icon(TA_LEAD, x, 49);
   if (v->pot) {
-    api->fmt(b, sizeof b, "%d gold", v->pot * 10);
+    api->fmt(b, sizeof b, "$%d,000", pot_k(v->pot * 10));
     api->text((int16_t)(120 - (int)api->str_len(b) * 3), 59, b, C_TEXT, CAPP_RGB(78, 40, 24));
   }
 }
@@ -758,18 +769,18 @@ static void paint_role_card(void) {
   frame(x, y, w, h, v->my_role == TR_TRAITOR ? C_BLOOD : C_GOLD);
   icon(v->my_role == TR_TRAITOR ? TA_CLOAK : TA_SHIELD, x + 8, y + 8);
   api->text_font(G.f_uib, (int16_t)(x + 22), (int16_t)(y + 6),
-                 v->my_role == TR_TRAITOR ? "You are a TRAITOR" : "You are FAITHFUL",
+                 v->my_role == TR_TRAITOR ? "You are a Traitor." : "You are a Faithful.",
                  v->my_role == TR_TRAITOR ? C_BLOOD : C_GOLD, C_PANEL);
-  api->fmt(b, sizeof b, "You sit as %s.", G.name[G.me]);
+  api->fmt(b, sizeof b, "%s, %s", G.name[G.me], TA_BIO[G.me]);
   api->text(x + 8, y + h - 10, b, C_GOLD, C_PANEL);
   if (v->my_role == TR_TRAITOR) {
     b[0] = 0;
     for (s = 0; s < TR_N; s++)
-      if (((v->traitors >> s) & 1) && s != G.me) api->fmt(b, sizeof b, "With you: %s", G.name[s]);
+      if (((v->traitors >> s) & 1) && s != G.me) api->fmt(b, sizeof b, "The other Traitor: %s", G.name[s]);
     api->text_font(G.f_ui, (int16_t)(x + 8), (int16_t)(y + 24), b, C_TEXT, C_PANEL);
-    api->text_font(G.f_ui, (int16_t)(x + 8), (int16_t)(y + 38), "Spoil missions. Lie.", C_DIM, C_PANEL);
+    api->text_font(G.f_ui, (int16_t)(x + 8), (int16_t)(y + 38), "Sabotage. Murder. Lie.", C_DIM, C_PANEL);
   } else {
-    api->text_font(G.f_ui, (int16_t)(x + 8), (int16_t)(y + 24), "Two among you lie.", C_TEXT, C_PANEL);
+    api->text_font(G.f_ui, (int16_t)(x + 8), (int16_t)(y + 24), "Two of them are lying.", C_TEXT, C_PANEL);
     api->text_font(G.f_ui, (int16_t)(x + 8), (int16_t)(y + 38), "Find them. Banish them.", C_DIM, C_PANEL);
   }
 }
@@ -787,8 +798,11 @@ static void paint_over(void) {
   api->text_font(G.f_uib, (int16_t)(x + 10), (int16_t)(y + 6),
                  v->winner == TR_TRAITOR ? "The Traitors win" : "The Faithful win",
                  v->winner == TR_TRAITOR ? C_BLOOD : C_GOLD, C_PANEL);
-  api->text_font(G.f_ui, (int16_t)(x + 10), (int16_t)(y + 22), mine ? "...and so do you." : "...and you do not.",
-                 C_TEXT, C_PANEL);
+  {
+    char b[48];
+    api->fmt(b, sizeof b, "$%d,000. %s", pot_k(v->pot * 10), mine ? "You win." : "You lose.");
+    api->text_font(G.f_ui, (int16_t)(x + 10), (int16_t)(y + 22), b, C_TEXT, C_PANEL);
+  }
 }
 
 /* The words under the hall: who speaks, and what, over two lines. */
@@ -843,7 +857,7 @@ static void mini_face(int s, int x, int y, int grey) {
       int i = (r * 2) * TA_FACE + c * 2;
       uint8_t b = TA_FACES[s][i / 2];
       int v = b >> 4;
-      if (grey && v > 1) v = 13;
+      if (grey && v > 1) v = 12;
       px[r * 10 + c] = TA_PAL[v];
     }
   api->pixels(capp_rect(x, y, 10, 10), px);
@@ -980,7 +994,7 @@ static const char *hint(void) {
     api->fmt(b, sizeof b, "space pick %d of %d  enter send", tr_bits(G.pick), v->crew_size);
     return b;
   case TR_ASK_YESNO: return "send this crew?  y yes  n no";
-  case TR_ASK_COIN: return v->my_role == TR_TRAITOR ? "your coin:  g gold  l lead" : "your coin:  g gold";
+  case TR_ASK_COIN: return v->my_role == TR_TRAITOR ? "enter play it straight  s sabotage" : "enter play it straight";
   case TR_ASK_SEAT:
     return v->phase == TR_SHIELD ? "arrows  enter give the shield" :
            v->phase == TR_NIGHT ? "arrows  enter murder" : "arrows  enter banish";
@@ -1002,12 +1016,13 @@ static void paint_game(CRect c) {
 static void paint_title(CRect c) {
   int i, y = 54;
   paint_hall();
-  api->fill(capp_rect(60, 8, 120, 20), C_PANEL);
-  frame(60, 8, 120, 20, C_BLOOD);
-  api->text_font(G.f_uib, (int16_t)(120 - api->text_width(G.f_uib, "THE TRAITORS") / 2), 11,
-                 "THE TRAITORS", C_BLOOD, C_PANEL);
-  icon(TA_CANDLE, 48, 12);
-  icon(TA_CANDLE, 183, 12);
+  api->fill(capp_rect(60, 6, 120, 30), C_PANEL);
+  frame(60, 6, 120, 30, C_BLOOD);
+  api->text_font(G.f_uib, (int16_t)(120 - api->text_width(G.f_uib, "TRAITORS") / 2), 8,
+                 "TRAITORS", C_BLOOD, C_PANEL);
+  api->text(120 - 4 * 6, 25, "THE GAME", C_DIM, C_PANEL);
+  icon(TA_CANDLE, 48, 14);
+  icon(TA_CANDLE, 183, 14);
   for (i = 0; i < M_N; i++) {
     uint16_t bg = i == G.menu ? C_BLOOD : C_PANEL;
     api->fill(capp_rect(70, y, 100, 15), bg);
@@ -1016,7 +1031,7 @@ static void paint_title(CRect c) {
     y += 17;
   }
   api->fill(capp_rect(0, HALL_H, 240, c.h - FOOT_H - HALL_H), C_PANEL);
-  api->text_font(G.f_ui, 6, HALL_H + 4, "Seven guests. Two Traitors. One castle.", C_DIM, C_PANEL);
+  api->text_font(G.f_ui, 6, HALL_H + 4, "Seven players. Two Traitors. One prize pot.", C_DIM, C_PANEL);
   footer_paint(api, c, "enter start  fn-h rules");
 }
 
@@ -1175,8 +1190,8 @@ static int key_game(uint8_t k) {
     else if (k == 'n' || k == 'N') answer(0);
     return 1;
   case TR_ASK_COIN:
-    if (k == 'g' || k == 'G') answer(0);
-    else if ((k == 'l' || k == 'L') && v->my_role == TR_TRAITOR) answer(1);
+    if (k == CAPP_KEY_ENTER || k == 'g' || k == 'G') answer(0);
+    else if ((k == 's' || k == 'S') && v->my_role == TR_TRAITOR) answer(1);
     return 1;
   case TR_ASK_CREW: case TR_ASK_SEAT:
     if (k == CAPP_KEY_LEFT || k == CAPP_KEY_UP) { move_cursor(-1); return 1; }
@@ -1294,7 +1309,11 @@ static int net_tick(void) {
         G.t.human[1] = 0;
         G.net = 0;
         api->fmt(G.name[1], NAME_W, "%s", TA_NAME[1]);
-        castle("Silas's player has gone; the castle plays Silas now.");
+        {
+          char b2[SAY_MAX];
+          api->fmt(b2, sizeof b2, "%s's player has left. The game plays %s now.", G.name[1], G.name[1]);
+          castle(b2);
+        }
         tr_enter(&G.t, G.t.phase);        /* the computer answers for it now */
         publish();
         return 1;
@@ -1361,18 +1380,19 @@ static int app_tick(void *st, uint32_t now) {
 const CappInfo capp_info = {
   CAPP_API_VERSION,
   CAPP_FULLSCREEN | CAPP_NEEDS_PROXY,
-  "The Traitors",
+  "Traitors",
   /* 16x16: a hooded figure. */
   { 0x07, 0xE0, 0x0F, 0xF0, 0x1F, 0xF8, 0x3C, 0x3C,
     0x38, 0x1C, 0x3A, 0x5C, 0x38, 0x1C, 0x3C, 0x3C,
     0x1E, 0x78, 0x3F, 0xFC, 0x7F, 0xFE, 0x7E, 0x7E,
     0xFE, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0xFE },
-  "Seven guests at a castle; two are Traitors.\n"
+  "Traitors: The Game. Seven players at a\n"
+  "castle; two are Traitors.\n"
   "\n"
-  "mission\tthe leader picks a crew; all vote y/n.\n"
-  "\tthree crews turned down spoil it\n"
-  "vault\tthe crew drop coins: Faithful gold,\n"
-  "\tTraitors gold or lead. One lead spoils it\n"
+  "mission\tthe leader picks a team; all vote y/n.\n"
+  "\tthree teams rejected and there's no mission\n"
+  "\tthe team secretly play it straight or (a\n"
+  "\tTraitor) sabotage: any sabotage, no money\n"
   "shield\ta clean mission's leader gives one;\n"
   "\tit stops one murder\n"
   "table\tthe talk, then everyone names someone:\n"
@@ -1380,7 +1400,7 @@ const CappInfo capp_info = {
   "night\tthe Traitors murder a Faithful\n"
   "\n"
   "Faithful win when no Traitor is left.\n"
-  "Traitors win at two spoiled missions, or\n"
+  "Traitors win at two sabotaged missions, or\n"
   "as many as the Faithful.\n"
   "\n"
   "tab\tthe room: everyone's words; type to talk,\n"
@@ -1390,7 +1410,7 @@ const CappInfo capp_info = {
   "space\tpick for a crew\n"
   "enter\tsettle, go on, next line\n"
   "y n\tvote on a crew\n"
-  "g l\tgold or lead\n"
+  "s\ta Traitor's sabotage, on a mission\n"
   "esc\tleave (asks)\n",
 };
 

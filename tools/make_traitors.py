@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""The Traitors' pictures: seven portraits and the little icons, as gothic
-pixel art on one 16-colour palette.
+"""Traitors: The Game's pictures: seven contestants and the little icons, as
+pixel art.
 
     python tools/make_traitors.py                 writes apps/traitors/traitors_art.h
     python tools/make_traitors.py --preview F.png  draws everything big, to look at
 
-Portraits are 20x20, drawn here from a few choices each (hair, cloak,
-trimmings) over one face, outlined where they meet the dark; icons are 9x9,
-drawn by hand below. Everything is a palette index, 4 bits a pixel for the
-portraits. The palette is RGB565 in the panel's byte order, as CAPP_RGB makes
-it, so the app hands it to api->pixels unchanged.
+The contestants are people you would see on the show: a first name, an age
+and a job (TA_BIO), and a portrait drawn here from a few choices -- skin,
+hair, what they wear, glasses or a beard or a scarf -- over one face,
+outlined where it meets the dark. Portraits are 20x20, 4 bits a pixel on
+their own palette (FACE_PAL); the 9x9 icons are drawn by hand below on
+another (ICON_PAL). Both palettes are RGB565 in the panel's byte order, as
+CAPP_RGB makes it, so the app hands them to api->pixels unchanged.
 """
 import os
 import sys
@@ -17,128 +19,127 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "apps", "traitors", "traitors_art.h")
 
-PAL = [
+FACE_PAL = [
     (14, 11, 20),     # 0  the dark behind a portrait
     (5, 4, 8),        # 1  outline
-    (226, 206, 192),  # 2  skin
-    (168, 136, 132),  # 3  skin in shadow
-    (36, 22, 28),     # 4  eyes
-    (128, 22, 34),    # 5  crimson
-    (78, 12, 22),     # 6  crimson, dark
-    (28, 66, 46),     # 7  forest
-    (34, 40, 92),     # 8  midnight
-    (82, 46, 104),    # 9  plum
-    (176, 180, 190),  # 10 silver
-    (226, 178, 72),   # 11 gold
-    (30, 26, 34),     # 12 black hair
-    (140, 136, 146),  # 13 grey hair
-    (140, 64, 36),    # 14 auburn
-    (210, 180, 110),  # 15 flaxen
+    (234, 204, 182),  # 2  light skin
+    (190, 152, 132),  # 3  light skin, shadow
+    (34, 22, 24),     # 4  eyes, brows
+    (196, 142, 102),  # 5  medium skin
+    (150, 102, 72),   # 6  medium skin, shadow
+    (122, 80, 54),    # 7  deep skin
+    (86, 54, 36),     # 8  deep skin, shadow
+    (28, 24, 28),     # 9  black hair, a black coat
+    (102, 64, 40),    # 10 brown hair
+    (214, 182, 112),  # 11 blonde
+    (150, 148, 152),  # 12 grey hair, a grey knit
+    (36, 48, 84),     # 13 navy
+    (112, 30, 42),    # 14 burgundy
+    (78, 88, 52),     # 15 olive
+]
+
+# The icons keep the colours they were drawn in.
+ICON_PAL = [
+    (14, 11, 20), (5, 4, 8), (226, 206, 192), (168, 136, 132), (36, 22, 28), (128, 22, 34),
+    (78, 12, 22), (28, 66, 46), (34, 40, 92), (82, 46, 104), (176, 180, 190), (226, 178, 72),
+    (30, 26, 34), (140, 136, 146), (140, 64, 36), (210, 180, 110),
 ]
 
 W = H = 20
+SKIN = {"light": (2, 3), "medium": (5, 6), "deep": (7, 8)}
 
-# name, hair (style, colour), cloak colour, trimming
+# name, bio, skin, hair (style, colour), what they wear, extra
 PEOPLE = [
-    ("Morwen", ("long", 12), 9, "necklace"),
-    ("Silas", ("short", 13), 8, "pin"),
-    ("Ingrid", ("braids", 15), 7, None),
-    ("Corvin", ("hood", 5), 5, None),
-    ("Agatha", ("bun", 14), 9, "necklace"),
-    ("Lucan", ("slick", 12), 8, "monocle"),
-    ("Esme", ("hood", 13), 6, "pin"),
+    ("Jess", "29, paramedic", "light", ("long", 10), 14, None),
+    ("Marcus", "34, firefighter", "deep", ("buzz", 9), 13, "beard"),
+    ("Priya", "27, lawyer", "medium", ("long", 9), 15, None),
+    ("Dan", "41, builder", "light", ("short", 10), 12, "beard"),
+    ("Chloe", "25, influencer", "light", ("bob", 11), 9, "scarf"),
+    ("Ray", "58, retired cop", "medium", ("short", 12), 14, "glasses"),
+    ("Tasha", "31, teacher", "deep", ("curly", 9), 12, "glasses"),
 ]
 
 
-def portrait(hair, cloak, trim):
+def portrait(skin, hair, clothes, extra):
     g = [[0] * W for _ in range(H)]
 
     def put(x, y, c):
         if 0 <= x < W and 0 <= y < H:
             g[y][x] = c
 
+    sk, sh = SKIN[skin]
     style, hc = hair
-    hooded = style == "hood"
-    # shoulders: a cloak widening to the bottom edge
+    # shoulders: a jumper or a coat, widening to the bottom edge, a neckline
     for y in range(14, 20):
         half = 4 + (y - 14) * 2
         for x in range(10 - half, 10 + half):
-            put(x, y, cloak)
-    # a darker fold down the middle
-    for y in range(15, 20):
-        put(10, y, 1 if cloak != 6 else 4)
+            put(x, y, clothes)
+    for x in range(8, 12):
+        put(x, 14, sh)                                # the neck in the neckline
+    put(9, 15, sh); put(10, 15, sh)
     # neck
-    for y in range(12, 15):
+    for y in range(11, 14):
         for x in range(8, 12):
-            put(x, y, 3)
-    # the face: an oval, its right side in shadow (shadowed whole under a hood)
-    for y in range(3, 14):
-        for x in range(4, 16):
-            dx, dy = (x - 9.5) / 4.6, (y - 8.0) / 5.4
+            put(x, y, sh)
+    # the face: an oval, its right side in shadow
+    for y in range(3, 13):
+        for x in range(5, 15):
+            dx, dy = (x - 9.5) / 4.3, (y - 7.6) / 5.0
             if dx * dx + dy * dy <= 1.0:
-                put(x, y, 3 if hooded or x >= 12 else 2)
-    put(7, 8, 4); put(12, 8, 4)                        # eyes
-    if hooded:
-        put(7, 8, 5); put(12, 8, 5)                   # a gleam under the hood
-    for x in range(9, 11):
-        put(x, 11, 3 if not hooded else 4)            # mouth
-    put(9, 9, 3)                                      # nose
+                put(x, y, sh if x >= 12 else sk)
+    put(7, 8, 4); put(12, 8, 4)                       # eyes
+    put(6, 7, 4); put(7, 7, 4); put(12, 7, 4); put(13, 7, 4)   # brows
+    put(9, 9, sh)                                     # nose
+    put(9, 11, sh); put(10, 11, sh)                   # mouth
     # hair
     if style == "long":
-        for y in range(2, 16):
-            for x in range(3, 17):
-                if g[y][x] == 0 and (y < 6 or x < 5 or x > 14):
+        for y in range(2, 17):
+            for x in range(4, 16):
+                if g[y][x] in (0,) and (y < 6 or x < 6 or x > 13):
                     put(x, y, hc)
         for x in range(5, 15):
-            put(x, 3, hc); put(x, 4, hc if x < 8 or x > 12 else g[4][x])
-    elif style == "short":
-        for y in range(2, 6):
-            for x in range(4, 16):
-                if y < 4 or x < 6 or x > 13:
-                    put(x, y, hc)
-    elif style == "slick":
-        for y in range(2, 5):
-            for x in range(4, 16):
-                put(x, y, hc)
-        put(4, 5, hc); put(15, 5, hc)
+            put(x, 3, hc)
         for x in range(6, 14):
-            put(x, 3, 13 if x % 3 == 0 else hc)      # a shine
-    elif style == "bun":
-        for y in range(0, 3):
-            for x in range(8, 12):
-                put(x, y, hc)
-        for y in range(2, 6):
+            put(x, 4, hc if x < 9 or x > 11 else g[4][x])   # a parting
+    elif style == "bob":
+        for y in range(2, 12):
             for x in range(4, 16):
-                if y < 4 or x < 6 or x > 13:
+                if y < 5 or x < 6 or x > 13:
                     put(x, y, hc)
-    elif style == "braids":
+        for x in range(6, 14):
+            put(x, 5, hc)                             # a fringe
+    elif style == "short":
         for y in range(2, 5):
-            for x in range(4, 16):
+            for x in range(5, 15):
                 put(x, y, hc)
-        for y in range(5, 17):
-            for x in (3, 4, 15, 16):
-                put(x, y, hc if y % 3 else 14)
-    elif hooded:
-        # the hood: around the head and down to the shoulders, a deep shadow inside
-        for y in range(1, 16):
-            for x in range(2, 18):
-                dx, dy = (x - 9.5) / 7.2, (y - 8.5) / 7.6
-                if dx * dx + dy * dy <= 1.0 and g[y][x] in (0, 3) and \
-                        not ((x - 9.5) / 4.6) ** 2 + ((y - 8.0) / 5.4) ** 2 <= 0.8:
-                    put(x, y, hc)
+        put(5, 5, hc); put(14, 5, hc); put(5, 6, hc); put(14, 6, hc)
+    elif style == "buzz":
+        for x in range(6, 14):
+            put(x, 2, hc)
         for x in range(5, 15):
-            put(x, 3, 1)                              # the hood's shadow on the brow
-    # trimmings
-    if trim == "pin":
-        put(7, 16, 11); put(6, 16, 11); put(7, 17, 11)
-    elif trim == "necklace":
-        for x in range(7, 13):
-            put(x, 14, 10)
-        put(10, 15, 5)
-    elif trim == "monocle":
-        for x, y in ((11, 7), (12, 7), (13, 7), (11, 9), (12, 9), (13, 9), (11, 8), (13, 8)):
-            put(x, y, 11)
-        put(13, 10, 11); put(13, 11, 11)
+            put(x, 3, hc)
+    elif style == "curly":
+        for y in range(0, 13):
+            for x in range(2, 18):
+                dx, dy = (x - 9.5) / 7.5, (y - 5.5) / 6.0
+                inside_face = ((x - 9.5) / 4.3) ** 2 + ((y - 7.6) / 5.0) ** 2 <= 1.0 and y >= 5
+                if dx * dx + dy * dy <= 1.0 and not inside_face:
+                    put(x, y, hc if (x + y) % 3 else 10)
+    # extras
+    if extra == "beard":
+        for y in range(9, 14):
+            for x in range(6, 14):
+                if g[y][x] in (sk, sh) and not (y == 11 and x in (9, 10)):
+                    put(x, y, hc if hc != 12 else 12)
+    elif extra == "glasses":
+        for x, y in ((6, 7), (7, 7), (8, 7), (11, 7), (12, 7), (13, 7), (6, 9), (7, 9), (8, 9),
+                     (11, 9), (12, 9), (13, 9), (6, 8), (8, 8), (11, 8), (13, 8), (9, 8), (10, 8)):
+            put(x, y, 1)
+    elif extra == "scarf":
+        for y in range(12, 16):
+            for x in range(6, 14):
+                put(x, y, 14)
+        put(12, 16, 14); put(12, 17, 14)
     # outline: the dark next to the figure
     out = [row[:] for row in g]
     for y in range(H):
@@ -258,18 +259,23 @@ def write_header():
              "#define TA_FACE 20                /* a portrait's side */",
              "#define TA_ICON 9                 /* an icon's side */",
              "#define TA_PEOPLE %d" % len(PEOPLE), "",
-             "/* The palette, in the panel's byte order (CAPP_RGB's). */",
+             "/* The palettes, in the panel's byte order (CAPP_RGB's): the faces', the icons'. */",
              "static const uint16_t TA_PAL[16] = {"]
-    lines.append("  " + ", ".join("0x%04X" % rgb565_panel(*c) for c in PAL))
+    lines.append("  " + ", ".join("0x%04X" % rgb565_panel(*c) for c in FACE_PAL))
+    lines.append("};")
+    lines.append("static const uint16_t TA_IPAL[16] = {")
+    lines.append("  " + ", ".join("0x%04X" % rgb565_panel(*c) for c in ICON_PAL))
     lines.append("};")
     lines.append("")
     lines.append("static const char *const TA_NAME[TA_PEOPLE] = { %s };" %
                  ", ".join('"%s"' % p[0] for p in PEOPLE))
+    lines.append("static const char *const TA_BIO[TA_PEOPLE] = { %s };" %
+                 ", ".join('"%s"' % p[1] for p in PEOPLE))
     lines.append("")
     lines.append("/* Portraits, 4 bits a pixel, the left pixel in the high half. */")
     lines.append("static const uint8_t TA_FACES[TA_PEOPLE][TA_FACE * TA_FACE / 2] = {")
-    for name, hair, cloak, trim in PEOPLE:
-        g = portrait(hair, cloak, trim)
+    for name, bio, skin, hair, clothes, extra in PEOPLE:
+        g = portrait(skin, hair, clothes, extra)
         b = []
         for y in range(H):
             for x in range(0, W, 2):
@@ -303,14 +309,14 @@ def preview(path):
     scale = 8
     w = (len(PEOPLE) * 22 + 2) * scale
     h = (22 + 12) * scale
-    im = Image.new("RGB", (w, h), PAL[0])
-    for i, (name, hair, cloak, trim) in enumerate(PEOPLE):
-        g = portrait(hair, cloak, trim)
+    im = Image.new("RGB", (w, h), FACE_PAL[0])
+    for i, (name, bio, skin, hair, clothes, extra) in enumerate(PEOPLE):
+        g = portrait(skin, hair, clothes, extra)
         for y in range(H):
             for x in range(W):
                 for dy in range(scale):
                     for dx in range(scale):
-                        im.putpixel(((2 + i * 22 + x) * scale + dx, (1 + y) * scale + dy), PAL[g[y][x]])
+                        im.putpixel(((2 + i * 22 + x) * scale + dx, (1 + y) * scale + dy), FACE_PAL[g[y][x]])
     for i, n in enumerate(ICONS):
         for y, row in enumerate(ICONS[n]):
             for x, ch in enumerate(row):
@@ -318,7 +324,7 @@ def preview(path):
                     continue
                 for dy in range(scale):
                     for dx in range(scale):
-                        im.putpixel(((2 + i * 11 + x) * scale + dx, (23 + y) * scale + dy), PAL[KEY[ch]])
+                        im.putpixel(((2 + i * 11 + x) * scale + dx, (23 + y) * scale + dy), ICON_PAL[KEY[ch]])
     im.save(path)
     print("wrote", path)
 

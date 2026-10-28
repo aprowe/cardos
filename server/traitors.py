@@ -26,6 +26,7 @@ The body, plain lines, unknown ones ignored:
                                       (VOTE is the old field, ignored now)
     person S NAME                     a person at the table
     gone S NAME HOW                   HOW: banished-faithful, banished-traitor, murdered
+    bio S TEXT                        who they are: "29, paramedic"
     log TEXT                          what happened, in order
     say S TEXT                        the table's talk so far, in order
 
@@ -51,14 +52,17 @@ LINE_MAX = 110
 
 _jobs = jobs.Table(1800)
 
-SYSTEM = ("You write dialogue for computer players in a gothic hidden-role party game "
-          "set in a Scottish castle. Short, in character, dramatic but never cruel. "
-          "Plain ASCII only.")
+SYSTEM = ("You write what contestants say at the round table of a reality TV show like "
+          "The Traitors: ordinary people -- a paramedic, a builder, a teacher -- at a castle, "
+          "playing for a cash prize. They talk like real people on that show: first names, "
+          "modern and natural, emotional, sometimes blunt or tearful, never theatrical, never "
+          "fantasy or old-fashioned speech. Plain ASCII only.")
 
 
 def parse(body):
     """The situation, from the device's lines."""
-    s = {"round": 1, "speakers": [], "people": [], "gone": [], "log": [], "talk": [], "mode": "open"}
+    s = {"round": 1, "speakers": [], "people": [], "gone": [], "log": [], "talk": [], "mode": "open",
+         "bio": {}}
     for raw in body.splitlines():
         parts = raw.strip().split()
         if not parts:
@@ -79,6 +83,8 @@ def parse(body):
                 s["people"].append({"seat": int(parts[1]), "name": parts[2][:16]})
             elif kind == "gone" and len(parts) >= 4:
                 s["gone"].append({"seat": int(parts[1]), "name": parts[2][:16], "how": parts[3]})
+            elif kind == "bio" and len(parts) >= 3:
+                s["bio"][int(parts[1])] = raw.strip().split(None, 2)[2][:40]
             elif kind == "log":
                 s["log"].append(raw.strip()[4:][:160])
         except ValueError:
@@ -110,6 +116,10 @@ def _roles(s, who):
 def prompt_for(s):
     who = names(s)
     alive = [who[p["seat"]] for p in s["speakers"]] + [who[p["seat"]] for p in s["people"]]
+    def who_is(p):
+        bio = s["bio"].get(p["seat"])
+        return "%s (%s)" % (p["name"], bio) if bio else p["name"]
+    alive = [who_is(p) for p in s["speakers"]] + [who_is(p) for p in s["people"]]
     out = ["It is round %d. At the round table now: %s." % (s["round"], ", ".join(alive))]
     if s["people"]:
         out.append("People (not computers): %s." % ", ".join(p["name"] for p in s["people"]))

@@ -19,7 +19,7 @@
 static CardApi TA;
 
 /* A server: a POST gives an id, its first poll is pending, the next has the
- * talk -- every computer's opening, or for a reply Corvin's answer and a lean. */
+ * talk -- every computer's opening, or for a reply Dan's answer and a lean. */
 static struct {
   int   on, polls, posts, reply_mode;
   char  body[3000];
@@ -41,7 +41,7 @@ static int ts_start(const char *m, const char *u, const char *b, const char *ct,
     if (TS.polls++ == 0) { snprintf(TS.reply, sizeof TS.reply, "pending\n"); return 0; }
     at = snprintf(TS.reply, sizeof TS.reply, "ok\n");
     if (TS.reply_mode) {
-      snprintf(TS.reply + at, sizeof TS.reply - (size_t)at, "3\tCorvin answers you.\nlean\t2\t3\n");
+      snprintf(TS.reply + at, sizeof TS.reply - (size_t)at, "3\tDan answers you.\nlean\t2\t3\n");
       return 0;
     }
     for (s = 0; s < TR_N; s++)
@@ -97,7 +97,7 @@ static void t_answer(void) {
     if (!G.chat_view) t_key('\t');
     if (T_SAID != G.v.round) {
       T_SAID = G.v.round;
-      t_type("I think Corvin is lying");
+      t_type("I think Dan is lying");
       t_key(CAPP_KEY_ENTER);
     } else {
       t_key(CAPP_KEY_ENTER);                        /* empty: ready to vote */
@@ -176,7 +176,7 @@ void test_traitors_paint_the_round_table_is_a_chat_room_with_the_server(void) {
   /* The opening request names every computer's role -- to the server only. */
   CHECK_EQ(TS.posts, 1);
   CHECK(strstr(TS.body, "mode open\n") != NULL);
-  CHECK(strstr(TS.body, "person 0 Morwen") != NULL);
+  CHECK(strstr(TS.body, "person 0 Jess") != NULL);
   /* They type, then speak, one at a time. */
   n0 = G.nchat;
   for (i = 0; i < 40 && talking(); i++) {
@@ -188,17 +188,17 @@ void test_traitors_paint_the_round_table_is_a_chat_room_with_the_server(void) {
   CHECK(strstr(G.chat[(G.nchat - 1) % CHAT_N].text, "The server speaks for") != NULL);
   /* Say something: it goes in the room, and the server is asked to answer it. */
   before = G.t.sus[2][3];
-  t_type("Corvin was on that crew");
-  CHECK(!strcmp(G.input, "Corvin was on that crew"));
+  t_type("Dan was on that crew");
+  CHECK(!strcmp(G.input, "Dan was on that crew"));
   t_key(CAPP_KEY_ENTER);
   CHECK_EQ(G.ilen, 0);
   CHECK_EQ(G.chat[(G.nchat - 1) % CHAT_N].seat, 0);
   CHECK_EQ(TS.posts, 2);
   CHECK(strstr(TS.body, "mode reply\n") != NULL);
-  CHECK(strstr(TS.body, "say 0 Corvin was on that crew\n") != NULL);
+  CHECK(strstr(TS.body, "say 0 Dan was on that crew\n") != NULL);
   CHECK(talking());                                 /* "..." while they think */
   for (i = 0; i < 40 && talking(); i++) t_tick(500);
-  CHECK(!strcmp(G.chat[(G.nchat - 1) % CHAT_N].text, "Corvin answers you."));
+  CHECK(!strcmp(G.chat[(G.nchat - 1) % CHAT_N].text, "Dan answers you."));
   CHECK(G.t.sus[2][3] > before);                  /* the lean moved a mind */
   CHECK_EQ(fakescreen_unset(), 0);
   fakescreen_dump("TRAITORS_DUMP", "traitors_chat");
