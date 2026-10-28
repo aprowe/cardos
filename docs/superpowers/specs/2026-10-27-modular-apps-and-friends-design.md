@@ -85,7 +85,11 @@ drawn over the app (`soc_pick_open/tick/key/paint`). A header, not a kernel
 dialog -- no firmware or API change. Host-tested in `test/test_social.c`;
 compiles under the device's flags.
 
-### First users (not built)
+### First users (built later on 2026-10-27)
+
+Wordle's friends' results, Jar's gifts on platform friends, and Wordloom --
+an original two-player word game on rooms (apps/wordloom). The list below
+was the plan.
 
 - Wordle: publish `pub/wordle stats` after a daily; show friends' results for
   the day on the result screen; `s` shares "Wordle #N 3/6".
@@ -135,10 +139,10 @@ Moved: Crossword, Jar (with Jar Lab), Chat (the /msg half of msg.py, plus
 /share), Wiki, MIDI (`TALK_KINDS` for songs), Hub (`/m5hub`). Each one's
 server tests are `apps/X/server/tests/`. `python -m apps.jar.server seed N`,
 `python -m apps.crossword.server import ...` replace the `server.` forms.
-`wire.ascii_text` moved out of wiki (Crossword used it). Still in `server/`,
-because the dashboard's pages are written into dashboard.html: Notes,
-Photos, Music, Toggl, Google (Calendar/Todo) -- a later step gives plugins
-dashboard pages.
+`wire.ascii_text` moved out of wiki (Crossword used it). Later the same
+day plugins gained dashboard pages (`DASH_VIEWS`, `DASH_CARDS`,
+`dash_state()`; `/dash/api/plugins`), and Notes, Photos, Music and Toggl
+moved with theirs. Google stays: Calendar and Todo share it.
 
 ## 4. Apps that outlive a firmware
 

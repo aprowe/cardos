@@ -52,8 +52,14 @@ are `apps/NAME/server/tests/` (`python -m apps.jar.server.tests.test_jar`),
 their commands `python -m apps.jar.server ...`. **A new feature's server
 state goes in the store first** (`server/kv.py`); only what truly needs
 code (asking Claude, signing, fetching elsewhere) is a plugin -- never a
-new `server/*.py`. Notes, Photos, Music, Toggl and Google are still in
-server/ because their dashboard pages are written into dashboard.html.
+new `server/*.py`. Notes, Photos, Music and Toggl are plugins too, and
+bring their dashboard pages: a plugin's `DASH_VIEWS` (a page at #/ID with
+nav entries), `DASH_CARDS` (a card on Accounts) and `dash_state()` (its part
+of /dash/api/state) are fragments beside it, served by `/dash/api/plugins`
+and registered with `dashPlugin(ID, {...})` in the page (server/plugins.py
+says how). Hook names are generic: a plugin function called `start` is its
+start hook (Toggl's was renamed `start_entry`). Google stays in server/:
+Calendar and Todo both use it, and its login is the dashboard's sign-in.
 
 **Friends** (2026-10-27): mutual, asked and answered on the dashboard's
 Accounts page (`server/friends.py`). What friends share, with no server
@@ -66,7 +72,8 @@ after the last one seen -- live play and play hours apart are the same);
 parsers and a friend picker. **Not social media** -- the owner's rule: no
 feed, nothing posted by itself, a friend's data shown only inside the app
 it belongs to, and only what a person chose to send reaches anyone. Users:
-Wordle (friends' results for the day under yours, `f` their grids, `s`
+Wordloom (an original two-player word game, a room per game, the first
+built on rooms -- apps/wordloom/README.md); Wordle (friends' results for the day under yours, `f` their grids, `s`
 shares -- apps/wordle/README.md) and Jar Factory, whose gifts and friend
 list are the platform's friends (its old `/jar/me`, `/jar/friend`,
 `/jar/unfriend` answer old devices from them; `python -m apps.jar.server
@@ -1020,13 +1027,13 @@ Settings) are in the kernel.
 - **Memo** (apps/memo.c) -- voice memos; notes in apps/memo.md
 - **MIDI** (apps/midi/midi.c) -- sequencer out of the Grove port; notes in apps/midi/README.md
 - **Mines** (apps/mines.c) -- Minesweeper, dressed as Windows 3.1
-- **Music** (apps/music.c) -- MP3 player dressed as an iPod nano; notes in apps/music.md
+- **Music** (apps/music/music.c) -- MP3 player dressed as an iPod nano; notes in apps/music/README.md
 - **Noodle** (apps/noodle.c) -- the tube man you blow on; notes in apps/noodle.md
-- **Notes** (apps/notes.c) -- notes synced with the server; notes in apps/notes.md
+- **Notes** (apps/notes/notes.c) -- notes synced with the server; notes in apps/notes/README.md
 - **ovltest** (apps/ovltest.c) -- CLI: checks data overlays on a device
 - **Pain** (apps/pain.c) -- a log of when it hurts, how much, where
 - **Pet** (apps/pet/pet.c) -- a virtual pet in wall-clock time
-- **Photos** (apps/photo.c) -- pictures from the dashboard, shown and printed; notes in apps/photo.md
+- **Photos** (apps/photo/photo.c) -- pictures from the dashboard, shown and printed; notes in apps/photo/README.md
 - **Python** (apps/python/python.c) -- MicroPython 1.24.1 REPL and scripts; notes in apps/python/README.md
 - **Quoridor** (apps/quoridor/quoridor.c) -- vs computer, pass-and-play, or nearby over ESP-NOW; notes in apps/quoridor/README.md
 - **Roku** (apps/roku.c) -- a Roku TV remote over the LAN
@@ -1036,10 +1043,11 @@ Settings) are in the kernel.
 - **Timer** (apps/timer.c) -- countdown timer
 - **Today** (apps/today.c) -- the day, made of other apps' commands, printed; notes in apps/today.md
 - **Todo** (apps/todo.c) -- Google Tasks, lists, claimed days; notes in apps/todo.md
-- **Toggl** (apps/toggl.c) -- Toggl timer and targets; notes in apps/toggl.md
+- **Toggl** (apps/toggl/toggl.c) -- Toggl timer and targets; notes in apps/toggl/README.md
 - **Update** (apps/update.c) -- the screen for `update`
 - **Vim** (apps/vim/vim.c) -- modal code editor with a file tree; notes in apps/vim/README.md
 - **Wikipedia** (apps/wiki/wiki.c) -- search and read; notes in apps/wiki/README.md
+- **Wordloom** (apps/wordloom/wordloom.c) -- two friends' word game on rooms; notes in apps/wordloom/README.md
 - **Wordle** (apps/wordle/wordle.c) -- daily and practice; notes in apps/wordle/README.md
 
 ## Hardware facts — measured on the actual device, not from a datasheet
