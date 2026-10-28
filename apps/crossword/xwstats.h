@@ -1,6 +1,6 @@
 /* Crossword's statistics: solves, times and the streak -- the parts a person
  * would argue about, kept apart from the screen so the host suite can pin
- * them (test/test_crossword.c).
+ * them (apps/crossword/test/test_crossword.c).
  *
  * Portable C with no libc, on apps/crossword/xwcore.h's small helpers.
  *

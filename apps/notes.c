@@ -33,6 +33,9 @@
  * Each operation after that is one blocking request a tick. Turning them
  * into http_start/http_poll would make every case of do_op a state of its
  * own; a note is small and the server is near, so it has not been worth it.
+ *
+ * @app folder Plan
+ * @app release core
  */
 
 #include "kernel/app/capp.h"

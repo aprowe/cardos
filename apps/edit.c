@@ -13,6 +13,10 @@
  * The buffer is a flat array of fixed-width lines rather than a gap buffer: a
  * file this thing is for is a few kilobytes, and a flat array is the version
  * that is obviously correct at a glance.
+ *
+ * @app folder Make
+ * @app release core
+ * @app embed yes
  */
 
 #include "kernel/app/capp.h"

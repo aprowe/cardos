@@ -1,0 +1,1772 @@
+<meta charset="utf-8">
+<title>Jar Sandbox</title>
+<meta name="description" content="A browser bench for Jarscript 3: physics, state machines, paths and sprites for Jar Factory critters on a 240x135 jar.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&family=Pixelify+Sans:wght@500;700&display=swap">
+<style>
+:root{
+  --bg:#e6ece4; --panel:#f5f8f2; --panel2:#ecf1e8; --ink:#1b251e; --muted:#58675c; --line:#c7d2c5;
+  --accent:#2e7548; --accent-ink:#ffffff; --accent-soft:#d3e8d8; --warn:#9a620e; --warn-soft:#f6ead2;
+  --err:#ad3535; --err-soft:#f7dddd; --code-bg:#fbfcf9; --code-ink:#1f2a22; --sel:rgba(46,117,72,.22);
+  --k:#7a3d9e; --ev:#1d6aa2; --num:#a2511a; --str:#2e7548; --com:#869488; --fn:#99366a; --se:#1b6b78;
+  --bezel:#1f2529; --bezel-2:#2b3338; --bezel-ink:#a5b6ab;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1511; --panel:#161e18; --panel2:#1c251f; --ink:#e0e9de; --muted:#8e9f93; --line:#2a362d;
+    --accent:#6dbf88; --accent-ink:#0b170f; --accent-soft:#1d3826; --warn:#e2a74b; --warn-soft:#3a2d16;
+    --err:#f07c7c; --err-soft:#3b1e1e; --code-bg:#111813; --code-ink:#dbe5d9; --sel:rgba(109,191,136,.25);
+    --k:#c79cf0; --ev:#7db7ea; --num:#f0a268; --str:#8ed39d; --com:#6a796e; --fn:#ee92bf; --se:#7ccfd6;
+    --bezel:#0a0d0f; --bezel-2:#1b2125; --bezel-ink:#7f9086;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1511; --panel:#161e18; --panel2:#1c251f; --ink:#e0e9de; --muted:#8e9f93; --line:#2a362d;
+  --accent:#6dbf88; --accent-ink:#0b170f; --accent-soft:#1d3826; --warn:#e2a74b; --warn-soft:#3a2d16;
+  --err:#f07c7c; --err-soft:#3b1e1e; --code-bg:#111813; --code-ink:#dbe5d9; --sel:rgba(109,191,136,.25);
+  --k:#c79cf0; --ev:#7db7ea; --num:#f0a268; --str:#8ed39d; --com:#6a796e; --fn:#ee92bf; --se:#7ccfd6;
+  --bezel:#0a0d0f; --bezel-2:#1b2125; --bezel-ink:#7f9086;
+  color-scheme: dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{background:var(--bg)}
+body{color:var(--ink);font:15px/1.45 "Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",sans-serif;margin:0}
+.wrap{padding-inline:16px;padding-block:14px 40px;max-width:1520px;margin:0 auto}
+h1,h2,h3{text-wrap:balance;margin:0}
+.mono,code,kbd{font-family:"JetBrains Mono",ui-monospace,Consolas,monospace}
+code{font-size:.88em;background:var(--panel2);padding:1px 5px;border-radius:4px}
+button,select,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* header */
+.top{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:flex-end;justify-content:space-between;margin-bottom:14px}
+.brand{display:flex;gap:12px;align-items:center}
+.brand canvas{width:40px;height:40px;image-rendering:pixelated;border-radius:8px;background:var(--panel2);border:1px solid var(--line)}
+.brand h1{font-family:"Pixelify Sans","Atkinson Hyperlegible",sans-serif;font-weight:700;font-size:28px;letter-spacing:.01em;line-height:1}
+.brand p{margin:3px 0 0;color:var(--muted);font-size:13.5px}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:7px;padding:5px 11px;cursor:pointer;line-height:1.3;white-space:nowrap}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+.btn.danger{color:var(--err)}
+.btn:disabled{opacity:.45;cursor:default}
+select.btn{padding-right:6px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.seg button{border:0;background:var(--panel);padding:5px 10px;cursor:pointer;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);font-weight:700}
+.confirm{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--warn-soft);border:1px solid var(--warn);color:var(--ink);border-radius:8px;padding:6px 10px;margin-bottom:12px;font-size:14px}
+
+.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
+@media(min-width:1120px){.layout{grid-template-columns:minmax(0,744px) minmax(0,1fr)}}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+/* stage */
+.bezel{background:var(--bezel);border-radius:14px;padding:12px 12px 8px;box-shadow:0 1px 0 var(--bezel-2) inset,0 6px 18px rgba(0,0,0,.18)}
+.bezel canvas{display:block;width:100%;height:auto;image-rendering:pixelated;image-rendering:crisp-edges;border-radius:3px;cursor:pointer;touch-action:none;background:#000}
+.bezel .cap{display:flex;justify-content:space-between;color:var(--bezel-ink);font:500 12px "Pixelify Sans",sans-serif;letter-spacing:.06em;padding:6px 2px 0;text-transform:uppercase}
+.controls{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}
+.controls label{display:inline-flex;gap:5px;align-items:center;font-size:14px;color:var(--muted);cursor:pointer}
+.clock{font-family:"JetBrains Mono",monospace;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;margin-left:auto}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;min-width:0}
+.panel>.ph{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--line)}
+.ph h2{font:600 13px "Pixelify Sans",sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.ph .sub{font-size:12.5px;color:var(--muted)}
+
+/* item chips */
+.chips{display:flex;flex-wrap:wrap;gap:8px;padding:10px 12px}
+.chip{display:flex;gap:8px;align-items:center;border:1px solid var(--line);background:var(--panel2);border-radius:9px;padding:5px 9px 5px 5px;cursor:pointer;min-width:0}
+.chip[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.chip canvas{width:32px;height:32px;image-rendering:pixelated;background:repeating-conic-gradient(var(--panel) 0 25%,var(--panel2) 0 50%) 0 0/8px 8px;border-radius:5px}
+.chip .nm{font-weight:700;font-size:14px;line-height:1.15}
+.chip .st{font-size:12px;color:var(--muted);font-family:"JetBrains Mono",monospace}
+.chip .st.bad{color:var(--err)}
+.meter{height:4px;width:70px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:3px}
+.meter i{display:block;height:100%;background:var(--accent);width:0}
+.meter i.hot{background:var(--warn)} .meter i.over{background:var(--err)}
+
+/* inspector */
+.tbl-wrap{overflow-x:auto}
+table.insp{border-collapse:collapse;width:100%;font:12.5px/1.3 "JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+.insp th,.insp td{padding:4px 8px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+.insp th{color:var(--muted);font-weight:400;font-family:"Atkinson Hyperlegible",sans-serif;font-size:12px}
+.insp td:first-child,.insp th:first-child,.insp td:nth-child(2),.insp th:nth-child(2){text-align:left}
+.insp tr.sel td{background:var(--accent-soft)}
+.insp tr{cursor:pointer}
+.detail{padding:8px 12px;font:12.5px/1.6 "JetBrains Mono",monospace;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 14px}
+.detail b{color:var(--ink);font-weight:600}
+
+/* console */
+.console{height:180px;overflow:auto;padding:6px 12px;font:12.5px/1.5 "JetBrains Mono",monospace}
+.console .ln{white-space:pre-wrap;word-break:break-word}
+.console .t{color:var(--muted)}
+.console .err{color:var(--err)} .console .warn{color:var(--warn)} .console .ev{color:var(--ev)} .console .say{color:var(--str)}
+.console .ln.err a{color:inherit}
+
+/* tabs */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);padding:0 8px;flex-wrap:wrap}
+.tabs button{border:0;background:none;padding:9px 12px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:700}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.tabpane{padding:12px}
+.row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.field{display:inline-flex;gap:6px;align-items:center;font-size:14px;color:var(--muted)}
+.field input[type=text],.field input[type=number]{border:1px solid var(--line);background:var(--code-bg);border-radius:6px;padding:4px 8px;color:var(--ink);min-width:0}
+
+/* code editor */
+.editor{display:flex;border:1px solid var(--line);border-radius:8px;background:var(--code-bg);height:min(560px,70vh);min-height:300px;overflow:hidden;margin-top:10px}
+.gutter{flex:none;width:44px;overflow:hidden;background:var(--panel2);border-right:1px solid var(--line);font:13px/20px "JetBrains Mono",monospace;color:var(--muted);text-align:right;padding:10px 8px 10px 0;user-select:none}
+.gutter div{height:20px}
+.gutter div.bad{color:var(--err-soft);background:var(--err);border-radius:0 4px 4px 0;color:#fff}
+.code-area{position:relative;flex:1;min-width:0}
+.code-area pre,.code-area textarea{position:absolute;inset:0;margin:0;padding:10px 12px;font:13px/20px "JetBrains Mono",ui-monospace,Consolas,monospace;white-space:pre;tab-size:2;border:0;letter-spacing:0;overflow:auto;font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0}
+.code-area pre{pointer-events:none;overflow:hidden;color:var(--code-ink)}
+.code-area textarea{color:transparent;background:transparent;caret-color:var(--ink);resize:none;outline:none;width:100%;height:100%}
+.code-area textarea::selection{background:var(--sel)}
+.hk{color:var(--k);font-weight:600} .hev{color:var(--ev)} .hn{color:var(--num)} .hs{color:var(--str)} .hc{color:var(--com);font-style:italic} .hf{color:var(--fn)} .hse{color:var(--se)}
+.hl-bad{background:var(--err-soft);display:inline-block;width:100%}
+.status{margin-top:8px;font-size:13.5px;padding:7px 10px;border-radius:7px;background:var(--panel2);display:flex;gap:6px 14px;flex-wrap:wrap}
+.status.bad{background:var(--err-soft);color:var(--err)}
+.status .k{color:var(--muted)}
+details.bc{margin-top:10px}
+details.bc summary{cursor:pointer;color:var(--muted);font-size:14px}
+details.bc pre{max-height:300px;overflow:auto;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:12px/1.5 "JetBrains Mono",monospace;margin:8px 0 0}
+
+/* sprite editor */
+.sprite-grid{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);gap:14px;align-items:start;margin-top:10px}
+@media(max-width:700px){.sprite-grid{grid-template-columns:minmax(0,1fr)}}
+.paint-wrap{max-width:100%;overflow:auto}
+#paint{display:block;image-rendering:pixelated;cursor:crosshair;touch-action:none;border:1px solid var(--line);border-radius:6px;max-width:100%}
+.pal{display:flex;gap:5px;flex-wrap:wrap}
+.sw{width:30px;height:30px;border-radius:6px;border:2px solid var(--line);cursor:pointer;position:relative;padding:0}
+.sw[aria-pressed="true"]{border-color:var(--ink);box-shadow:0 0 0 2px var(--accent)}
+.sw.t{background:repeating-conic-gradient(#cfd6cd 0 25%,#fff 0 50%) 0 0/10px 10px}
+.sw span{position:absolute;right:2px;bottom:0;font:700 10px "JetBrains Mono",monospace;color:#fff;text-shadow:0 0 2px #000}
+.frames{display:flex;gap:6px;flex-wrap:wrap}
+.fr{border:1px solid var(--line);border-radius:6px;padding:3px;background:var(--panel2);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px}
+.fr[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.fr canvas{image-rendering:pixelated;width:40px;height:40px}
+.fr small{font:11px "JetBrains Mono",monospace;color:var(--muted);max-width:56px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sidebox{display:flex;flex-direction:column;gap:12px;min-width:0}
+.sidebox h3{font:600 12px "Pixelify Sans",sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.preview{display:flex;gap:10px;align-items:center}
+.preview canvas{width:96px;height:96px;image-rendering:pixelated;background:repeating-conic-gradient(var(--panel) 0 25%,var(--panel2) 0 50%) 0 0/12px 12px;border:1px solid var(--line);border-radius:6px}
+.note{font-size:13px;color:var(--muted)}
+.note.warn{color:var(--warn)}
+
+/* reference */
+.ref{max-width:78ch}
+.ref h3{font:700 17px "Atkinson Hyperlegible",sans-serif;margin:18px 0 6px}
+.ref h3:first-child{margin-top:4px}
+.ref p{margin:6px 0}
+.ref .tw{overflow-x:auto}
+.ref table{border-collapse:collapse;width:100%;font-size:13.5px;margin:6px 0}
+.ref td,.ref th{border-bottom:1px solid var(--line);padding:5px 8px;vertical-align:top;text-align:left}
+.ref th{color:var(--muted);font-weight:400;font-size:12.5px}
+.ref td:first-child{font-family:"JetBrains Mono",monospace;font-size:12.5px;white-space:nowrap}
+.ref pre{background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;overflow-x:auto;font:12.5px/1.55 "JetBrains Mono",monospace}
+.ref ul{padding-left:20px;margin:6px 0}
+.ref li{margin:3px 0}
+.tag{display:inline-block;font:700 11px "JetBrains Mono",monospace;padding:1px 6px;border-radius:999px;background:var(--accent-soft);color:var(--ink);vertical-align:1px}
+.tag.no{background:var(--warn-soft)}
+
+/* modal */
+.modal{position:fixed;inset:0;background:rgba(10,15,12,.5);display:flex;align-items:center;justify-content:center;padding:16px;z-index:20}
+.modal .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;width:min(760px,100%);max-height:90vh;display:flex;flex-direction:column;gap:10px;padding:14px}
+.modal textarea{width:100%;min-height:300px;flex:1;font:12px/1.45 "JetBrains Mono",monospace;background:var(--code-bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px}
+/* embedded in the prompt lab: no header, a little tighter */
+.embed .brand{display:none} .embed .top{margin-bottom:8px} .embed .wrap{padding-block:8px 16px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <canvas id="logo" width="16" height="16" aria-hidden="true"></canvas>
+      <div>
+        <h1>Jar Sandbox</h1>
+        <p>Jarscript 3, a draft: physics, states, paths and sprites for Jar Factory critters, on the real 240×135 jar.</p>
+      </div>
+    </div>
+    <div class="toolbar">
+      <select class="btn" id="examples" aria-label="Load an example">
+        <option value="">Load example…</option>
+        <option value="all">All together (rolly, tree, bird, fence)</option>
+        <option value="rolly">Rolly polly alone</option>
+        <option value="treebird">Tree and bird</option>
+        <option value="bird">Bird alone (rim and ground only)</option>
+        <option value="tree">Tree alone</option>
+        <option value="empty">Empty jar</option>
+        <optgroup label="Scenarios" id="scenarioOpts"></optgroup>
+      </select>
+      <button class="btn" id="newItem">New item</button>
+      <button class="btn" id="exportBtn">Export / import</button>
+    </div>
+  </header>
+  <div class="confirm" id="confirmBar" hidden>
+    <span id="confirmText">Replace everything in the jar?</span>
+    <button class="btn primary" id="confirmYes">Replace</button>
+    <button class="btn" id="confirmNo">Keep mine</button>
+  </div>
+
+  <div class="layout">
+    <section class="col" aria-label="Stage">
+      <div class="bezel">
+        <canvas id="stage" width="720" height="405" aria-label="The jar, 240 by 135 pixels"></canvas>
+        <div class="cap"><span>240 × 135 · soil at y 112</span><span id="capInfo">click a critter to poke it</span></div>
+      </div>
+      <div class="controls">
+        <button class="btn primary" id="runBtn">Pause</button>
+        <button class="btn" id="stepBtn" title="Advance one 50 ms tick">Step</button>
+        <button class="btn" id="resetBtn">Reset</button>
+        <select class="btn" id="speed" aria-label="Speed">
+          <option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+        </select>
+        <div class="seg" role="group" aria-label="Click does">
+          <button id="modePoke" aria-pressed="true">Poke</button><button id="modeMove" aria-pressed="false">Drag</button>
+        </div>
+        <label><input type="checkbox" id="optGrid"> grid</label>
+        <label><input type="checkbox" id="optDebug"> perches &amp; bodies</label>
+        <span class="clock" id="clock">t 0.00 s · tick 0</span>
+      </div>
+      <div class="panel">
+        <div class="ph"><h2>Items</h2><span class="sub" id="budgetSum">budget 100 steps / item / tick</span></div>
+        <div class="chips" id="chips"></div>
+      </div>
+      <div class="panel">
+        <div class="ph"><h2>Inspector</h2><span class="sub">values as the device would hold them: 1/16 px, 256-step angles</span></div>
+        <div class="tbl-wrap"><table class="insp" id="insp"></table></div>
+        <div class="detail" id="detail"></div>
+      </div>
+      <div class="panel">
+        <div class="ph"><h2>Console</h2>
+          <div class="row">
+            <label class="field"><input type="checkbox" id="logEvents" checked> events</label>
+            <label class="field"><input type="checkbox" id="logStates" checked> states</label>
+            <button class="btn" id="clearLog">Clear</button>
+          </div>
+        </div>
+        <div class="console" id="console" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section class="col" aria-label="Workbench">
+      <div class="panel">
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="true" data-tab="script" id="tab-script">Script</button>
+          <button role="tab" aria-selected="false" data-tab="sprite" id="tab-sprite">Sprite</button>
+          <button role="tab" aria-selected="false" data-tab="ref" id="tab-ref">Language</button>
+          <button role="tab" aria-selected="false" data-tab="device" id="tab-device">Fit on device</button>
+        </div>
+
+        <div class="tabpane" id="pane-script">
+          <div class="row">
+            <label class="field">Name <input type="text" id="itemName" size="12" maxlength="12"></label>
+            <label class="field">Start x <input type="number" id="startX" style="width:70px"></label>
+            <label class="field">y <input type="number" id="startY" style="width:70px" placeholder="ground"></label>
+            <button class="btn" id="dupItem">Duplicate</button>
+            <button class="btn danger" id="delItem">Delete</button>
+          </div>
+          <div class="editor" id="editor">
+            <div class="gutter" id="gutter"></div>
+            <div class="code-area">
+              <pre id="hl" aria-hidden="true"></pre>
+              <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Script"></textarea>
+            </div>
+          </div>
+          <div class="status" id="status"></div>
+          <details class="bc"><summary>Compiled bytecode</summary><pre id="bytecode"></pre></details>
+        </div>
+
+        <div class="tabpane" id="pane-sprite" hidden>
+          <div class="row">
+            <label class="field">Size
+              <select class="btn" id="spSize"><option>16x16</option><option>32x16</option><option>16x32</option><option>32x32</option></select>
+            </label>
+            <div class="seg" role="group" aria-label="Tool">
+              <button data-tool="pen" aria-pressed="true">Pencil</button><button data-tool="fill" aria-pressed="false">Fill</button><button data-tool="pick" aria-pressed="false">Pick</button>
+            </div>
+            <label class="field"><input type="checkbox" id="onion" checked> onion skin</label>
+            <button class="btn" id="mirrorBtn">Mirror</button>
+            <button class="btn" id="clearFrame">Clear frame</button>
+          </div>
+          <div class="sprite-grid">
+            <div class="paint-wrap"><canvas id="paint" width="320" height="320"></canvas></div>
+            <div class="sidebox">
+              <div>
+                <h3>Palette · slot 0 is see-through</h3>
+                <div class="pal" id="pal"></div>
+                <div class="row" style="margin-top:8px">
+                  <label class="field">Slot <b id="slotNo">1</b> colour <input type="color" id="slotColor"></label>
+                </div>
+              </div>
+              <div>
+                <h3>Frames</h3>
+                <div class="frames" id="frames"></div>
+                <div class="row" style="margin-top:8px">
+                  <label class="field">Name <input type="text" id="frameName" size="9" maxlength="10"></label>
+                  <button class="btn" id="frAdd">New</button>
+                  <button class="btn" id="frDup">Copy</button>
+                  <button class="btn" id="frLeft" title="Move earlier">◀</button>
+                  <button class="btn" id="frRight" title="Move later">▶</button>
+                  <button class="btn danger" id="frDel">Delete</button>
+                </div>
+              </div>
+              <div>
+                <h3>Preview</h3>
+                <div class="preview">
+                  <canvas id="prev" width="32" height="32"></canvas>
+                  <div class="col" style="gap:6px">
+                    <label class="field">Play <select class="btn" id="prevAnim"></select></label>
+                    <label class="field">fps <input type="number" id="prevFps" value="6" min="1" max="30" style="width:60px"></label>
+                  </div>
+                </div>
+              </div>
+              <p class="note" id="spriteNote"></p>
+            </div>
+          </div>
+        </div>
+
+        <div class="tabpane ref" id="pane-ref" hidden></div>
+        <div class="tabpane ref" id="pane-device" hidden></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <div class="box">
+    <div class="row" style="justify-content:space-between"><h2 style="font:700 18px 'Atkinson Hyperlegible',sans-serif">Export or import the jar</h2><button class="btn" id="mClose">Close</button></div>
+    <p class="note" style="margin:0">Everything in the jar: each item's sprite, palette, script and start position. Copy it out, or paste a saved jar and load it.</p>
+    <textarea id="mText" spellcheck="false" aria-label="Jar JSON"></textarea>
+    <div class="row">
+      <button class="btn primary" id="mCopy">Copy</button>
+      <button class="btn" id="mLoad">Load this text</button>
+      <label class="btn">Open file… <input type="file" id="mFile" accept=".json,application/json" hidden></label>
+      <span class="note" id="mMsg"></span>
+    </div>
+  </div>
+</div>
+
+<script src="jarscript3.js"></script>
+<script>window.SCENARIOS = {};</script>
+<!-- Hand-built scenarios: each file sets SCENARIOS.KEY = {title, about, items: [defs]} -->
+<script src="scenarios/castle.js"></script>
+<script src="scenarios/branch.js"></script>
+<script src="scenarios/mug.js"></script>
+<script src="scenarios/pond.js"></script>
+<script>
+'use strict';
+/* ============================================================
+   Constants of the world. A tick is 50 ms (20 Hz).
+   ============================================================ */
+const W = 240, H = 135, SOIL = 112, TICK = 0.05, BUDGET = 100, STACKMAX = 16, MAXFRAMES = 8;
+const RIM = [{x:16,y:22},{x:32,y:22},{x:208,y:22},{x:224,y:22}];   // ledges where the glass narrows
+
+/* seeded PRNG, so Reset replays the same jar (the device would use xorshift) */
+let seed = 12345;
+function rnd(){ seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }
+const q = v => Math.round(v * 16) / 16;                        // Q12.4: what an int16 with 4 fraction bits keeps
+const qa = a => { a = ((a % 360) + 360) % 360; return Math.round(a * 256 / 360) % 256 * 360 / 256; }; // 256-step angles
+const clamp = (v,a,b) => v < a ? a : v > b ? b : v;
+
+/* The language itself (EVENTS .. KEYWORDS, MAXVARS, CErr, lex, parse, compile,
+   opBytes) is in jarscript3.js, loaded just before this script. */
+
+/* ============================================================
+   World and items
+   ============================================================ */
+const world = {t:0, tick:0, items:[], parts:[], occ:new Map()};
+let nextId = 1, selected = null;
+const byId = id => world.items.find(i => i.id === id);
+
+function hexToU32(h){ const n = parseInt(h.slice(1), 16); return (255 << 24 | (n & 255) << 16 | (n >> 8 & 255) << 8 | n >> 16) >>> 0; }
+function rowsToPx(rows, w, h){ const px = new Uint8Array(w*h); for (let y = 0; y < h; y++){ const r = rows[y] || ''; for (let x = 0; x < w; x++){ const c = r[x]; px[y*w+x] = (c && c >= '1' && c <= '7') ? +c : 0; } } return px; }
+function pxToRows(px, w, h){ const out = []; for (let y = 0; y < h; y++){ let s = ''; for (let x = 0; x < w; x++){ const v = px[y*w+x]; s += v ? v : '.'; } out.push(s); } return out; }
+function refreshPal(it){ it.palU32 = it.palette.map(hexToU32); }
+function footPad(it){ const f = it.frames[0]; if (!f) return 0; for (let y = it.h - 1; y >= 0; y--) for (let x = 0; x < it.w; x++) if (f.px[y*it.w+x]) return it.h - 1 - y; return 0; }
+const scl = it => (it.prog && it.prog.scale) || 1;
+const groundY = it => SOIL + footPad(it) * scl(it);
+function bodyR(it){ return (it.prog && it.prog.body) || Math.min(it.w, it.h) * scl(it) / 2 - 1; }
+function boxOf(it){ const s = scl(it); return {left:Math.round(it.x - it.w*s/2), top:Math.round(it.y) - it.h*s, w:it.w*s, h:it.h*s}; }
+function solidOf(it){ if (!it.prog || !it.prog.solid) return null; const b = boxOf(it), s = scl(it), so = it.prog.solid; return {x:b.left + so.x*s, y:b.top + so.y*s, w:so.w*s, h:so.h*s}; }
+
+function makeItem(def){
+  const it = {id:nextId++, name:def.name, w:def.w, h:def.h, palette:def.palette.slice(), script:def.script,
+    frames:def.frames.map(f => ({name:f.name, px:rowsToPx(f.rows, def.w, def.h)})),
+    start:{x:def.start.x, y:def.start.y == null ? null : def.start.y}, prog:null, err:null};
+  refreshPal(it);
+  compileItem(it, true);
+  resetItem(it);
+  return it;
+}
+function defOf(it){ return {name:it.name, w:it.w, h:it.h, palette:it.palette.slice(), frames:it.frames.map(f => ({name:f.name, rows:pxToRows(f.px, it.w, it.h)})), script:it.script, start:{...it.start}}; }
+
+function resetItem(it){
+  leavePerch(it);
+  Object.assign(it, {x:it.start.x, y:0, vx:0, vy:0, angle:0, spin:0, gravity:160, bounce:40, friction:60, physics:false, roll:false,
+    facing:1, frame:0, anim:null, state:-1, stateT:0, vars:[], thread:null, waitUntil:0, mover:null, perch:null,
+    sway:null, shake:0, say:null, grounded:false, impact:0, blocked:false, other:0, events:[], nearIn:{}, everyAt:{},
+    opsUsed:0, opsHist:[], starved:false, touch:new Set(), maxStack:0, halted:false, errored:false});
+  it.y = it.start.y == null ? groundY(it) : it.start.y;
+  if (it.prog){ it.vars = it.prog.vars.map(v => q(v.init)); enterState(it, 0); }
+}
+
+function compileItem(it, quiet){
+  try {
+    const prog = compile(it.script, it.frames.map(f => f.name));
+    const old = it.prog; it.prog = prog; it.err = null;
+    if (old && it.state >= 0){
+      const nv = prog.vars.map(v => { const oi = old.varIdx[v.name]; return oi !== undefined && it.vars[oi] !== undefined ? it.vars[oi] : q(v.init); });
+      it.vars = nv;
+      const sn = old.states[it.state] && old.states[it.state].name;
+      const idx = prog.stateIdx[sn] !== undefined ? prog.stateIdx[sn] : 0;
+      it.everyAt = {}; it.nearIn = {};
+      enterState(it, idx);
+      if (!quiet) log(it, `reloaded — back into state '${prog.states[idx].name}'`, 'ev');
+    }
+    return true;
+  } catch (e){
+    if (!(e instanceof CErr)) { console.error(e); e = new CErr('internal: ' + e.message, 1); }
+    it.err = {msg:e.message, line:e.line};
+    return false;
+  }
+}
+
+function enterState(it, idx){
+  const P = it.prog; if (!P) return;
+  if (it.mover && it.mover.k !== 'phys') it.mover = null;
+  const prev = it.state;
+  it.state = idx; it.stateT = 0; it.waitUntil = 0; it.halted = false;
+  it.thread = {code:P.bodies[idx], pc:0, stack:[]};
+  if (prev !== idx || true) if (ui.logStates) log(it, `→ ${P.states[idx].name}`, 'st');
+}
+
+/* perches -------------------------------------------------- */
+function perchSpots(it, trait){
+  const out = [];
+  for (const o of world.items){
+    if (o === it || !o.prog || !o.prog.perches.length) continue;
+    if (trait && !o.prog.traits.includes(trait)) continue;
+    o.prog.perches.forEach((p, i) => out.push({owner:o, i, key:o.id + ':' + i}));
+  }
+  if (!trait || trait === 'rim') RIM.forEach((r, i) => out.push({owner:null, i, key:'rim:' + i}));
+  return out.filter(s => { const who = world.occ.get(s.key); return (!who || who === it) && !(it.perch && it.perch.key === s.key); });
+}
+function spotPos(s){
+  if (!s.owner) return {x:RIM[s.i].x + .5, y:RIM[s.i].y};
+  const o = s.owner, b = boxOf(o), sc = scl(o), p = o.prog.perches[s.i];
+  if (!p) return null;
+  return {x:b.left + p.x*sc + .5, y:b.top + p.y*sc};
+}
+function leavePerch(it){ if (it.perch){ if (world.occ.get(it.perch.key) === it) world.occ.delete(it.perch.key); it.perch = null; } }
+function occupy(it, s){ leavePerch(it); world.occ.set(s.key, it); it.perch = {owner:s.owner, i:s.i, key:s.key}; }
+
+/* movement -------------------------------------------------- */
+function startPath(it, x1, y1, speed, arc, spot, keepPerch){
+  if (!keepPerch) leavePerch(it);
+  it.physics = false; it.vx = 0; it.vy = 0;
+  const x0 = it.x, y0 = it.y, cx = (x0 + x1)/2, cy = (y0 + y1)/2 - 2*arc;
+  let len = 0, px = x0, py = y0;
+  for (let i = 1; i <= 12; i++){ const t = i/12, u = 1 - t; const x = u*u*x0 + 2*u*t*cx + t*t*x1, y = u*u*y0 + 2*u*t*cy + t*t*y1; len += Math.hypot(x - px, y - py); px = x; py = y; }
+  it.mover = {k:'path', x0, y0, x1, y1, cx, cy, t:0, dur:Math.max(0.15, len / Math.max(5, speed)), spot, keep:keepPerch};
+  if (Math.abs(x1 - x0) > 0.5) it.facing = x1 > x0 ? 1 : -1;
+}
+
+/* ============================================================
+   The machine
+   ============================================================ */
+class RErr extends Error { constructor(msg, line){ super(msg); this.line = line; } }
+function sense(it, n){
+  switch (n){
+    case 'x': return it.x; case 'y': return it.y; case 'vx': return it.vx; case 'vy': return it.vy;
+    case 'angle': return it.angle; case 'spin': return it.spin; case 'gravity': return it.gravity; case 'bounce': return it.bounce; case 'friction': return it.friction;
+    case 'speed': return q(Math.hypot(it.vx, it.vy));
+    case 'grounded': return it.grounded ? 1 : 0;
+    case 'onperch': return it.perch ? 1 : 0;
+    case 'perched': return it.perch && it.perch.owner ? it.perch.owner.id : 0;
+    case 'facing': return it.facing;
+    case 'other': return it.other || 0;
+    case 'me': return it.id;
+    case 'statetime': return q(it.stateT);
+    case 'time': return q(world.t);
+    case 'soil': return SOIL; case 'jarw': return W; case 'jarh': return H;
+    case 'impact': return q(it.impact || 0);
+    case 'blocked': return it.blocked ? 1 : 0;
+    case 'state': return it.state;
+    case 'frame': return it.frame + 1;
+    case 'physics': return it.physics ? 1 : 0;
+  }
+  return 0;
+}
+function setProp(it, n, v, op){
+  if (typeof v !== 'number' || !isFinite(v)) throw new RErr(`${n} needs a number`, op.line);
+  switch (n){
+    case 'angle': it.angle = qa(v); break;
+    case 'bounce': it.bounce = clamp(Math.round(v), 0, 100); break;
+    case 'friction': it.friction = Math.max(0, q(v)); break;
+    case 'x': it.x = q(v); if (!it.mover) leavePerch(it); break;
+    case 'y': it.y = q(v); if (!it.mover) leavePerch(it); break;
+    default: it[n] = q(clamp(v, -2047, 2047));
+  }
+}
+function itemArg(id, op, what){ const o = byId(id); if (!o) throw new RErr(`${what}: no item ${id} — find() gives 0 when nothing is there; check it first`, op.line); return o; }
+const centerOf = o => ({x:o.x, y:o.y - o.h*scl(o)/2});
+function callFn(it, name, a, op){
+  switch (name){
+    case 'random': { const [lo, hi] = a[0] <= a[1] ? a : [a[1], a[0]]; return Number.isInteger(lo) && Number.isInteger(hi) ? lo + Math.floor(rnd() * (hi - lo + 1)) : q(lo + rnd() * (hi - lo)); }
+    case 'chance': return rnd() * 100 < a[0] ? 1 : 0;
+    case 'pick': return a[Math.floor(rnd() * a.length)];
+    case 'abs': return Math.abs(a[0]);
+    case 'min': return Math.min(a[0], a[1]);
+    case 'max': return Math.max(a[0], a[1]);
+    case 'sign': return Math.sign(a[0]);
+    case 'clamp': return clamp(a[0], a[1], a[2]);
+    case 'sin': return q(Math.sin(a[0] * Math.PI / 180));
+    case 'cos': return q(Math.cos(a[0] * Math.PI / 180));
+    case 'sqrt': if (a[0] < 0) throw new RErr('sqrt of a negative number', op.line); return q(Math.sqrt(a[0]));
+    case 'round': return Math.round(a[0]);
+    case 'floor': return Math.floor(a[0]);
+    case 'dist': { const me = centerOf(it); if (a.length === 2) return q(Math.hypot(a[0] - me.x, a[1] - me.y)); const o = itemArg(a[0], op, 'dist'); const c = centerOf(o); return q(Math.hypot(c.x - me.x, c.y - me.y)); }
+    case 'angleto': { const o = itemArg(a[0], op, 'angleto'); const c = centerOf(o), me = centerOf(it); return qa(Math.atan2(c.y - me.y, c.x - me.x) * 180 / Math.PI); }
+    case 'find': {
+      const tr = a[0], lim = a.length > 1 ? a[1] : Infinity; let best = 0, bd = Infinity; const me = centerOf(it);
+      for (const o of world.items){ if (o === it || !o.prog || !o.prog.traits.includes(tr)) continue; const c = centerOf(o); const d = Math.hypot(c.x - me.x, c.y - me.y); if (d <= lim && d < bd){ bd = d; best = o.id; } }
+      return best;
+    }
+    case 'count': return world.items.filter(o => o !== it && o.prog && o.prog.traits.includes(a[0])).length;
+    case 'has': { const o = byId(a[0]); return o && o.prog && o.prog.traits.includes(a[1]) ? 1 : 0; }
+  }
+  throw new RErr(`unknown function ${name}`, op.line);
+}
+function binop(o, a, b, op){
+  if (o === '+' && (typeof a === 'string' || typeof b === 'string')) return String(a) + String(b);
+  if (typeof a === 'string' || typeof b === 'string'){
+    if (o === '==') return a === b ? 1 : 0; if (o === '!=') return a !== b ? 1 : 0;
+    throw new RErr(`can't use '${o}' with text`, op.line);
+  }
+  switch (o){
+    case '+': return a + b; case '-': return a - b; case '*': return q(a * b);
+    case '/': if (b === 0) throw new RErr('division by zero', op.line); return q(a / b);
+    case '%': if (b === 0) throw new RErr('% by zero', op.line); return ((a % b) + b) % b;
+    case '==': return a === b ? 1 : 0; case '!=': return a !== b ? 1 : 0;
+    case '<': return a < b ? 1 : 0; case '<=': return a <= b ? 1 : 0; case '>': return a > b ? 1 : 0; case '>=': return a >= b ? 1 : 0;
+    case 'and': return a && b ? 1 : 0; case 'or': return a || b ? 1 : 0;
+  }
+  throw new RErr('bad operator ' + o, op.line);
+}
+const fmt = v => typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/0$/, '')) : v;
+
+function blockedOn(it){ return !!it.mover || (it.anim && it.anim.once && !it.anim.done); }
+
+function run(it, th, budget){
+  const S = th.stack; let used = 0;
+  while (used < budget){
+    const op = th.code[th.pc++]; used++;
+    switch (op.o){
+      case 'num': case 'str': S.push(op.a); break;
+      case 'ldv': S.push(it.vars[op.a]); break;
+      case 'stv': { const v = S.pop(); if (typeof v !== 'number') throw new RErr(`variables hold numbers, not text`, op.line); it.vars[op.a] = q(v); break; }
+      case 'lds': S.push(sense(it, op.a)); break;
+      case 'stp': setProp(it, op.a, S.pop(), op); break;
+      case 'bin': { const b = S.pop(), a = S.pop(); S.push(binop(op.a, a, b, op)); break; }
+      case 'neg': S.push(-S.pop()); break;
+      case 'not': S.push(S.pop() ? 0 : 1); break;
+      case 'call': { const args = S.splice(S.length - op.b, op.b); S.push(callFn(it, op.a, args, op)); break; }
+      case 'field': {
+        const o = itemArg(S.pop(), op, '.' + op.a);
+        const v = op.a === 'id' ? o.id : op.a === 'w' ? o.w*scl(o) : op.a === 'h' ? o.h*scl(o) : op.a === 'speed' ? q(Math.hypot(o.vx, o.vy)) : o[op.a];
+        S.push(v); break;
+      }
+      case 'jmp': th.pc = op.a; break;
+      case 'jz': if (!S.pop()) th.pc = op.a; break;
+      case 'jzy': if (!S.pop()){ th.pc = op.a; return {st:'yield', used}; } break;
+      case 'rpt': { const n = S[S.length - 1]; if (n <= 0){ S.pop(); th.pc = op.a; } else S[S.length - 1] = n - 1; break; }
+      case 'wait': { const s = S.pop(); if (typeof s !== 'number') throw new RErr('wait needs a time', op.line); it.waitUntil = world.t + Math.max(0, s) - 1e-9; return {st:'yield', used}; }
+      case 'await': if (blockedOn(it)){ th.pc--; return {st:'yield', used:used - 1}; } break;
+      case 'go': return {st:'go', a:op.a, used};
+      case 'ret': return {st:'done', used};
+      case 'halt': th.pc--; return {st:'halt', used};
+      case 'framec': it.anim = null; it.frame = op.a; break;
+      case 'framee': { const n = Math.round(S.pop()); if (n < 1 || n > it.frames.length) throw new RErr(`frame ${n} doesn't exist (1..${it.frames.length})`, op.line); it.anim = null; it.frame = n - 1; break; }
+      case 'play': {
+        const a = it.prog.anims[op.a];
+        if (!it.anim || it.anim.name !== op.a || op.b || it.anim.once) it.anim = {name:op.a, idx:a.idx, fps:a.fps, once:!!op.b, t:0, done:false};
+        it.frame = a.idx[0]; break;
+      }
+      case 'stop': it.anim = null; break;
+      case 'flag':
+        if (op.a === 'physics'){ it.physics = !!op.b; if (it.physics){ leavePerch(it); if (it.mover && it.mover.k !== 'phys') it.mover = null; } }
+        else it.roll = !!op.b;
+        break;
+      case 'say': { const d = S.pop(), t = S.pop(); it.say = {text:String(fmt(t)).slice(0, 24), until:world.t + Math.max(0.3, d)}; log(it, `says “${fmt(t)}”`, 'say'); break; }
+      case 'log': { const vals = S.splice(S.length - op.a, op.a); log(it, vals.map(fmt).join(' '), 'log'); break; }
+      case 'emit': { const n = clamp(Math.round(S.pop()), 0, 12); emit(it, op.a, n); break; }
+      case 'sway': { const d = S.pop(), a = S.pop(); it.sway = {amp:clamp(a, 0, 8), dur:Math.max(0.1, d), t0:world.t}; break; }
+      case 'shake': it.shake = world.t + Math.max(0, S.pop()); break;
+      case 'face': { const v = S.pop(); if (v) it.facing = v > 0 ? 1 : -1; break; }
+      case 'toward': { const o = itemArg(S.pop(), op, 'face toward'); if (Math.abs(o.x - it.x) > 0.5) it.facing = o.x > it.x ? 1 : -1; break; }
+      case 'move': {
+        const arc = S.pop(), speed = S.pop(); let tx, ty, spot = null;
+        if (op.a === 'xy'){ ty = S.pop(); tx = S.pop(); }
+        else if (op.a === 'item'){ const o = itemArg(S.pop(), op, 'move to'); tx = o.x; ty = o.y - o.h*scl(o); }
+        else if (op.a === 'perch'){
+          const spots = perchSpots(it, op.b);
+          if (spots.length){ spot = spots[Math.floor(rnd() * spots.length)]; const p = spotPos(spot); tx = p.x; ty = p.y; }
+          else { if (ui.logEvents) log(it, `no free perch${op.b ? " on a '" + op.b + "'" : ''} — landing on the ground`, 'warn'); }
+        }
+        if (tx === undefined){ tx = 14 + rnd() * (W - 28); ty = groundY(it); }
+        const half = it.w*scl(it)/2;
+        tx = clamp(tx, half, W - half); ty = clamp(ty, 8, groundY(it));
+        startPath(it, tx, ty, speed, arc, spot, false);
+        break;
+      }
+      case 'walk': {
+        const speed = S.pop(), dx = S.pop();
+        it.blocked = false; leavePerch(it);
+        if (Math.abs(dx) >= 0.5) { it.mover = {k:'walk', left:Math.abs(dx), dir:Math.sign(dx), speed:Math.max(1, Math.abs(speed))}; it.facing = Math.sign(dx); }
+        break;
+      }
+      case 'hop': {
+        const h = S.pop(), dx0 = S.pop(); const onP = !!it.perch; const dx = onP ? 0 : dx0;
+        const half = it.w*scl(it)/2; const x1 = clamp(it.x + dx, half + 2, W - half - 2);
+        startPath(it, x1, it.y, 40, Math.max(1, h), it.perch ? {key:it.perch.key, owner:it.perch.owner, i:it.perch.i} : null, onP);
+        it.mover.hop = true; break;
+      }
+      case 'signal': {
+        const ev = {ev:'signal', name:op.a, other:it.id};
+        if (op.b){ const o = itemArg(S.pop(), op, 'signal to'); o.events.push(ev); }
+        else world.items.forEach(o => { if (o !== it) o.events.push({...ev}); });
+        if (ui.logEvents) log(it, `signal ${op.a}${op.b ? '' : ' (to all)'}`, 'ev');
+        break;
+      }
+      default: throw new RErr('unknown op ' + op.o, op.line);
+    }
+    if (S.length > it.maxStack) it.maxStack = S.length;
+    if (S.length > STACKMAX) throw new RErr(`expression stack overflow (${STACKMAX} values)`, op.line);
+  }
+  return {st:'budget', used};
+}
+
+function handlerFor(it, e){
+  const P = it.prog; const match = h => h.ev === e.ev && (e.ev !== 'signal' || h.arg === e.name) && (e.ev !== 'near' || (h.arg === e.trait && h === e.h)) && (e.ev !== 'every' || h === e.h);
+  return P.allHandlers.find(h => h.state === it.state && match(h)) || P.allHandlers.find(h => h.state === -1 && match(h) && !P.allHandlers.some(x => x.state === it.state && x.ev === h.ev && x.arg === h.arg && e.ev !== 'every' && e.ev !== 'near'));
+}
+const activeHandlers = it => it.prog.allHandlers.filter(h => h.state === -1 || h.state === it.state);
+
+function rtError(it, err){
+  it.errored = true;
+  log(it, `line ${err.line}: ${err.message}`, 'err', err.line);
+}
+
+function tickItem(it){
+  it.opsUsed = 0; it.starved = false;
+  if (!it.prog) return;
+  let budget = BUDGET;
+  const evs = it.events; it.events = [];
+  for (const h of activeHandlers(it)){
+    if (h.ev === 'tick') evs.push({ev:'tick'});
+    if (h.ev === 'every'){ const key = h.line; if (it.everyAt[key] === undefined) it.everyAt[key] = world.t + h.every; else if (world.t >= it.everyAt[key] - 1e-9){ it.everyAt[key] += h.every; evs.push({ev:'every', h}); } }
+  }
+  let goTo = -1;
+  for (const e of evs){
+    const h = handlerFor(it, e); if (!h) continue;
+    if (budget <= 0){ log(it, `out of budget — '${e.ev}' dropped this tick`, 'warn'); continue; }
+    it.other = e.other || 0; it.impact = e.impact || 0;
+    if (ui.logEvents && e.ev !== 'tick' && e.ev !== 'every') log(it, `on ${e.ev}${e.name ? ' ' + e.name : ''}${e.trait ? ' ' + e.trait : ''}${e.other ? ' (from ' + (byId(e.other) || {}).name + ')' : ''}`, 'ev');
+    try {
+      const r = run(it, {code:h.code, pc:0, stack:[]}, budget);
+      budget -= r.used; it.opsUsed += r.used;
+      if (r.st === 'budget') rtError(it, new RErr(`the 'on ${h.ev}' handler used all ${BUDGET} steps without finishing — a handler must finish within one tick`, h.line));
+      if (r.st === 'go') goTo = r.a;
+    } catch (err){ rtError(it, err); }
+  }
+  if (goTo >= 0) enterState(it, goTo);
+  if (it.thread && !it.halted && world.t >= it.waitUntil){
+    for (let hops = 0; hops < 4 && budget > 0; hops++){
+      if (it.thread.code[it.thread.pc].o === 'await' && blockedOn(it)) break;
+      let r;
+      try { r = run(it, it.thread, budget); } catch (err){ rtError(it, err); it.halted = true; break; }
+      budget -= r.used; it.opsUsed += r.used;
+      if (r.st === 'go'){ enterState(it, r.a); continue; }
+      if (r.st === 'halt') it.halted = true;
+      if (r.st === 'budget') it.starved = true;
+      break;
+    }
+  }
+  it.opsHist.push(it.opsUsed); if (it.opsHist.length > 20) it.opsHist.shift();
+}
+
+/* body & motion step ----------------------------------------- */
+function onSolidTop(it){
+  for (const o of world.items){ if (o === it) continue; const s = solidOf(o); if (!s) continue; if (Math.abs(it.y - footPad(it)*scl(it) - s.y) < 1 && it.x >= s.x - 1 && it.x <= s.x + s.w + 1) return o; }
+  return null;
+}
+function stepBody(it){
+  const sc = scl(it), hs = it.h*sc, half = it.w*sc/2;
+  const prevTouch = it.touch; it.touch = new Set();
+  if (it.mover){
+    const m = it.mover;
+    if (m.k === 'path'){
+      m.t = Math.min(1, m.t + TICK / m.dur);
+      const s = m.t*m.t*(3 - 2*m.t), u = 1 - s;
+      it.x = q(u*u*m.x0 + 2*u*s*m.cx + s*s*m.x1); it.y = q(u*u*m.y0 + 2*u*s*m.cy + s*s*m.y1);
+      if (m.t >= 1){
+        it.x = q(m.x1); it.y = q(m.y1); it.mover = null;
+        if (m.spot) occupy(it, m.spot);
+        if (!m.hop){ it.events.push({ev:'land'}); }
+      }
+    } else if (m.k === 'walk'){
+      const d = Math.min(m.left, m.speed * TICK); let nx = it.x + m.dir * d;
+      let stop = false;
+      if (nx < half + 2 || nx > W - half - 2){ nx = clamp(nx, half + 2, W - half - 2); stop = true; }
+      for (const o of world.items){ if (o === it) continue; const s = solidOf(o); if (!s) continue;
+        if (it.y > s.y + 0.5 && it.y - hs < s.y + s.h && nx + half*0.6 > s.x && nx - half*0.6 < s.x + s.w && !(it.x + half*0.6 > s.x && it.x - half*0.6 < s.x + s.w)){ stop = true; nx = it.x; } }
+      if (Math.abs(it.y - groundY(it)) > 1){ const sup = onSolidTop(it); if (sup){ const s = solidOf(sup); if (nx < s.x || nx > s.x + s.w){ stop = true; nx = it.x; } } }
+      it.x = q(nx); m.left -= d;
+      if (stop){ it.blocked = true; it.mover = null; } else if (m.left <= 0.01) it.mover = null;
+    }
+  } else if (it.physics){
+    const e = it.bounce / 100, r = bodyR(it);
+    it.vy += it.gravity * TICK;
+    if (it.grounded && it.friction){ const f = it.friction * TICK; it.vx = Math.abs(it.vx) <= f ? 0 : it.vx - Math.sign(it.vx) * f; }
+    let cx = it.x + it.vx * TICK, cy = it.y - hs/2 + it.vy * TICK;
+    let grounded = false;
+    const hit = imp => { if (imp > 15) it.events.push({ev:'hit', impact:q(imp)}); };
+    if (cy + r > SOIL){ cy = SOIL - r; if (it.vy > 0){ const imp = it.vy; it.vy = -it.vy * e; if (Math.abs(it.vy) < 12) it.vy = 0; hit(imp); } grounded = true; }
+    if (cx - r < 3){ cx = 3 + r; if (it.vx < 0){ const imp = -it.vx; it.vx = -it.vx * e; hit(imp); } }
+    if (cx + r > W - 3){ cx = W - 3 - r; if (it.vx > 0){ const imp = it.vx; it.vx = -it.vx * e; hit(imp); } }
+    if (cy - r < 8){ cy = 8 + r; if (it.vy < 0){ const imp = -it.vy; it.vy = -it.vy * e; hit(imp); } }
+    for (const o of world.items){
+      if (o === it) continue; const s = solidOf(o); if (!s) continue;
+      const nx = clamp(cx, s.x, s.x + s.w), ny = clamp(cy, s.y, s.y + s.h);
+      let dx = cx - nx, dy = cy - ny, d2 = dx*dx + dy*dy;
+      if (d2 >= r*r) continue;
+      let d = Math.sqrt(d2), n;
+      if (d < 1e-6){ n = {x:0, y:-1}; d = 0; cy = s.y - r; } else { n = {x:dx/d, y:dy/d}; cx += n.x*(r - d); cy += n.y*(r - d); }
+      const vn = it.vx*n.x + it.vy*n.y;
+      if (vn < 0){
+        it.vx -= (1 + e)*vn*n.x; it.vy -= (1 + e)*vn*n.y;
+        if (n.y < -0.6 && Math.abs(it.vy) < 12) it.vy = 0;
+        if (-vn > 10 && !prevTouch.has(o.id)){ it.events.push({ev:'bump', other:o.id, impact:q(-vn)}); o.events.push({ev:'bump', other:it.id, impact:q(-vn)}); }
+      }
+      if (n.y < -0.6){
+        grounded = true;
+        if (s.w < r * 2){ const side = cx >= s.x + s.w/2 ? 1 : -1; it.vx += side * 25 * TICK * 8; grounded = false; } // too narrow to balance on
+      }
+      it.touch.add(o.id);
+    }
+    it.grounded = grounded;
+    it.x = q(cx); it.y = q(cy + hs/2); it.vx = q(it.vx); it.vy = q(it.vy);
+    if (it.roll) it.angle = qa(it.angle + (it.vx * TICK / Math.max(1, r)) * 180 / Math.PI);
+  }
+  if (!it.physics){
+    if (it.spin) it.angle = qa(it.angle + it.spin * TICK);
+    if (it.perch && !it.mover){ const p = spotPos(it.perch); if (p){ it.x = q(p.x); it.y = q(p.y); } else leavePerch(it); }
+    it.grounded = !it.perch && !it.mover && (Math.abs(it.y - groundY(it)) < 0.75 || !!onSolidTop(it));
+  }
+}
+
+/* near ------------------------------------------------------- */
+function senseNear(it){
+  if (!it.prog) return;
+  for (const h of activeHandlers(it)){
+    if (h.ev !== 'near') continue;
+    const key = h.line, was = it.nearIn[key] || new Set(), now = new Set(); const me = centerOf(it);
+    for (const o of world.items){
+      if (o === it || !o.prog || !o.prog.traits.includes(h.arg)) continue;
+      const c = centerOf(o); if (Math.hypot(c.x - me.x, c.y - me.y) <= h.within){ now.add(o.id); if (!was.has(o.id)) it.events.push({ev:'near', trait:h.arg, other:o.id, h}); }
+    }
+    it.nearIn[key] = now;
+  }
+}
+
+/* particles -------------------------------------------------- */
+const PCOL = {dust:['#b8a487','#9c8a70'], feather:['#f4efe6','#d9d2c6'], spark:['#ffe27a','#fff6c2'], heart:['#ef6f8e'], note:['#3b4b8f']};
+function emit(it, kind, n){
+  const b = boxOf(it), f = it.frames[it.frame] || it.frames[0];
+  for (let k = 0; k < n; k++){
+    let x = it.x, y = it.y - b.h/2;
+    if (kind === 'leaf' && f){
+      for (let tries = 0; tries < 30; tries++){ const sx = Math.floor(rnd()*it.w), sy = Math.floor(rnd()*it.h*0.6); if (f.px[sy*it.w + sx]){ x = b.left + sx*scl(it); y = b.top + sy*scl(it); break; } }
+    } else if (kind === 'dust'){ x = it.x + (rnd() - .5)*b.w*.6; y = Math.min(it.y, SOIL) - 1; }
+    else if (kind === 'heart' || kind === 'note' || kind === 'spark'){ y = b.top + 2; }
+    let col;
+    if (kind === 'leaf'){ const cand = [3,4,7].map(i => it.palette[i]).filter(Boolean); col = cand[Math.floor(rnd()*cand.length)] || '#6aa84f'; }
+    else { const c = PCOL[kind]; col = c[Math.floor(rnd()*c.length)]; }
+    const p = {k:kind, x, y, vx:0, vy:0, age:0, life:1, ph:rnd()*6, col:hexToU32(col), rest:0};
+    if (kind === 'leaf'){ p.vx = (rnd() - .5)*10; p.vy = 4 + rnd()*6; p.life = 9; }
+    if (kind === 'feather'){ p.vx = (rnd() - .5)*16; p.vy = -6; p.life = 7; }
+    if (kind === 'dust'){ p.vx = (rnd() - .5)*40; p.vy = -10 - rnd()*15; p.life = .5 + rnd()*.3; }
+    if (kind === 'spark'){ p.vx = (rnd() - .5)*50; p.vy = -20 - rnd()*30; p.life = .6; }
+    if (kind === 'heart' || kind === 'note'){ p.vx = (rnd() - .5)*8; p.vy = -14; p.life = 1.4; }
+    world.parts.push(p);
+  }
+  if (world.parts.length > 160) world.parts.splice(0, world.parts.length - 160);
+}
+function stepParts(){
+  for (const p of world.parts){
+    p.age += TICK;
+    if (p.k === 'leaf' || p.k === 'feather'){
+      if (p.rest){ p.rest += TICK; continue; }
+      p.vy = Math.min(p.vy + 14*TICK, p.k === 'leaf' ? 13 : 7);
+      p.x += (p.vx + Math.sin(p.age*4 + p.ph)*9) * TICK; p.y += p.vy * TICK; p.vx *= .97;
+      if (p.y >= SOIL - 1){ p.y = SOIL - 1 + (p.k === 'leaf' ? 0 : 0); p.rest = TICK; }
+    } else {
+      p.vy += (p.k === 'dust' ? 30 : p.k === 'spark' ? 60 : -2) * TICK;
+      p.x += p.vx*TICK; p.y += p.vy*TICK; p.vx *= .92;
+    }
+  }
+  world.parts = world.parts.filter(p => p.age < p.life && p.x > -4 && p.x < W + 4 && p.y < H);
+}
+
+/* the tick ---------------------------------------------------- */
+function tick(){
+  world.t = Math.round((world.t + TICK) * 1000) / 1000; world.tick++;
+  const items = world.items;
+  items.forEach(senseNear);
+  items.forEach(tickItem);
+  items.forEach(stepBody);
+  for (const it of items){
+    if (it.anim){
+      const a = it.anim; a.t += TICK; const k = Math.floor(a.t * a.fps + 1e-6);
+      if (a.once && k >= a.idx.length){ it.frame = a.idx[a.idx.length - 1]; a.done = true; }
+      else it.frame = a.idx[k % a.idx.length];
+    }
+    it.stateT += TICK;
+    if (it.sway && world.t > it.sway.t0 + it.sway.dur) it.sway = null;
+    if (it.say && world.t > it.say.until) it.say = null;
+  }
+  stepParts();
+}
+
+/* ============================================================
+   Drawing — into a 240x135 buffer, then scaled crisp
+   ============================================================ */
+const low = document.createElement('canvas'); low.width = W; low.height = H;
+const lctx = low.getContext('2d');
+const img = lctx.createImageData(W, H), buf = new Uint32Array(img.data.buffer);
+const bg = new Uint32Array(W*H);
+const BAYER = [0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5];
+function mix(a, b, t){ const pa = [a >> 16 & 255, a >> 8 & 255, a & 255], pb = [b >> 16 & 255, b >> 8 & 255, b & 255]; return '#' + pa.map((v, i) => Math.round(v + (pb[i] - v)*t).toString(16).padStart(2, '0')).join(''); }
+function paintBackground(){
+  const U = hexToU32;
+  const sky = [0xbfe1dc, 0xcde8de, 0xdcefdf, 0xe7f3df].map(c => U('#' + c.toString(16)));
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
+    const t = y / SOIL * 3; const i = Math.min(2, Math.floor(t)); const f = t - i;
+    bg[y*W + x] = (f*16 > BAYER[(y & 3)*4 + (x & 3)]) ? sky[i + 1] : sky[i];
+  }
+  // far moss hills
+  const hill = U('#b5d6a3'), hill2 = U('#a3c991');
+  for (let x = 0; x < W; x++){
+    const h1 = 100 + Math.round(4*Math.sin(x/23) + 3*Math.sin(x/9 + 1));
+    const h2 = 105 + Math.round(3*Math.sin(x/17 + 2) + 2*Math.sin(x/6));
+    for (let y = h1; y < SOIL; y++) bg[y*W + x] = hill;
+    for (let y = h2; y < SOIL; y++) bg[y*W + x] = hill2;
+  }
+  // soil
+  const s0 = U('#6e4b2f'), s1 = U('#5b3d25'), s2 = U('#87603f'), moss = U('#5e8e44'), moss2 = U('#7aab55');
+  let sd = 99; const r = () => { sd = (sd * 1103515245 + 12345) & 0x7fffffff; return sd / 0x7fffffff; };
+  for (let y = SOIL; y < H; y++) for (let x = 0; x < W; x++){ const v = r(); bg[y*W + x] = v < .12 ? s1 : v < .2 ? s2 : s0; }
+  for (let x = 0; x < W; x++){ bg[SOIL*W + x] = moss; if (r() < .5) bg[(SOIL+1)*W + x] = moss; }
+  for (let x = 2; x < W - 2; x += 3 + Math.floor(r()*5)){ const h = 1 + Math.floor(r()*3); for (let k = 1; k <= h; k++) bg[(SOIL - k)*W + x] = k === h ? moss2 : moss; }
+  const peb = U('#9a9a90'), peb2 = U('#c3c2b6');
+  [[40,120,3],[150,126,2],[205,118,3],[96,129,2]].forEach(([px, py, pr]) => { for (let y = -pr; y <= pr; y++) for (let x = -pr - 1; x <= pr + 1; x++) if (x*x/((pr+1)*(pr+1)) + y*y/(pr*pr) <= 1) bg[(py + y)*W + px + x] = y < 0 && x < 0 ? peb2 : peb; });
+  // lid and neck
+  const lid = U('#7b8792'), lidHi = U('#a9b5bf'), lidLo = U('#535e68');
+  for (let y = 0; y < 6; y++) for (let x = 0; x < W; x++) bg[y*W + x] = y === 1 ? lidHi : y === 5 ? lidLo : ((x % 12 === 0) ? lidLo : lid);
+  // glass ledges (the "rim")
+  const ledge = U('#e9f6f3'), ledgeLo = U('#9ec3be');
+  for (const [a, b] of [[3, 42], [198, 237]]) for (let x = a; x < b; x++){ bg[22*W + x] = ledge; bg[23*W + x] = ledgeLo; }
+  // glass walls & glints
+  const glass = U('#9fc6c0'), glint = U('#f4fbf8');
+  for (let y = 6; y < SOIL; y++){ bg[y*W] = glass; bg[y*W + 1] = glass; bg[y*W + W - 1] = glass; bg[y*W + W - 2] = glass; }
+  for (let y = 30; y < 92; y++){ if (y % 7 !== 0) bg[y*W + 6] = glint; if (y > 40 && y < 70) bg[y*W + 8] = glint; }
+  for (let y = 26; y < 50; y++) bg[y*W + W - 7] = glint;
+}
+
+function swayOff(it, row){
+  if (!it.sway) return 0;
+  const s = it.sway, k = (world.t - s.t0) / s.dur; if (k >= 1) return 0;
+  const env = 1 - k, h = it.h - 1 || 1;
+  return Math.round(s.amp * env * Math.sin((world.t - s.t0) * 2 * Math.PI * 2.2) * Math.pow((h - row) / h, 1.4));
+}
+function put(x, y, c){ if (x >= 0 && x < W && y >= 0 && y < H) buf[y*W + x] = c; }
+function drawItem(it){
+  const f = it.frames[it.frame] || it.frames[0]; if (!f) return;
+  const sc = scl(it), w = it.w, h = it.h, ws = w*sc, hs = h*sc, pal = it.palU32, flip = it.facing < 0;
+  let left = Math.round(it.x - ws/2), top = Math.round(it.y) - hs;
+  if (it.shake > world.t) left += (world.tick % 2 ? 1 : -1);
+  let perchOff = 0;
+  if (it.perch && it.perch.owner && it.perch.owner.prog){ const p = it.perch.owner.prog.perches[it.perch.i]; if (p) perchOff = swayOff(it.perch.owner, p.y); }
+  if (!it.angle){
+    for (let sy = 0; sy < hs; sy++){
+      const row = Math.floor(sy / sc), off = swayOff(it, row) + perchOff;
+      for (let sx = 0; sx < ws; sx++){
+        let col = Math.floor(sx / sc); if (flip) col = w - 1 - col;
+        const c = f.px[row*w + col]; if (c) put(left + sx + off, top + sy, pal[c]);
+      }
+    }
+  } else {
+    const cx = left + ws/2, cy = top + hs/2, R = Math.ceil(Math.hypot(ws, hs)/2) + 1;
+    const a = it.angle * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+    for (let dy = Math.floor(cy - R); dy <= Math.ceil(cy + R); dy++) for (let dx = Math.floor(cx - R); dx <= Math.ceil(cx + R); dx++){
+      const rx = dx + .5 - cx, ry = dy + .5 - cy;
+      const sx = Math.floor(rx*ca + ry*sa + ws/2), sy = Math.floor(-rx*sa + ry*ca + hs/2);
+      if (sx < 0 || sy < 0 || sx >= ws || sy >= hs) continue;
+      const row = Math.floor(sy / sc); let col = Math.floor(sx / sc); if (flip) col = w - 1 - col;
+      const c = f.px[row*w + col]; if (c) put(dx + perchOff, dy, pal[c]);
+    }
+  }
+}
+function drawParts(){
+  for (const p of world.parts){
+    const x = Math.round(p.x), y = Math.round(p.y);
+    const fade = p.life - p.age < .4 && (world.tick % 2) ? 0 : 1;
+    if (!fade && p.k !== 'dust') continue;
+    if (p.k === 'leaf'){ put(x, y, p.col); if (!p.rest && Math.sin(p.age*6 + p.ph) > 0) put(x + 1, y, p.col); else put(x, y - 1 + (p.rest ? 1 : 0), p.col); }
+    else if (p.k === 'feather'){ put(x, y, p.col); put(x + 1, y + (Math.sin(p.age*5) > 0 ? 1 : 0), p.col); }
+    else if (p.k === 'heart'){ put(x - 1, y, p.col); put(x + 1, y, p.col); put(x - 1, y + 1, p.col); put(x, y + 1, p.col); put(x + 1, y + 1, p.col); put(x, y + 2, p.col); }
+    else if (p.k === 'note'){ put(x, y, p.col); put(x, y + 1, p.col); put(x, y + 2, p.col); put(x - 1, y + 2, p.col); put(x + 1, y, p.col); }
+    else put(x, y, p.col);
+  }
+}
+
+const stage = document.getElementById('stage'), sctx = stage.getContext('2d');
+let S = 3;
+function fitStage(){
+  const wpx = stage.parentElement.clientWidth - 24;
+  const s = Math.max(1, Math.min(4, Math.floor(wpx * (window.devicePixelRatio || 1) / W)));
+  if (s !== S || stage.width !== W*s){ S = s; stage.width = W*S; stage.height = H*S; }
+}
+function render(){
+  buf.set(bg);
+  const order = world.items.slice().sort((a, b) => ((a.prog ? a.prog.layer : 1) - (b.prog ? b.prog.layer : 1)) || (a === selected) - (b === selected));
+  order.forEach(drawItem);
+  drawParts();
+  lctx.putImageData(img, 0, 0);
+  sctx.imageSmoothingEnabled = false;
+  sctx.drawImage(low, 0, 0, W*S, H*S);
+  if (ui.grid){
+    sctx.strokeStyle = 'rgba(20,40,30,.13)'; sctx.lineWidth = 1; sctx.beginPath();
+    for (let x = 8; x < W; x += 8){ sctx.moveTo(x*S + .5, 0); sctx.lineTo(x*S + .5, H*S); }
+    for (let y = 8; y < H; y += 8){ sctx.moveTo(0, y*S + .5); sctx.lineTo(W*S, y*S + .5); }
+    sctx.stroke();
+  }
+  if (ui.debug) drawDebug();
+  if (selected && world.items.includes(selected)){
+    const b = boxOf(selected); sctx.setLineDash([S*2, S*2]); sctx.strokeStyle = 'rgba(255,255,255,.85)'; sctx.lineWidth = Math.max(1, S/2);
+    sctx.strokeRect(b.left*S - 1, b.top*S - 1, b.w*S + 2, b.h*S + 2); sctx.setLineDash([]);
+  }
+  for (const it of world.items) if (it.say) bubble(it);
+}
+function drawDebug(){
+  sctx.lineWidth = Math.max(1, S/2);
+  for (const it of world.items){
+    const s = solidOf(it); if (s){ sctx.strokeStyle = 'rgba(240,140,40,.9)'; sctx.strokeRect(s.x*S, s.y*S, s.w*S, s.h*S); }
+    if (it.physics){ const r = bodyR(it), c = {x:it.x, y:it.y - it.h*scl(it)/2}; sctx.strokeStyle = 'rgba(230,60,200,.9)'; sctx.beginPath(); sctx.arc(c.x*S, c.y*S, r*S, 0, 7); sctx.stroke(); }
+    if (it.mover && it.mover.k === 'path'){ const m = it.mover; sctx.strokeStyle = 'rgba(40,90,230,.8)'; sctx.setLineDash([S, S*2]); sctx.beginPath(); sctx.moveTo(m.x0*S, m.y0*S); sctx.quadraticCurveTo(m.cx*S, m.cy*S, m.x1*S, m.y1*S); sctx.stroke(); sctx.setLineDash([]); }
+  }
+  const spots = [];
+  world.items.forEach(o => o.prog && o.prog.perches.forEach((p, i) => spots.push({owner:o, i, key:o.id + ':' + i})));
+  RIM.forEach((r, i) => spots.push({owner:null, i, key:'rim:' + i}));
+  for (const s of spots){ const p = spotPos(s); if (!p) continue; const taken = world.occ.has(s.key); sctx.strokeStyle = taken ? 'rgba(230,60,60,.95)' : 'rgba(20,170,200,.95)'; const x = p.x*S, y = p.y*S, k = S*1.5; sctx.beginPath(); sctx.moveTo(x - k, y - k); sctx.lineTo(x + k, y + k); sctx.moveTo(x + k, y - k); sctx.lineTo(x - k, y + k); sctx.stroke(); }
+}
+function bubble(it){
+  const fs = Math.max(11, Math.round(S * 3.6));
+  sctx.font = `600 ${fs}px "Pixelify Sans", "Atkinson Hyperlegible", sans-serif`;
+  const tw = sctx.measureText(it.say.text).width, pad = fs*0.45, bw = tw + pad*2, bh = fs + pad*1.2;
+  const b = boxOf(it);
+  let x = clamp(it.x*S - bw/2, 4, W*S - bw - 4), y = b.top*S - bh - S*3; if (y < 4) y = (b.top + b.h)*S + S*3;
+  sctx.fillStyle = '#fffdf6'; sctx.strokeStyle = '#26302a'; sctx.lineWidth = Math.max(1.5, S/2);
+  const r = Math.min(8, bh/2);
+  sctx.beginPath(); sctx.moveTo(x + r, y); sctx.arcTo(x + bw, y, x + bw, y + bh, r); sctx.arcTo(x + bw, y + bh, x, y + bh, r); sctx.arcTo(x, y + bh, x, y, r); sctx.arcTo(x, y, x + bw, y, r); sctx.closePath(); sctx.fill(); sctx.stroke();
+  sctx.fillStyle = '#1d2620'; sctx.textBaseline = 'middle'; sctx.fillText(it.say.text, x + pad, y + bh/2 + 1);
+}
+
+/* ============================================================
+   UI state, console, inspector
+   ============================================================ */
+const ui = {running:true, speed:1, mode:'poke', grid:false, debug:false, logEvents:true, logStates:true, tab:'script', tool:'pen', slot:1, frame:0, onion:true};
+const $ = id => document.getElementById(id);
+const consoleEl = $('console');
+let logCount = 0;
+function log(it, msg, cls, line){
+  const d = document.createElement('div'); d.className = 'ln ' + (cls || '');
+  const t = document.createElement('span'); t.className = 't'; t.textContent = `${world.t.toFixed(2).padStart(6)} `;
+  d.appendChild(t);
+  const who = it ? (it.name || '?') + ': ' : '';
+  if (cls === 'err' && it){ const a = document.createElement('a'); a.href = '#'; a.textContent = who + msg; a.onclick = ev => { ev.preventDefault(); select(it); showTab('script'); gotoLine(line); }; d.appendChild(a); }
+  else d.appendChild(document.createTextNode(who + msg));
+  const stick = consoleEl.scrollTop + consoleEl.clientHeight >= consoleEl.scrollHeight - 8;
+  consoleEl.appendChild(d); if (++logCount > 400){ consoleEl.firstChild.remove(); logCount--; }
+  if (stick) consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
+function thumb(canvas, it, fi){
+  const f = it.frames[fi === undefined ? 0 : fi]; canvas.width = it.w; canvas.height = it.h;
+  const c = canvas.getContext('2d'), id = c.createImageData(it.w, it.h), u = new Uint32Array(id.data.buffer);
+  if (f) for (let i = 0; i < f.px.length; i++) if (f.px[i]) u[i] = it.palU32[f.px[i]];
+  c.putImageData(id, 0, 0);
+}
+function buildChips(){
+  const box = $('chips'); box.textContent = '';
+  for (const it of world.items){
+    const b = document.createElement('button'); b.className = 'chip'; b.setAttribute('aria-pressed', it === selected); b.dataset.id = it.id;
+    const cv = document.createElement('canvas'); thumb(cv, it);
+    const t = document.createElement('div');
+    t.innerHTML = `<div class="nm"></div><div class="st"></div><div class="meter"><i></i></div>`;
+    t.querySelector('.nm').textContent = it.name;
+    b.append(cv, t); b.onclick = () => select(it);
+    box.appendChild(b);
+  }
+  if (!world.items.length) box.innerHTML = '<span class="note">The jar is empty. Load an example or add a new item.</span>';
+}
+function updateChips(){
+  for (const b of document.querySelectorAll('.chip')){
+    const it = byId(+b.dataset.id); if (!it) continue;
+    const st = b.querySelector('.st'), i = b.querySelector('.meter i');
+    const peak = Math.max(0, ...it.opsHist);
+    st.textContent = it.err ? 'script error' : `${it.prog ? it.prog.states[it.state] ? it.prog.states[it.state].name : '-' : '-'} · ${peak}/${BUDGET}`;
+    st.classList.toggle('bad', !!it.err || it.errored);
+    i.style.width = Math.min(100, peak / BUDGET * 100) + '%';
+    i.className = peak >= BUDGET ? 'over' : peak > BUDGET * .6 ? 'hot' : '';
+  }
+  const tot = world.items.reduce((s, it) => s + Math.max(0, ...it.opsHist), 0);
+  $('budgetSum').textContent = `peak this second: ${tot} steps / tick across the jar · budget ${BUDGET} per item`;
+}
+function updateInspector(){
+  const rows = ['<tr><th>item</th><th>state</th><th>x</th><th>y</th><th>vx</th><th>vy</th><th>angle</th><th>frame</th><th>steps</th></tr>'];
+  for (const it of world.items){
+    const st = it.prog && it.prog.states[it.state] ? it.prog.states[it.state].name : '-';
+    rows.push(`<tr data-id="${it.id}" class="${it === selected ? 'sel' : ''}"><td>${esc(it.name)}</td><td>${esc(st)}</td><td>${fmt(it.x)}</td><td>${fmt(it.y)}</td><td>${fmt(it.vx)}</td><td>${fmt(it.vy)}</td><td>${fmt(Math.round(it.angle*10)/10)}</td><td>${esc(it.frames[it.frame] ? it.frames[it.frame].name : '-')}</td><td>${it.opsUsed}</td></tr>`);
+  }
+  $('insp').innerHTML = rows.join('');
+  const it = selected, d = $('detail');
+  if (!it || !it.prog){ d.innerHTML = it && it.err ? `<span style="color:var(--err)">${esc(it.name)} has a script error and is not running a program.</span>` : ''; return; }
+  const P = it.prog, parts = [];
+  P.vars.forEach((v, i) => parts.push(`${esc(v.name)} <b>${fmt(it.vars[i])}</b>`));
+  parts.push(`physics <b>${it.physics ? 'on' : 'off'}</b>`, `roll <b>${it.roll ? 'on' : 'off'}</b>`, `grounded <b>${it.grounded ? 1 : 0}</b>`,
+    `perched <b>${it.perch ? (it.perch.owner ? it.perch.owner.name : 'rim') : '-'}</b>`, `facing <b>${it.facing > 0 ? 'right' : 'left'}</b>`,
+    `in state <b>${it.stateT.toFixed(1)}s</b>`, `waiting <b>${it.mover ? it.mover.k : world.t < it.waitUntil ? (it.waitUntil - world.t).toFixed(2) + 's' : it.halted ? 'done' : '-'}</b>`,
+    `pc <b>${it.thread ? it.thread.pc : '-'}</b>`, `stack peak <b>${it.maxStack}</b>`);
+  d.innerHTML = parts.join('');
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* stage pointer ------------------------------------------------ */
+function hitTest(lx, ly){
+  const order = world.items.slice().sort((a, b) => ((b.prog ? b.prog.layer : 1) - (a.prog ? a.prog.layer : 1)));
+  for (const it of order){
+    const b = boxOf(it); if (lx < b.left - 1 || lx > b.left + b.w + 1 || ly < b.top - 1 || ly > b.top + b.h + 1) continue;
+    if (it.angle) return it;
+    const f = it.frames[it.frame] || it.frames[0], sc = scl(it);
+    for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++){
+      let col = Math.floor((lx + ox - b.left) / sc), row = Math.floor((ly + oy - b.top) / sc);
+      if (it.facing < 0) col = it.w - 1 - col;
+      if (col >= 0 && row >= 0 && col < it.w && row < it.h && f.px[row*it.w + col]) return it;
+    }
+  }
+  return null;
+}
+let drag = null;
+stage.addEventListener('pointerdown', e => {
+  const r = stage.getBoundingClientRect(), lx = (e.clientX - r.left) / r.width * W, ly = (e.clientY - r.top) / r.height * H;
+  const it = hitTest(lx, ly);
+  if (!it){ $('capInfo').textContent = `x ${Math.round(lx)}, y ${Math.round(ly)}`; return; }
+  if (it !== selected) select(it);
+  if (ui.mode === 'poke'){ it.events.push({ev:'poke'}); $('capInfo').textContent = `poked ${it.name}`; }
+  else { drag = {it, dx:it.x - lx, dy:it.y - ly}; stage.setPointerCapture(e.pointerId); leavePerch(it); it.mover = null; }
+});
+stage.addEventListener('pointermove', e => {
+  if (!drag) return; const r = stage.getBoundingClientRect(), lx = (e.clientX - r.left) / r.width * W, ly = (e.clientY - r.top) / r.height * H;
+  const it = drag.it; it.x = q(clamp(lx + drag.dx, 0, W)); it.y = q(clamp(ly + drag.dy, 8, H)); it.vx = 0; it.vy = 0;
+});
+stage.addEventListener('pointerup', () => {
+  if (drag){ const it = drag.it; drag = null; it.start = {x:Math.round(it.x), y:Math.abs(it.y - groundY(it)) < 1.5 ? null : Math.round(it.y)}; syncItemFields(); save(); }
+});
+
+/* ============================================================
+   Script editor with highlighting
+   ============================================================ */
+const codeEl = $('code'), hlEl = $('hl'), gutEl = $('gutter');
+const HL_EV = new Set(['poke','tick','bump','hit','land','near','every']);
+function hlLine(s, bad){
+  let out = ''; const re = /(#.*$)|("[^"]*"?)|(\b\d+(?:\.\d+)?(?:ms|s)?\b|\.\d+(?:ms|s)?)|([A-Za-z_]\w*)|(\s+)|([^\sA-Za-z_0-9"#]+)/g; let m;
+  while ((m = re.exec(s))){
+    if (m[1]) out += `<span class="hc">${esc(m[1])}</span>`;
+    else if (m[2]) out += `<span class="hs">${esc(m[2])}</span>`;
+    else if (m[3]) out += `<span class="hn">${esc(m[3])}</span>`;
+    else if (m[4]){ const w = m[4];
+      out += KEYWORDS.has(w) ? `<span class="hk">${w}</span>` : HL_EV.has(w) ? `<span class="hev">${w}</span>` : FUNCS[w] ? `<span class="hf">${w}</span>` : (SENSES.has(w) || CONSTS[w] !== undefined) ? `<span class="hse">${w}</span>` : esc(w); }
+    else out += esc(m[0]);
+  }
+  return bad ? `<span class="hl-bad">${out || ' '}</span>` : out;
+}
+function paintEditor(){
+  const it = selected; const lines = codeEl.value.split('\n'); const bad = it && it.err ? it.err.line : -1;
+  hlEl.innerHTML = lines.map((l, i) => hlLine(l, i + 1 === bad)).join('\n') + '\n ';
+  gutEl.innerHTML = lines.map((_, i) => `<div class="${i + 1 === bad ? 'bad' : ''}">${i + 1}</div>`).join('') + '<div></div>';
+  syncScroll();
+}
+function syncScroll(){ hlEl.scrollTop = codeEl.scrollTop; hlEl.scrollLeft = codeEl.scrollLeft; gutEl.scrollTop = codeEl.scrollTop; }
+codeEl.addEventListener('scroll', syncScroll);
+let compileTimer = 0;
+codeEl.addEventListener('input', () => {
+  if (!selected) return; selected.script = codeEl.value; paintEditor();
+  clearTimeout(compileTimer); compileTimer = setTimeout(() => { if (!selected) return; const was = selected.err; compileItem(selected); if (selected.err && (!was || was.msg !== selected.err.msg)) log(selected, `line ${selected.err.line}: ${selected.err.msg}`, 'err', selected.err.line); paintEditor(); showStatus(); buildChips(); save(); }, 350);
+});
+codeEl.addEventListener('keydown', e => {
+  if (e.key === 'Tab'){ e.preventDefault(); document.execCommand('insertText', false, '  '); }
+  else if (e.key === 'Enter' && !e.shiftKey){
+    const v = codeEl.value, p = codeEl.selectionStart, ls = v.lastIndexOf('\n', p - 1) + 1, line = v.slice(ls, p);
+    let ind = line.match(/^\s*/)[0];
+    if (/(:|\bthen|\bdo|\bloop|\belse|\btimes)\s*(#.*)?$/.test(line.trim()) || /^\s*(repeat|while)\b/.test(line) && !/\bend\s*$/.test(line)) ind += '  ';
+    e.preventDefault(); document.execCommand('insertText', false, '\n' + ind);
+  }
+});
+function gotoLine(n){
+  const lines = codeEl.value.split('\n'); let pos = 0; for (let i = 0; i < n - 1 && i < lines.length; i++) pos += lines[i].length + 1;
+  codeEl.focus(); codeEl.setSelectionRange(pos, pos + (lines[n-1] || '').length); codeEl.scrollTop = Math.max(0, (n - 5) * 20);
+}
+function stateBytes(it){ const P = it.prog; if (!P) return 0; return 42 + 12 + 16 + P.vars.length * 2; }
+function showStatus(){
+  const it = selected, s = $('status');
+  if (!it){ s.className = 'status'; s.textContent = 'Select an item.'; $('bytecode').textContent = ''; return; }
+  if (it.err){
+    s.className = 'status bad';
+    s.innerHTML = `<b>Line ${it.err.line}:</b> <span>${esc(it.err.msg)}</span>` + (it.prog ? `<span class="k">still running the last version that compiled</span>` : '');
+  } else {
+    const P = it.prog; s.className = 'status';
+    s.innerHTML = `<span><b>Compiled</b></span><span><span class="k">bytecode</span> ${P.bytes} B</span><span><span class="k">states</span> ${P.states.length}</span><span><span class="k">handlers</span> ${P.allHandlers.length}</span><span><span class="k">vars</span> ${P.vars.length}/${MAXVARS}</span><span><span class="k">per-item state</span> ≈${stateBytes(it)} B</span>`;
+  }
+  const P = it.prog; if (!P){ $('bytecode').textContent = ''; return; }
+  const out = [];
+  const dump = (title, code) => { out.push(title); code.forEach((op, i) => out.push(`  ${String(i).padStart(3)}  ${op.o.padEnd(7)} ${op.a === null || op.a === undefined ? '' : JSON.stringify(op.a)}${op.b !== null && op.b !== undefined ? ' ' + JSON.stringify(op.b) : ''}`.padEnd(40) + `; line ${op.line}`)); };
+  P.states.forEach((s, i) => dump(`state ${s.name}:`, P.bodies[i]));
+  P.allHandlers.forEach(h => dump(`${h.state >= 0 ? P.states[h.state].name + ' / ' : ''}on ${h.ev}${h.arg ? ' ' + h.arg : ''}${h.every ? ' ' + h.every + 's' : ''}:`, h.code));
+  $('bytecode').textContent = out.join('\n');
+}
+
+/* ============================================================
+   Selection, tabs, item fields
+   ============================================================ */
+function select(it){
+  selected = it; ui.frame = 0;
+  codeEl.value = it ? it.script : ''; codeEl.disabled = !it;
+  paintEditor(); showStatus(); syncItemFields(); buildChips(); spriteRefresh();
+}
+function syncItemFields(){
+  const it = selected; $('itemName').value = it ? it.name : ''; $('startX').value = it ? it.start.x : ''; $('startY').value = it && it.start.y != null ? it.start.y : '';
+  ['itemName','startX','startY','dupItem','delItem'].forEach(id => $(id).disabled = !it);
+}
+$('itemName').addEventListener('input', e => { if (!selected) return; selected.name = e.target.value.slice(0, 12) || 'item'; buildChips(); save(); });
+$('startX').addEventListener('change', e => { if (!selected) return; selected.start.x = clamp(+e.target.value || 0, 0, W); save(); });
+$('startY').addEventListener('change', e => { if (!selected) return; selected.start.y = e.target.value === '' ? null : clamp(+e.target.value, 8, H); save(); });
+$('dupItem').onclick = () => { if (!selected) return; const d = defOf(selected); d.name = (d.name + ' 2').slice(0, 12); d.start.x = clamp(d.start.x + 20, 10, 230); const it = makeItem(d); world.items.push(it); select(it); save(); };
+$('delItem').onclick = () => {
+  if (!selected) return; const it = selected; leavePerch(it);
+  for (const o of world.items) if (o.perch && o.perch.owner === it) leavePerch(o);
+  for (const [k, v] of world.occ) if (k.startsWith(it.id + ':')) world.occ.delete(k);
+  world.items = world.items.filter(o => o !== it); log(null, `${it.name} removed`, 'warn');
+  select(world.items[0] || null); save();
+};
+function showTab(t){
+  ui.tab = t;
+  for (const b of document.querySelectorAll('.tabs button')) b.setAttribute('aria-selected', b.dataset.tab === t);
+  ['script','sprite','ref','device'].forEach(n => $('pane-' + n).hidden = n !== t);
+  if (t === 'sprite') spriteRefresh();
+  if (t === 'device') renderDevice();
+  if (t === 'script') paintEditor();
+}
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
+
+/* controls */
+$('runBtn').onclick = () => { ui.running = !ui.running; $('runBtn').textContent = ui.running ? 'Pause' : 'Run'; };
+$('stepBtn').onclick = () => { ui.running = false; $('runBtn').textContent = 'Run'; tick(); };
+$('resetBtn').onclick = resetAll;
+$('speed').onchange = e => ui.speed = +e.target.value;
+$('modePoke').onclick = () => setMode('poke'); $('modeMove').onclick = () => setMode('move');
+function setMode(m){ ui.mode = m; $('modePoke').setAttribute('aria-pressed', m === 'poke'); $('modeMove').setAttribute('aria-pressed', m === 'move'); $('capInfo').textContent = m === 'poke' ? 'click a critter to poke it' : 'drag items to place them'; }
+$('optGrid').onchange = e => ui.grid = e.target.checked;
+$('optDebug').onchange = e => ui.debug = e.target.checked;
+$('logEvents').onchange = e => ui.logEvents = e.target.checked;
+$('logStates').onchange = e => ui.logStates = e.target.checked;
+$('clearLog').onclick = () => { consoleEl.textContent = ''; logCount = 0; };
+document.addEventListener('keydown', e => {
+  if (e.target.closest('input,textarea,select')) return;
+  if (e.key === ' '){ e.preventDefault(); $('runBtn').click(); }
+  else if (e.key === '.'){ $('stepBtn').click(); }
+});
+function resetAll(){
+  seed = 12345; world.t = 0; world.tick = 0; world.parts = []; world.occ.clear();
+  for (const it of world.items){ it.perch = null; }
+  for (const it of world.items) resetItem(it);
+  log(null, 'reset', 'warn');
+}
+
+/* ============================================================
+   Sprite editor
+   ============================================================ */
+const paint = $('paint'), pctx = paint.getContext('2d');
+let cell = 20, painting = false;
+function spriteRefresh(){
+  const it = selected;
+  if (!it){ pctx.clearRect(0, 0, paint.width, paint.height); $('pal').textContent = ''; $('frames').textContent = ''; return; }
+  if (ui.frame >= it.frames.length) ui.frame = it.frames.length - 1;
+  $('spSize').value = `${it.w}x${it.h}`;
+  const avail = Math.min(400, (paint.parentElement.clientWidth || 360));
+  cell = Math.max(6, Math.floor(avail / Math.max(it.w, it.h)));
+  paint.width = it.w * cell; paint.height = it.h * cell;
+  drawPaint(); buildPal(); buildFrames(); buildPrevAnims();
+  const bytes = it.frames.length * it.w * it.h * 3 / 8;
+  const fits = it.w === 16 && it.h === 16 && it.frames.length <= 4;
+  $('spriteNote').className = 'note' + (fits ? '' : ' warn');
+  $('spriteNote').textContent = `${it.frames.length} frame${it.frames.length > 1 ? 's' : ''} × ${it.w}×${it.h} at 3 bits a pixel = ${bytes} bytes. ` +
+    (fits ? 'Fits today\'s item record (16×16, up to 4 frames, 96 B each).' : 'Today\'s item record holds only 16×16 and up to 4 frames (scale 2 doubles a 16×16); this one needs a bigger record.');
+}
+function drawPaint(){
+  const it = selected; if (!it) return; const f = it.frames[ui.frame]; const w = it.w, h = it.h;
+  pctx.clearRect(0, 0, paint.width, paint.height);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++){ pctx.fillStyle = (x + y) & 1 ? '#e3e8e1' : '#f3f6f1'; pctx.fillRect(x*cell, y*cell, cell, cell); }
+  if (ui.onion && ui.frame > 0){
+    const pf = it.frames[ui.frame - 1]; pctx.globalAlpha = .28;
+    for (let i = 0; i < pf.px.length; i++) if (pf.px[i]){ pctx.fillStyle = it.palette[pf.px[i]]; pctx.fillRect((i % w)*cell, Math.floor(i / w)*cell, cell, cell); }
+    pctx.globalAlpha = 1;
+  }
+  for (let i = 0; i < f.px.length; i++) if (f.px[i]){ pctx.fillStyle = it.palette[f.px[i]]; pctx.fillRect((i % w)*cell, Math.floor(i / w)*cell, cell, cell); }
+  pctx.strokeStyle = 'rgba(0,0,0,.08)'; pctx.lineWidth = 1; pctx.beginPath();
+  for (let x = 0; x <= w; x++){ pctx.moveTo(x*cell + .5, 0); pctx.lineTo(x*cell + .5, h*cell); }
+  for (let y = 0; y <= h; y++){ pctx.moveTo(0, y*cell + .5); pctx.lineTo(w*cell, y*cell + .5); }
+  pctx.stroke();
+  pctx.strokeStyle = 'rgba(0,0,0,.25)'; pctx.beginPath(); pctx.moveTo(w/2*cell + .5, 0); pctx.lineTo(w/2*cell + .5, h*cell); pctx.stroke();
+  // perch markers for this item
+  if (it.prog){ pctx.fillStyle = 'rgba(20,160,200,.8)'; it.prog.perches.forEach(p => pctx.fillRect(p.x*cell + cell*.3, p.y*cell - cell*.2, cell*.4, cell*.4)); }
+}
+function buildPal(){
+  const it = selected, box = $('pal'); box.textContent = '';
+  it.palette.forEach((c, i) => {
+    const b = document.createElement('button'); b.className = 'sw' + (i === 0 ? ' t' : ''); b.setAttribute('aria-pressed', ui.slot === i); b.title = i === 0 ? 'slot 0: see-through (eraser)' : `slot ${i}: ${c}`;
+    if (i) b.style.background = c; b.innerHTML = `<span>${i}</span>`;
+    b.onclick = () => { ui.slot = i; buildPal(); };
+    box.appendChild(b);
+  });
+  $('slotNo').textContent = ui.slot; $('slotColor').disabled = ui.slot === 0; $('slotColor').value = ui.slot ? it.palette[ui.slot] : '#000000';
+}
+$('slotColor').addEventListener('input', e => { const it = selected; if (!it || !ui.slot) return; it.palette[ui.slot] = e.target.value; refreshPal(it); drawPaint(); buildFrames(); buildPalSwatches(); save(); });
+function buildPalSwatches(){ const sw = $('pal').children; selected.palette.forEach((c, i) => { if (i) sw[i].style.background = c; }); }
+function buildFrames(){
+  const it = selected, box = $('frames'); box.textContent = '';
+  it.frames.forEach((f, i) => {
+    const b = document.createElement('button'); b.className = 'fr'; b.setAttribute('aria-pressed', i === ui.frame);
+    const cv = document.createElement('canvas'); thumb(cv, it, i); const s = document.createElement('small'); s.textContent = `${i + 1} ${f.name}`;
+    b.append(cv, s); b.onclick = () => { ui.frame = i; drawPaint(); buildFrames(); }; box.appendChild(b);
+  });
+  $('frameName').value = it.frames[ui.frame].name;
+  $('frAdd').disabled = $('frDup').disabled = it.frames.length >= MAXFRAMES; $('frDel').disabled = it.frames.length <= 1;
+}
+function buildPrevAnims(){
+  const it = selected, sel = $('prevAnim'), cur = sel.value; sel.textContent = '';
+  const o = document.createElement('option'); o.value = ''; o.textContent = 'all frames'; sel.appendChild(o);
+  if (it.prog) for (const n of Object.keys(it.prog.anims)){ const op = document.createElement('option'); op.value = n; op.textContent = n; sel.appendChild(op); }
+  if ([...sel.options].some(x => x.value === cur)) sel.value = cur;
+}
+$('prevAnim').onchange = () => { const it = selected; if (it && it.prog && it.prog.anims[$('prevAnim').value]) $('prevFps').value = it.prog.anims[$('prevAnim').value].fps; };
+function cellAt(e){ const r = paint.getBoundingClientRect(); return {x:Math.floor((e.clientX - r.left) / r.width * selected.w), y:Math.floor((e.clientY - r.top) / r.height * selected.h)}; }
+function applyTool(e, first){
+  const it = selected; if (!it) return; const {x, y} = cellAt(e); if (x < 0 || y < 0 || x >= it.w || y >= it.h) return;
+  const px = it.frames[ui.frame].px, slot = e.buttons === 2 ? 0 : ui.slot;
+  if (ui.tool === 'pick'){ if (first){ ui.slot = px[y*it.w + x]; buildPal(); } return; }
+  if (ui.tool === 'fill'){
+    if (!first) return; const target = px[y*it.w + x]; if (target === slot) return;
+    const st = [[x, y]]; while (st.length){ const [cx, cy] = st.pop(); if (cx < 0 || cy < 0 || cx >= it.w || cy >= it.h || px[cy*it.w + cx] !== target) continue; px[cy*it.w + cx] = slot; st.push([cx+1, cy], [cx-1, cy], [cx, cy+1], [cx, cy-1]); }
+  } else px[y*it.w + x] = slot;
+  drawPaint(); spriteDirty();
+}
+let dirtyT = 0;
+function spriteDirty(){ clearTimeout(dirtyT); dirtyT = setTimeout(() => { buildFrames(); buildChips(); save(); }, 250); }
+paint.addEventListener('contextmenu', e => e.preventDefault());
+paint.addEventListener('pointerdown', e => { if (!selected) return; painting = true; paint.setPointerCapture(e.pointerId); applyTool(e, true); });
+paint.addEventListener('pointermove', e => { if (painting) applyTool(e, false); });
+paint.addEventListener('pointerup', () => painting = false);
+document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { ui.tool = b.dataset.tool; document.querySelectorAll('[data-tool]').forEach(x => x.setAttribute('aria-pressed', x === b)); });
+$('onion').onchange = e => { ui.onion = e.target.checked; drawPaint(); };
+$('mirrorBtn').onclick = () => { const it = selected; if (!it) return; const px = it.frames[ui.frame].px, w = it.w; for (let y = 0; y < it.h; y++){ const row = px.slice(y*w, y*w + w).reverse(); px.set(row, y*w); } drawPaint(); spriteDirty(); };
+$('clearFrame').onclick = () => { const it = selected; if (!it) return; it.frames[ui.frame].px.fill(0); drawPaint(); spriteDirty(); };
+$('frameName').addEventListener('change', e => {
+  const it = selected; if (!it) return; const v = e.target.value.trim().replace(/\W/g, '').slice(0, 10);
+  if (!v || it.frames.some((f, i) => f.name === v && i !== ui.frame)){ e.target.value = it.frames[ui.frame].name; return; }
+  it.frames[ui.frame].name = v; recompileAfterFrames(); buildFrames();
+});
+function recompileAfterFrames(){ compileItem(selected, true); paintEditor(); showStatus(); buildChips(); save(); }
+function uniqueFrameName(it, base){ let n = 1, v = base; while (it.frames.some(f => f.name === v)) v = base + (++n); return v; }
+$('frAdd').onclick = () => { const it = selected; it.frames.splice(ui.frame + 1, 0, {name:uniqueFrameName(it, 'f'), px:new Uint8Array(it.w*it.h)}); ui.frame++; recompileAfterFrames(); spriteRefresh(); };
+$('frDup').onclick = () => { const it = selected; const f = it.frames[ui.frame]; it.frames.splice(ui.frame + 1, 0, {name:uniqueFrameName(it, f.name), px:f.px.slice()}); ui.frame++; recompileAfterFrames(); spriteRefresh(); };
+$('frDel').onclick = () => { const it = selected; if (it.frames.length <= 1) return; it.frames.splice(ui.frame, 1); ui.frame = Math.max(0, ui.frame - 1); it.frame = 0; it.anim = null; recompileAfterFrames(); spriteRefresh(); };
+$('frLeft').onclick = () => moveFrame(-1); $('frRight').onclick = () => moveFrame(1);
+function moveFrame(d){ const it = selected, i = ui.frame, j = i + d; if (j < 0 || j >= it.frames.length) return; [it.frames[i], it.frames[j]] = [it.frames[j], it.frames[i]]; ui.frame = j; recompileAfterFrames(); spriteRefresh(); }
+$('spSize').onchange = e => {
+  const it = selected; if (!it) return; const [nw, nh] = e.target.value.split('x').map(Number);
+  const ox = Math.round((nw - it.w)/2), oy = nh - it.h;
+  for (const f of it.frames){ const np = new Uint8Array(nw*nh); for (let y = 0; y < it.h; y++) for (let x = 0; x < it.w; x++){ const X = x + ox, Y = y + oy; if (X >= 0 && Y >= 0 && X < nw && Y < nh) np[Y*nw + X] = f.px[y*it.w + x]; } f.px = np; }
+  it.w = nw; it.h = nh; recompileAfterFrames(); spriteRefresh();
+};
+const prevC = $('prev');
+function drawPreview(now){
+  const it = selected; if (!it || ui.tab !== 'sprite') return;
+  const fps = clamp(+$('prevFps').value || 6, 1, 30); const an = it.prog && it.prog.anims[$('prevAnim').value];
+  const seq = an ? an.idx : it.frames.map((_, i) => i); const fi = seq[Math.floor(now / 1000 * fps) % seq.length];
+  thumb(prevC, it, fi);
+}
+
+/* ============================================================
+   Save / load / examples
+   ============================================================ */
+const KEY = 'jarsandbox.v1';
+let saveT = 0;
+function save(){ clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(snapshot())); } catch (e){} }, 600); }
+function snapshot(){ return {format:'jarsandbox', version:1, items:world.items.map(defOf)}; }
+function loadDefs(defs){
+  world.items = []; world.occ.clear(); world.parts = []; world.t = 0; world.tick = 0; seed = 12345;
+  for (const d of defs){ const it = makeItem(d); world.items.push(it); if (it.err) log(it, `line ${it.err.line}: ${it.err.msg}`, 'err', it.err.line); }
+  select(world.items[0] || null); buildChips();
+}
+function validDefs(o){
+  if (!o || !Array.isArray(o.items)) throw new Error('expected {"items": [...]}');
+  return o.items.map((d, n) => {
+    if (typeof d.script !== 'string' || !Array.isArray(d.frames) || !d.frames.length || !Array.isArray(d.palette)) throw new Error(`item ${n + 1} is missing script, frames or palette`);
+    const w = [16, 32].includes(d.w) ? d.w : 16, h = [16, 32].includes(d.h) ? d.h : 16;
+    const pal = d.palette.slice(0, 8).map(c => /^#[0-9a-f]{6}$/i.test(c) ? c : '#000000'); while (pal.length < 8) pal.push('#000000');
+    return {name:String(d.name || 'item').slice(0, 12), w, h, palette:pal, script:d.script,
+      frames:d.frames.slice(0, MAXFRAMES).map((f, i) => ({name:String(f.name || 'f' + (i + 1)).replace(/\W/g, '').slice(0, 10) || 'f' + (i + 1), rows:Array.isArray(f.rows) ? f.rows.map(String) : []})),
+      start:{x:clamp(+((d.start || {}).x) || 120, 0, W), y:(d.start && d.start.y != null) ? clamp(+d.start.y, 8, H) : null}};
+  });
+}
+
+/* ---------- example sprites (hand-drawn; '.' is slot 0) ---------- */
+const TREE_STILL = ["................................", "............11111111............", "........1111443433431111........", "......11444443443333232311......", "....114443433334433333332211....", "...14333343433432233233333221...", "..1434332233343333337323322221..", "..1433334223333333322322322221..", "3133437433333333323333332222331.", "5553334333333222333222332222221.", ".133343333232223332222222232221.", ".133333223327333223222223322221.", "..1322322323332322222222722221..", "..1332333223222222222222222221..", "...12223222332323222222222221.33", "....1332232223223272222222255555", ".....1133322322222222222211.....", ".......111322222222222111.......", "..........111156551111..........", "..............5665..............", "..............5665..............", "..............5655..............", "..............5665..............", "..............5665..............", "..............5655..............", "..............5665..............", "..............5665..............", "..............5655..............", "..............5665..............", ".............566665.............", "............56666655............", "...........5666666665..........."];
+const TREE_RUSTLE = ["................................", ".............11111111...........", ".........1114434333411111.......", ".......14443433433434333111.....", ".....134444334334333333333111...", "...134343333343332222333332211..", "..13443332243343333337333323211.", "..13433333223333333233332333221.", "31434347333333233332333223222211", "5553333333333233333322332223221.", ".133333333223333232222322322221.", ".133323322327323333222222322221.", "..1323222322322232233222722221..", "..1233332322222322232222222221..", "...12322232222222222222222221.33", "....1323323222232272222222255555", ".....1123222222222222222211.....", ".......111323222222222111.......", "..........111156551111..........", "..............5665..............", "..............5665..............", "..............5655..............", "..............5665..............", "..............5665..............", "..............5655..............", "..............5665..............", "..............5665..............", "..............5655..............", "..............5665..............", ".............566665.............", "............56666655............", "...........5666666665..........."];
+const FENCE = ["...1........................1...", "..131......................131..", ".13241....................13241.", ".13241....................13241.", "11324111111111111111111111132411", "31324133323332333233323332132413", "21324122222422222222422222132412", "11324111111111111111111111132411", ".13241....................13241.", ".13241....................13241.", "11324111111111111111111111132411", "31324133323332333233323332132413", "21324122222422222222422222132412", "11324111111111111111111111132411", ".13241....................13241.", ".14441....................14441."];
+
+const ROLLY_FRAMES = [
+  {name:'ball', rows:[
+'................','................','......1111......','....11433211....','...1443323321...','...1432332321...','..143233233221..','..132332332321..',
+'..123323323321..','..123233233221..','...1233233221...','...1223322211...','....11222211....','......1111......','................','................']},
+  {name:'half', rows:[
+'................','................','................','................','......11111.....','....114343411...','...13232323231..','..1323232323231.',
+'..1232323232321.','..1222222222221.','..1221111112261.','...11.5.5.5.11..','......5.5.5.....','................','................','................']},
+  {name:'walk1', rows:[
+'................','................','................','................','................','................','....11111111...7','..1143434343117.',
+'.13232323232321.','.12323232323261.','.12222222222221.','..111111111111..','..5.5.5.5.5.5...','...5.5.5.5.5.5..','................','................']},
+  {name:'walk2', rows:[
+'................','................','................','................','................','...............7','....11111111..7.','..1143434343117.',
+'.13232323232321.','.12323232323261.','.12222222222221.','..111111111111..','...5.5.5.5.5.5..','..5.5.5.5.5.5...','................','................']},
+];
+const BIRD_FRAMES = [
+  {name:'sit', rows:[
+'................','................','................','................','................','.........111....','........12221...','........122615..',
+'...1111123331...','.1122277733331..','12227777733341..','.1127777744441..','..11222244441...','....1111111.....','......5..5......','.....55..55.....']},
+  {name:'look', rows:[
+'................','................','................','................','................','.........111....','........12221...','.......516221...',
+'...1111123331...','.1122277733331..','12227777733341..','.1127777744441..','..11222244441...','....1111111.....','......5..5......','.....55..55.....']},
+  {name:'flap1', rows:[
+'................','................','...11...........','..1771..........','..17771.........','...17771.111....','....177712221...','.....111122615..',
+'...1111123331...','.1122222233331..','12222222233341..','.1122222244441..','..11222244441...','....1111111.....','................','................']},
+  {name:'flap2', rows:[
+'................','................','................','................','................','.........111....','........12221...','........122615..',
+'...1111123331...','.1122222233331..','12227777733341..','.1117777744441..','..11777714441...','...177711111....','....1771........','.....11.........']},
+];
+
+const SCRIPTS = {
+rolly: `# Rolly polly. A pill bug: rolls as a ball under physics,
+# uncurls when it comes to rest, then crawls about.
+traits bug, critter, roller
+body 6                 # physics circle radius, px
+var rest, dir, laps
+
+anim uncurl = ball half walk1 @ 6
+anim curl   = walk1 half ball @ 12
+anim crawl  = walk1 walk2 @ 8
+
+state start:           # the first state is where it begins
+  vx = pick(left, right) * random(40, 80)
+  go tumble
+end
+
+state tumble:
+  physics on
+  roll on              # angle follows the distance rolled
+  bounce 55            # percent of speed kept on a bounce
+  friction 45          # px/s² of slowing while touching ground
+  frame ball
+  loop
+    wait until grounded and speed < 4
+    wait 1.2s
+    if grounded and speed < 4 then go uncurl end
+  end
+end
+
+state uncurl:
+  physics off
+  roll off
+  angle = 0
+  vx = 0; vy = 0
+  play uncurl once
+  go crawl
+end
+
+state crawl:
+  dir = pick(left, right)
+  laps = random(3, 6)
+  repeat laps
+    play crawl
+    walk dir * random(12, 40) speed 9
+    frame walk1
+    if blocked or chance(35) then dir = -dir end
+    wait random(5, 18) / 10
+  end
+  say "zzz" 1.5s
+  wait 2s
+  go crawl
+end
+
+state flung:
+  play curl once
+  physics on
+  roll on
+  vx = pick(-1, 1) * random(70, 130)
+  vy = -random(80, 130)
+  go tumble
+end
+
+state hide:            # curled up, still, until the coast is clear
+  play curl once
+  wait random(2, 4)
+  go uncurl
+end
+
+on poke:
+  say "!" 0.8s
+  go flung
+end
+
+on hit:                # struck the soil or the glass
+  if impact > 45 then emit dust 2 end
+end
+
+on near bird within 26:
+  if state == crawl then go hide end
+end
+`,
+tree: `# Sapling. Others perch on it; it rustles when they land.
+traits tree, plant
+layer 0                # drawn behind the critters
+solid 14, 18, 4, 14    # the trunk: x, y, w, h in sprite pixels
+perch 15, 1            # where a visitor's feet go
+perch 9, 2
+perch 22, 2
+perch 1, 9
+perch 29, 15
+
+anim rustle = rustle still rustle still @ 10
+
+state idle:
+  frame still
+  loop
+    wait random(5, 11)
+    sway 1 1.6s        # a breeze
+  end
+end
+
+on signal landed:      # a bird says it just landed on me
+  sway 3 1.2s
+  play rustle once
+  emit leaf random(1, 2)
+end
+
+on bump:               # something rolled into the trunk
+  sway 2 0.8s
+  if chance(50) then emit leaf 1 end
+end
+
+on poke:
+  sway 4 1.5s
+  play rustle once
+  emit leaf 3
+  signal startle       # anyone perched on me takes off
+end
+`,
+bird: `# Wren. Swoops between perches, lands, looks around.
+traits bird, flyer
+var looks, where
+
+anim flap   = flap1 flap2 @ 10
+anim settle = flap1 flap2 sit @ 10
+
+state sit:
+  if perched then signal landed to perched end
+  play settle once
+  looks = random(2, 5)
+  repeat looks
+    wait random(6, 18) / 10
+    if chance(45) then
+      frame look         # head turned back
+      wait random(4, 9) / 10
+      frame sit
+    else
+      face -facing       # look the other way
+    end
+    if grounded and chance(40) then
+      hop random(-14, 14) 4
+    end
+  end
+  go fly
+end
+
+state fly:
+  play flap
+  if chance(20) then emit feather 1 end
+  where = random(1, 10)
+  if where <= 4 then
+    move to perch tree speed 75 arc -22   # a swoop: dips, then rises
+  elif where <= 6 then
+    move to perch fence speed 70 arc -16
+  elif where <= 8 then
+    move to perch rim speed 85 arc 18
+  else
+    move to ground speed 70 arc 16
+  end
+  go sit
+end
+
+on poke:
+  say "tweet!" 1s
+  go fly
+end
+
+on signal startle:
+  if perched == other then go fly end
+end
+`,
+fence: `# Fence. Furniture: a top to stand on, posts to perch on.
+traits fence, furniture
+layer 0
+solid 0, 4, 32, 12
+perch 3, 0
+perch 28, 0
+perch 16, 4
+
+state still:
+  frame fence
+end
+
+on bump: shake 0.25s end
+`,
+blank: `# A new critter. Edit me — the jar reloads as you type.
+traits critter
+var n
+
+anim wiggle = blob blob2 @ 4
+
+state idle:
+  play wiggle
+  wait random(1, 3)
+  hop random(-20, 20) 6
+  go idle
+end
+
+on poke:
+  n += 1
+  say "poked " + n
+  emit heart 2
+end
+`};
+const PALS = {
+  rolly:['#000000','#2a2633','#5d6680','#8d97b0','#c5cde0','#3a3346','#0f0f14','#9b7c8e'],
+  bird: ['#000000','#2b2230','#8a5a3c','#e0803a','#f2dcae','#f2b632','#121218','#5a3a28'],
+  tree: ['#000000','#1e3a28','#2f6b3a','#4f9a4b','#8fcb63','#4a3020','#7a5232','#e2685a'],
+  fence:['#000000','#3b2618','#9a6b3c','#c4935a','#6b4528','#000000','#000000','#000000'],
+  blank:['#000000','#24324a','#5b7fc7','#9fc1f2','#ffffff','#e2685a','#121218','#f2b632'],
+};
+const BLOB = ['................','................','................','................','................','.....111111.....','....13333331....','...1333333331...','...1336336331...','...1333333331...','...1335555331...','...1333333331...','....12222221....','.....111111.....','................','................'];
+const BLOB2 = ['................','................','................','................','................','................','....11111111....','...1333333331...','..133633363331..','..133333333331..','..133555553331..','..133333333331..','...1222222221...','....11111111....','................','................'];
+const DEF = {
+  rolly: () => ({name:'Rolly', w:16, h:16, palette:PALS.rolly, frames:ROLLY_FRAMES, script:SCRIPTS.rolly, start:{x:128, y:52}}),
+  tree:  () => ({name:'Tree', w:32, h:32, palette:PALS.tree, frames:[{name:'still', rows:TREE_STILL}, {name:'rustle', rows:TREE_RUSTLE}], script:SCRIPTS.tree, start:{x:72, y:null}}),
+  bird:  () => ({name:'Wren', w:16, h:16, palette:PALS.bird, frames:BIRD_FRAMES, script:SCRIPTS.bird, start:{x:30, y:null}}),
+  fence: () => ({name:'Fence', w:32, h:16, palette:PALS.fence, frames:[{name:'fence', rows:FENCE}], script:SCRIPTS.fence, start:{x:186, y:null}}),
+  blank: () => ({name:'Blob', w:16, h:16, palette:PALS.blank, frames:[{name:'blob', rows:BLOB}, {name:'blob2', rows:BLOB2}], script:SCRIPTS.blank, start:{x:120, y:null}}),
+};
+const EXAMPLES = {all:['tree','fence','rolly','bird'], rolly:['rolly'], treebird:['tree','bird'], bird:['bird'], tree:['tree'], empty:[]};
+
+/* Scenarios (scenarios/*.js): a missing or broken file just leaves its entry out. */
+for (const [k, s] of Object.entries(window.SCENARIOS || {})){
+  const o = document.createElement('option'); o.value = 'sc:' + k;
+  o.textContent = s.title + ' (' + s.items.length + ' things)'; $('scenarioOpts').appendChild(o);
+}
+function exampleDefs(name){
+  if (name && name.startsWith('sc:')) return JSON.parse(JSON.stringify(SCENARIOS[name.slice(3)].items));
+  return (EXAMPLES[name] || EXAMPLES.all).map(k => DEF[k]());
+}
+
+let pendingExample = null;
+$('examples').onchange = e => {
+  const v = e.target.value; e.target.value = ''; if (!v) return;
+  pendingExample = v; $('confirmText').textContent = `Load “${e.target.querySelector(`option[value="${v}"]`).textContent}”? It replaces everything in the jar (export first to keep it).`;
+  $('confirmBar').hidden = false;
+};
+$('confirmYes').onclick = () => { $('confirmBar').hidden = true; if (pendingExample){ loadDefs(validDefs({items:exampleDefs(pendingExample)})); log(null, 'example loaded', 'warn'); save(); } pendingExample = null; };
+$('confirmNo').onclick = () => { $('confirmBar').hidden = true; pendingExample = null; };
+$('newItem').onclick = () => { const d = DEF.blank(); d.name = 'Blob ' + (world.items.length + 1); d.start.x = 30 + Math.floor(rnd()*180); const it = makeItem(d); world.items.push(it); select(it); showTab('script'); save(); };
+
+$('exportBtn').onclick = () => { $('mText').value = JSON.stringify(snapshot(), null, 1); $('mMsg').textContent = ''; $('modal').hidden = false; };
+$('mClose').onclick = () => $('modal').hidden = true;
+$('modal').addEventListener('click', e => { if (e.target === $('modal')) $('modal').hidden = true; });
+$('mCopy').onclick = () => {
+  const t = $('mText'); const ok = () => $('mMsg').textContent = 'Copied.';
+  try { navigator.clipboard.writeText(t.value).then(ok, () => { t.select(); $('mMsg').textContent = 'Selected — press Ctrl+C to copy.'; }); } catch (e){ t.select(); $('mMsg').textContent = 'Selected — press Ctrl+C to copy.'; }
+};
+$('mLoad').onclick = () => {
+  try { const defs = validDefs(JSON.parse($('mText').value)); loadDefs(defs); save(); $('mMsg').textContent = `Loaded ${defs.length} item${defs.length === 1 ? '' : 's'}.`; }
+  catch (e){ $('mMsg').textContent = 'Could not load: ' + e.message; }
+};
+$('mFile').onchange = e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { $('mText').value = r.result; $('mLoad').click(); }; r.readAsText(f); e.target.value = ''; };
+
+/* ============================================================
+   Reference & device notes
+   ============================================================ */
+/* The Language tab is jarscript3.md, the same file the prompt lab hands Claude.
+   A page opened straight from disk cannot fetch it; it then says where it is. */
+function mdInline(s){
+  return esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/\[body only\]/g, '<span class="tag">body only</span>');
+}
+function mdCells(line){
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, '|'));
+}
+function mdToHtml(md){
+  md = md.replace(/<!--[\s\S]*?-->/g, '');
+  const L = md.split(/\r?\n/), out = []; let i = 0;
+  while (i < L.length){
+    const s = L[i];
+    if (!s.trim()){ i++; continue; }
+    if (s.startsWith('```')){ const body = []; i++; while (i < L.length && !L[i].startsWith('```')) body.push(L[i++]); i++; out.push(`<pre>${esc(body.join('\n'))}</pre>`); continue; }
+    if (/^#\s/.test(s)){ i++; continue; }                       // the file's own title: the tab is the title
+    if (/^#{2,4}\s/.test(s)){ out.push(`<h3>${mdInline(s.replace(/^#+\s*/, ''))}</h3>`); i++; continue; }
+    if (s.trim().startsWith('|')){
+      const rows = []; while (i < L.length && L[i].trim().startsWith('|')) rows.push(L[i++]);
+      const head = mdCells(rows[0]), body = rows.slice(1).filter(r => !/^\s*\|[\s|:-]+\|\s*$/.test(r));
+      out.push(`<div class="tw"><table><tr>${head.map(c => `<th>${mdInline(c)}</th>`).join('')}</tr>` +
+        body.map(r => `<tr>${mdCells(r).map(c => `<td>${mdInline(c)}</td>`).join('')}</tr>`).join('') + '</table></div>');
+      continue;
+    }
+    if (/^\s*-\s/.test(s)){ const items = []; while (i < L.length && /^\s*-\s/.test(L[i])) items.push(L[i++].replace(/^\s*-\s/, '')); out.push(`<ul>${items.map(x => `<li>${mdInline(x)}</li>`).join('')}</ul>`); continue; }
+    const para = []; while (i < L.length && L[i].trim() && !/^(#|```|\s*\||\s*-\s)/.test(L[i])) para.push(L[i++]);
+    out.push(`<p>${mdInline(para.join(' '))}</p>`);
+  }
+  return out.join('\n');
+}
+function renderRef(){
+  const pane = $('pane-ref');
+  pane.innerHTML = '<p class="note">Loading jarscript3.md…</p>';
+  fetch('jarscript3.md', {cache:'no-cache'}).then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+    .then(md => { pane.innerHTML = mdToHtml(md); })
+    .catch(() => { pane.innerHTML = `<p>The language reference is <a href="jarscript3.md">jarscript3.md</a>, beside this page. A page opened straight from disk cannot read it; open the sandbox through a local server to see it here — <code>python apps/jar/tools/promptlab/serve.py</code> serves it at <code>http://127.0.0.1:8765/jarsandbox/</code>.</p>`; });
+}
+function renderDevice(){
+  const rows = world.items.map(it => {
+    const sprite = it.frames.length * it.w * it.h * 3 / 8, code = it.prog ? it.prog.bytes : 0, rec = 224 + 64 + code + sprite;
+    const ok = rec <= 1024 && it.w === 16 && it.h === 16 && it.frames.length <= 4;
+    return `<tr><td>${esc(it.name)}</td><td>${code} B ${code > 256 ? '<span class="tag no">&gt; 256</span>' : ''}</td><td>${sprite} B</td><td>${stateBytes(it)} B</td><td>≈${rec} B ${ok ? '<span class="tag">fits 1 KB</span>' : '<span class="tag no">needs a bigger record</span>'}</td></tr>`;
+  }).join('');
+  $('pane-device').innerHTML = `
+<h3>What this would take on the Cardputer</h3>
+<p>The jar runs on an ESP32-S3 with no PSRAM; the Jar app's data lives in a 28 KB arena with only a few hundred bytes to spare. Today's item scripts (<code>apps/jar/jarvm.def</code>) are handlers only: at most 256 bytes of bytecode, 64 instructions per handler run, 8 memory slots, and motion is canned (<code>walk</code>, <code>hop</code>, <code>fly</code>, <code>seek</code>) — C code decides the path. Everything here was designed so it <em>could</em> run there, but most of it is new.</p>
+<div class="tw"><table><tr><th>item now in the jar</th><th>bytecode</th><th>sprite (3 bpp)</th><th>runtime state</th><th>record (224 header + 64 sig + code + frames)</th></tr>${rows || '<tr><td colspan="5">no items</td></tr>'}</table></div>
+<h3>What the device VM would need</h3>
+<ul>
+<li><b>A resumable thread per item.</b> Today a handler runs to completion. A state body that can <code>wait</code> or <code>move</code> needs its program counter, a small stack and a wake-up time kept between ticks: about 2 + 1 + 16 + 2 bytes per item, plus the state number and time in state.</li>
+<li><b>Fixed-point physics in C, not in script.</b> Position and velocity as Q12.4 int16 (1/16 px, ±2047), angles as 8-bit brads, sin/cos from a 64-entry table. Gravity, bounce, friction and the circle-against-box collision are a few dozen lines of integer C run for each item with <code>physics on</code>; scripts only set the numbers. The sandbox rounds to the same precision so what you see is what that would do.</li>
+<li><b>Movers in C.</b> <code>move … arc</code> is a quadratic curve with an eased parameter; <code>walk</code> and <code>hop</code> are special cases. About 10 bytes per item while moving. The script just starts one and waits (<code>AWAIT</code>).</li>
+<li><b>New bytecode ops</b>: <code>WAIT</code>, <code>WAITUNTIL</code> (yield and re-test), <code>GO</code>, <code>RPT</code> (counted loop), <code>AWAIT</code>, <code>PLAY</code>, <code>MOVE</code> / <code>WALK</code> / <code>HOP</code>, <code>SIGNAL</code> with a target, <code>FIELD</code> (read another item's x, y…), <code>FLAG</code>, <code>SWAY</code>, and calls for <code>find</code>, <code>dist</code>, <code>angleto</code>, <code>random</code>. Each op here is costed at 1–3 bytes; the examples come to 80–270 bytes, and the rolly polly already passes today's 256-byte cap, so it would have to grow to 512 bytes or 1 KB.</li>
+<li><b>Runtime state ≈ 70–90 bytes an item</b> (the table above): position 4, velocity 4, angle/spin 2, physics settings 3, flags 1, frame and anim 3, state and time 3, thread 21, wait 2, mover 10, perch 1, sway/shake/bubble 6, event queue 12, variables 16. Sixteen items is about 1.4 KB — more than the arena has free, so it belongs in an overlay or replaces the per-item records it supersedes.</li>
+<li><b>Rotation is cheap</b>: inverse-mapping a 16×16 is 256–400 lookups with two multiplies each, and works inside the 15-row strips the scene already paints in. Sway is a per-row x offset while blitting.</li>
+<li><b>Sprites.</b> The record holds 16×16, 3 bits a pixel, up to 4 frames (96 B each), with a 2× scale flag. Rolly polly and the wren fit exactly (4 frames). The 32×32 tree is 384 B a frame: two frames plus header and script pass 1 KB, so on the device it would be a 16×16 at scale 2, or the record grows.</li>
+<li><b>Signals between items</b> need a name table (the server's compiler would number them) and a small event queue per item (the sandbox drops nothing; the device would hold maybe four).</li>
+<li><b>One machine, twice.</b> The server also runs item scripts (a simulated day) and must agree with the device. Integer maths and a shared PRNG make that possible; floats would not.</li>
+<li><b>Budget.</b> ${BUDGET} steps × 20 ticks × 16 items is 32 000 steps a second — small for a 240 MHz core, but today's <code>on tick</code> runs 4 times a second, and physics wants 20. The scene would step bodies at 20 Hz and could run scripts less often.</li>
+</ul>
+<h3>Honest gaps in this sandbox</h3>
+<ul>
+<li>Physics bodies are circles against boxes; two moving bodies don't collide with each other.</li>
+<li>Walking follows the soil or the top of one solid; it doesn't climb.</li>
+<li>Perch positions are fixed in the sprite — a perched bird rides the tree's sway but not a frame change.</li>
+<li>Byte counts are estimates of a plausible encoding, not output of the real <code>jarvm</code> compiler.</li>
+</ul>`;
+}
+
+/* ============================================================
+   Boot and main loop
+   ============================================================ */
+function boot(){
+  paintBackground(); renderRef();
+  const lg = $('logo'); const tmp = {w:16, h:16, palette:PALS.rolly, frames:[{px:rowsToPx(ROLLY_FRAMES[2].rows, 16, 16)}]}; refreshPal(tmp); thumb(lg, tmp);
+  let defs = null;
+  try { const raw = localStorage.getItem(KEY); if (raw) defs = validDefs(JSON.parse(raw)); } catch (e){ defs = null; }
+  loadDefs(defs || EXAMPLES.all.map(k => DEF[k]()));
+  log(null, defs ? 'restored your jar from this browser' : 'loaded the three examples — poke them', 'warn');
+  fitStage(); new ResizeObserver(fitStage).observe(stage.parentElement);
+  syncItemFields();
+  let last = performance.now(), acc = 0, uiAcc = 0;
+  function frame(now){
+    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+    if (ui.running){ acc += dt * ui.speed; let n = 0; while (acc >= TICK && n < 10){ tick(); acc -= TICK; n++; } if (n === 10) acc = 0; }
+    render();
+    uiAcc += dt; if (uiAcc > 0.12){ uiAcc = 0; updateChips(); updateInspector(); $('clock').textContent = `t ${world.t.toFixed(2)} s · tick ${world.tick}`; }
+    drawPreview(now);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+/* ============================================================
+   Embedding: apps/jar/tools/promptlab shows this page in a frame and puts the items
+   it generates into the jar. Same origin there, so it calls window.jarSandbox
+   directly; postMessage works too ({type:'jarsandbox', op, ...}).
+   ============================================================ */
+function sandboxAdd(def, opts){
+  opts = opts || {};
+  const d = validDefs({items:[def]})[0];
+  if (opts.replace !== false){
+    for (const old of world.items.filter(o => o.name === d.name)){ selected = old; $('delItem').onclick(); }
+  }
+  const it = makeItem(d); world.items.push(it);
+  if (it.err) log(it, `line ${it.err.line}: ${it.err.msg}`, 'err', it.err.line);
+  else log(it, 'arrived from the prompt lab', 'warn');
+  select(it); save();
+  return {id:it.id, name:it.name, err:it.err};
+}
+window.jarSandbox = {
+  add: sandboxAdd,
+  load: defs => { loadDefs(validDefs({items:defs})); save(); return world.items.length; },
+  example: name => { loadDefs(validDefs({items:exampleDefs(name)})); save(); return world.items.length; },
+  scenarios: () => Object.keys(window.SCENARIOS || {}),
+  items: () => world.items.map(defOf),
+  errors: () => world.items.filter(it => it.err || it.errored).map(it => ({name:it.name, err:it.err})),
+  reset: resetAll,
+};
+window.addEventListener('message', e => {
+  const m = e.data; if (!m || m.type !== 'jarsandbox') return;
+  let r = null;
+  try {
+    if (m.op === 'add') r = sandboxAdd(m.def, m.opts);
+    else if (m.op === 'load') r = window.jarSandbox.load(m.defs);
+    else if (m.op === 'example') r = window.jarSandbox.example(m.name);
+    if (e.source) e.source.postMessage({type:'jarsandbox:done', op:m.op, result:r}, '*');
+  } catch (err){ if (e.source) e.source.postMessage({type:'jarsandbox:error', op:m.op, error:String(err.message || err)}, '*'); }
+});
+if (new URLSearchParams(location.search).has('embed')) document.documentElement.classList.add('embed');
+boot();
+</script>

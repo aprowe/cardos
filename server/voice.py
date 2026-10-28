@@ -31,7 +31,7 @@ DEFAULT_WHISPER_DIR = os.path.expanduser(
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CATALOG = os.path.join(ROOT, "build", "apps", "commands.json")
-FOLDERS = os.path.join(ROOT, "apps", "folders.txt")
+FOLDERS = None                 # server/updates.py's: build/apps/folders.txt
 
 # Built into the kernel rather than loaded, so on no list the build writes.
 BUILTINS = ("notes", "settings", "memory", "about")
@@ -92,15 +92,8 @@ def _catalog_line(app, c):
 
 
 def _app_names(catalog, folders_path):
-    names = set(catalog)
-    try:
-        with open(folders_path, encoding="utf-8") as f:
-            for line in f:
-                w = line.split("#", 1)[0].split()
-                if len(w) == 2 and w[1] != "-":      # "-" is a CLI tool
-                    names.add(w[0])
-    except OSError:
-        pass
+    from . import updates
+    names = set(catalog) | set(updates.load_folders(folders_path))   # not the CLI tools
     return sorted(names) + list(BUILTINS)
 
 

@@ -2,9 +2,9 @@
  * 2026-10-14-jarscript3-design.md is THE semantics; apps/jar/jarvm3.def is
  * THE table, built into the enums and tables below with X-macros).
  *
- * The server compiles the language to bytes (server/jar/jarvm3.py) and runs
- * the same machine; tools/make_jarvm3_fixtures.py writes worlds and the
- * Python machine's traces, and test/test_jv3.c replays them here and needs
+ * The server compiles the language to bytes (apps/jar/server/jarvm3.py) and runs
+ * the same machine; apps/jar/tools/make_jarvm3_fixtures.py writes worlds and the
+ * Python machine's traces, and apps/jar/test/test_jv3.c replays them here and needs
  * them equal line for line. Where the spec left a choice, the choice is
  * written down below under DECISIONS.
  *
@@ -23,7 +23,7 @@
  * item's new place even without the call. jv3_remove compacts the slots
  * when an item leaves, as the jar's list does.
  *
- * DECISIONS (each exact; server/jar/jarvm3.py makes the same ones, and the
+ * DECISIONS (each exact; apps/jar/server/jarvm3.py makes the same ones, and the
  * fixtures hold both to them):
  *  - Integer helpers: asr(v, k) is floor(v / 2^k); ticks(raw) = asr(raw *
  *    20 + 8, 4); sat() clamps to -32768..32767; "/" in C is trunc. A handle
@@ -302,7 +302,7 @@ static JV3_OPT const int8_t J3_SIN[256] = {
 };
 
 /* ANG[k] = round(sin(2 pi k / 256) * 16384), halves away from zero: angleto's
- * table (server/jar/jarvm3.py ANG, D24). */
+ * table (apps/jar/server/jarvm3.py ANG, D24). */
 static JV3_OPT const int16_t J3_ANG[256] = {
   0,402,804,1205,1606,2006,2404,2801,3196,3590,3981,4370,4756,5139,5520,5897,
   6270,6639,7005,7366,7723,8076,8423,8765,9102,9434,9760,10080,10394,10702,11003,11297,

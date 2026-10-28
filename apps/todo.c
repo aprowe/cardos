@@ -44,6 +44,9 @@
  * The JSON is read by looking for field names rather than parsed. A real parser
  * is several kilobytes to extract three strings per item from a document this
  * regular, and the memory is better spent on the items themselves.
+ *
+ * @app folder Plan
+ * @app release core
  */
 
 #include "kernel/app/capp.h"

@@ -18,6 +18,9 @@
  * the current price and the week's closes in one request. The reply is JSON
  * and this reads it by looking for field names: a real parser is several
  * kilobytes to extract two numbers and an array from a document this regular.
+ *
+ * @app folder Net
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

@@ -25,6 +25,9 @@
  * every 60 ms of the repeat.
  *
  * Commands (the same functions as the keys): add, sub, set N, lap, show.
+ *
+ * @app folder Plan
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

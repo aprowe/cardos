@@ -18,6 +18,9 @@
  * The matcher is plain substring, not a regular expression. A regex engine is
  * several kilobytes to answer a question that, on a machine with this much
  * text on it, "does this line contain these characters" answers just as well.
+ *
+ * @app folder -
+ * @app release core
  */
 
 #include "kernel/app/capp.h"

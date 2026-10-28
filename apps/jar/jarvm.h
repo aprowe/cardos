@@ -3,7 +3,7 @@
  *
  * A script is bytecode, at most JI_SCRIPT_MAX (256) bytes, carried in an
  * item's record. The server compiles it from the readable language
- * (server/jar/jarvm.py) and runs the same machine to test it; the device only
+ * (apps/jar/server/jarvm.py) and runs the same machine to test it; the device only
  * ever sees the bytes. The instructions are apps/jar/jarvm.def, which both sides
  * read -- this file builds its tables from it.
  *
@@ -40,8 +40,8 @@
  * ignored outright, as the spec asks, rather than met halfway through.
  *
  * Portable and libc-free, no allocation, like the rest of the jar headers;
- * host-tested in test/test_jarvm.c, which also replays the Python machine's
- * traces (test/fixtures/jarvm_*) and needs them to agree byte for byte.
+ * host-tested in apps/jar/test/test_jarvm.c, which also replays the Python machine's
+ * traces (apps/jar/test/fixtures/jarvm_*) and needs them to agree byte for byte.
  */
 #ifndef CARDOS_JARVM_H
 #define CARDOS_JARVM_H

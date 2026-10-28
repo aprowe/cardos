@@ -23,6 +23,9 @@
  *   m       models              f      find my remote
  *   r       re-read /config/lamps.txt
  *   c       map this lamp's buttons by hand
+ *
+ * @app folder Make
+ * @app release extra
  */
 #include "kernel/app/capp.h"
 #include "apps/footer.h"

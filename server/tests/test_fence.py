@@ -54,8 +54,9 @@ class Fence(unittest.TestCase):
         self.assertFalse(self.may("apps/chess_board.h"))   # no chess app yet
         self.assertTrue(self.may("apps/chess.c"))          # a new app: claimed
         self.assertTrue(self.may("apps/chess_board.h"))    # and now its parts
-        self.assertTrue(self.may("apps/icons/chess.txt"))
-        self.assertTrue(self.may("apps/folders.txt"))      # line by line, later
+        self.assertTrue(self.may("apps/chess.icon.txt"))
+        self.assertFalse(self.may("apps/pet.icon.txt"))     # the owner's app's icon
+        self.assertFalse(self.may("apps/folders.txt"))     # nothing shared lists apps now
         self.assertEqual(fence.apps_of(self.state, "britney"), ["chess"])
         # somebody else cannot take it, nor its parts
         self.assertFalse(self.may("apps/chess.c", user="sam"))
@@ -77,17 +78,13 @@ class Fence(unittest.TestCase):
         self.put("kernel/main.c", "hacked\n")
         self.put("apps/pet.c", "hers now?\n")
         self.put("apps/sneaky.c", "never claimed\n")
-        self.put("apps/folders.txt", "# folders\npet       Make\ntimer     Plan\nchess     Games\n")
         back = fence.enforce(self.state, self.root, "britney",
                              {"apps/chess.c", "kernel/main.c", "apps/pet.c",
-                              "apps/sneaky.c", "apps/folders.txt"})
+                              "apps/sneaky.c"})
         self.assertEqual(self.read("apps/chess.c"), "her game\n")
         self.assertEqual(self.read("kernel/main.c"), "kernel\n")
         self.assertEqual(self.read("apps/pet.c"), "owner's pet\n")
         self.assertFalse(os.path.exists(os.path.join(self.root, "apps/sneaky.c")))
-        # her line kept, the owner's put back
-        self.assertEqual(self.read("apps/folders.txt"),
-                         "# folders\npet       Games\ntimer     Plan\nchess     Games\n")
         self.assertIn("kernel/main.c", back)
 
     def test_the_hook(self):

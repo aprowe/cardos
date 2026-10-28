@@ -6,7 +6,7 @@
  * with Jar Post (apps/jarpost.c) is apps/jar/jarui.h; the files are
  * apps/jar/jarstore.h's.
  *
- * THE DAILY STOCK (spec step 5; server/jar/__init__.py). When the shop opens and its
+ * THE DAILY STOCK (spec step 5; apps/jar/server/__init__.py). When the shop opens and its
  * stock is not today's (UTC), it asks in the background, one request at a
  * time, never blocking:
  *   POST /jar/day   "garden mushroom=N,berry=N,reed=N,flower=N"
@@ -29,7 +29,7 @@
  * (api->epoch; with no clock it waits) and only grown beds make jam and
  * steer the stock. Replacing a grown plant asks first.
  *
- * Host tests: test/test_jarshop.c (JAR_DUMP=dir writes its screens).
+ * Host tests: apps/jar/test/test_jarshop.c (JAR_DUMP=dir writes its screens).
  */
 
 #ifndef CARDOS_JARSHOP_H
@@ -46,7 +46,7 @@ enum { N_DAY_POST = N_APP, N_DAY_POLL, N_ITEM };
 typedef struct {
   JStock s;                                               /* the stock on show */
   JStock ns;                                              /* the day's batch, arriving */
-  /* Tibbs's line of the day (server/jar/shopkeep.py). Talking to him is Jar
+  /* Tibbs's line of the day (apps/jar/server/shopkeep.py). Talking to him is Jar
    * Post's ("talk"); t opens it. */
   char say[144];
   struct {
@@ -168,7 +168,7 @@ static void open_card(uint32_t id, int back) {
 
 /* ---- the daily stock ---------------------------------------------------------------- */
 
-#define RESTOCK_S 14400u        /* a new stock every 4 hours (server/jar/__init__.py RESTOCK_S) */
+#define RESTOCK_S 14400u        /* a new stock every 4 hours (apps/jar/server/__init__.py RESTOCK_S) */
 static uint32_t today(void) { return api->epoch() / RESTOCK_S; }
 static int today_gen(void) { return 2 + (int)(today() % 250u); }
 

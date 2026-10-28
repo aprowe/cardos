@@ -1,0 +1,17 @@
+Screen
+................
+.KKKKKKKKKKKKKK.
+.KWWWWWWWWWWWWK.
+.KWbbbbbbbbbbWK.
+.KWbggbbbbbbbWK.
+.KWbbbbbbggbbWK.
+.KWbbggbbbbbbWK.
+.KWbbbbbbbggbWK.
+.KWbggbbbbbbbWK.
+.KWbbbbbggbbbWK.
+.KWWWWWWWWWWWWK.
+.KKKKKKKKKKKKKK.
+.....KKKKKK.....
+...KKGGGGGGKK...
+..KGGGGGGGGGGK..
+..KKKKKKKKKKKK..

@@ -85,6 +85,9 @@
  * cloth. What does not fit there is in the help (fn-h): capp_info.help, a key
  * and its meaning a line, at most eight lines, with the keys short enough for
  * the panel's key column.
+ *
+ * @app folder Games
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

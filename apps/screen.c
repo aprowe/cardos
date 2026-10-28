@@ -28,6 +28,9 @@
  * While the stream runs the shell is blocked -- see CardApi.http_stream. That
  * is why this app is fullscreen only and why any key stops it: there is
  * nothing else running to notice one.
+ *
+ * @app folder Net
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

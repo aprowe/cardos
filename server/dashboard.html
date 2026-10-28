@@ -523,6 +523,7 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
         <div class="two">
           <div class="panel acct" id="me"></div>
           <div class="panel acct" id="people"></div>
+          <div class="panel acct" id="friends"></div>
         </div>
         <div class="two">
           <div class="panel acct" id="google"></div>
@@ -1735,6 +1736,7 @@ async function meLoad(){
   ME.busy=true;
   try{ ME.v=await api('GET','/dash/api/me'); ME.err=''; }catch(e){ ME.err=e.message; }
   ME.busy=false; renderMe(); renderPeople(); renderClaude();
+  if(ME.v&&ME.v.accounts) friendsLoad(); else renderFriends();
 }
 function renderMe(){
   const el=$('#me'); if(!el) return;
@@ -1765,6 +1767,51 @@ function renderPeople(){
   h+='<div class="acts"><button class="btn primary" data-act="user-add">Add a person</button></div>';
   h+='<p class="dim" style="margin:0;font-size:13px">For their Google sign-in, add their address as a test user on the OAuth consent screen while it is in Testing.</p>';
   el.innerHTML=h;
+}
+/* ---------- friends (server/friends.py) ---------- */
+// Who an app may show your public data to, share a room with, send to.
+// Plain-text routes the device uses too: one line a person.
+const FR={rows:[],people:[],err:''};
+async function textApi(method,url){
+  let r;
+  try{ r=await fetch(url,{method,credentials:'same-origin'}); }catch(e){ throw netError(e); }
+  const t=await r.text();
+  if(!r.ok) throw new ApiError(t.replace(/^error /,'').trim()||`The server answered “${r.status}”.`);
+  return t;
+}
+const frLines=t=>t.split('\n').filter(Boolean).map(l=>l.split('\t'));
+async function friendsLoad(){
+  try{
+    FR.rows=frLines(await textApi('GET','/friends'));
+    FR.people=frLines(await textApi('GET','/people'));
+    FR.err='';
+  }catch(e){ FR.err=e.message; }
+  renderFriends();
+}
+function renderFriends(){
+  const el=$('#friends'); if(!el) return;
+  const v=ME.v;
+  if(!v||!v.accounts){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  let h=`<div class="acct-top"><div class="logo">♥</div><div style="min-width:0"><h3>Friends</h3><div class="sub">Who your apps may share with: results to compare, games to play together</div></div></div>`;
+  if(FR.err){ el.innerHTML=h+`<div class="note warn">${esc(FR.err)}</div>`; return; }
+  const said={friend:'friends',asked:'asked — waiting for them',asking:'asked to be your friend'};
+  h+=FR.rows.length?'<ul class="plain">'+FR.rows.map(([name,disp,state])=>`<li style="display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;justify-content:space-between;margin-bottom:6px"><span>${esc(disp)} <span class="faint">${esc(said[state]||state)}</span></span><span>${state==='asking'?`<button class="btn primary sm" data-act="fr-ask" data-name="${esc(name)}">Say yes</button>`:''}<button class="btn ghost sm" data-act="fr-drop" data-name="${esc(name)}" data-label="${esc(disp)}">${state==='friend'?'Remove':state==='asked'?'Take back':'No'}</button></span></li>`).join('')+'</ul>'
+    :'<p class="dim" style="margin:0">None yet.</p>';
+  const known=new Set(FR.rows.map(r=>r[0]));
+  const others=FR.people.filter(([name])=>name!==v.user&&!known.has(name));
+  if(others.length) h+='<div class="acts">'+others.map(([name,disp])=>`<button class="btn ghost" data-act="fr-ask" data-name="${esc(name)}">Ask ${esc(disp)}</button>`).join('')+'</div>';
+  h+='<p class="dim" style="margin:0;font-size:13px">A friendship is both ways: they say yes here, on their own sign-in. Nothing is posted for you; an app shows a friend’s results only where they belong, and sends only what you choose to send.</p>';
+  el.innerHTML=h;
+}
+async function frAsk(name){
+  try{ const t=await textApi('POST','/friends/ask?who='+encodeURIComponent(name)); toast(t.includes('friend')?'Friends now.':'Asked. They see it on their device and here.'); friendsLoad(); }
+  catch(e){ toast(e.message,'err'); }
+}
+async function frDrop(name,label){
+  const r=await modal({title:'Not friends?',html:`<p>${esc(label)} and you stop sharing: neither of your apps shows the other’s results any more.</p>`,actions:[{label:'Cancel'},{label:'Remove',value:1,kind:'danger'}]});
+  if(!r) return;
+  try{ await textApi('POST','/friends/drop?who='+encodeURIComponent(name)); friendsLoad(); }catch(e){ toast(e.message,'err'); }
 }
 async function showToken(r){
   await modal({title:'The device’s token',html:`<p>Put this in <code>/config/claude.token</code> on ${esc(r.user)}’s device card, then restart it.</p>
@@ -1849,6 +1896,8 @@ document.addEventListener('click',e=>{
     case 'pw-change': pwChange(); break;
     case 'user-add': userAdd(); break;
     case 'user-del': userDel(b.dataset.name); break;
+    case 'fr-ask': frAsk(b.dataset.name); break;
+    case 'fr-drop': frDrop(b.dataset.name,b.dataset.label); break;
     case 'g-signout': gSignOut(); break;
     case 't-disconnect': tDisconnect(); break;
     case 'ph-add': $('#ph-file').click(); break;

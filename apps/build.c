@@ -28,6 +28,9 @@
  * Type /new to forget the conversation, /url <base> to move the server, and
  * /update (or ctrl-u) to install whatever the PC has built since -- which,
  * after "make the flippers stronger", is the point.
+ *
+ * @app folder Make
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

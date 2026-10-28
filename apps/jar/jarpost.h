@@ -5,7 +5,7 @@
  * screen, or fn-`, goes back to the jar. What it shares with Jar Shop
  * (apps/jarshop.c) is apps/jar/jarui.h; the files are apps/jar/jarstore.h's.
  *
- * THE SERVER (spec step 6; server/jar/__init__.py), one request at a time, never
+ * THE SERVER (spec step 6; apps/jar/server/__init__.py), one request at a time, never
  * blocking, the device's own token on each:
  *   GET  /jar/me                  "code CODE", "name NAME", and a
  *                                 "friend NAME\tDISPLAY\tLAST_SEEN\tmutual|waiting"
@@ -34,10 +34,10 @@
  *                                 handed over before the player says yes
  *   GET  /jar/jobs                "job WHO SECONDS WHAT": what each is making
  *   GET  /jar/item?id=ID          an item a deal changed or made: the Town
- *                                 (server/jar/town.py; V_TOWN lists the lane)
+ *                                 (apps/jar/server/town.py; V_TOWN lists the lane)
  * Offline, sending and collecting say so and nothing changes.
  *
- * Host tests: test/test_jarpost.c (JAR_DUMP=dir writes its screens).
+ * Host tests: apps/jar/test/test_jarpost.c (JAR_DUMP=dir writes its screens).
  */
 
 #ifndef CARDOS_JARPOST_H
@@ -50,7 +50,7 @@ enum { V_FRIENDS = 0, V_GIFT, V_MAIL, V_CARD, V_PICK, V_TALK, V_TOWN };
 enum { IN_NONE = 0, IN_CODE, IN_NAME, IN_NOTE, IN_TALK };
 enum { N_ME = N_APP + 8, N_FRIEND, N_NAME, N_GIFT, N_PEEK, N_ACK, N_THANKS, N_SAY, N_HEAR, N_DEAL, N_ANSWER, N_JOBS };
 
-/* The lane (server/jar/shopkeep.py's CAST): who you can talk to in the Town. */
+/* The lane (apps/jar/server/shopkeep.py's CAST): who you can talk to in the Town. */
 #define NPC_N 4
 static const char *const NPC_ID[NPC_N] = { "tibbs", "pip", "bramble", "wren" };
 static const char *const NPC_NAME[NPC_N] = { "Tibbs", "Pip", "Bramble", "Wren" };
@@ -61,7 +61,7 @@ static const char *const NPC_HELLO[NPC_N] = {
   "Tibbs is behind the counter.", "Pip looks up from her bench, a spring in her teeth.",
   "Bramble is watering something enormous.", "Wren is measuring a plank twice." };
 
-/* Talking to Tibbs, the shopkeeper (server/jar/shopkeep.py): the conversation,
+/* Talking to Tibbs, the shopkeeper (apps/jar/server/shopkeep.py): the conversation,
  * wrapped into rows when it arrives (never in paint). */
 #define TK_ROWS 28
 #define TK_COLS 38

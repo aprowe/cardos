@@ -1,6 +1,6 @@
 /* Hangman's rules: the secret, the guesses, the figure's progress and how a
  * phrase is laid out on two lines. Portable, no libc, host-tested in
- * test/test_hangman.c; apps/hangman/hangman.c is the screen around it.
+ * apps/hangman/test/test_hangman.c; apps/hangman/hangman.c is the screen around it.
  *
  * A secret is letters and single spaces -- "BIG RED BUS" -- upper case,
  * at most HM_MAX characters, and it has to fit HM_LINES lines of HM_COLS

@@ -10,7 +10,7 @@
  * in ui13. Tab on the list is the statistics.
  *
  * Playing (the rules are apps/crossword/xwcore.h, host-tested in
- * test/test_crossword.c; the statistics are xwstats.h):
+ * apps/crossword/test/test_crossword.c; the statistics are xwstats.h):
  *
  *   letters       go into the square, and the cursor moves on; backspace
  *                 clears a letter, or steps back and clears the one before
@@ -39,7 +39,7 @@
  * Where things are:
  *
  *   server        GET /crossword/list pages the library in 40s, newest first,
- *                 by weekday and date (server/crossword.py); the list asks for
+ *                 by weekday and date (apps/crossword/server/__init__.py); the list asks for
  *                 the next page past the end of this one and the one before
  *                 past its start, so thousands of puzzles are a scroll away
  *   /crossword    the card: ID.xw is each puzzle opened once (the very text
@@ -65,6 +65,9 @@
  * only the words it leaves and enters and the clue bar (api->damage); a
  * damaged repaint goes to the panel directly, which is why no region of
  * text is ever filled and then written over.
+ *
+ * @app folder Games
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"
@@ -88,7 +91,7 @@ enum { LAY_SIDE, LAY_BIG, LAY_ZOOM, LAY_N };
 /* The list's tabs: which puzzles. The Midi is kept by the server as
  * DATE-midi; a puzzle whose id is not a date (traitors) is Themed, made for
  * this library and printed nowhere; everything else -- the dailies, old and
- * new -- is Full. server/crossword.py's kind_of says the same. */
+ * new -- is Full. apps/crossword/server/__init__.py's kind_of says the same. */
 enum { KIND_FULL, KIND_MIDI, KIND_THEMED, KIND_N };
 static const char *const KIND_TAB[KIND_N] = { "Full", "Midi", "Themed" };
 static const char *const KIND_ARG[KIND_N] = { "full", "midi", "themed" };
@@ -1386,7 +1389,7 @@ static void paint_empty(CRect c, int y) {
   } else {
     l1 = "The server has no puzzles for this.";
     l2 = "a shows all; the library is filled by";
-    l3 = "python -m server.crossword import";
+    l3 = "python -m apps.crossword.server import";
   }
   for (i = 0; i < 3; i++, y += ROW_H)
     box_text(0, c.x, y, c.w, ROW_H, MARGIN, 0, i == 0 ? l1 : i == 1 ? l2 : l3, i == 0 ? L_TEXT : L_DIM, L_BG);

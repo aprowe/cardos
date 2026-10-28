@@ -21,6 +21,9 @@
  * kernel so the two cannot read a line differently.
  *
  * Commands: add "7:30 wake up" (once), list, next, off TIME.
+ *
+ * @app folder Plan
+ * @app release core
  */
 
 #include "kernel/app/capp.h"

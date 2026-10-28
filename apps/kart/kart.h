@@ -1,6 +1,6 @@
 /* Kart: the game, without the device -- the track, the karts, the race and
  * the picture. apps/kart/kart.c is the app around it (screens, tilt, timing,
- * blitting); test/test_kart.c drives it on the PC, and KART_DUMP=dir there
+ * blitting); apps/kart/test/test_kart.c drives it on the PC, and KART_DUMP=dir there
  * writes frames to look at.
  *
  * THE FLOOR is Mode 7, as the SNES did it: every screen row below the

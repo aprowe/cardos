@@ -19,6 +19,10 @@
  * The keys are the shared vocabulary (CLAUDE.md, "Every app speaks the same
  * keys"): e renames, o opens in the editor, v pastes, r reads again, d
  * deletes after asking, and Escape backs out of whatever is being asked.
+ *
+ * @app folder System
+ * @app release core
+ * @app embed yes
  */
 
 #include "kernel/app/capp.h"

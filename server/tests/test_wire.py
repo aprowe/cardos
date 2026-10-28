@@ -17,7 +17,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-from server import google, images, m5hub, msg, toggl
+from server import google, images, msg, toggl
+from apps.hub import server as m5hub
 
 
 def rows():

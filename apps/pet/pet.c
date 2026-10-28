@@ -17,6 +17,9 @@
  *
  * State is /var/pet/state.txt, key=value lines, saved through safefile.h.
  * Commands: status, feed, clean.
+ *
+ * @app folder Games
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

@@ -5,7 +5,7 @@
  * reads: notes at beats with lengths and velocities, chords, controller
  * changes and ramps, pitch bends, a tempo, a loop. `n` asks Claude for one
  * ("write the first section of Fur Elise") through the server
- * (server/midi.py), which checks it before it comes back; `e` opens one in
+ * (apps/midi/server/__init__.py), which checks it before it comes back; `e` opens one in
  * Edit, and leaving Edit comes back to that song.
  *
  * Enter opens a song like a project: its piano roll, still, and every action
@@ -28,10 +28,13 @@
  * The converter listens on G1 or G2 depending on which it is; `g` swaps,
  * and the choice is kept in /config/midi.txt. `t` plays an arpeggio, to
  * find out which.
+ *
+ * @app folder Make
+ * @app release extra
  */
 /* Circuit (apps/midi/circuit.c) is this file built again with CIRCUIT defined:
  * a beat for a Novation Circuit's eight tracks, asked of Claude with the
- * instruments named (server/midi.py, kit=circuit), its own folder and
+ * instruments named (apps/midi/server/__init__.py, kit=circuit), its own folder and
  * colours, drums heard as drums, a lane per track, and a map from track to
  * the channel and note the Circuit listens on. Everything else is MIDI's. */
 #ifdef CIRCUIT

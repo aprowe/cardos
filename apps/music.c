@@ -17,6 +17,9 @@
  *
  * Playing is the kernel's audio task (api->audio). Leaving the app lets
  * the track that is playing finish; nothing follows it.
+ *
+ * @app folder Make
+ * @app release core
  */
 #include "kernel/app/capp.h"
 #include "apps/datetime.h"

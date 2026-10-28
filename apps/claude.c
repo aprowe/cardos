@@ -24,6 +24,9 @@
  * revised document waits on the server until ctrl-s saves it over the
  * file; ctrl-z puts the file back. fn-` returns to the app that asked,
  * which opens the file again and finds it changed.
+ *
+ * @app folder Net
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

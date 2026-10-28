@@ -13,7 +13,7 @@
  *     player Alice             in column order
  *     round 5 -3 _ 12          one per round, a number per player, _ blank
  *
- * Portable and libc-free; host-tested in test/test_gamenight.c. */
+ * Portable and libc-free; host-tested in apps/gamenight/test/test_gamenight.c. */
 #ifndef CARDOS_GN_SCORE_H
 #define CARDOS_GN_SCORE_H
 

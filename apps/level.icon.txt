@@ -1,0 +1,17 @@
+Level
+.....KKKKKK.....
+...KKggggggKK...
+..KggggggggggK..
+.KgggggeggggggK.
+.KgggggeggggggK.
+KgggggeeeWWWgggK
+KggggggeWWWWWggK
+KeeeeeeeWWWWWeeK
+KggggggeeWWWgggK
+KggggggeggggggK.
+.KgggggeggggggK.
+.KgggggeggggggK.
+..KggggggggggK..
+...KKggggggKK...
+.....KKKKKK.....
+................

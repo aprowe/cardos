@@ -1,5 +1,5 @@
 /* Lamp's remotes: what each model's buttons send. Portable; host-tested
- * (test/test_lampmodel.c).
+ * (apps/lamp/test/test_lampmodel.c).
  *
  * A model is text, the same for the ones built in and the ones a person
  * adds in /config/lamps.txt, so there is one reader:

@@ -12,6 +12,9 @@
  * Damage is coarse on purpose: the board is 60x120 pixels, so redrawing all
  * of it on every fall or keypress costs nothing worth tracking more finely,
  * unlike Mines' much busier cell-by-cell bookkeeping.
+ *
+ * @app folder Games
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

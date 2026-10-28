@@ -1,5 +1,5 @@
-/* Jar Factory: what the lane's deals do to the jar (server/jar/town.py,
- * server/jar/shopkeep.py).
+/* Jar Factory: what the lane's deals do to the jar (apps/jar/server/town.py,
+ * apps/jar/server/shopkeep.py).
  *
  * A deal struck in talk -- with Tibbs, Pip, Bramble or Wren -- reaches the
  * device as "tx ID OP ARG" lines, in the talk reply and from GET

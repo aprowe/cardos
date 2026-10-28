@@ -25,6 +25,57 @@ The kernel core works on hardware. Three shells over it, all switchable:
   window system works more than a daily driver.
 - **console** -- the development shell. `help` lists it.
 
+**An app is one folder, and nothing central lists apps** (2026-10-27,
+`docs/superpowers/specs/2026-10-27-modular-apps-and-friends-design.md`).
+Everything about an app lives beside its source (`tools/appmeta.py`, whose
+docstring is the reference; `python tools/appmeta.py` lists them):
+`@app` lines in its top comment (`folder` -- required -- `release
+core|extra`, `embed yes`, `budget WHY`, `multi {JSON}`, `routes /prefix`),
+`NAME.icon.txt` (its colour icon), `NAME.md` or `README.md` (its notes),
+and for a folder app `test/` (host tests, collected with test/ by
+gen_test_main and the host CMake), `tools/` (its generators) and
+`server/` (a plugin). There is no apps/folders.txt, no apps/icons/, no
+list in build_apps.py: build_apps reads the apps and writes
+`build/apps/folders.txt` for `/update`. **Adding an app touches no shared
+file.**
+
+**Server code that belongs to an app is a plugin** (`server/plugins.py`):
+`apps/NAME/server/__init__.py`, imported as `apps.NAME.server`. It may
+give `ROUTES` (under `/NAME` or its `@app routes` prefixes), `start()`,
+`notify_poll(args, user)` (its part of `/notify/poll`) and `TALK_KINDS`
+(document kinds `/talk` revises). It imports platform modules by name
+(`from server import kv, ask, accounts, ...`), never the HTTP layer. Chat,
+Jar (and Jar Lab), Crossword, Wiki, MIDI and Hub are plugins; their tests
+are `apps/NAME/server/tests/` (`python -m apps.jar.server.tests.test_jar`),
+their commands `python -m apps.jar.server ...`. **A new feature's server
+state goes in the store first** (`server/kv.py`); only what truly needs
+code (asking Claude, signing, fetching elsewhere) is a plugin -- never a
+new `server/*.py`. Notes, Photos, Music, Toggl and Google are still in
+server/ because their dashboard pages are written into dashboard.html.
+
+**Friends** (2026-10-27): mutual, asked and answered on the dashboard's
+Accounts page (`server/friends.py`). What friends share, with no server
+code per app: `pub/APP` in the store (each person writes their own,
+friends read: `/kv/get?...&of=NAME`, everyone's at once `/kv/each`); rooms
+(`server/rooms.py`: 2-8 friends, a versioned state and a log of moves read
+after the last one seen -- live play and play hours apart are the same);
+`/share?app=APP` puts a line the person chose into Chat. Invites and
+`say=` moves notify. On the device, `apps/social.h`: the calls, the
+parsers and a friend picker. **Not social media** -- the owner's rule: no
+feed, nothing posted by itself, a friend's data shown only inside the app
+it belongs to, and only what a person chose to send reaches anyone. No app
+uses it yet (Wordle's friends' results and Jar's gifts are the natural
+first; Jar still has its own `/jar/friend`).
+
+**Apps outlive a firmware** (2026-10-27): the loader takes an app built for
+any API version from `CAPP_API_MIN` (48) to the firmware's own, and says
+"needs a newer CardOS" for a newer one. The table only grows. **The SDK**:
+`python tools/make_sdk.py OUT` is what a repository of apps builds and
+tests against without the kernel (`python OUT/tools/build_apps.py --apps
+REPO/apps`); `build_apps.py --release` builds only `@app release core`,
+the 17 a CardOS release carries. Moving the rest to repos of their own is
+the next step, not done.
+
 Apps come in two kinds. Built-ins are now only **Memory, About and Settings** —
 what cannot sensibly be loaded, being reports on the kernel that would load
 them. Everything else, Files included, is a `.capp`: ELF, linked complete,
@@ -114,18 +165,6 @@ table changed for this (two OTA slots; `factory` is 2.75 MB and `spiffs`
 700 KB since 2026-09-12, see the comments in `partitions.csv`), so the
 first flash after it needs the whole table: `python -m platformio run -t
 upload` does that, but old NVS contents (WiFi credentials, PATH) are gone.
-
-**Notes** (2026-10-01). Kept on the server (`server/notes.py`, JSON in
-CARDOS_STATE/notes, each with an FNV-1a hash of its text), edited in the
-dashboard's Notes view or on the device. `apps/notes.c` (Plan) keeps each
-as /home/notes/NAME.md, opened in Edit, and syncs by hash against
-/home/notes/.sync: changed on one side goes to the other, changed on both
-keeps both (NAME (conflict)), deleted on one side is deleted on the other
-unless it changed there. Host-tested over an in-memory card and server
-(`test/test_notes.c`). G0 held on its list says a new note; `m` there, or
-`n` in Memo, sends a voice memo to /notes/audio, which Whisper turns into a
-note. That needed `api->http_upload` (API 36): an app's body is a string,
-and a WAV is not.
 
 **The G0 button, since 2026-10-01** (API 35). A hold is delegated: the app
 on screen is asked first (`CappUi.button`, `CAPP_G0_ASK`) and may claim it
@@ -291,19 +330,6 @@ action -- never on a timer, because the state asks Toggl, which has an
 hourly quota -- and polls the cheap `/dash/files/status` for the device's
 link. Everything is behind the dashboard cookie; a 403 sends it to sign in.
 
-**Dashboard Link: the device from the dashboard** (2026-10-01; was Remote
-Files). While `apps/dashlink.c` (Net) is open, the dashboard can browse
-and change the card and run console lines on the device. The droplet
-cannot reach the device, so the device polls `/files/poll`, one request
-carrying the last answer in and the next job out (`server/files.py` has
-the protocol). File data is base64 in 3 KB chunks because the app HTTP
-layer is text; an upload goes to NAME.part and is committed at the end. A
-console line (`POST /dash/term`) is the `sh` job: `api->shell` (API 34)
-runs it through the console's own pipeline with `con_capture` on, so its
-output fills a buffer and nothing is drawn over the app on screen; lines
-that would take the screen (launch, desk, run, ...) are refused, and so is
-an app on PATH that wants it. Closed, nothing is reachable.
-
 **Work on the device over USB with `tools/cardctl.py`, never by typing**
 (2026-10-01). `state` (which shell and app are up), `sh "LINE"` (a console
 line, output back, nothing drawn), `ls`, `cat`, `get`, `put`, `append`,
@@ -320,15 +346,6 @@ about 6 s. In Git Bash set `MSYS_NO_PATHCONV=1` or `/config` becomes a
 Windows path. Typing at the console with con.py is how a carriage return
 in the launcher opened apps nobody asked for.
 
-**Toggl targets and the day's focus** (2026-10-01). A target is hours a
-project should get, weekly from Monday or in total since a date
-(`server/toggl.py`, set on the dashboard's Toggl card, in Toggl's `g` view
--- e hours, n new, d remove -- or `do toggl target NAME 10 week`); `toggl targets` answers `%bar NN label` lines, which Today
-draws and the printer prints as filled bars (`printdoc.c`). Today's `daily
-focus` and `daily fact` come from `/daily` (`server/daily.py`): one
-stateless Claude call a day, cached; a fallback line when Claude fails, not
-cached, so the day is still written once Claude is back.
-
 **One app opening another closes it first, and quitting goes back**
 (2026-10-02). `api->run` from the app on screen used to load the new app
 beside the old one -- Edit beside Notes did not fit, and the key did
@@ -344,35 +361,6 @@ host-tested): type part of a name, arrows choose, Enter opens; every app
 in every folder, best match first (name start, word start, anywhere,
 letters in order).
 
-**Photos: drag pictures onto the dashboard, see and print them on the
-device** (2026-10-02). The dashboard's Photos page takes JPG, PNG, GIF,
-WebP; `server/photos.py` keeps each with a screen copy (RGB565 `.img`,
-fitted to 240x135 with bars -- `server/images.py`) and a print copy (the
-picture dithered to the printer's 384 dots as printdoc `%%` lines, rows
-merged, runs or raw per row). The device never decodes JPEG or PNG: no
-decoder, and flash is short. `apps/photo.c` (Photos) syncs on open --
-the list, then one picture a tick, and what is gone from the server goes
-from /pics -- flips with the arrows, slideshows on space (holding the
-screen on), prints on p / fn-p by fetching the print copy to /cache and
-running `print FILE` through `api->shell`, which now reads the whole file
-(up to 48 KB; it stopped at 6). `api->http_download` now sends the
-device's token to its own server, as `http` and `http_upload` did.
-
-**Music: tracks dragged onto the dashboard, played on the device**
-(2026-10-06; MP3 since 2026-10-12, below). The device played PCM WAV only, so the dashboard's Music page
-converts in the browser -- decodeAudioData, an OfflineAudioContext at
-22050 Hz mono, lifted to near full scale -- and uploads a 16-bit WAV
-(about 2.6 MB a minute); `server/music.py` checks it is one and keeps it.
-`apps/music.c` (Make) syncs on open: the list, then each missing track
-streamed to /music/ID.part with a bar, renamed when whole; a key stops it.
-Enter plays, space pauses and goes on, [ ] (or shift+left/right) seek ten
-seconds, left/right step, esc stops, s shuffles, + - volume; the next track
-starts when one ends. Pause holds the place by sending silence between
-blocks (the channel stays up, so no click) and seek moves the read inside
-the data -- `audio_pause`/`audio_seek_ms`, in CappAudio as pause/paused/
-seek_ms. Leaving the app lets the current track finish. `api->http_stream`
-now carries the device's token to its own server.
-
 **MIDI: a sequencer out of the Grove port, its songs written by Claude**
 (2026-10-06). `kernel/sys/midi.c` is UART1 at 31250 baud on G1 or G2 --
 which one depends on the converter, so the app asks (`g` swaps, kept in
@@ -380,24 +368,7 @@ which one depends on the converter, so the app asks (`g` swaps, kept in
 plays a whole song of time-stamped messages on time and loops, because the
 shell's loop stalls when it paints. Stopping ends every sounding note and
 sends all-notes-off; the port closes with the app that opened it.
-`api->midi` (API 38). Songs are text in /songs (`apps/midi/midiseq.h`, host-
-tested): `n BEAT NOTE LEN [VEL]`, chords, `cc`, `ramp`, `bend`, `prog`,
-`ch`, `tempo`, `loop`, beats as decimals or fractions, integer ticks inside.
-`n` in the app asks Claude (`server/midi.py`, POST then poll); the reply is
-checked against the format and a mistake goes back to Claude once. The
-app's song buffers are sized to keep its data under 28 KB.
-
-**Circuit: beats for a Novation Circuit** (2026-10-12, `apps/midi/circuit.c`,
-Make). It is `apps/midi/midi.c` built again with `CIRCUIT` defined -- one
-source, two apps. Claude is asked with the kit (`/midi/compose?kit=circuit`,
-`server/midi.py` CIRCUIT): channels 1-8 are kick, snare, hat, crash/fx,
-keys, bass, misc, samples, no `prog`, and the check refuses channels past 8.
-`/config/circuit.txt` sends each track to the channel (and a drum to the
-note) the Circuit really listens on, so songs never change for a setup.
-Beats in /circuit; the preview plays drums as synthesised hits; the roll is
-a lane a track. A beat is dense (1536 events), so the song is a big-mode
-block (`CAPP_BIG`), not the arena. `c` there asks the composer for a change
-(it knows the tracks; the talk would not), `u` undoes -- in MIDI too.
+`api->midi` (API 38).
 
 **Music is an MP3 player, dressed as an iPod nano** (2026-10-12). The
 kernel decodes MP3 (`kernel/sys/mp3stream.c`, host-tested against
@@ -413,64 +384,24 @@ stack 6 KB (2.5 spare); the decoder is 29 KB of heap in two blocks, so an
 MP3 lets the radios go first (`capprun_make_room`, as a print does) --
 with WiFi up and Music's fonts loaded, the heap was too broken for the
 serial link's frames. Nothing polls for notifications while one plays.
-`play FILE` in the console plays either kind. The server keeps each
-upload as a 44.1 kHz mono 96 kbps MP3 (0.7 MB a minute; the WAV was 2.6),
-title and artist from its tags, and `/music` lists `fmt` and `artist` as
-fields 5 and 6; `python -m server.music mp3` makes the old WAVs MP3 under
-the same ids, and the device swaps them at its next sync. The app
-(`apps/music.c`) is the nano: a grey title bar, white lists with a blue
-bar and chevrons, Songs, Artists, Shuffle Songs, Now Playing ("3 of 12",
-a cover drawn from the name, a bar with time gone and left; up/down are
-the volume there, as the wheel was), in Inter (`pod13`, `pod13b`,
-`pod16b`). MP3s put in /music by hand are named by their ID3 tags
-(`apps/id3.h`).
+`play FILE` in the console plays either kind.
 
-**Chat has dog emojis: Arty and Marcy** (2026-10-13). Tab in Chat opens a
-picker of eight moods (happy, love, sad, sleepy, hungry, grumpy, zoomies,
-huh) for one dog -- Tab again is the other, kept as the second line of
-/config/chat.txt; arrows choose (no fn: Chat stops taking text while the
-picker is up), Enter puts it into the text box, and Enter there sends. An
-emoji is only text on the wire, `:arty-happy:` among the words, so the
-server and older Chats need nothing; Chat draws each as a picture four log
-rows tall among the message's wrapped words (each row a log line marked
-`\x01`, painted by the row hook `tl_paint_log_ex` in `apps/termlog.h`), and
-the notify poll turns them into words for the banner ("Arty: happy", or
-"(Arty: happy)" among words; `msg.banner_text`). The art is pixel art in
-`tools/make_emoji.py` -- each dog an 18x18 grid of letters drawn by hand
-(Arty: the small white terrier, black head with tan; Marcy: the black one,
-white blaze), each mood stamps of eyes, mouth and a mark beside the head,
-and a grey outline so a black dog shows on Chat's black. `python
-tools/make_emoji.py` writes `apps/chat/chat_emoji.h` (palette indices, the
-palette in the panel's byte order as `CAPP_RGB` makes it; 7 KB of constants,
-in flash); `--preview FILE.html` draws them all big and at device size.
-Chat moved to `apps/chat/` for it. Tests: `test/test_chat_emoji.c`, and
-`test/test_chat_paint.c` runs the real app into a framebuffer
-(`CHAT_DUMP=dir` writes the screens).
-
-**Talking to Claude about a document** (2026-10-06). `claude [-k song]
-PATH` opens the Claude app about one file instead of the device agent:
-`server/talk.py` takes the document, Claude answers there with no tools,
-and a revised document (a ```doc fence in the answer) waits on the server
-until ctrl-s saves it over the file; ctrl-z puts it back. Edit's ctrl-k
+**Talking to Claude about a document** (2026-10-06). Edit's ctrl-k
 and MIDI's `c` (in a song) open it, and fn-` goes back to the caller --
 the launcher's back stack keeps each app's arguments now, so Edit comes
 back to its file. Moving between apps no longer paints the launcher in
 between (`leave_app_ex(0)`, and `enter()` does not fill the screen when
-already in the launcher). A MIDI song opens like a project: Enter on the
-list shows the roll, and play, hear, tempo, loop, ask, edit happen there.
+already in the launcher).
 
 **USB disk mode, and downloads ten times faster** (2026-10-06). Hold `d`
 at power-on, or type `usbdisk`, and the SD card is a USB drive on the PC
 (`kernel/drv/usbdisk.c`, TinyUSB MSC over the raw card from
 `fs_raw_card()`; CardOS does not mount it meanwhile). Measured: 67 MB in
 111 s, ~600 KB/s. The serial console is gone until a key restarts it, so
-flashing needs that restart first. Music lists any WAV put in /music by
-hand (`M.local`: never removed by a sync, deleted from the card only);
-named by a server track's id it counts as that track. Over WiFi a download
+flashing needs that restart first. Over WiFi a download
 went from 17 KB/s to 180 (170 to the card): power save off during a
 transfer (`wifi_fast`), TCP window 17280, 8 KB reads. `get -s URL [FILE]`
-measures it. The server converts any uploaded audio with ffmpeg
-(`server/music.py`); the dashboard sends files as they are.
+measures it.
 
 **The launcher slides, and the OS makes sounds** (2026-10-06). The
 carousel is drawn off the panel a 20-row strip at a time
@@ -485,60 +416,6 @@ DONE, NOTIFY, BOOT) played by a low-priority task, never over music or the
 mic, sharing a lock with the WAV player (`speaker_play_pcm`); Settings >
 Sound turns UI sounds and key clicks off (`ui_snd`, `key_snd` prefs).
 Apps cannot ask for one yet (no API).
-
-**Kart is SNES Mario Kart on the Cardputer** (2026-10-06, `apps/kart/kart.c`,
-Games). Mode 7 floor -- each row below the horizon a line across a
-128x128-cell map (4 bits a cell, painted at start from 256 waypoints in
-`apps/kart/kart_data.h`, which `tools/make_kart.py` makes from a spline and
-refuses if the road runs into itself) -- and billboard sprites for karts
-(four sides and mirrors), item boxes, bananas, coins and trees. Six karts,
-three laps, mushrooms and bananas, coins for top speed, CPU karts on the
-racing line with a rubber band. Steered by tilt (roll from the pose at the
-start; lean back to brake; `x` swaps the axis, `i` flips it, in
-/config/kart.txt with the best time), arrows on the original. The game is
-`apps/kart/kart.h`, host-tested in `test/test_kart.c`; `KART_DUMP=dir` writes
-frames. Drawn in 15-row strips in paint, physics in 16 ms steps in tick.
-
-**Wordle** (2026-10-16, `apps/wordle/wordle.c`, Games). Six guesses at a
-five-letter word, the standard duplicate-letter rules (greens first, then a
-letter is yellow only while the answer has one unmatched -- pinned case by
-case in `test/test_wordle.c`), a keyboard strip coloured by each letter's
-best. The daily puzzle is the same word for everyone on a date: day 0 is
-2026-01-01 (puzzle #1), the answer `(day * WD_DAILY_MUL + WD_DAILY_ADD) %
-WD_NANSWERS`, every answer once before any repeats; with no clock it is
-practice only. Practice (`n` when a game is over, or from Tab's stats) is a
-random answer counted nowhere. Stats -- played, won, streak, best, the
-guess distribution -- and today's guesses so far are /var/wordle/stats.txt
-through safefile.h, so leaving the app keeps the board. The words are
-`tools/make_wordle.py` over `tools/wordle/`: ENABLE2K's five-letter words
-(public domain) less `blocked.txt` are the guesses (8586), and
-`answers.txt`, 1029 common words written by hand, the answers. One sorted
-list, two bytes a word (the first two letters pick a bucket, the last three
-are 15 bits, the top bit marks an answer): 19 KB of constants, which the
-icon scan reads into RAM -- do not grow it lightly. The rules are
-`apps/wordle/wordle.h`; `test/test_wordle_paint.c` plays it into a
-framebuffer with the real fonts (`test/fakescreen.h`; `WORDLE_DUMP=dir`).
-
-**Hangman** (2026-10-16, `apps/hangman/hangman.c`, Games), two players on
-one device. The setter types a word or phrase (letters and spaces, at most
-28, two lines of 14 without splitting a word) shown as dots -- Tab shows it
--- passes the device over, and the guesser types letters. Six misses finish
-the figure (head, body, arms, legs) and the setter scores; every letter
-found cuts him down to stand on the grass, arms up, and the guesser scores.
-Then the other one sets the word. Esc in a round asks before giving up; `e`
-on the score screen names the players. The score is the session's: nothing
-is saved. Rules in `apps/hangman/hangman.h` (`test/test_hangman.c`), the
-screen in `test/test_hangman_paint.c` (`HANGMAN_DUMP=dir`). Neither game
-marks damage: every repaint is whole and composed off the panel.
-Since 2026-10-21 the left panel is an old sepia photograph: the empty
-gallows on the Fort Bravo film set (CC0, Wikimedia Commons; the crop is
-`tools/hangman/gallows.jpg`), toned, grained, vignetted and dithered to 15
-tones, with a man in hat and coat drawn by `tools/make_hangman.py` in
-pieces (hanging, head fallen, standing with arms up) over it -- no real
-person is in it. The script writes `apps/hangman/hangman_art.h` (7 KB of
-constants); `--preview F.png` draws the poses. `paint_scene` composes a row
-at a time through `api->pixels` (which `test/fakescreen.h` now has), and
-the app's colours went sepia to match.
 
 **More than one person on the server** (2026-10-06, branch `accounts`).
 `server/accounts.py`: `CARDOS_STATE/accounts.json` holds people (PBKDF2
@@ -638,161 +515,8 @@ writes them (`make_color_icons.write_cic_files`), so the droplet has them
 -- and `server/build.py` publishes them to `STORE/icons` beside
 `STORE/apps`, retiring any nothing draws; icons alone send no note. The
 firmware now embeds only `SEED` in `tools/make_color_icons.py` -- generic,
-firmware, the folders, Settings, Memory, About and the four EMBED apps --
+firmware, the folders, Settings, Memory, About and the four `@app embed yes` apps --
 what a blank card shows before its first `update apps`.
-
-**Toggl** (2026-10-01). `apps/toggl.c` (Net) shows the running timer in
-`num30`, starts one from a list of recent entries or a typed description,
-and stops it; commands `status`, `start TEXT`, `stop`, `today` (a Today
-section: `Toggl | toggl today`). `server/toggl.py` holds the API token --
-pasted into the dashboard's Toggl card, kept in toggl.json -- and answers
-in lines. Toggl has an hourly request quota, so the server caches projects
-and recent entries and the app counts the timer itself, asking only on
-open and after an action. Both of an app's HTTP calls now carry the
-device's token to its own server (`own_bearer` in cardapi.c); before, only
-`http_start` did, and a command using the blocking `http` was refused.
-
-**Wikipedia** (2026-10-12). `apps/wiki.c` (Net) searches and reads it;
-`server/wiki.py` does the HTTPS and JSON (with a Wikimedia-style
-User-Agent) and answers in lines: `/wiki/search?q=` a result a line
-(`title<TAB>description`), `/wiki/page?title=&page=N` a header
-`page<TAB>N<TAB>TOTAL<TAB>title` then plain ASCII, a paragraph a line,
-`## `/`### ` headings, the See also / References sections gone, cut
-between paragraphs into pages of at most 5 KB (the app's buffer is 6 KB);
-`/wiki/random`, `/wiki/summary?q=` (searched, then the lead paragraph) and
-`/wiki/featured`; `lang=xx` on all; ten minutes of cache. The app is a
-search box (wants text, so voice types into it; Enter on nothing is a
-random article), results, and a reader wrapped in ui13/ui13b that fetches
-the next page when you scroll past the end and the one before (landing at
-its end) when you scroll above the top; `r` random, `p`/fn-p prints the
-page loaded. Commands `summary TOPIC`, `featured` (for Today) and `open
-TOPIC`. Data 16.7 KB. Tests: `test/test_wiki.c`, `server/tests/test_wiki.py`.
-
-**Vim: a modal code editor** (2026-10-16, `apps/vim/vim.c`, Make). The
-owner asked for "an IDE with vim motions, basic autocomplete and syntax
-highlighting". Normal, insert, visual (v, V) and : modes; [count]
-operator [count] motion with d c y > < g~ gu gU over h j k l w b e W B E
-0 ^ $ gg G f t F T ; , % H M L { } n N * #; x X r s S D C Y p P J ~ o O
-a A i I; u and ctrl-r by change; the dot (`3.` too); / and ? (literal,
-not regex; `:set ic`); ctrl-d/u/e/y/f/b, zz zt zb; :w :q :wq :x :e :N
-:set nu sw= ts= et ic, :s and :%s (flags g, i), :d, ranges `%`, `N,M`,
-`'<,'>`. Colours for C, Python and Markdown by extension. Completion in
-insert mode: ctrl-n/ctrl-p, or tab after a word character -- words in the
-buffer, nearest first, then the language's keywords, in a list over the
-text. One unnamed register; no marks, macros, regex or windows. The core is
-portable headers (`apps/vim/vimbuf.h` the gap buffer, `vimhl.h` the
-highlighter, `vimcore.h` everything else), driven a key at a time by
-`test/test_vim.c`; `test/test_vim_paint.c` runs the real app into a
-framebuffer with the real font and checks that after every key a paint of
-only the damage equals a full paint (`VIM_DUMP=dir` writes the screens).
-- **Memory**: a 20 KB pool in the arena (14 KB text, 4 KB undo, 2 KB
-  register on its own); Vim is `CAPP_BIG`, and at launch the text takes one
-  big-mode block of big_room less 4 KB, up to 96 KB, the pool becoming
-  12 KB of undo and 8 KB of register. A file too big is refused, never
-  opened in part; a change too big for the undo log empties it and says
-  so. Measured by build_apps: code 32.5 KB, data 24.5 KB (of 28), rodata
-  4.0 KB (with the tree, below).
-- **Syntax states**: a line's colours depend only on the state the line
-  above left (inside a block comment, a triple-quoted string, a fence),
-  kept at a checkpoint every 32 lines and invalidated from the edited line
-  down, so a paint never scans the file.
-- **The file tree** (2026-10-16, `apps/vim/vimtree.h`, host-tested). The
-  owner: "view a file tree, open a file, view it, then close back to the
-  file tree at the same spot". Vim with no file (or a folder) is a tree of
-  the card rooted at /: folders first, A-Z, dotfiles hidden (`.` or `gh`),
-  a coloured mark per kind (.py, .c/.h, .md, other). j k gg G ctrl-d
-  ctrl-u H M L move; Enter/o open a file or fold a folder, l unfolds (then
-  steps in), h folds (or goes up), `-` goes up a folder and folds it, `/`
-  finds a name as it is typed (n N), R reads the card again, `:e NAME`
-  makes a file beside the selection, q or :q leaves Vim (api->leave).
-  nvim-tree's keys (2026-10-16): a, r and d fill in the command line --
-  `add ` (NAME/ makes a folder), `rename OLDNAME`, `delete NAME` -- and
-  Enter does it, Esc does not (that is the confirm); `:mkdir NAME` (also in
-  a file, beside it) makes a folder; a folder must be empty to delete. In a
-  file, `-` or `:Ex` shows the tree on that file (every folder on the way
-  opened, it selected; E37 when it has changes), and :q / :wq / :x go back
-  to the tree with the same folders open, the same row selected and the
-  same scroll -- or, for a file Vim was opened with (from Files), out of
-  Vim, back to the opener. Only the open folders are read, each at most 256
-  entries (a "..." row says it was cut). What is kept is small and in the
-  arena (the open folders' paths in 448 bytes, the selection's path, the
-  scroll); the rows are rebuilt from the card whenever the tree is shown,
-  into the text buffer's memory, which is empty while the tree is up -- so
-  the tree costs the editor no room (data went 23.5 -> 24.5 KB). The state
-  is also `/cache/vimtree`, so the tree is as it was from launch to launch.
-- **Running Python**: `:run` (`:py`), `space r` in a file or on a .py in
-  the tree, writes the file and opens Python on it (`api->run("python",
-  PATH)`); a file that is not .py is said, not run. Python's exit() comes
-  back through the way back (API 48): `CappUi.save` writes the mode (tree,
-  file-from-tree, file), the file, line, column and top line, and the
-  tree's state as a few versioned lines (`vim1 ... .`, at most ~700 bytes
-  of CAPP_SAVE_MAX), writing an unsaved file first; capp_main takes
-  `api->resumed` and reloads the file with the cursor clamped into it. A
-  blob cut short or not ours is refused whole and Vim starts fresh.
-  `space` followed by anything but r is still `l`; `-` with a count or
-  after an operator is still the motion.
-- Esc is vim's; wants_text is always yes, so ; , . / are commands and fn
-  makes them arrows. `:e` alone still opens the OS picker.
-- Not tried on a device yet: the big_room a real heap gives, how a full
-  repaint feels on the panel, how long reading a few open folders takes on
-  the card, and the trip to Python and back (the launcher side of API 48).
-
-**Python: MicroPython 1.24.1 as an app** (2026-10-16, `apps/python/`,
-Make). A REPL (history, tab completion, auto-indent) whose heap is
-big-mode blocks (`CAPP_BIG | CAPP_BIG_NO_NET`, up to 112 KB as a split
-heap); calls are stackless and the C stack is checked (3 KB of the
-shell's 8). A key held down is a KeyboardInterrupt (`cardpy_poll`, every
-400 bytecodes). The owner's loop is edit, run, edit again: Vim's `:run`
-saves and `api->run("python", PATH)`.
-- **Built how**: MicroPython's embed sources are generated into
-  `apps/python/mp` from `apps/python/mpconfigport.h` by
-  `tools/make_micropython.sh`, which needs Linux -- from Windows, `HOST=
-  root@157.245.252.47 bash tools/make_micropython.sh`. Run it again after
-  any change to mpconfigport.h **or to a name or module in
-  `cardpy_mod.h`**: the interned strings and the module table are scanned
-  from it. `tools/build_apps.py` (MULTI) links the app against the
-  toolchain's libc/libm/libgcc and still refuses an unresolved symbol.
-  `python.c` is the app; `cardpy_mod.h` (a .h only so build_apps does not
-  take it for an app; python.c includes it) is the port: open, import,
-  os, time, sys.stdout, exit.
-- **python FILE** runs it as `__main__` in the REPL's own globals, says
-  `-- ran NAME in N ms` (or `exited (code)`, or `with an error`), and
-  stays at the prompt with what it defined, like `python -i`. Tracebacks
-  name the file and line. The script's folder becomes the current
-  directory; `sys.argv` is `[PATH]`, `__file__` is set.
-- **Files**: `open()` is a stream over the CardApi file calls (r w a, +,
-  b; read/readline/readlines/iteration/write/seek/tell/with;
-  `print(file=f)` since `sys.stdout` is a stream too). Text is bytes
-  passed through (no unicode str). `a` opens without truncating and seeks
-  to the end, since the card's append flag is not in the CardApi. The OS has
-  eight descriptors in all and an app is not told when fn-` closes it, so
-  Python holds at most four, closes unreferenced ones when the heap is
-  collected (a finaliser; tried before refusing a fifth, and after every
-  script), and closes all on exit(). One a script left open when fn-`
-  takes the app is lost until a restart -- the kernel does not close an
-  app's descriptors on release.
-- **import NAME** finds NAME.py beside the script (`sys.path` is
-  `['', '/lib']`, '' the current directory), then in `/lib`. `os`:
-  getcwd, chdir, listdir, stat (`[0] & 0x4000` a folder, `[6]` the size),
-  mkdir, remove, rename. `time`: sleep, sleep_ms (a busy wait that a held
-  key still stops), ticks_ms, ticks_diff, time (epoch, 0 until the clock
-  is set). input() (API 49, 2026-10-16) takes typed keys through api->key_wait: the prompt and what is typed on the input line, Esc KeyboardInterrupt, ctrl-d on nothing EOFError. While a script runs its prints are drawn within 100 ms (api->repaint_now, from the output and the VM hook), and time.sleep waits in key_wait -- it yields, and a key stops it.
-- **Leaving**: `exit()`, `quit()`, `sys.exit()` or `raise SystemExit` at
-  the prompt, or ctrl-d on an empty line (only: it scrolled too, and
-  scrolling to the bottom closed the REPL -- ctrl-b / ctrl-f scroll now,
-  ctrl-u clears the line), call `api->leave` -- back to Vim or the launcher. A SystemExit inside a
-  script ends the script, not the app. No `CappUi.save`: the session is
-  the heap, far too big to keep.
-- Output appears when a run ends, not during it: the run is one key
-  handler, and nothing paints meanwhile.
-- **Tests**: `apps/python/test/host_repl.c` drives the real app through
-  `test/fakeapi.c` (its in-memory card, `fakeapi_left`): the REPL, a file
-  run with imports from its folder and /lib, globals after, tracebacks,
-  open in every mode, os, time, exit/ctrl-d leaving and closing files,
-  SystemExit and KeyboardInterrupt inside a script. MicroPython wants gcc,
-  so it is not in the MSVC suite: `HOST=root@157.245.252.47 bash
-  tools/python_host_test.sh`. Measured by build_apps: code 102.1 KB, data
-  14.7 KB, rodata 21.7 KB. Not yet run on a device with files.
 
 **Infrared out, and Lamp** (2026-10-26, API 50). Both Cardputers have an
 IR LED on G44 and no receiver: the device sends what a remote sends but
@@ -802,17 +526,7 @@ host-tested, `test/test_irproto.c`); `kernel/drv/irtx.c` plays them on an
 RMT channel at a 38 kHz carrier, made on first use, splitting durations
 over 32767 us. `api->ir_send(proto, addr, cmd, repeats)` and
 `api->ir_raw(us, n, hz)`, both blocking; `ir nec ADDR CMD` / `ir msb CODE`
-in the console. `apps/lamp/` (Make) is a remote for LED lamps and strips:
-models are text (`apps/lamp/lampmodel.h`, host-tested) -- the 24-key
-(NEC 0xEF00) and 44-key (NEC 0x00) RGB remotes built in, more in
-`/config/lamps.txt` -- the choice kept in `/config/lamp.txt`, and `f`
-tries each model in turn and asks whether the lamp reacted. The owner's
-lamp answered the 24-key address with its buttons elsewhere (colours that
-were modes), so `c` (or Enter after a find) maps a lamp: each code 00-FF
-on the model's address is sent and the person picks what it did from 21
-switches and colours (`LM_OPTS`); every pick rewrites a "My lamp" model in
-lamps.txt (`lm_map_text`, `lm_replace`, host-tested). Checked on the
-device (2026-10-26).
+in the console.
 
 **The Bluetooth radio comes down after a print** unless Bluetooth is set
 to start at boot (`bt_radio_down`, run on cardos-bg after the job). Before,
@@ -827,31 +541,12 @@ is both the mic's clock and LRCLK, which mic.h always said. `kernel/sys/audio.c`
 runs a recording or a playback on a task and an app polls state, level and
 position from tick; `api->audio()` (API 28) is that behind a table. The
 mic's ceiling is ten minutes now (`MIC_HARD_MAX_MS`); the voice button still
-asks for fifteen seconds. `apps/memo.c` records into `/home/memos` (named by
-the clock, `0920-1142.wav`, or by count when there is no clock), lists with
-lengths, plays back with a bar, deletes after asking. The strip with the
-meter is drawn in place and repainted only when it would look different, at
-most fifteen times a second -- clearing and redrawing it every tick was a
-visible flicker.
+asks for fifteen seconds.
 
 **The mic can listen without a file** (2026-09-25). `record(NULL, ms)` runs
 the mic with `level()` moving and nothing written, where a file would be
 32 KB a second of card wear for a meter or a toy. Older firmware refuses a
-NULL path with -2, and an app should fall back to a file. Noodle
-(`apps/noodle.c`, Games) is the first user. It is the car-lot tube man: blow
-on the mic and he inflates and flails, stop and he folds over. He is drawn in
-15-row strips into a buffer and blitted, redrawing only where he moved.
-`NOODLE_DUMP=dir build\cardos_tests.exe` writes frames to look at, which is
-how the physics was tuned. Apps are not told when they are closed, so it
-records in 8 s pieces restarted from tick: leaving the app leaves the mic on
-for at most that long.
-
-**Edit's preview is set in Atkinson Hyperlegible and word-wraps** (2026-09-25),
-using `ui13`/`ui13b`, with code still in 6x8. It used to cut a long line at the
-screen edge and never draw the rest. Rows break at the last space that fits, a
-word too long for a row breaks inside, and list items and quotes hang under
-their text. `test/test_edit_preview.c` checks it against a font of uneven
-widths.
+NULL path with -2, and an app should fall back to a file.
 
 **There is an OS file picker** (2026-09-20). `api->pick(&req)` puts a
 dialog over the app -- open a file, save (a name field, asks before
@@ -905,17 +600,6 @@ base64 digit (`kernel/sys/printdoc.h`). No API change: it is still
 runs alone put one graph of `4sin(5x)` at 20 KB, and the kernel copies the
 whole document. A line that only starts with `%%` is text, as before.
 Needs the firmware that knows it: on older firmware the lines print as text.
-
-**Calc is a graphing calculator** (`apps/calc.c`, 2026-09-24). A roll of
-sums (`ans`, `a=5`, implicit multiplication, sin..round, `n!`), and any
-line that is `y=...` or mentions x becomes one of four graphs: Tab shows
-them, arrows pan, + - zoom, f fits, t traces. fn-p prints the view on
-screen, the graph as a `%%` picture. Single-precision float, shown to seven
-digits, because that is the hardware -- and an app links no libgcc, so
-Calc carries its own `__divsf3` (`a / b` compiles to a call) and its own
-libm. Struct assignment compiles to `memcpy`, which is not there either;
-use `api->mem_cpy`. `test/test_calc.c` checks the maths against the
-host's libm.
 
 **The toolbar is a keyboard menu too** (2026-09-18). `fn-b` shows the bar and
 puts the keyboard in it: left/right walk the menu names, down opens one,
@@ -982,30 +666,6 @@ a pocket and that is when the intermittent fault happens. `log`, `log N` and
 is the device glue. Log a handful of lines per sync, never one per tick -- it
 is an SD card.
 
-**A task is claimed for a day by its due date** (2026-10-12). The list is
-a running list; the agenda is what was claimed. `c` in Todo claims the
-highlighted task for today (for tomorrow after 6 pm) or lets it go, `+`/`-`
-move its date a day, `w` takes one typed (today, tom, fri, +3, 10/15). The
-agenda is every open task due today *or earlier*, from every list, so a
-claim not finished is still there the next day: the top of `o`, and
-`todo today LIST` -- Today's To do section, which falls back to LIST's open
-tasks when nothing is claimed (and on tomorrow's page is asked `tomorrow`).
-Dates are Google's, so one set on a phone is a claim too. The server sends
-them only when asked (`/todo/tasks?...&due=1`), because an older Todo
-splits a line into three fields; a push sends the date only when it changed
-here (`due_dirty`), so a tick does not undo a date set elsewhere. Today
-rewrites an old `todo show X` section to `todo today X` once.
-
-**Todo syncs once, at open** (2026-09-18). One sweep: the lists, then the
-list on screen (pending edits pushed first, then pulled), then every other
-list straight into its own cache file. Then it stops -- `s` asks for another.
-It used to re-pull the current list every ten minutes, which rearranged the
-screen while you were reading it and still never fetched the lists you were
-not looking at. A list off screen is absorbed into its file rather than into
-the item array, because the array is what is on display. `o` is the overview:
-every list's open tasks under its own heading, read from those files. `d`
-toggles a pending delete rather than only setting it.
-
 **Calendar and Todo get Google through the server** (2026-09-29). The
 server holds the Google login -- the one the dashboard's sign-in at /dash
 writes to google.json -- and `server/google.py` does the HTTPS and the JSON,
@@ -1027,13 +687,6 @@ cut off, and the app parses as far as the cut: a long list came back short
 with nothing saying so. Both Todo URLs now carry a field mask, as
 `apps/calendar.c` always did. Any new Google call needs one.
 
-**Todo has lists** (2026-09-17). All of the account's task lists, one at a
-time: only the current list's tasks are in memory, each list caches to
-`/todo/<id>.cache`, and `/todo/lists` remembers the names and the choice so
-Left/Right work offline. `l` is the picker. Switching mid-pull drops that
-reply; switching mid-push waits, because a dropped push reply means the item
-is sent twice. A new list can be made from the list picker (`n`).
-
 **One HTTP request at a time, and it has an owner.** `kernel/net/httpq.c`
 runs a single request off the shell's loop; `api->http_start` refuses a
 second. Every request is owned by the app slot whose handler started it, and
@@ -1050,10 +703,16 @@ start is refused instead of returning silently.
 
 **API version 45** (`CAPP_API_VERSION` in `capp.h` is the truth; this
 paragraph is history). It moved six times in one day — 11 to 17 — and has
-kept moving since; each move means every `.capp` must be rebuilt, because the
-loader refuses a binary built against a different table. `python
-tools/build_apps.py` before every firmware build; the symptom of forgetting is
-"built for a different API version" at boot. What arrived: `tick` and `mouse`
+kept moving since. **Since 2026-10-27 an app built for version V loads when
+`CAPP_API_MIN <= V <= CAPP_API_VERSION`** (MIN is 48, the last change to a
+struct an app hands the kernel: CappUi.save); a newer app is refused as "needs a
+newer CardOS", an older one as built for an older CardOS. The rules are in the
+comment on `CAPP_API_MIN` in capp.h: CardApi only grows, a new app-provided
+struct field raises MIN (or is read only after checking the app's version), and
+an app checks `api->version` before calling an entry newer than MIN. Before
+that, every move meant every `.capp` had to be rebuilt. `python
+tools/build_apps.py` before every firmware build; the symptom of forgetting, once
+MIN moves, is "built for an older CardOS; rebuild it" at boot. What arrived: `tick` and `mouse`
 (12, 13), `update_check`/`update_apply` (14), `caps_ok` (15), the file
 operations `list_ex`, `stat`, `mkdir`, `remove`, `rename` and `run` that the
 file manager needed (16), `damage`/`paint_area` (17), then actions,
@@ -1112,26 +771,11 @@ and the Clock app share it, host-tested). `kernel/sys/alarm.c` reads it when
 the minute changes and rings the due one as a panel over the current app --
 which is not closed or told -- beeping, holding the screen on, until a key:
 `s` snoozes nine minutes, anything else stops it; unanswered it stops after
-five. A `once` switches itself off after ringing, a snooze deletes itself.
-The Clock app (`apps/clock.c`) is the face and the editor; it re-reads the
-file before every change and finds its alarm by content, never position,
-so it cannot undo what the kernel changed. Commands: `do clock add 7:30
-wake up`, `list`, `next`, `off 7:30`. The big numbers everywhere are Inter
+five. A `once` switches itself off after ringing, a snooze deletes itself. The big numbers everywhere are Inter
 Bold now (`clock56`, `num30`); `make_cfnt.py --style Bold` picks a variable
 font's weight.
 
-**Today prints your day, and is made of other apps' commands** (2026-09-29).
-`apps/today.c` knows nothing about calendars: `/config/today.txt` lists
-sections, `Heading | app command`, and each is answered by
-`api->run_command` (API 33) -- `calendar today`, `todo show Chores`,
-`habits today`, `stocks portfolio` to start. `t` turns the page to tomorrow: a
-section asking `today` is asked `tomorrow` (Calendar and Habits have one),
-and `do today tomorrow` prints it. A new section is a line; a new
-kind of section is a command on some app. Answers written `[ ] task` print
-as boxes (Todo's `show` and Habits' `today` answer that way). fn-p prints in
-the print fonts, `l` picks the todo list, `e` edits the sections, and `do
-today print` is "Carlos, print my day". Gathering is one command a tick, so
-the screen says what it is waiting on. `capprun_command` is re-entrant for
+**Today prints your day, and is made of other apps' commands** (2026-09-29). `capprun_command` is re-entrant for
 this: a command running a command saves and restores what the outer one
 keeps (`command_inner` and its wrapper).
 The apps it asks are loaded and closed one at a time, but executable RAM
@@ -1172,7 +816,7 @@ Half the image is radio and TLS (net80211 158 KB,
 mbedTLS + PSA crypto 228 KB, Bluetooth 177 KB, lwIP 103 KB), which is not
 shrinkable by writing tighter kernel code — CardOS's own code is about 178 KB.
 **Only four apps are embedded** (2026-10-01): Dashboard Link, Files, Edit and
-Update (`EMBED` in `tools/build_apps.py`) -- enough for a blank card to be
+Update (`@app embed yes`) -- enough for a blank card to be
 linked, repaired and brought up to date. All of them used to be, 948 KB by then, and the image
 outgrew the 2304 KB OTA slots: `update os` downloaded it and refused it as
 "not a bootable image". The rest arrive with `update apps`. Run
@@ -1227,7 +871,7 @@ beep, and which way `motion`'s axes point against Level's bubble.
 (2026-10-07). `accounts.set_build(name, True)` gives a person Build with
 their own conversation; their turns may make new apps and change only the
 ones they made (`server/fence.py`: apps/NAME.c, apps/NAME_*.h,
-apps/icons/NAME.txt, their lines of folders.txt; ownership in
+apps/NAME.icon.txt -- the folder is an `@app` line in NAME.c; ownership in
 CARDOS_STATE/app_owners.json, claimed when a file is first written). Three
 walls: the prompt, a PreToolUse hook (`server/fence_hook.py`, verified
 against the real CLI on the droplet), and a post-turn sweep that puts back
@@ -1262,22 +906,11 @@ is fn-` from code -- Vim's `:q`, Python's `exit()` -- acted on once the
 handler returns; -1 outside the launcher. Nothing is kept in RAM: the
 files go when their entry does (`back_clear`, `forget_saved`). Not
 host-tested: launchui is device code. Users: Vim (its tree and file, see
-the Vim paragraph) and Files (the folder and the row by name,
+apps/vim/README.md) and Files (the folder and the row by name,
 `dir_state_save`/`dir_state_load` in `apps/dirmodel.h`, host-tested). An
 app's open files close with it too (`cardapi_release_files`, a release
 hook: cardapi.c notes which app opened each of the card's 8 slots) -- fn-`
 never tells an app, and a file Python left open held a slot until a restart.
-
-**Hub: M5Launcher's firmware catalog** (2026-10-08, `apps/hub.c`, System).
-LauncherHub (api.launcherhub.net, ~700 Cardputer firmwares) through
-`server/m5hub.py`, which does the HTTPS and JSON and pages it 40 at a time
-(the kernel's HTTP buffer is 8 KB). The files are whole-flash images; each
-version gives its app's offset and size (`ao`, `as`), and the server fetches
-only that range from m5burner-cdn, so the device gets a bootable app image
-(490 KB of a 4 MB file) into /firmware/NAME.bin and, if asked, boots it
-through `api->firmware_boot` (API 42) -- the launcher's chain-boot, reset
-comes home. A version that also wants a SPIFFS/FAT partition is marked
-"+data": its app boots without that data.
 
 **Two devices, one game: ESP-NOW** (2026-10-08, API 43). `api->link()`
 (CappLink) is local multiplayer with no router: the WiFi radio sending
@@ -1291,10 +924,7 @@ frames come in on the WiFi task through a ring and are handled in
 `link_tick` on the shell's loop. ESP-NOW shares the radio's one channel
 with WiFi: joined to a router it is the router's (HELLO says so), else it
 sits on channel 1 and walks 2-13 while it hears nobody. `wifi_pin` keeps
-`wifi_release` off it, and it closes with the app. Quoridor's "Play nearby"
-is the first user (the inviter is blue; a move is 5 bytes);
-`test/test_quoridor_net.c` runs the real app against the real protocol.
-The USB serial link's hooks in main.c are `ser_open`/`ser_state` now: "link"
+`wifi_release` off it, and it closes with the app. The USB serial link's hooks in main.c are `ser_open`/`ser_state` now: "link"
 is this.
 
 **Releases are git tags** (2026-10-09): `vMAJOR.MINOR.PATCH`, annotated, with
@@ -1347,311 +977,60 @@ CARDOS_STATE/sign_key.pem must never be regenerated). The wire format is in
 `docs/superpowers/specs/2026-10-09-server-store-design.md`. Devices verify
 signatures with `api->sig_verify` (API 44).
 
-**Jar Factory is one app again** (2026-10-10, API 45). The shop and the post
-are screens of `apps/jar/jar.c`: `apps/jar/jarshop.h` and `apps/jar/jarpost.h` (each still
-compiles alone for its host tests) are included with their clashing names
-renamed, and `jar_open` switches screens. Two things make it fit:
-- **Code** runs from flash (XIP, the `appcode` partition), so the 50 KB of
-  code is no longer the limit.
-- **Data** has to fit the 28 KB arena. While a screen is up, the scene is
-  saved, its placed items become `want` lines, and the screens' state lives
-  in the scene's item memory (`screen_bind`): the post in `J.placed`, the
-  shop with `U` and the picture buffer in the frame pool. Their big buffers
-  share `SCR` with the scene's strip. The scene reloads from the card when
-  it comes back.
+## Apps
 
-Data is about 430 bytes under the budget: measure before adding.
-`api->paint_direct` lets the scene paint its own strips while the screens
-are composed by the OS. A device whose partition table predates `appcode`
-(updated only over the air) loads app code into RAM, where 50 KB will not
-fit: it needs one full USB flash.
+What each app is, in a line; what is worth knowing about one is beside its
+source (`python tools/appmeta.py` lists them all). Built-ins (Memory, About,
+Settings) are in the kernel.
 
-**Jar Factory** (2026-10-09, `apps/jar/jar.c`, Games): an idle
-terrarium jam factory with AI-made collectible items, the owner's spec in
-`docs/superpowers/specs/2026-10-09-jar-factory-design.md` (all seven build
-steps). The world and items are portable headers (`apps/jar/jarsim.h`,
-`apps/jar/jaritem.h` -- the item record, under 1 KB, the server's packer mirrors
-it byte for byte), host-tested. `server/jar/__init__.py` makes each person's daily
-stock with Claude from their garden, shelf and the day (8 items, sprites
-included, checked, signed), keeps the ownership ledger, friends and gifts on
-the store. Items run recipes (habits) or, in phase 2, bytecode scripts:
-`apps/jar/jarvm.def` is the one instruction table, read by the device machine
-(`apps/jar/jarvm.h`) and by `server/jar/jarvm.py` (compiler, the same machine, a
-simulated day); test fixtures pin that both machines agree. The signature
-covers the record minus its signature and its 8 memory slots (scripts write
-those).
-The jar's light is the real sky (2026-10-10): `GET /jar/sky?tz=` (open-meteo,
-cached per city per half hour) gives the weather and today's sunrise and
-sunset; the jar moves its clock so they fall in dawn and dusk, tints the sky,
-dims everything in front by the hour and the weather (glowing items light
-their corner), draws rain, snow and lightning, and fires `on weather rainy:`.
-
-**The living jar** (2026-10-11, branch `jar-living` until API 46 is on
-main; design in docs/superpowers/specs/2026-10-11-jar-living-world-design.md).
-- **Language v2** (apps/jar/jarvm.def, both machines, cross-checked fixtures):
-  `on hour/signal/world/new/berry/bumped`; `sound`, `burst`, `throw`, `eat`,
-  `drop`, `signal`, `seek`, `fly`/`home`, `boost`, `nudge`, `shake`; senses
-  incl. `traits`/`neartraits`/`newtraits` read with `has(X, TRAIT)` (a BIT op).
-  Traits are the record's tag field, sixteen words; scripts react to traits,
-  never names. A name must mean one number (water was a zone and a trait).
-- **Gated:** server/jar/jarvm.py makes and accepts only v1 until
-  `CARDOS_JAR_V2=1` -- a device needs a jar.capp built with v2. Turn it on in
-  /etc/cardos/env after jar-living reaches devices.
-- **The sim** (apps/jar/jarsim.h): world events (ants, leak, breeze, visitor,
-  dark, bloom) every 20-60 min; chores that stop production until the player
-  comes (snail sulks, mould, puddle; js_chores/js_fix, saved); furniture
-  (js_put_on, rides along, a fifth number on "place"); scenery; parts.
-  Coins are still only jars that left: a visitor leaves jars on the dock.
-- **The record's longer header** (224 bytes, still version 1): role, scale,
-  surface, part, part home, voice. Things keep 208 byte for byte.
-- **The scene** (apps/jar/jarlive.h): drawing for all of it, a sound bank and a
-  sparse soundtrack (apps/synth.h, b cycles), x for chores, keep_awake.
-- **AI on the fly:** patches (server/jar/jarpatch.py) -- a few handlers for an
-  item in the jar about a newcomer's traits, signed, fetched with the post,
-  run for events the item's own script leaves; the day's events
-  (server/jar/jarevents.py) -- times and kinds rolled by the code, named by Claude.
-- **Deals in talk:** `coins N` before the words; `DEAL:` lines; `tx` effects
-  done once (txseen); a commission comes as a `deal` line on /jar/day.
-- **Tibbs's memory:** CARDOS_STATE/tibbs/history (every exchange), a
-  notebook every 20 turns, a seeded fresh session after 150 or a lost one;
-  tools/tibbs_backfill.py put his past in.
-
-**A shop's stock is 8 items** (2026-10-11): 2 random, 2 of Tibbs's picks, 4
-new; a paid commission is 8 new. The older note below says 4.
-
-**A shop's stock is 4 items, from a shared pool** (2026-10-10). Every item
-ever made goes into one pool (`server/jar/__init__.py`, "the pool"), and `own/ID` is
-where an item is: absent means the pool; a name means that person's shop or
-things. That keeps every item unique. A stock is:
-- what the person holds (Space in the shop, 4 at most);
-- then pool items, a random mix;
-- then new ones, made one Claude call each and shown as each lands
-  (`/jar/day` says `more` until the stock is whole, and `batch N` says
-  which stock it is).
-
-The device buys offline and reports `bought` and `held` ids with its next
-request; the rest goes back to the pool then. The shop checks `/jar/day`
-quietly on every open, so it picks up a stock it missed. `python -m
-server.jar seed N` adds N items to the pool, counted against nobody.
-
-**The shop is a person: Tibbs** (2026-10-10, `server/jar/shopkeep.py`). There
-are no tags any more. The shelf, the garden and the season used to steer
-the stock, and a request for industrial scrap on an autumn day came out a
-jack-o'-lantern with a gear in it. Now each new stock begins with Tibbs's
-beat: his line of the day (shown in the shop) and a one-line brief per new
-find, each item then made from its brief. He keeps a journal per player:
-- his last few beats;
-- the recent talk;
-- purchases, as history only;
-- what is in their jar.
-
-**Variety is the code's job, not the model's** -- the owner's rule. Models
-latch on: sell one cute thing and every find is cute. So:
-- the server rolls the dice: an event in his day, and two sparks per find
-  from wide word lists;
-- a coin (ANSWER_CHANCE) decides whether a find answers what the player
-  said;
-- recent briefs are passed as themes not to repeat;
-- purchases are framed as history with a rule against catering to them.
-
-Change the prompts with care: they were tuned against real output.
-
-**Items are made in stages** (2026-10-11, v0.20.0, spec
-docs/superpowers/specs/2026-10-11-jar-item-pipeline-design.md). The only
-path: `jar.generate(search=)` -> `server/jar/jarstages.py`. Per find the code
-rolls kind, tier, form and activity (`jar.ACTIVITIES`); the DM writes a
-concept from Tibbs's search (`dm_prompt` is the one place to grow its
-strategy); the fitter writes the sheet inside `jar.motion_rules(activity,
-kind)` (only critters travel); the artist and the behaviour writer run on
-two threads; `check_parts` routes a refusal to the stage at fault, once.
-`concept/ID` is kept beside the record (never sent to devices); remakes
-(`jarstages.remake`) start from it. Stages run with limit=None. Motion
-parts are record bytes 215 travel, 216 idle, 217 lively (agreed with the
-device side: a still thing with no idle is written lively=normal so it
-never reads as all-zero, which means "an old item, use byte 72"; the
-fixture is test/fixtures/jar_item_motion.bin). Tibbs's stock turn now
-answers `search` (his last six in tibbs/searches); sparks, briefs and the
-chance event are gone. `tools/jar_stages_trial.py` runs real finds in a
-scratch state. Jar Lab still previews the old one-call prompt.
-
-**No examples in the prompts that make items** (2026-10-13, the owner: "AI
-grasps onto places so we need lots of variance without examples"). Finds
-had become made objects -- 21 of 22, critters as "a painted tin hedgehog",
-brass in 9 -- because the code rolled a place per find from a list ("he
-found it at a model village gift shop -- let that shape what it is"), and
-Tibbs's character named six contacts, whom his last six days visited in
-turn. Now: no place is rolled for a find; the critter slot says "It is
-alive -- not a toy, ornament or model of one"; the DM is told to decide
-what a thing is first and name a material only where that is simply what
-it is made of (materials never steer); his day is "the setting, not a list
-of what to make"; the tier is rarity ("a common find", not "a cheap
-trinket"). Tibbs is named no place, not even his own last searches
-(still kept in tibbs/searches, never shown); the code rolls the first
-letter of where he went. His resumed session and notebook still remember
-the old contacts.
-
-**Tibbs's story moves in chapters, and finds are made ahead** (2026-10-13).
-- **Chapters** (`shopkeep.maybe_chapter`): time only moves when someone
-  visits. A visit (a stock started, or its last item fetched) 4 hours or more
-  after the last chapter writes the next one -- one, however long the gap.
-  The code rolls three pairs of initials, weighted like English word starts
-  (`INITIAL_WEIGHTS`): a place he went, someone he dealt with, something he
-  came back with ("W. S.", "P. K.", "C. H."); he names them. What players
-  said at the counter and did (`tibbs/shoplog`, filled by `note` and talk)
-  since the last chapter is rolled in. Every chapter prompt carries the
-  opening, `server/jar/tibbs_intro.txt` -- prose the owner edits -- and the
-  last chapter; the last 12 are kept in `tibbs/chapters`.
-- **The finds come from the chapter.** The stock turn only greets and picks
-  from the pool; it asks "where did you go" only for a commission's errand.
-- **The deck** (`jar.premake`, `deck/PERSON`): once a person has fetched
-  the last item of a whole stock, their next NEW_ITEMS finds are made in the
-  background from the latest chapter, theirs and out of the pool. A new stock
-  takes its finds off the deck first and makes only the rest; a commission is
-  made fresh. Nothing is made for someone who has not looked, and a deck
-  never expires.
-- **A paid errand takes real time** (2026-10-16): paid, he sets off at once
-  but is out `ERRAND_S` (45 min). The deal keeps `back`; until then
-  /jar/day's `say` is "Out on your errand ... back in about N min", there is
-  no `deal` line (so the shop does not ask for the stock) and `r` waits;
-  talk is told he answers a note from the road. Unpaid, he waits for the
-  next chapter, as before.
-- **Bans** (`jar.ban`, `banned/ID`): out of the pool for good. An item
-  passed on (shown, neither bought nor held) twice is banned by itself
-  (`passed_on`, `passes/ID`). `POST /jar/ban?id=N[&off=1]` and `GET
-  /jar/bans` (the owner only), or `python -m server.jar ban N | unban N |
-  bans`.
-- **Jar keys**: Tab (or j) is the next jar, 1-9 jumps to one (1 the
-  factory), bars or no bars; zoomed, Tab still follows a critter.
-
-**Lively finds** (2026-10-15, the owner: "i want things lively,
-interacting" -- the pill bug crawls, poked it curls and turns to physics).
-`server/jar/jarstages.py`, all v3:
-- **A life is rolled per find** (`roll_life`): a role from `ROLES` (critter:
-  grazer, hunter, timid, climber, flitter, singer, collector, player; floor:
-  stage, shelter, feeder, toy, noisemaker, lamp, weathervane; hanging: lamp,
-  roost, noisemaker, weathervane), a poke reaction from `POKES`, and a trait
-  it notices -- one a resident of the person's jar really has, mostly. The
-  role's trait is worn (`_wear_role`). Roles say what a thing does, never
-  what it is: no nouns.
-- **Shared signals** (`JAR_SIGNALS`: startle, call, crumbs, landed): items
-  made apart can set each other off. The writer sees the residents and their
-  traits (`residents_of`, from the request's `injar`).
-- **Nothing moves a v3 item but its script** (the device ignores travel), and
-  the writer is told so; `lively_error` refuses a script with no `on poke`,
-  none that answers the jar, or a critter that never moves. Every v3 find
-  has a script (rare and treasure: full); critters are never rolled still.
-- **One chapter is not every find**: `CHAPTER_CHANCE` (0.35) of finds are
-  told Tibbs's chapter, and borrow at most one thing from it; an errand or a
-  commission always is. The DM is shown the last 20 finds; a name may not
-  repeat one of the last 80 (`recent_finds`). (One chapter had made 4
-  windmills, 7 clovers and two Clover Ants in ten finds.)
-- Known: a v3 hanging item is placed on the soil by the device
-  (`js_item_y` uses the lid only for non-v3) -- a firmware fix.
-
-**JarScript 3** (2026-10-14, branch `jarscript3`; spec
-docs/superpowers/specs/2026-10-14-jarscript3-design.md). The sandbox's
-language (tools/jarsandbox) on the device: states that take time (`wait`,
-`move to`, `walk`, `hop`, `play once`), physics, perches, signals by name,
-`find(trait)`, 12.4 fixed point, 20 ticks a second.
-- `apps/jar/jarvm3.def` is the one table. `apps/jar/jv3.h` (C) and
-  `server/jar/jarvm3.py` (compiler, the same machine, `simulate`, the guide)
-  must agree byte for byte: `tools/make_jarvm3_fixtures.py` writes
-  test/fixtures/jv3_*, `test/test_jv3.c` replays them.
-- A script's first byte says its language: 1 is v1/v2, 3 is v3. The v2
-  machine is untouched and never sees a v3 script.
-- Records carry up to 1024 bytes of script (`JI_SCRIPT_MAX`;
-  `JI_SCRIPT_V2` 256 for v2 and patches), `JI_MAX` 1728, four frames.
-- The code rolls a **script tier**: none (still non-critters), small (512),
-  full (1024, critters).
-- On the device, `apps/jar/jarv3.h` runs v3 items in **one big-mode block**
-  (16 KB, taken at launch). An item that does not fit is placed on its
-  recipe, never refused.
-- Measured: 260 us a tick for 24 items; 776 us for 24 copies of the worst
-  scripts; 252 bytes of runtime an item.
-- **Off by default**: `CARDOS_JAR_V3=1` makes new items v3 and retires the
-  pool's v2 items (kept, never stocked).
-- `python -m server.jar v3convert [--dry] [--id N]` rewrites held items in
-  v3, keeping each original in `v2rec/ID`. `v3undo` puts them back. Both send
-  the owner `tx remake ID`.
-- A device needs this jar.capp before any v3 record reaches it: an older one
-  refuses a script over 256 bytes.
-
-**More jars** (2026-10-11, v0.21.0). `JU_JAR` in Upgrades buys up to
-`JS_MAX_JARS` (3) extra jars: empty glass, no factory. `J.jar_at` is the
-jar on screen (0 the factory), saved as `jars N AT`. One wallet: coins,
-things, resources and deals stay in the main save; an extra jar's file
-(/var/jar/jarN.txt, `js_save_extra` / `js_extra_parse`) holds only its
-place lines. Away from the factory its places stay as want lines (the main
-save writes only those while away), `js_step` skips the factory and
-`js_step_away` pays by `js_rate_ph` (zero under a chore). `jar_go` in
-jar.c switches; `jar_of` keeps a thing in one jar at a time.
-
-**Jar Lab: the bench for prompts and behaviour** (2026-10-11,
-`server/jar/jarlab.py`, `server/jar/jarlab.html`). At `/dash/jarlab` (under /dash
-because the cookie's Path is /dash; `/jarlab` redirects), the dashboard's
-cookie and an admin only. Pick kind, tier, price, form, brief (Sparks and
-Roll use the code's own dice), see the exact `jar.prompt_for` text and
-schema, edit it, and send it to Claude or a stub (dry run), or paste an
-answer to examine. Each item is run through `check_item`, its script
-compiled and given `simulate_day` (with the trace hook it gained for
-this: every handler run, its actions and x), packed with
-`to_item`/`encode` and decoded back: sprite drawn and animated, errors
-listed, the day replayed in a strip of jar with a per-hour chart and an
-event log. "Simulate only" iterates on a script with no Claude. Session
-history diffs prompts; named experiments are JSON in
-CARDOS_STATE/jarlab/. It never writes the pool, the ledger, rec/ID or
-next_id, never signs, and never touches sign_key.pem; to preview the other
-language version it flips `jarvm.V2` under a lock for the few ms of the
-pure calls (never across a Claude call). `server/tests/test_jarlab.py`.
-
-**The Town: four plants, three resources, three more people** (2026-10-11,
-v0.18.0). The owner asked for fewer plant kinds, each making its own thing,
-and neighbours for Tibbs who are paid in them:
-- **Plants** (`apps/jar/jarsim.h`, `JPL_*`): berry (jam, coins, as before), reed
-  (twigs), mushroom (spores), flower (nectar). Mosslings carry the non-berry
-  produce to `J.res[]`, saved as `res S N T`; a bed's level 1-3 (`level`
-  line) makes it grow 1x, 1.5x, 2x. Old saves' fern and cactus are reed.
-  Only berry beds count in `js_rate_ph`.
-- **People** (`server/jar/shopkeep.py`, `CAST`): everything there takes `who`
-  (tibbs default) -- one Claude Code session each, the same history,
-  notebook and seeding as Tibbs's, in CARDOS_STATE/<who>. `town_note` tells
-  the others what happened. Pip alters a thing (spores), Bramble evolves a
-  critter or grows a bed (nectar), Wren builds furniture (twigs).
-- **Deals** (`server/jar/town.py`): the device sends `coins`, `have` and `beds`
-  lines before the words (`jtx_have` in `apps/jar/jartx.h`); a `DEAL:` line is
-  checked against them and becomes tx lines in the shared queue
-  (`use<res>`, `gain<res>` on a failed job, `bedup K`, `remake ID`, `give
-  ID`). Alteration is the old item and the request shown to Claude, made
-  again under the same id and re-signed; Wren's is `jar.generate(...,
-  force_form="furniture")`.
-- **Confirmation and real time** (v0.19.0, the owner: "needs confirmation
-  before any transaction", "upgrades and commissions should take real world
-  time"). A `DEAL:` line is only a dry run (`make_deal(..., dry=True)`) kept
-  as an offer worded by the code (`town.words`, `jar.deal_words`), shown as
-  `offer	WORDS` on /jar/talk; `POST /jar/deal?who=` with the have lines
-  and yes/no carries it out, re-checked. A job is made at once and held in
-  `held/PERSON` (`town.hold`/`ready`/`release_due`) until its time; the tx
-  is queued at hand-over so ids stay in order; `GET /jar/jobs` lists them.
-  Shop buys and upgrades ask y/n; upgrades are built over real time
-  (`js_buy_at`, `build K AT` in the save, `js_settle_build`).
-  Resource beds ripen in `JS_RES_GROW_MS` (4 min at level 1).
-- **On the device**: Jar Post's Town (`V_TOWN`, `post_open("town")`) lists
-  the four and talks with `?who=`; `apps/jar/jartx.h` carries out tx lines for
-  the talk screen and for the scene, which asks `GET /jar/tx?after=` after
-  the patches and events. A `remake`/`give` stops the queue until the item
-  (`GET /jar/item?id=`) is fetched and its signature checks; a remade item
-  in the jar is put back where it stood and its old patch is deleted.
-
-The rest:
-- Talk replaces the old hint: Jar Post's Talk screen (`t` in the shop),
-  `POST`/`GET /jar/talk`.
-- Prices are chosen before an item is made (`TIERS`: common to treasure,
-  30-900), kept in record byte 207 (in fives, signed), and a dear item gets
-  more care and more effort.
-- Plants steer nothing. Since v0.18.2 there are no seeds: the Garden plants
-  any bed with any plant, free, and it grows in an hour (`JS_MATURE_S`).
-  Different growth rates or looks per plant are a later idea, not now.
-- The shelf is gone.
+- **Build** (apps/build.c) -- the terminal to Claude Code in this repo (see above)
+- **Calc** (apps/calc.c) -- graphing calculator; notes in apps/calc.md
+- **Calendar** (apps/calendar.c) -- Google Calendar through the server, offline cache
+- **cat** (apps/cat.c) -- CLI: files or stdin to stdout
+- **Chat** (apps/chat/chat.c) -- chat, with Arty and Marcy emojis; notes in apps/chat/README.md
+- **Circuit** (apps/midi/circuit.c) -- beats for a Novation Circuit; notes in apps/midi/README.md
+- **Claude** (apps/claude.c) -- chat with the kernel's agent, or about one document; notes in apps/claude.md
+- **Clock** (apps/clock.c) -- clock face and alarm editor; notes in apps/clock.md
+- **Counter** (apps/counter.c) -- a tally with laps
+- **Crossword** (apps/crossword/crossword.c) -- NYT puzzles, Full, Midi and Themed
+- **Dashboard Link** (apps/dashlink.c) -- the dashboard reaches the card and console; notes in apps/dashlink.md
+- **Edit** (apps/edit.c) -- text editor with a Markdown preview; notes in apps/edit.md
+- **Explorer** (apps/explorer.c) -- two-pane file manager for a mouse
+- **Files** (apps/files.c) -- the keyboard file manager
+- **Game Night** (apps/gamenight/gamenight.c) -- scoreboard, dice, round timer, Taboo buzzer
+- **grep** (apps/grep.c) -- CLI: lines matching a pattern
+- **Habits** (apps/habits.c) -- daily habits and streaks
+- **Hangman** (apps/hangman/hangman.c) -- two players, one device; notes in apps/hangman/README.md
+- **Hub** (apps/hub/hub.c) -- M5Launcher's firmware catalog, booted; notes in apps/hub/README.md
+- **Iron** (apps/iron/iron.c) -- press the wrinkles out before the clock runs out
+- **Jar Factory** (apps/jar/jar.c) -- idle terrarium jam factory, Tibbs and the Town; notes in apps/jar/README.md
+- **Kart** (apps/kart/kart.c) -- SNES Mario Kart, Mode 7; notes in apps/kart/README.md
+- **Lamp** (apps/lamp/lamp.c) -- IR remote for LED lamps; notes in apps/lamp/README.md
+- **Level** (apps/level.c) -- bubble level, the ADV motion sensor's test
+- **Memo** (apps/memo.c) -- voice memos; notes in apps/memo.md
+- **MIDI** (apps/midi/midi.c) -- sequencer out of the Grove port; notes in apps/midi/README.md
+- **Mines** (apps/mines.c) -- Minesweeper, dressed as Windows 3.1
+- **Music** (apps/music.c) -- MP3 player dressed as an iPod nano; notes in apps/music.md
+- **Noodle** (apps/noodle.c) -- the tube man you blow on; notes in apps/noodle.md
+- **Notes** (apps/notes.c) -- notes synced with the server; notes in apps/notes.md
+- **ovltest** (apps/ovltest.c) -- CLI: checks data overlays on a device
+- **Pain** (apps/pain.c) -- a log of when it hurts, how much, where
+- **Pet** (apps/pet/pet.c) -- a virtual pet in wall-clock time
+- **Photos** (apps/photo.c) -- pictures from the dashboard, shown and printed; notes in apps/photo.md
+- **Python** (apps/python/python.c) -- MicroPython 1.24.1 REPL and scripts; notes in apps/python/README.md
+- **Quoridor** (apps/quoridor/quoridor.c) -- vs computer, pass-and-play, or nearby over ESP-NOW; notes in apps/quoridor/README.md
+- **Roku** (apps/roku.c) -- a Roku TV remote over the LAN
+- **Screen** (apps/screen.c) -- the PC's desktop, live
+- **Stocks** (apps/stocks.c) -- watchlist, a week's graph, holdings
+- **Tetris** (apps/tetris/tetris.c) -- Tetris
+- **Timer** (apps/timer.c) -- countdown timer
+- **Today** (apps/today.c) -- the day, made of other apps' commands, printed; notes in apps/today.md
+- **Todo** (apps/todo.c) -- Google Tasks, lists, claimed days; notes in apps/todo.md
+- **Toggl** (apps/toggl.c) -- Toggl timer and targets; notes in apps/toggl.md
+- **Update** (apps/update.c) -- the screen for `update`
+- **Vim** (apps/vim/vim.c) -- modal code editor with a file tree; notes in apps/vim/README.md
+- **Wikipedia** (apps/wiki/wiki.c) -- search and read; notes in apps/wiki/README.md
+- **Wordle** (apps/wordle/wordle.c) -- daily and practice; notes in apps/wordle/README.md
 
 ## Hardware facts — measured on the actual device, not from a datasheet
 
@@ -1698,7 +1077,8 @@ has arrow keys). Not an API change: an older kernel reads 2 as plain yes.
   `kernel/app/capp_blobs.h`, which is gitignored precisely so a stale copy
   cannot ship. Forgetting it means the firmware embeds apps built against a
   different API version, and the loader refuses them at boot with
-  "built for a different API version".
+  "built for an older CardOS; rebuild it" once they are older than
+  `CAPP_API_MIN`.
 - `python tools/make_cfnt.py --all` rebuilds the loadable fonts from
   `fonts/fonts.txt`; `--show out.png --text 12:34` renders a `.cfnt` back to
   check it.
@@ -1737,37 +1117,34 @@ hardware-specific. What it cost to learn:
 
 ## Working agreements
 
-- **A new app needs two things besides its code**, or `tools/build_apps.py`
-  refuses it: a line in `apps/folders.txt` (`name Tools`, `Games`, `Net`, or
-  `-` for a CLI app at the top level), and a non-blank 16x16 icon in its
-  `capp_info` (32 bytes, 1bpp, two bytes a row, bit 7 leftmost; `apps/timer.c`
-  has one). And a colour icon under the app's name -- `apps/icons/STEM.txt`,
-  the name on the first line and sixteen rows of art in the INK letters of
+- **A new app needs three things besides its code**, or `tools/build_apps.py`
+  refuses it, and all three are in the app's own files: an `@app folder`
+  line in its top comment (`Plan`, `Make`, `Net`, `Games`, `System`, or `-`
+  for a CLI app at the top level); a non-blank 16x16 icon in its `capp_info`
+  (32 bytes, 1bpp, two bytes a row, bit 7 leftmost; `apps/timer.c` has one);
+  and a colour icon, `NAME.icon.txt` beside its source -- the name on the
+  first line and sixteen rows of art in the INK letters of
   `tools/make_color_icons.py`: the launcher shows that one, and without it
   the app wears its 1bpp icon in one flat teal. `update apps` delivers the
   icon with the app (`build_apps.py` writes `build/icons`); only the few in
   `SEED` are in the firmware, so run `python tools/make_color_icons.py`
-  only when one of those changes. The folder also reaches the `/update` manifest, so a first install
-  lands in it rather than at the top level, which is where every app Build
-  made used to end up.
+  only when one of those changes. The folder also reaches the `/update`
+  manifest, so a first install lands in it rather than at the top level,
+  which is where every app Build made used to end up. Add `@app release
+  core` only for an app a CardOS release should carry.
 
 - **An app with several files of its own lives in a folder** (2026-10-12):
-  `apps/jar/`, `apps/kart/`, `apps/midi/` (MIDI and Circuit), `apps/iron/`,
-  `apps/gamenight/`, `apps/quoridor/`, `apps/tetris/`, `apps/pet/`, `apps/chat/`,
-  `apps/wordle/`, `apps/hangman/`.
-  `tools/build_apps.py` (`app_sources`) builds every `.c` directly in `apps/`
-  and every `.c` one folder down; the `.capp` is named by the file, not the
-  folder (`apps/jar/jar.c` is still `jar.capp`), so `folders.txt`, the icons,
-  the card and the manifest are unchanged, and two sources with one name are
-  refused. Includes are from the repo root (`#include "apps/jar/jarsim.h"`);
-  headers more than one app uses (`str.h`, `footer.h`, `synth.h`, `b64.h`,
-  ...) stay in `apps/`. A one-file app stays `apps/NAME.c`, which is all a
-  fenced Build may make (`server/fence.py` refuses `apps/NAME.c` beside an
-  `apps/NAME/`). On the server Jar is the package `server/jar/`:
-  `__init__.py` is what `server/jar.py` was, with `jarvm`, `jarstages`,
-  `jarlab` (and `jarlab.html`), `jarpatch`, `jarevents`, `shopkeep` and
-  `town` beside it (`from server.jar import shopkeep`); routes, URLs and
-  state are as they were, and `python -m server.jar seed N` still works.
+  `apps/jar/`, `apps/kart/`, `apps/midi/` (MIDI and Circuit), `apps/chat/`,
+  `apps/wordle/`, ... -- and an app with a server plugin, tests or tools of
+  its own (Wiki and Hub became folders for their plugins). Every `.c`
+  directly in `apps/` and every `.c` one folder down is an app; the `.capp`
+  is named by the file, not the folder (`apps/jar/jar.c` is still
+  `jar.capp`), and two sources with one name are refused. Includes are from
+  the repo root (`#include "apps/jar/jarsim.h"`); headers more than one app
+  uses (`str.h`, `footer.h`, `synth.h`, `b64.h`, `social.h`, ...) stay in
+  `apps/` and are what the SDK carries. A one-file app stays `apps/NAME.c`,
+  which is all a fenced Build may make (`server/fence.py` refuses
+  `apps/NAME.c` beside an `apps/NAME/`).
 
 - **Every app speaks the same keys** (2026-10-02). A letter means one
   thing everywhere, so a key learned in one app works in the next:

@@ -17,6 +17,9 @@
  *   c   take the way it is lying now as level (a surface that is not)
  *   r   back to true level
  *   h   hold the reading
+ *
+ * @app folder Make
+ * @app release extra
  */
 #include "kernel/app/capp.h"
 #include "apps/footer.h"

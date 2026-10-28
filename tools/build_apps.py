@@ -29,15 +29,26 @@ APPS = os.path.join(ROOT, "apps")
 OUT = os.path.join(ROOT, "build", "apps")
 HEADER = os.path.join(ROOT, "kernel", "app", "capp_blobs.h")
 
-# The apps the firmware carries, for a card that has none: enough to link
-# the device to the dashboard and repair the card from there or by hand.
-# Everything else comes from `update apps`. All of them used to be
-# embedded -- 948 KB of the image by 2026-10-01, which pushed the firmware
-# past the 2304 KB update slots, so `update os` could no longer install it.
-# Update joins them for the same reason Memory, About and Settings need no
-# `update apps` first: the one app that fetches updates must not itself be
-# missing, or stale, on a card that has never synced.
-EMBED = ("dashlink", "files", "edit", "update")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import appmeta  # noqa: E402
+
+# What each app says about itself: its `@app` lines (tools/appmeta.py). That
+# is where an app's launcher folder, whether a release carries it, whether the
+# firmware embeds it, a budget exception and a many-source build are written
+# -- nothing here lists apps. Set by main(); the default is apps/ alone.
+APPS_META = {}
+
+# `@app embed yes`: the apps the firmware carries, for a card that has none:
+# enough to link the device to the dashboard and repair the card from there
+# or by hand (Dashboard Link, Files, Edit, Update). Everything else comes from
+# `update apps`. All of them used to be embedded -- 948 KB of the image by
+# 2026-10-01, which pushed the firmware past the 2304 KB update slots, so
+# `update os` could no longer install it. Update is one for the same reason
+# Memory, About and Settings need no `update apps` first: the one app that
+# fetches updates must not itself be missing, or stale, on a card that has
+# never synced.
+def embedded():
+    return tuple(s for s, a in sorted(APPS_META.items()) if a.embed)
 
 TOOLCHAIN = os.path.join(
     os.path.expanduser("~"), ".platformio", "packages",
@@ -245,13 +256,14 @@ CAPP_CODE_IN_RAM = 0x0040
 
 # Apps allowed over the budget for now, each with why. Take one off as soon
 # as it is back under -- the build says when.
-OVER_BUDGET = {
-}
+def over_budget():
+    """{stem: why} for apps allowed over the budget (`@app budget WHY`)."""
+    return {s: a.budget for s, a in APPS_META.items() if a.budget}
 
 
 def check_budget(built):
     """Print the layout per app, write build/apps/sizes.txt, and refuse an
-    app over budget that is not in OVER_BUDGET."""
+    app over budget that does not say `@app budget WHY`."""
     rows, bad = [], []
     for name, elf in built:
         lay = layout(elf)
@@ -277,17 +289,17 @@ def check_budget(built):
                        lay["block"], "ram  " if in_ram else "flash", "  OVER" if over else ""))
     print("  %s" % os.path.relpath(os.path.join(OUT, "sizes.txt"), ROOT))
     for name, lay, in_ram, over in rows:
-        if over and name in OVER_BUDGET:
+        if over and name in over_budget():
             print("  warning: %s is over budget (%s), allowed: %s"
-                  % (name, "; ".join(over), OVER_BUDGET[name]))
+                  % (name, "; ".join(over), over_budget()[name]))
         elif over:
             bad.append("%s: %s" % (name, "; ".join(over)))
-        elif name in OVER_BUDGET:
-            print("  note: %s is under budget now -- take it out of OVER_BUDGET" % name)
+        elif name in over_budget():
+            print("  note: %s is under budget now -- take its @app budget line out" % name)
     if bad:
         raise SystemExit(
             "over the app size budget (the data block must fit the 28 KB arena; "
-            "see OVER_BUDGET in tools/build_apps.py):\n  " + "\n  ".join(bad))
+            "an app allowed over it says `@app budget WHY`):\n  " + "\n  ".join(bad))
 
 
 def check_image(elf, name):
@@ -323,24 +335,22 @@ def check_image(elf, name):
 
 # Which folder of /apps each app goes in: apps/folders.txt, shared with the
 # server, which puts it in the /update manifest so a first install lands in
-# the folder too. Every app must have a line -- "-" for the top level, where
-# the CLI apps stay on the default PATH -- because an app nobody placed used to
-# land at the top level with no folder, which is where Build's apps all went.
-FOLDERS_FILE = os.path.join(APPS, "folders.txt")
+# the folder too -- written for it as build/apps/folders.txt. Every app must
+# say -- `@app folder -` for the top level, where the CLI apps stay on the
+# default PATH -- because an app nobody placed used to land at the top level
+# with no folder, which is where Build's apps all went.
+def folder_of(stem):
+    a = APPS_META.get(stem)
+    return a.folder if a else None
 
 
-def load_folders():
-    """{app: folder or None} for every app apps/folders.txt names."""
-    out = {}
-    with open(FOLDERS_FILE, encoding="utf-8") as f:
-        for line in f:
-            words = line.split("#", 1)[0].split()
-            if len(words) == 2:
-                out[words[0]] = None if words[1] == "-" else words[1]
-    return out
-
-
-FOLDERS = load_folders()
+def emit_folders(built):
+    """build/apps/folders.txt, "stem folder" a line, for server/updates.py."""
+    path = os.path.join(OUT, "folders.txt")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("# Generated by tools/build_apps.py from each app's @app folder line.\n")
+        for name, _ in built:
+            f.write("%-10s %s\n" % (name, folder_of(name) or "-"))
 
 # The descriptor's layout (CappInfo in kernel/app/capp.h): capp_info is the
 # first thing in .data (apps/capp.ld keeps it there), so it can be read out of
@@ -564,11 +574,13 @@ def emit_catalog(built):
 def check_placement(stem, elf):
     """Refuse an app that nobody placed or that has no face. A Build turn that
     makes an app reads this when it fails, so the message says what to do."""
-    if stem not in FOLDERS:
+    a = APPS_META.get(stem)
+    if a is None or not a.placed:
         raise SystemExit(
-            "%s: apps/folders.txt has no line for it. Add one: '%s Tools' (or "
-            "Games, Net -- the folders there are), or '%s -' for a CLI app at "
-            "the top level." % (stem, stem, stem))
+            "%s: it does not say which launcher folder it goes in. Add a line "
+            "'@app folder Games' to the comment at the top of its source (or "
+            "Plan, Make, Net, System), or '@app folder -' for a CLI app at the "
+            "top level." % stem)
     flags, name, icon = read_info(elf)
     if not flags & CAPP_CLI and not any(icon):
         raise SystemExit(
@@ -582,34 +594,31 @@ def check_placement(stem, elf):
     import make_color_icons
     if not flags & CAPP_CLI and name not in make_color_icons.ICONS:
         raise SystemExit(
-            "%s: no colour icon for '%s' in tools/make_color_icons.py -- the "
-            "launcher would show only its 1bpp icon, in one flat teal. Add a "
-            "16x16 picture under that name: apps/icons/%s.txt, the name on the "
-            "first line and sixteen rows of art in the INK letters of "
-            "tools/make_color_icons.py." % (stem, name, stem))
+            "%s: no colour icon for '%s' -- the launcher would show only its "
+            "1bpp icon, in one flat teal. Draw one beside its source, as "
+            "%s.icon.txt: the name on the first line and sixteen rows of art "
+            "in the INK letters of tools/make_color_icons.py." % (stem, name, stem))
 
 
 def seed_name(stem):
     """Where this app's .capp is written, relative to /apps."""
-    folder = FOLDERS.get(stem)
+    folder = folder_of(stem)
     return "%s/%s.capp" % (folder, stem) if folder else "%s.capp" % stem
 
 
-# Apps built from more than their one source (2026-10-16, the Python app):
-# every .c under `dirs` (relative to the repo) compiled with `include` on the
-# path and `defines`, and linked against the toolchain's libc, libm and
+# Apps built from more than their one source (2026-10-16, the Python app),
+# `@app multi {JSON}`: every .c in its "dirs" compiled with "include" on the
+# path and "defines", and linked against the toolchain's libc, libm and
 # libgcc. Only these: everything else links against nothing. check_image
 # still refuses an unresolved symbol, so a library function that would need
 # the C library's system layer (malloc, files, reentrancy) fails the build
 # rather than the device. Warnings are not errors in sources that are not
 # ours.
-MULTI = {
-    "python": {
-        "dirs": ["apps/python/mp/py"],     # gc_collect is the app's own
-        "include": ["apps/python", "apps/python/mp"],
-        "defines": ["-DNDEBUG"],
-    },
-}
+def multi_of(name):
+    a = APPS_META.get(name)
+    return a.multi if a else None
+
+
 MULTI_DROP = ("-nostdinc", "-Werror", "-Wall", "-Wextra")
 
 
@@ -619,23 +628,21 @@ def toolchain_lib(name):
 
 
 def compile_multi(name, src, out_dir):
-    spec = MULTI[name]
+    spec = multi_of(name)
     flags = [f for f in CFLAGS if f not in MULTI_DROP]
     for d in spec["include"]:
-        flags += ["-I", os.path.join(ROOT, d)]
+        flags += ["-I", d]
     flags += spec.get("defines", [])
     objdir = os.path.join(out_dir, name + ".objs")
     os.makedirs(objdir, exist_ok=True)
     srcs = [src]
     for d in spec["dirs"]:
-        full = os.path.join(ROOT, d)
-        srcs += [os.path.join(full, f) for f in sorted(os.listdir(full)) if f.endswith(".c")]
+        srcs += [os.path.join(d, f) for f in sorted(os.listdir(d)) if f.endswith(".c")]
     objs = []
     for s in srcs:
         obj = os.path.join(objdir, os.path.splitext(os.path.basename(s))[0] + ".o")
         if not os.path.exists(obj) or os.path.getmtime(obj) < max(
-                os.path.getmtime(s), os.path.getmtime(os.path.join(ROOT, spec["include"][0],
-                                                                    "mpconfigport.h"))) \
+                os.path.getmtime(s), os.path.getmtime(spec["config"] or s)) \
                 or s == src:
             run([GCC] + flags + ["-c", s, "-o", obj])
         objs.append(obj)
@@ -652,7 +659,7 @@ def compile_link(src, out_dir=OUT):
     name = os.path.splitext(os.path.basename(src))[0]
     obj = os.path.join(out_dir, name + ".o")
     elf = os.path.join(out_dir, name + ".capp")
-    if name in MULTI:
+    if multi_of(name):
         objs, libs = compile_multi(name, src, out_dir)
     else:
         run([GCC] + CFLAGS + ["-isystem", gcc_include_dir(), "-c", src, "-o", obj])
@@ -685,7 +692,7 @@ def emit_header(built):
     lines = [
         "/* Generated by tools/build_apps.py -- do not edit.",
         " *",
-        " * The few apps the firmware carries (EMBED in tools/build_apps.py), so",
+        " * The few apps the firmware carries (`@app embed yes`), so",
         " * a card with none can still be linked to the dashboard and repaired.",
         " * The rest arrive with `update apps`.",
         " */",
@@ -754,38 +761,47 @@ def check_slots(napps):
             % (napps, limit, napps + SLOT_SPARE))
 
 
-def app_sources(apps_dir=APPS):
-    """Every app's source. An app is apps/NAME.c, or -- when it has files of
-    its own beside its shared headers -- apps/DIR/NAME.c: every .c directly
-    in a folder of apps/ is an app (apps/midi holds MIDI and Circuit). One
-    level only. The .capp is NAME.capp either way, so moving an app into a
-    folder changes nothing on the card; two sources with one NAME are refused."""
-    srcs = []
-    for f in sorted(os.listdir(apps_dir)):
-        p = os.path.join(apps_dir, f)
-        if f.endswith(".c") and os.path.isfile(p):
-            srcs.append(p)
-        elif os.path.isdir(p):
-            srcs.extend(os.path.join(p, g) for g in sorted(os.listdir(p))
-                        if g.endswith(".c") and os.path.isfile(os.path.join(p, g)))
-    seen = {}
-    for s in srcs:
-        name = os.path.splitext(os.path.basename(s))[0]
-        if name in seen:
-            raise SystemExit("two apps called %s: %s and %s" % (
-                name, os.path.relpath(seen[name], ROOT), os.path.relpath(s, ROOT)))
-        seen[name] = s
-    return sorted(srcs, key=lambda s: os.path.basename(s))
+def app_sources(*dirs):
+    """Every app's source (tools/appmeta.py: apps/NAME.c and apps/DIR/NAME.c,
+    one level), from apps/ and any other apps folders given -- another
+    repo's. The .capp is NAME.capp either way; two with one NAME are refused."""
+    return [a.src for _, a in sorted(appmeta.apps(*dirs).items())]
 
 
-def main():
+USAGE = """usage: python tools/build_apps.py [--apps DIR ...] [--release]
+
+    --apps DIR   build the apps in DIR as well as apps/ (another repo's apps
+                 folder, laid out the same way; may be given more than once)
+    --release    only the apps marked `@app release core`: what a CardOS
+                 release carries"""
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    dirs, release = [APPS], False
+    while argv:
+        a = argv.pop(0)
+        if a == "--apps" and argv:
+            dirs.append(os.path.abspath(argv.pop(0)))
+        elif a == "--release":
+            release = True
+        else:
+            raise SystemExit(USAGE)
     if not os.path.exists(GCC):
         raise SystemExit("no Xtensa toolchain at " + TOOLCHAIN)
     os.makedirs(OUT, exist_ok=True)
 
-    srcs = app_sources()
+    APPS_META.clear()
+    APPS_META.update(appmeta.apps(*dirs))
+    import make_color_icons
+    if dirs[1:]:
+        make_color_icons.load_icon_files(*dirs[1:])   # apps/'s are loaded already
+    if release:
+        for stem in [s for s, a in APPS_META.items() if a.release != "core"]:
+            del APPS_META[stem]
+    srcs = [a.src for _, a in sorted(APPS_META.items())]
     if not srcs:
-        raise SystemExit("no apps in " + APPS)
+        raise SystemExit("no apps in " + ", ".join(dirs))
 
     check_slots(len(srcs))
     print("building %d app(s):" % len(srcs))
@@ -797,16 +813,17 @@ def main():
         if f.endswith(".capp") and f[:-len(".capp")] not in names:
             os.remove(os.path.join(OUT, f))
             print("  removed %s: no source for it any more" % f)
-    missing = [n for n in EMBED if n not in dict(built)]
-    if missing:
-        raise SystemExit("EMBED names apps that were not built: %s" % ", ".join(missing))
     check_budget(built)
-    emit_header([b for b in built if b[0] in EMBED])
+    # The firmware's own apps -- only where there is a firmware to carry
+    # them: the SDK (tools/make_sdk.py) builds apps for a card, not a kernel.
+    if os.path.isfile(os.path.join(ROOT, "kernel", "app", "elfload.c")):
+        if not embedded():
+            raise SystemExit("no app says `@app embed yes`: a blank card could not be repaired")
+        emit_header([b for b in built if b[0] in embedded()])
+    emit_folders(built)
     emit_catalog(built)
     # The colour icons, beside the apps: the server offers both with
     # `update apps`, and publishes both from here (server/build.py).
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    import make_color_icons
     icons = make_color_icons.write_cic_files(os.path.join(ROOT, make_color_icons.OUT), quiet=True)
     print("  %s (%d colour icons)" % (make_color_icons.OUT, len(icons)))
 

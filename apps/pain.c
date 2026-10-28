@@ -98,6 +98,9 @@
  * clock56, falling back to num30 if the column is too short and to the 6x8
  * font if the card has no fonts. The colours are the dark ones Counter and
  * Habits use.
+ *
+ * @app folder Plan
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

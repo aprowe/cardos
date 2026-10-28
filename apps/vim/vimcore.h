@@ -2,7 +2,7 @@
  * commands and completion, over the gap buffer in vimbuf.h.
  *
  * Everything that is not pixels is here, so the host suite can drive it a
- * key at a time (test/test_vim.c) exactly as the app does. The app
+ * key at a time (apps/vim/test/test_vim.c) exactly as the app does. The app
  * (apps/vim/vim.c) hands keys to vi_key, paints from what vi_layout leaves,
  * and answers the requests in V->req (a picker to open or save, :q).
  *

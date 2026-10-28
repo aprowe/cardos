@@ -1,9 +1,9 @@
 /* JarScript 3: THE table. apps/jar/jv3.h includes this file with the macros
- * defined to build its tables; server/jar/jarvm3.py reads the same lines with
+ * defined to build its tables; apps/jar/server/jarvm3.py reads the same lines with
  * regular expressions at import (nobody retypes them). The semantics are in
  * docs/superpowers/specs/2026-10-14-jarscript3-design.md. Change a line here
  * and both machines change together; the fixtures (tools/
- * make_jarvm3_fixtures.py, test/test_jv3.c) say if they stop agreeing.
+ * make_jarvm3_fixtures.py, apps/jar/test/test_jv3.c) say if they stop agreeing.
  *
  * Keep every entry on one line, in the exact shapes below.
  *

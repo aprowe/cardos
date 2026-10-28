@@ -17,7 +17,7 @@
  * A record that came from the server is kept byte for byte as it arrived,
  * so its signature still holds when it is sent on as a gift. Every write
  * goes through apps/safefile.h. Header-only, static helpers taking the API,
- * host-tested in test/test_jarstore.c.
+ * host-tested in apps/jar/test/test_jarstore.c.
  */
 #ifndef CARDOS_JARSTORE_H
 #define CARDOS_JARSTORE_H

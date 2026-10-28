@@ -1,8 +1,8 @@
 /* Python: MicroPython on the device, a REPL to play with (2026-10-16).
  *
  * The interpreter is MicroPython's embed port, generated into apps/python/mp
- * from apps/python/mpconfigport.h (tools/make_micropython.sh) and built into
- * this one app (tools/build_apps.py, MULTI): the only app linked against the
+ * from apps/python/mpconfigport.h (apps/python/tools/make_micropython.sh) and built into
+ * this one app (its `@app multi` line, below): the only app linked against the
  * toolchain's libc, libm and libgcc, and still checked for anything they
  * leave unresolved. Its code runs from flash like any app's.
  *
@@ -17,6 +17,10 @@
  * `python FILE` runs the file, then stays at the prompt with its globals;
  * exit() and ctrl-d on an empty line leave (api->leave). Files, imports,
  * os and time are cardpy_mod.h.
+ *
+ * @app folder Make
+ * @app release core
+ * @app multi {"dirs": ["mp/py"], "include": [".", "mp"], "defines": ["-DNDEBUG"], "config": "mpconfigport.h"}
  */
 #include <setjmp.h>
 #include <string.h>

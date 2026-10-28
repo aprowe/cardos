@@ -11,7 +11,7 @@
  * scanning, and a jump to the end of the file costs one pass over it. The
  * anchor is kept true across inserts and deletes before it.
  *
- * Portable: no libc, no hardware. Host-tested in test/test_vim.c.
+ * Portable: no libc, no hardware. Host-tested in apps/vim/test/test_vim.c.
  */
 #ifndef CARDOS_VIMBUF_H
 #define CARDOS_VIMBUF_H

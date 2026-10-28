@@ -7,7 +7,7 @@
  * platform, arms up.
  *
  * The picture is an old photograph of an empty gallows on a film set, and
- * the man is drawn for it -- both made by tools/make_hangman.py into
+ * the man is drawn for it -- both made by apps/hangman/tools/make_hangman.py into
  * apps/hangman/hangman_art.h (5.6 KB of photograph, 1.3 KB of man).
  *
  * A point to the guesser for a word found, to the setter for a figure
@@ -21,8 +21,11 @@
  * marks): a key changes the word, the figure, the letters tried and a line
  * of text. The picture is 124 rows sent with api->pixels.
  *
- * The rules are apps/hangman/hangman.h, host-tested in test/test_hangman.c;
- * the screen in test/test_hangman_paint.c.
+ * The rules are apps/hangman/hangman.h, host-tested in apps/hangman/test/test_hangman.c;
+ * the screen in apps/hangman/test/test_hangman_paint.c.
+ *
+ * @app folder Games
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

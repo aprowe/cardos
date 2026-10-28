@@ -22,7 +22,7 @@
  * not ours is refused whole, and nothing is changed.
  *
  * Portable, like vimcore.h: the card is the CardApi in `vapi`, and
- * test/test_vim.c drives it a key at a time.
+ * apps/vim/test/test_vim.c drives it a key at a time.
  */
 #ifndef CARDOS_VIMTREE_H
 #define CARDOS_VIMTREE_H

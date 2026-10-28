@@ -16,9 +16,9 @@
  * back here, and the jar starts again from its save. Nothing is made while
  * the jar is off screen -- not in the companions, not while shut: jam and
  * coins come only from this scene running. The world is apps/jar/jarsim.h, the item record apps/jar/jaritem.h, the
- * card apps/jar/jarstore.h, the pictures apps/jar/jar_art.h (tools/make_jar_art.py
- * from tools/jar_art.txt). Host tests: test/test_jarsim.c,
- * test/test_jaritem.c, test/test_jarstore.c, test/test_jar.c (JAR_DUMP=dir
+ * card apps/jar/jarstore.h, the pictures apps/jar/jar_art.h (apps/jar/tools/make_jar_art.py
+ * from apps/jar/tools/jar_art.txt). Host tests: apps/jar/test/test_jarsim.c,
+ * apps/jar/test/test_jaritem.c, apps/jar/test/test_jarstore.c, apps/jar/test/test_jar.c (JAR_DUMP=dir
  * writes frames).
  *
  * GIFTS ARRIVE HERE. While online (and once at the start) the jar asks the
@@ -38,6 +38,10 @@
  * ON THE CARD. /var/jar/jar.txt is the jar (js_save), saved on every
  * placement, before opening a companion and every five minutes;
  * /var/jar/items/ holds one record per owned item (apps/jar/jarstore.h).
+ *
+ * @app folder Games
+ * @app routes /jarlab /dash/jarlab
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"
@@ -1436,7 +1440,7 @@ static uint32_t thanks(int n) {
 
 static void clock_minute(void);
 
-/* "sky WORD TAG", "rise MIN", "set MIN" (server/jar/__init__.py sky_text). */
+/* "sky WORD TAG", "rise MIN", "set MIN" (apps/jar/server/__init__.py sky_text). */
 static void sky_reply(void) {
   const char *p, *q;
   int w = -1, r = 0, s = 0;

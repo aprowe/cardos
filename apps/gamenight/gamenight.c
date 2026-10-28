@@ -31,6 +31,9 @@
  * plays WAV files and has nothing that makes a tone), and m turns them off.
  * Settings -- the dice, the timer's preset, sound -- are in
  * /var/gamenight/prefs.txt.
+ *
+ * @app folder Games
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

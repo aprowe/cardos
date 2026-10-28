@@ -32,6 +32,9 @@
  * names one), `project NAME` (no description), `describe TEXT` (the running
  * one), `stop`, and `today` -- what was tracked today and the total,
  * which is what Today's page wants from it.
+ *
+ * @app folder Plan
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

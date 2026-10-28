@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Generate test/test_main.c from every `void test_*(void)` in test/test_*.c.
+"""Generate test/test_main.c from every `void test_*(void)` in test/test_*.c
+and in each app's own tests, apps/*/test/test_*.c (tools/appmeta.py).
 
 Hand-maintaining a test registry means a test can be written, compiled, and
 then silently never run -- the worst failure mode a suite can have. Generating
@@ -14,7 +15,7 @@ NL = "\\n"  # a literal backslash-n, to be emitted inside C string literals
 pattern = re.compile(r"^void\s+(test_[A-Za-z0-9_]+)\s*\(\s*void\s*\)", re.M)
 
 groups = []
-for path in sorted((ROOT / "test").glob("test_*.c")):
+for path in sorted((ROOT / "test").glob("test_*.c")) + sorted(ROOT.glob("apps/*/test/test_*.c")):
     if path.name == "test_main.c":
         continue
     names = pattern.findall(path.read_text())

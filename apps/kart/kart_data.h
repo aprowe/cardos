@@ -1,4 +1,4 @@
-/* Kart's tables, from tools/make_kart.py -- do not edit. */
+/* Kart's tables, from apps/kart/tools/make_kart.py -- do not edit. */
 #ifndef KART_DATA_H
 #define KART_DATA_H
 

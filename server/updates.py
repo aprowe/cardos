@@ -64,10 +64,11 @@ APPS_DIR = os.path.join(ROOT, "build", "apps")
 # The .cic files, beside the apps: tools/make_color_icons.py writes them (and
 # tools/build_apps.py has it do so, so the droplet's build has them too).
 ICONS_DIR = os.path.join(ROOT, "build", "icons")
-# Which folder each app belongs in. Shared with tools/build_apps.py, which
-# seeds the firmware from it; the manifest carries it so a first install
-# lands in the folder too, not at the top level.
-FOLDERS_FILE = os.path.join(ROOT, "apps", "folders.txt")
+# Which folder each app belongs in: each app says so itself (`@app folder`,
+# tools/appmeta.py), and tools/build_apps.py writes what the apps it built
+# said here. The manifest carries it so a first install lands in the folder
+# too, not at the top level.
+FOLDERS_FILE = os.path.join(APPS_DIR, "folders.txt")
 
 # esp_app_desc_t sits after the 24-byte image header and the first 8-byte
 # segment header. Within it: magic u32, secure_version u32, reserv1 u32[2],
@@ -164,8 +165,12 @@ def icon_path(name, icons_dir):
 
 
 def load_folders(path=None):
-    """{app: folder} from apps/folders.txt; top-level apps ("-") are left out."""
+    """{app: folder} from build/apps/folders.txt -- or, with no build here
+    yet, from the apps' own @app lines; top-level apps ("-") are left out."""
     out = {}
+    if path is None and not os.path.isfile(FOLDERS_FILE):
+        from tools import appmeta
+        return {s: f for s, f in appmeta.folders().items() if f and valid_name(f)}
     try:
         with open(path or FOLDERS_FILE, encoding="utf-8") as f:
             for line in f:

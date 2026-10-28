@@ -18,6 +18,10 @@
  * the server. An upload is written to NAME.part and only becomes NAME when
  * the last chunk is in, so a dropped connection never leaves half a file
  * under the real name.
+ *
+ * @app folder Net
+ * @app release core
+ * @app embed yes
  */
 
 #include "kernel/app/capp.h"

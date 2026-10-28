@@ -1,6 +1,6 @@
 /* The pet's life, apart from the screen: what time does to it and what the
  * keys do for it. Header-only and libc-free, like apps/forklang.h, so the
- * app and the host tests (test/test_petsim.c) share one copy.
+ * app and the host tests (apps/pet/test/test_petsim.c) share one copy.
  *
  * Time is wall-clock minutes. The app calls pet_advance with the epoch each
  * time it opens and once a minute while it is open, so a pet left for a day

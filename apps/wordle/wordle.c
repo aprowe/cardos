@@ -18,7 +18,10 @@
  * redraw than to track, and nothing can flicker.
  *
  * The rules, the word list and the stats file are wordle.h, host-tested in
- * test/test_wordle.c; the screen in test/test_wordle_paint.c.
+ * apps/wordle/test/test_wordle.c; the screen in apps/wordle/test/test_wordle_paint.c.
+ *
+ * @app folder Games
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

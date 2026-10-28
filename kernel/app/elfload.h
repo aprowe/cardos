@@ -76,8 +76,18 @@ typedef enum {
   CAPP_ERR_NO_ENTRY,        /* capp_main or capp_info missing */
   CAPP_ERR_NO_MEMORY,       /* no executable RAM left */
   CAPP_ERR_RELOC,           /* a relocation type we cannot apply */
-  CAPP_ERR_API              /* built against a different API version */
+  CAPP_ERR_API,             /* built for an API older than CAPP_API_MIN */
+  CAPP_ERR_API_NEWER        /* built for an API newer than this firmware's */
 } CappResult;
+
+/* Whether an app built for API version v loads here (see CAPP_API_MIN in
+ * capp.h). Inline so the host suite can pin it; the rest of the loader is
+ * device-only. */
+static inline CappResult capp_api_check(unsigned v) {
+  if (v > CAPP_API_VERSION) return CAPP_ERR_API_NEWER;
+  if (v < CAPP_API_MIN) return CAPP_ERR_API;
+  return CAPP_OK;
+}
 
 CappResult capp_load(const char *path, LoadedApp *out);
 

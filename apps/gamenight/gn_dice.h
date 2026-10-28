@@ -3,7 +3,7 @@
  * "1d4-1" -- rolled with the dice a player chose to hold kept as they were
  * (Yahtzee). A d2 is a coin.
  *
- * Portable and libc-free; host-tested in test/test_gamenight.c. */
+ * Portable and libc-free; host-tested in apps/gamenight/test/test_gamenight.c. */
 #ifndef CARDOS_GN_DICE_H
 #define CARDOS_GN_DICE_H
 

@@ -20,6 +20,9 @@
  * 384 dots as printdoc `%%` lines -- into /cache and hands it to the
  * console's `print FILE`, which can hold a document this app's memory
  * should not.
+ *
+ * @app folder Make
+ * @app release extra
  */
 #include "kernel/app/capp.h"
 #include "apps/str.h"

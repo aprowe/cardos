@@ -9,7 +9,11 @@
  * Files are named by the clock when it is set -- 0920-1142.wav -- and by
  * count when it is not, so the list sorts into the order they were made
  * either way. 16 kHz mono 16-bit, the mic's native form: 32 KB a second,
- * which the card takes without noticing. */
+ * which the card takes without noticing.
+ *
+ * @app folder Make
+ * @app release core
+ */
 
 #include "kernel/app/capp.h"
 #include "apps/datetime.h"
