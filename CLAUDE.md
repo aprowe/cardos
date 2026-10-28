@@ -65,9 +65,12 @@ after the last one seen -- live play and play hours apart are the same);
 `say=` moves notify. On the device, `apps/social.h`: the calls, the
 parsers and a friend picker. **Not social media** -- the owner's rule: no
 feed, nothing posted by itself, a friend's data shown only inside the app
-it belongs to, and only what a person chose to send reaches anyone. No app
-uses it yet (Wordle's friends' results and Jar's gifts are the natural
-first; Jar still has its own `/jar/friend`).
+it belongs to, and only what a person chose to send reaches anyone. Users:
+Wordle (friends' results for the day under yours, `f` their grids, `s`
+shares -- apps/wordle/README.md) and Jar Factory, whose gifts and friend
+list are the platform's friends (its old `/jar/me`, `/jar/friend`,
+`/jar/unfriend` answer old devices from them; `python -m apps.jar.server
+migrate-friends` turned its own list into platform friendships).
 
 **Apps outlive a firmware** (2026-10-27): the loader takes an app built for
 any API version from `CAPP_API_MIN` (48) to the firmware's own, and says
@@ -75,8 +78,13 @@ any API version from `CAPP_API_MIN` (48) to the firmware's own, and says
 `python tools/make_sdk.py OUT` is what a repository of apps builds and
 tests against without the kernel (`python OUT/tools/build_apps.py --apps
 REPO/apps`); `build_apps.py --release` builds only `@app release core`,
-the 17 a CardOS release carries. Moving the rest to repos of their own is
-the next step, not done.
+the 17 a CardOS release carries. **Apps in another repository**: each folder
+in `CARDOS_APP_DIRS` (os.pathsep-separated) is searched after apps/ -- by
+the build, `/update` and the server's plugins (imported from where they
+are, as `cardos_apps.NAME.server`; `server/tests/test_plugins.py`). Moving
+the extra apps to repos of their own is not done: the droplet's build and
+on-device Build both edit apps inside this repository, and need
+CARDOS_APP_DIRS (and a clone of each app repo) first.
 
 Apps come in two kinds. Built-ins are now only **Memory, About and Settings** —
 what cannot sensibly be loaded, being reports on the kernel that would load
@@ -1091,7 +1099,8 @@ has arrow keys). Not an API change: an older kernel reads 2 as plain yes.
   (there is no `pio` on PATH). `python -m platformio run -t upload --upload-port COM3`
   flashes the debug build; add `-e release` for the release one.
 - For CardOS use `framework = espidf`, **not** Arduino.
-- The device enumerates as **COM3** (USB VID:PID 303A:1001).
+- The device enumerates as **COM3** (USB VID:PID 303A:1001) -- or another
+  port: it was COM4 on 2026-10-27. `CARDOS_PORT=COM4` for tools/cardctl.py.
 
 ## Hard-won lessons from the sibling project
 
