@@ -1,7 +1,7 @@
 /* Jar Factory's world, apart from the screen: the factory in the jar, its
  * coins, its upgrades, the items placed in it and what they do. Header-only
  * and libc-free, like apps/pet/petsim.h, so apps/jar/jar.c and the host tests
- * (test/test_jarsim.c) share one copy. The design is
+ * (apps/jar/test/test_jarsim.c) share one copy. The design is
  * docs/superpowers/specs/2026-10-09-jar-factory-design.md.
  *
  * THE LOOP. A plant grows a berry on a timer. A free mossling walks over,
@@ -194,7 +194,7 @@ typedef struct { int32_t grow; uint32_t at; uint8_t ready, claimed, type, young,
 /* The garden: four plants, each making its own thing (2026-10-11). Berries
  * are jam and coins, as before; reed makes twigs, mushrooms spores and
  * flowers nectar, which the mosslings carry to the stores and the lane's
- * people are paid in (server/jar/town.py): Wren builds for twigs, Pip alters
+ * people are paid in (apps/jar/server/town.py): Wren builds for twigs, Pip alters
  * for spores, Bramble evolves for nectar. A bed's level (1-3, Bramble's
  * work) makes it grow faster. Fern and cactus were plants once: a save's
  * fern (1) is reed now, its cactus (4) reed too. */
@@ -301,7 +301,7 @@ typedef struct {
   uint32_t decor;                      /* an item the companion asked to place */
   uint32_t gseen;                      /* the last gift the jar announced */
   uint32_t txseen;                     /* the last of Tibbs's deals carried out (tx) */
-  uint32_t patchseen;                  /* the last patch fetched (server/jar/jarpatch.py) */
+  uint32_t patchseen;                  /* the last patch fetched (apps/jar/server/jarpatch.py) */
   /* Sold back (to the pool) and trashed (gone for good), not yet told to the
    * server: sent with the next poll (POST /jar/release), then cleared. */
 #define JS_RELQ 8

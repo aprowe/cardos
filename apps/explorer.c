@@ -20,6 +20,9 @@
  * same letters every app uses (CLAUDE.md, "Every app speaks the same keys"),
  * because a machine with a keyboard under your thumbs should never require
  * reaching for a mouse -- but nothing is keyboard-only.
+ *
+ * @app folder System
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

@@ -34,6 +34,9 @@
  * two, and one at a time the screen says which it is waiting on rather than
  * freezing on the lot. What was gathered is what prints: nothing is fetched
  * twice.
+ *
+ * @app folder Plan
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

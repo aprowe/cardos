@@ -69,9 +69,10 @@ def main(argv=None):
             print("  accounts: made, with %s as the owner" % os.environ.get("CARDOS_OWNER", "alex"))
         accounts.know_token(args.token)
 
-    # The NYT Midi: today's and a week back, looked for hourly (server/crossword.py).
-    from . import crossword
-    crossword.start_midi()
+    # The apps' own background work (server/plugins.py): Crossword's NYT
+    # Midi, today's and a week back, looked for hourly.
+    from . import plugins
+    plugins.start_all()
 
     # Threading, because a chat turn takes a minute, a render takes ten
     # seconds, and the device polls for its answer throughout. On the

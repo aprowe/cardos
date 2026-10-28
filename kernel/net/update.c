@@ -52,7 +52,7 @@ const char *update_base(void) {
   return (v && *v) ? v : DEFAULT_BASE;
 }
 
-/* Same file and the same trimming as apps/claude.c: a token with a newline
+/* Same file and the same trimming as apps/claude/claude.c: a token with a newline
  * on the end matches nothing. */
 const char *update_token(void) {
   int fd, n;

@@ -31,6 +31,9 @@
  *
  * No divisions by variables and nothing from libm: an app links no libgcc,
  * and a float divide is a call into it. Sines are a polynomial.
+ *
+ * @app folder Games
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

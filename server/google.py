@@ -8,6 +8,11 @@ moment most likely to fail for memory. Here all of that is easy: the server
 holds the login, does the HTTPS and the JSON, and hands the device plain
 lines over the plain HTTP it already speaks to this server.
 
+It stays in server/, not in an app's plugin (server/plugins.py): two apps,
+Calendar and Todo, use it, and its login is the dashboard's own Google
+sign-in (server/dash.py, the Accounts page) -- a platform service, as
+accounts and the store are.
+
     GET  /calendar/events?from=RFC3339&to=RFC3339
          -> one event a line: id <tab> start <tab> end <tab> summary
             start and end exactly as Google gives them -- "2026-09-29T13:00:00

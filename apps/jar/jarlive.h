@@ -25,7 +25,7 @@
 #include "apps/synth.h"
 #include "apps/b64.h"
 
-/* ---- patches: what items learned about a newcomer (server/jar/jarpatch.py) ---------- */
+/* ---- patches: what items learned about a newcomer (apps/jar/server/jarpatch.py) ---------- */
 
 #define LV_PATCH_DIR CAPP_VAR "/jar/patches"
 static const char LV_MAGIC[9] = { 'J', 'A', 'R', 'P', 'A', 'T', 'C', 'H', '1' };
@@ -92,7 +92,7 @@ static int lv_patches(char *t) {
   return got >= 3;
 }
 
-/* ---- the day's events, written (server/jar/jarevents.py) -------------------------------
+/* ---- the day's events, written (apps/jar/server/jarevents.py) -------------------------------
  *
  * "event N KIND TITLE" lines, asked for once a day; kept across the shop and
  * the post (which clear the scene's state). Never at a time of day (you would

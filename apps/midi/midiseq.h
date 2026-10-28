@@ -1,6 +1,6 @@
 /* Songs as text, into MIDI messages with times. No screen, no API, no libc:
- * apps/midi/midi.c plays what this makes, test/test_midiseq.c checks it, and the
- * server's prompt (server/midi.py) teaches Claude to write it.
+ * apps/midi/midi.c plays what this makes, apps/midi/test/test_midiseq.c checks it, and the
+ * server's prompt (apps/midi/server/__init__.py) teaches Claude to write it.
  *
  *   # Fur Elise, opening       the first # line is the title
  *   tempo 72                   beats a minute (one only)

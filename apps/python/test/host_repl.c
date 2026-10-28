@@ -1,7 +1,7 @@
 /* The Python app's REPL on the PC: apps/python/python.c and MicroPython's
  * core built for the host with gcc, driven by keystrokes through the fake
  * CardApi (test/fakeapi.c). Not in the MSVC host suite -- MicroPython wants
- * gcc -- so tools/python_host_test.sh builds and runs it on Linux (the
+ * gcc -- so apps/python/tools/python_host_test.sh builds and runs it on Linux (the
  * droplet, from Windows).
  */
 #include <stdio.h>

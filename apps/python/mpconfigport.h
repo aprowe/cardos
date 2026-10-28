@@ -1,7 +1,7 @@
 /* MicroPython's configuration for the Python app (apps/python/python.c).
  *
  * The embed port's sources in apps/python/mp are generated from this file
- * (tools/make_micropython.sh): change a feature here and generate them again,
+ * (apps/python/tools/make_micropython.sh): change a feature here and generate them again,
  * since the interned strings (genhdr/qstrdefs.generated.h) depend on it. */
 
 #include <port/mpconfigport_common.h>

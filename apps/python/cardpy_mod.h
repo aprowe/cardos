@@ -6,7 +6,7 @@
  * takes every .c in an app's folder for an app, leaves it alone). It is a
  * file of its own because MicroPython's
  * generator scans it for the names it uses (MP_QSTR_...) and the modules it
- * registers (tools/make_micropython.sh): run that again after adding one.
+ * registers (apps/python/tools/make_micropython.sh): run that again after adding one.
  * So it includes MicroPython's headers only -- the generator has no
  * kernel/app/capp.h -- and the scan sees `api->...` as plain words.
  *

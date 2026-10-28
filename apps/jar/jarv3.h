@@ -21,7 +21,7 @@
  *
  * The machine ticks 20 times a second: every second step of the sim's 40.
  *
- * Portable and libc-free like the rest; host-tested in test/test_jarv3.c.
+ * Portable and libc-free like the rest; host-tested in apps/jar/test/test_jarv3.c.
  */
 #ifndef CARDOS_JARV3_H
 #define CARDOS_JARV3_H

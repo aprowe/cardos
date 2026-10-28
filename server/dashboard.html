@@ -38,31 +38,9 @@ button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 a{color:inherit}
 .mono{font-family:var(--mono);font-size:.92em}
-.notes{display:grid;grid-template-columns:minmax(180px,260px) 1fr;gap:12px;align-items:stretch}
-@media (max-width:700px){.notes{grid-template-columns:1fr}}
-.notes-list{padding:6px;max-height:min(62vh,560px);overflow-y:auto}
-.notes-list button{display:block;width:100%;text-align:left;border:0;background:none;color:var(--ink);padding:8px 10px;border-radius:6px;cursor:pointer;font:inherit}
-.notes-list button:hover{background:var(--panel2)}
-.notes-list button.on{background:var(--accent-soft);color:var(--ink)}
-.notes-list .t{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.notes-list .w{display:block;font-size:12px;color:var(--ink3)}
-.notes-ed{display:flex;flex-direction:column;padding:0;overflow:hidden}
-.notes-ed textarea{flex:1;min-height:min(56vh,500px);border:0;resize:vertical;background:transparent;color:var(--ink);font:14px/1.55 var(--mono);padding:14px;outline:none}
-.notes-bar{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--line)}
-.notes-bar .grow{flex:1}
 .drop{border:2px dashed var(--line2);border-radius:12px;padding:22px;text-align:center;color:var(--ink2);margin-bottom:14px;transition:background .15s,border-color .15s}
 .drop.over{background:var(--accent-soft);border-color:var(--accent)}
 .drop b{color:var(--ink)}
-.tracks{list-style:none;margin:0;padding:0}
-.tracks li{display:grid;grid-template-columns:auto 1fr auto auto auto;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line)}
-.tracks li:last-child{border-bottom:0}
-.tracks .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tracks .m{font-variant-numeric:tabular-nums;color:var(--ink2);font-size:13px}
-.photo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
-.ph{position:relative;border-radius:10px;overflow:hidden;background:var(--panel2);box-shadow:inset 0 0 0 1px var(--line)}
-.ph img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#000}
-.ph .cap{display:flex;align-items:center;gap:6px;padding:6px 8px;font-size:13px}
-.ph .cap span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .term{padding:0;overflow:hidden}
 .term-out{background:var(--screen);color:var(--screen-ink);font:13px/1.45 var(--mono);padding:12px 14px;height:min(58vh,520px);overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere}
 .term-out .cmd{color:var(--screen-hi)}
@@ -270,7 +248,6 @@ section.block{margin-top:0}
 .acct-top{display:flex;align-items:center;gap:12px}
 .logo{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;font-weight:800;font-size:18px;flex:none}
 .logo.g{background:var(--panel2);box-shadow:inset 0 0 0 1px var(--line)}
-.logo.t{background:#e57cd8;color:#2c1029}
 .logo.c{background:#d97757;color:#fff}
 .acct-top h3{margin:0;font-size:16px}
 .acct-top .sub{font-size:13px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis}
@@ -283,22 +260,6 @@ section.block{margin-top:0}
 .note.bad{background:var(--bad-soft);color:var(--ink)} .note.bad b{color:var(--bad)}
 .note.warn{background:var(--warn-soft)} .note.warn b{color:var(--warn)}
 .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto}
-.running{display:flex;align-items:center;gap:12px;border-radius:12px;background:var(--panel2);padding:12px 14px}
-.running .clk{font:600 24px var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
-.running .clk small{font-size:13px;color:var(--ink3);font-weight:500}
-.running .what{min-width:0;flex:1}
-.running .what b{display:block}
-.running .what span{font-size:13px;color:var(--ink2)}
-.proj-dot{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:0}
-.tgs{display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line);padding-top:14px}
-.tgs h4{margin:0;font-size:14px}
-.tg{display:grid;grid-template-columns:1fr auto auto;gap:4px 10px;align-items:center;font-size:13.5px}
-.tg .bar{grid-column:1/-1;height:10px;border-radius:5px;background:var(--panel2);overflow:hidden;box-shadow:inset 0 0 0 1px var(--line)}
-.tg .bar i{display:block;height:100%;border-radius:5px}
-.tg .n{color:var(--ink2);font-variant-numeric:tabular-nums}
-.tg-form{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.tg-form .inp{width:auto;flex:1 1 120px;font-family:inherit}
-.tg-form .inp.h{flex:0 0 76px}
 .field{display:flex;flex-direction:column;gap:6px}
 .field label{font-size:13px;font-weight:600}
 .field .hint{font-size:12.5px;color:var(--ink3)}
@@ -417,16 +378,13 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
     <a class="mark" href="#/home"><span class="px"></span>CardOS <small>dash</small></a>
     <div><div class="device" aria-hidden="true"><div class="screen js-screen"></div><div class="keys"></div></div><div class="device-cap js-devcap"></div></div>
     <nav class="nav" aria-label="Views">
-      <a href="#/home" data-view="home"><svg class="i" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/></svg>Overview</a>
-      <a href="#/files" data-view="files"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M10 3v4M13 3v4"/></svg>SD card<span class="end"><span class="badge js-xbadge hidden"></span><span class="dot js-nd-files"></span></span></a>
-      <a href="#/term" data-view="term"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Terminal<span class="end"><span class="dot js-nd-files"></span></span></a>
-      <a href="#/notes" data-view="notes"><svg class="i" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>Notes</a>
-      <a href="#/photos" data-view="photos"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg>Photos</a>
-      <a href="#/music" data-view="music"><svg class="i" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>Music</a>
-    <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts &amp; keys<span class="end"><span class="dot js-nd-accounts"></span></span></a>
-      <a href="#/server" data-view="server"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>Server<span class="end"><span class="dot js-nd-server"></span></span></a>
-      <a href="#/updates" data-view="updates"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
-      <a href="#/settings" data-view="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>Settings</a>
+      <a href="#/home" data-view="home" data-order="0"><svg class="i" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/></svg>Overview</a>
+      <a href="#/files" data-view="files" data-order="10"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M10 3v4M13 3v4"/></svg>SD card<span class="end"><span class="badge js-xbadge hidden"></span><span class="dot js-nd-files"></span></span></a>
+      <a href="#/term" data-view="term" data-order="20"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Terminal<span class="end"><span class="dot js-nd-files"></span></span></a>
+    <a href="#/accounts" data-view="accounts" data-order="60"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts &amp; keys<span class="end"><span class="dot js-nd-accounts"></span></span></a>
+      <a href="#/server" data-view="server" data-order="70"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>Server<span class="end"><span class="dot js-nd-server"></span></span></a>
+      <a href="#/updates" data-view="updates" data-order="80"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
+      <a href="#/settings" data-view="settings" data-order="90"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>Settings</a>
     </nav>
     <div class="side-foot"><span class="dot ok"></span>Signed in<button class="btn sm" data-act="logout">Log out</button></div>
   </aside>
@@ -476,45 +434,6 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
         <p class="faint term-note">Commands run on the device's console, one at a time, and answer when they finish &mdash; an <span class="mono">update</span> can take minutes. Lines that would take over its screen (<span class="mono">launch</span>, <span class="mono">desk</span>, <span class="mono">run</span>) are refused.</p>
       </section>
 
-      <section class="view block" id="v-photos">
-        <div class="sec-head">
-          <div><span class="lab">on the server, synced to the device</span><h2>Photos</h2></div>
-          <div class="side-info"><span id="ph-state" class="faint"></span><button class="btn sm primary" data-act="ph-add">Add photos</button></div>
-        </div>
-        <div class="drop" id="ph-drop"><b>Drop pictures here</b> &mdash; JPG, PNG, GIF, WebP. The device gets a screen copy and a print copy the next time Photos opens.</div>
-        <div class="photo-grid" id="ph-grid"></div>
-        <input type="file" id="ph-file" accept="image/*" multiple hidden>
-      </section>
-
-      <section class="view block" id="v-music">
-        <div class="sec-head">
-          <div><span class="lab">on the server, synced to the device</span><h2>Music</h2></div>
-          <div class="side-info"><span id="mu-state" class="faint"></span><button class="btn sm primary" data-act="mu-add">Add tracks</button></div>
-        </div>
-        <div class="drop" id="mu-drop"><b>Drop tracks here</b> &mdash; MP3, M4A, Ogg, FLAC, WAV. They are turned into what the device's speaker plays (22 kHz mono) here in the browser, then kept on the server; the Music app on the device fetches them when it opens.</div>
-        <div class="panel"><ul class="tracks" id="mu-list"></ul></div>
-        <audio id="mu-audio" preload="none"></audio>
-        <input type="file" id="mu-file" accept="audio/*" multiple hidden>
-      </section>
-
-      <section class="view block" id="v-notes">
-        <div class="sec-head">
-          <div><span class="lab">on the server</span><h2>Notes</h2></div>
-          <div class="side-info"><span id="note-state" class="faint"></span><button class="btn sm" data-act="note-new">New note</button></div>
-        </div>
-        <div class="notes">
-          <div class="panel notes-list" id="notes-list"></div>
-          <div class="panel notes-ed">
-            <textarea id="note-text" spellcheck="true" placeholder="Pick a note, or start a new one. The first line is its title."></textarea>
-            <div class="notes-bar"><span class="faint" id="note-meta"></span>
-              <span class="grow"></span>
-              <button class="btn sm" data-act="note-delete">Delete</button>
-              <button class="btn sm primary" data-act="note-save">Save</button></div>
-          </div>
-        </div>
-        <p class="faint term-note">Kept on the server. The Notes app on the device keeps a copy of each as a file and syncs it; Ctrl-S saves here.</p>
-      </section>
-
       <section class="view block" id="v-accounts">
         <div class="sec-head">
           <div><span class="lab">connections</span><h2>Accounts &amp; keys</h2></div>
@@ -523,10 +442,10 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
         <div class="two">
           <div class="panel acct" id="me"></div>
           <div class="panel acct" id="people"></div>
+          <div class="panel acct" id="friends"></div>
         </div>
-        <div class="two">
+        <div class="two" data-cards="accounts">
           <div class="panel acct" id="google"></div>
-          <div class="panel acct" id="toggl"></div>
         </div>
         <div class="two">
           <div class="panel acct" id="claude"></div>
@@ -568,16 +487,13 @@ footer{max-width:1120px;margin:40px auto 0;padding:0 16px;color:var(--ink3);font
   </div>
 
   <nav class="bnav" aria-label="Views">
-    <a href="#/home" data-view="home"><svg class="i" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/></svg>Overview</a>
-    <a href="#/files" data-view="files"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M10 3v4M13 3v4"/></svg>Card<span class="badge js-xbadge hidden"></span><span class="dot js-nd-files"></span></a>
-    <a href="#/term" data-view="term"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Term</a>
-    <a href="#/notes" data-view="notes"><svg class="i" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>Notes</a>
-      <a href="#/photos" data-view="photos"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg>Photos</a>
-      <a href="#/music" data-view="music"><svg class="i" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>Music</a>
-    <a href="#/accounts" data-view="accounts"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts<span class="dot js-nd-accounts"></span></a>
-    <a href="#/server" data-view="server"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/></svg>Server<span class="dot js-nd-server"></span></a>
-    <a href="#/updates" data-view="updates"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
-    <a href="#/settings" data-view="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>Settings</a>
+    <a href="#/home" data-view="home" data-order="0"><svg class="i" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/></svg>Overview</a>
+    <a href="#/files" data-view="files" data-order="10"><svg class="i" viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"/><path d="M10 3v4M13 3v4"/></svg>Card<span class="badge js-xbadge hidden"></span><span class="dot js-nd-files"></span></a>
+    <a href="#/term" data-view="term" data-order="20"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Term</a>
+    <a href="#/accounts" data-view="accounts" data-order="60"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M21 12v2"/></svg>Accounts<span class="dot js-nd-accounts"></span></a>
+    <a href="#/server" data-view="server" data-order="70"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/></svg>Server<span class="dot js-nd-server"></span></a>
+    <a href="#/updates" data-view="updates" data-order="80"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Updates</a>
+    <a href="#/settings" data-view="settings" data-order="90"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>Settings</a>
   </nav>
 </div>
 
@@ -645,7 +561,6 @@ const S={
   xfers:[], xid:0, lastRate:0,
   editor:null,
   appFilter:'All', appQuery:'',
-  tStart:0,
 };
 
 /* ---------- talking to the server ---------- */
@@ -715,7 +630,6 @@ async function loadState(quiet){
     const st=await api('GET','/dash/api/state');
     S.st=st; S.stAt=now(); S.stErr='';
     if(st.device) setDevice(st.device);
-    if(st.toggl&&st.toggl.running) S.tStart=st.toggl.running.start*1000;
     S.serverDown=false;
   }catch(e){ S.stErr=e.message; if(!quiet) toast(e.message,'err'); }
   S.stLoading=false; renderAll();
@@ -790,7 +704,6 @@ function googleState(){ const g=S.st&&S.st.google; if(!g) return 'unknown'; if(!
 const SRV=[['claude','Claude agent','Available','Not available'],['builds','Builds','Enabled','Disabled'],['voice','Voice (whisper)','Ready','Not ready']];
 // Builds being off is a choice (a laptop server has none), not a fault.
 function srvProblems(){ const s=S.st&&S.st.server; if(!s) return []; return SRV.filter(([k])=>k!=='builds'&&s[k]&&!s[k].ok).map(r=>r[1]); }
-function togglLine(t){ const r=t.running; return `${esc(r.description||'(no description)')}${r.project?' — '+esc(r.project):''}`; }
 function renderGlance(){
   const d=S.dev, st=S.st;
   $$('.js-nd-files').forEach(e=>e.className='dot js-nd-files '+(d.connected?'ok':'warn'));
@@ -799,20 +712,21 @@ function renderGlance(){
     $('#glist').innerHTML=S.stErr?`<li><a href="#/home" data-act="state-refresh"><span class="k">Server</span><span class="dot bad"></span><span class="v">${esc(S.stErr)} <u>Try again</u></span><span class="go"></span></a></li>`:'';
     return;
   }
-  const gs=googleState(), t=st.toggl||{}, probs=srvProblems(), fw=(st.updates&&st.updates.firmware)||{}, apps=(st.updates&&st.updates.apps)||[];
-  let issues=0; if(!d.connected) issues++; if(gs!=='ok') issues++; if(probs.length) issues++; if(t.error) issues++;
+  const gs=googleState(), prow=pluginGlance(), probs=srvProblems(), fw=(st.updates&&st.updates.firmware)||{}, apps=(st.updates&&st.updates.apps)||[];
+  let issues=0; if(!d.connected) issues++; if(gs!=='ok') issues++; if(probs.length) issues++; issues+=prow.filter(r=>/warn|bad/.test(r[1])).length;
   $('#headline').innerHTML= issues===0?'Everything is <em>working</em>.':issues===1?'One thing needs <em>you</em>.':`${issues} things need <em>you</em>.`;
   const g=st.google||{};
   const gText={ok:`${esc(g.email)} — working`,partial:`Working, but missing the ${!g.tasks?'Tasks':'Calendar'} permission — ${!g.tasks?'Todo':'Calendar'} can’t sync`,broken:'Login broken — sign in again',out:'Not signed in — Calendar and Todo can’t sync',unset:'Google sign-in isn’t set up on this server'}[gs];
   const rows=[
     ['SD card',d.connected?'ok live':'warn',d.connected?`Reachable — Dashboard Link is open, heard from <span class="js-heard">${heardText()}</span>`:`Not reachable — open Dashboard Link on the device (last heard <span class="js-heard">${heardText()}</span>)`,'#/files'],
     ['Google',gs==='ok'?'ok':gs==='partial'?'warn':'bad',gText,'#/accounts'],
-    ['Toggl',t.error?'warn':t.connected?'ok':'off',t.connected?(t.error?'Connected, but Toggl didn’t answer just now':t.running?`Running: ${togglLine(t)}, <span class="js-toggl-short mono">${elapsedShort()}</span>`:`Connected as ${esc(t.name)}, nothing running`):'Not connected','#/accounts'],
+    ...prow,
     ['Server',probs.length?'bad':'ok',probs.length?`${probs.length} problem${probs.length>1?'s':''}: ${probs.join(', ')}`:'All checks pass','#/server'],
     ['Updates','ok',`${fw.release?`Firmware <span class="mono">${esc(fw.release.slice(0,8))}</span> · `:fw.debug?`Firmware <span class="mono">${esc(fw.debug.slice(0,8))}</span> (debug) · `:'No firmware published · '}${apps.length} apps published`,'#/updates'],
   ];
   $('#glist').innerHTML=rows.map(r=>`<li><a href="${r[3]}"><span class="k">${r[0]}</span><span class="dot ${r[1]}"></span><span class="v">${r[2]}</span><span class="go">→</span></a></li>`).join('');
-  $$('.js-nd-accounts').forEach(e=>e.className='dot js-nd-accounts '+(gs==='ok'&&!t.error?'ok':gs==='partial'||t.error?'warn':'bad'));
+  const acctWarn=prow.some(r=>r[3]==='#/accounts'&&/warn|bad/.test(r[1]));
+  $$('.js-nd-accounts').forEach(e=>e.className='dot js-nd-accounts '+(gs==='ok'&&!acctWarn?'ok':gs==='partial'||acctWarn?'warn':'bad'));
   $$('.js-nd-server').forEach(e=>e.className='dot js-nd-server '+(probs.length?'bad':'ok'));
 }
 
@@ -1233,79 +1147,6 @@ async function gSignOut(){
   loadState(true);
 }
 
-/* ---------- Toggl ---------- */
-function elapsed(){ if(!S.tStart) return [0,0,0]; const s=Math.max(0,Math.floor((now()-S.tStart)/1000)); return [Math.floor(s/3600),Math.floor(s/60)%60,s%60]; }
-function elapsedShort(){ const [h,m]=elapsed(); return `${h}:${String(m).padStart(2,'0')}`; }
-let tChecking=false;
-function renderToggl(){
-  const el=$('#toggl'), t=S.st&&S.st.toggl;
-  const head=`<div class="acct-top"><div class="logo t">⏻</div><div style="min-width:0"><h3>Toggl Track</h3><div class="sub">For the device’s Toggl app</div></div>${!t?'':t.connected?'<span class="pill ok">Connected</span>':'<span class="pill">Not connected</span>'}</div>`;
-  if(!t){ el.innerHTML=head+`<p class="dim" style="margin:0">${S.stErr?esc(S.stErr):'<span class="spin"></span>Loading…'}</p>`; return; }
-  if(t.connected){
-    const [h,m,s]=elapsed(), r=t.running;
-    el.innerHTML=head+`
-      ${t.error?`<div class="note warn"><b>Couldn’t ask Toggl what’s running.</b> ${esc(t.error)}</div>`
-      :r?`<div class="running"><span class="dot ok live"></span><div class="what"><b>${esc(r.description||'(no description)')}</b><span>${r.project?`<i class="proj-dot" style="background:#e57cd8"></i>${esc(r.project)}`:'No project'}</span></div><div class="clk js-toggl">${h}:${String(m).padStart(2,'0')}<small>:${String(s).padStart(2,'0')}</small></div></div>`
-      :'<div class="running"><span class="dot off"></span><div class="what"><b>Nothing running</b><span>Start a timer from the device or Toggl itself.</span></div></div>'}
-      <dl class="facts"><dt>Account</dt><dd>${esc(t.name||'(unknown)')}</dd><dt>Connected</dt><dd>${fmtEpoch(t.since)}</dd></dl>
-      <div class="tgs" id="tgs"></div>
-      <div class="acts"><button class="btn ghost" data-act="t-disconnect">Disconnect</button></div>`;
-    renderTargets(); if(!TG.data&&!TG.loading&&!TG.err) loadTargets();
-    return;
-  }
-  el.innerHTML=head+`
-    <p class="dim" style="margin:0">Paste your Toggl API token and the server will check it with Toggl. The device then shows and controls the running timer.</p>
-    <form class="field" id="t-form" autocomplete="off">
-      <label for="t-token">API token</label>
-      <div class="inp-row"><input class="inp" id="t-token" type="password" placeholder="Paste the token" spellcheck="false" ${tChecking?'disabled':''}>
-        <button type="button" class="btn sm ghost" data-act="t-show" aria-label="Show token">Show</button></div>
-      <span class="hint">Find it at the bottom of your profile page on track.toggl.com.</span>
-      <div class="ferr" id="t-err" role="alert"></div>
-      <div class="acts"><button class="btn primary" type="submit" ${tChecking?'disabled':''}>${tChecking?'<span class="spin"></span>Checking with Toggl…':'Connect'}</button></div>
-    </form>`;
-}
-/* targets: hours a project should get, weekly or in total since a date */
-const TG={data:null,err:'',loading:false};
-const hm=s=>`${Math.floor(s/3600)}:${String(Math.floor(s/60)%60).padStart(2,'0')}`;
-async function loadTargets(){
-  TG.loading=true; renderTargets();
-  try{ TG.data=await api('GET','/dash/api/toggl/targets?off='+(-new Date().getTimezoneOffset()*60)); TG.err=''; }
-  catch(e){ TG.err=e.message; }
-  TG.loading=false; renderTargets();
-}
-function renderTargets(){
-  const el=$('#tgs'); if(!el) return;
-  const d=TG.data, keep=$('#tg-form')?['tg-p','tg-h','tg-k','tg-s'].map(i=>$('#'+i).value):null;
-  let h=`<h4>Targets <span class="faint" style="font-weight:400">— hours a project should get</span></h4>`;
-  if(TG.err) h+=`<div class="note warn"><b>Couldn’t add up the hours.</b> ${esc(TG.err)}</div>`;
-  if(!d){ el.innerHTML=h+(TG.err?'':'<p class="dim" style="margin:0"><span class="spin"></span>Adding up…</p>'); return; }
-  if(!d.targets.length) h+='<p class="dim" style="margin:0">None yet. A weekly target restarts each Monday; a total one counts from the day the contract was booked.</p>';
-  for(const t of d.targets){
-    const want=t.hours*3600, pct=want?Math.min(100,t.done*100/want):0;
-    const when=t.kind==='week'?'this week':`since ${new Date(t.since+'T12:00').toLocaleDateString(undefined,{day:'numeric',month:'short'})}`;
-    h+=`<div class="tg"><b><i class="proj-dot" style="background:${esc(t.color)}"></i>${esc(t.name)}</b>
-      <span class="n">${hm(t.done)} of ${hm(want)} ${when}</span>
-      <button class="btn sm ghost" data-act="tg-del" data-p="${t.project}" data-k="${t.kind}" aria-label="Remove target">✕</button>
-      <div class="bar"><i style="width:${pct.toFixed(1)}%;background:${esc(t.color)}"></i></div></div>`;
-  }
-  const today=new Date().toISOString().slice(0,10);
-  h+=`<form class="tg-form" id="tg-form" autocomplete="off">
-    <select class="inp" id="tg-p" aria-label="Project">${d.projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
-    <input class="inp h" id="tg-h" type="number" min="0" step="0.5" placeholder="hours" aria-label="Hours">
-    <select class="inp" id="tg-k" aria-label="Kind" style="flex:0 0 auto"><option value="week">a week</option><option value="total">in total</option></select>
-    <input class="inp" id="tg-s" type="date" value="${today}" aria-label="Since" style="flex:0 0 auto;display:none" title="Counted from this day">
-    <button class="btn sm primary" type="submit">Set</button></form>
-    <span class="hint faint" style="font-size:12.5px">Setting a project again changes its target; a new total date is re-booking. Toggl keeps about three months of entries.</span>`;
-  el.innerHTML=h;
-  if(keep){ ['tg-p','tg-h','tg-k','tg-s'].forEach((i,n)=>{ $('#'+i).value=keep[n]; }); $('#tg-s').style.display=keep[2]==='total'?'':'none'; }
-  $('#tg-k').onchange=e=>{ $('#tg-s').style.display=e.target.value==='total'?'':'none'; };
-}
-async function setTarget(project,kind,hours,since){
-  try{ await api('POST','/dash/api/toggl/target',{project,kind,hours,since}); toast(hours?'Target set.':'Target removed.'); }
-  catch(e){ toast(e.message,'err'); return; }
-  loadTargets();
-}
-
 /* Claude's login on the server (server/claudeauth.py). Sign in runs
  * `claude setup-token` there; this page shows its link and hands back the
  * code claude.com gives you. Checked only when this view opens: a check is a
@@ -1376,27 +1217,6 @@ async function claudeToken(){
   catch(e){ $('#cl-err').textContent=e.message; }
 }
 
-async function tConnect(){
-  const v=$('#t-token').value.trim();
-  if(!v){ $('#t-err').textContent='Paste a token first.'; $('#t-token').focus(); return; }
-  tChecking=true; renderToggl(); $('#t-token').value=v;
-  try{
-    const j=await api('POST','/dash/api/toggl/token',{token:v});
-    tChecking=false; toast(`Toggl connected as ${j.name||'your account'}.`);
-    await loadState(true);
-  }catch(e){
-    tChecking=false; renderToggl(); $('#t-token').value=v;
-    $('#t-err').textContent=e.message; toast('Toggl refused the token.','err');
-  }
-}
-async function tDisconnect(){
-  const r=await modal({title:'Disconnect Toggl?',html:'<p>The server forgets the API token. Toggl itself is untouched — a running timer keeps running there.</p>',actions:[{label:'Cancel'},{label:'Disconnect',value:1,kind:'danger'}]});
-  if(!r) return;
-  try{ await api('POST','/dash/api/toggl/forget'); toast('Toggl disconnected.'); }
-  catch(e){ toast(`Couldn’t disconnect Toggl. ${e.message}`,'err'); }
-  loadState(true);
-}
-
 /* ---------- server ---------- */
 function renderServer(){
   const s=S.st&&S.st.server;
@@ -1451,12 +1271,11 @@ async function logout(){
 }
 
 /* ---------- render everything ---------- */
-function renderAll(){ renderScreen(); renderGlance(); renderCard(); renderXfers(); renderGoogle(); renderToggl(); renderClaude(); renderServer(); renderUpdates(); renderSession(); }
+function renderAll(){ renderScreen(); renderGlance(); renderCard(); renderXfers(); renderGoogle(); plugCall('render'); renderClaude(); renderServer(); renderUpdates(); renderSession(); }
 function tick(){
   $$('.js-heard').forEach(e=>e.textContent=heardText());
   $$('.js-stat').forEach(e=>e.textContent=fmtAgo(now()-S.stAt));
-  const t=S.st&&S.st.toggl;
-  if(t&&t.connected&&t.running){ const [h,m,s]=elapsed(); $$('.js-toggl').forEach(e=>e.innerHTML=`${h}:${String(m).padStart(2,'0')}<small>:${String(s).padStart(2,'0')}</small>`); $$('.js-toggl-short').forEach(e=>e.textContent=elapsedShort()); }
+  plugCall('tick');
   if(!activeXfer()) renderScreen();
   S.xfers.filter(x=>x.status==='waiting'||x.status==='writing').forEach(updateXferRow);
 }
@@ -1507,209 +1326,54 @@ $('#term-line').addEventListener('keydown',e=>{
   else if(e.key==='ArrowDown'){ if(T.hi<T.hist.length){ T.hi++; e.target.value=T.hist[T.hi]||''; } e.preventDefault(); }
 });
 
-/* ---------- music ----------
- * The device plays 16-bit PCM WAV only. The browser decodes whatever it can
- * (MP3, AAC, Ogg, FLAC) and resamples it to 22050 Hz mono -- about 2.6 MB a
- * minute -- so the server and the device never see anything else
- * (server/music.py). Quiet tracks are lifted to near full scale: the
- * speaker is one watt. */
-const MU={list:[],busy:'',playing:''};
-const mmss=ms=>{ const s=Math.round(ms/1000); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
-async function musicLoad(){
-  try{ const r=await fetch('/dash/music',{credentials:'same-origin'}); if(r.status===403){ signedOut(); return; } MU.list=await r.json(); }
-  catch(e){ toast('Couldn’t load the music.','err'); }
-  renderMusic();
-}
-function renderMusic(){
-  const el=$('#mu-list'); if(!el) return;
-  const total=MU.list.reduce((a,m)=>a+m.bytes,0);
-  $('#mu-state').textContent=MU.busy||(MU.list.length?`${MU.list.length} track${MU.list.length===1?'':'s'}, ${(total/1048576).toFixed(1)} MB`:'');
-  el.innerHTML=MU.list.length?MU.list.map(m=>`<li>
-      <button class="icon-btn" data-act="mu-play" data-id="${esc(m.id)}" title="${MU.playing===m.id?'Stop':'Listen'}" aria-label="${MU.playing===m.id?'Stop':'Listen to'} ${esc(m.title)}">${MU.playing===m.id?'■':'▶'}</button>
-      <span class="t" title="${esc(m.title)}">${esc(m.title)}</span>
-      <span class="m">${mmss(m.ms)}</span><span class="m">${(m.bytes/1048576).toFixed(1)} MB</span>
-      <button class="icon-btn" data-act="mu-del" data-id="${esc(m.id)}" title="Delete" aria-label="Delete ${esc(m.title)}">${ic('trash')}</button></li>`).join('')
-    :'<li><span></span><span class="dim">No tracks yet.</span></li>';
-}
-async function toDeviceWav(file){
-  const AC=window.AudioContext||window.webkitAudioContext;
-  const ctx=new AC();
-  let decoded;
-  try{ decoded=await ctx.decodeAudioData(await file.arrayBuffer()); }
-  finally{ ctx.close(); }
-  const rate=22050, len=Math.max(1,Math.ceil(decoded.duration*rate));
-  const off=new OfflineAudioContext(1,len,rate);
-  const src=off.createBufferSource(); src.buffer=decoded; src.connect(off.destination); src.start();
-  const pcm=(await off.startRendering()).getChannelData(0);
-  let peak=0; for(let i=0;i<pcm.length;i++){ const a=Math.abs(pcm[i]); if(a>peak) peak=a; }
-  const gain=peak>0.01?Math.min(4,0.95/peak):1;
-  const buf=new ArrayBuffer(44+pcm.length*2), v=new DataView(buf);
-  const str=(o,s)=>{ for(let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
-  str(0,'RIFF'); v.setUint32(4,36+pcm.length*2,true); str(8,'WAVE'); str(12,'fmt ');
-  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true); v.setUint32(24,rate,true);
-  v.setUint32(28,rate*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true); str(36,'data'); v.setUint32(40,pcm.length*2,true);
-  for(let i=0;i<pcm.length;i++){ const s=Math.max(-1,Math.min(1,pcm[i]*gain)); v.setInt16(44+i*2,s<0?s*32768:s*32767,true); }
-  return new Blob([buf],{type:'audio/wav'});
-}
-async function musicAdd(files){
-  const tracks=[...files].filter(f=>/^audio\//.test(f.type)||/\.(mp3|m4a|aac|ogg|oga|opus|flac|wav)$/i.test(f.name));
-  if(!tracks.length){ toast('Those aren’t tracks.','err'); return; }
-  let added=0;
-  for(const f of tracks){
-    try{
-      // The file as it is: the server converts it. Only a server without
-      // ffmpeg says so, and then the browser converts and sends a WAV.
-      MU.busy=`uploading and converting ${f.name} (${(f.size/1048576).toFixed(1)} MB)…`; renderMusic();
-      let r=await fetch('/dash/music/upload?title='+encodeURIComponent(f.name),{method:'POST',credentials:'same-origin',body:f});
-      let j=await r.json().catch(()=>({}));
-      if(!r.ok && /ffmpeg/.test(j.error||'')){
-        MU.busy=`converting ${f.name}…`; renderMusic();
-        const wav=await toDeviceWav(f);
-        MU.busy=`uploading ${f.name} (${(wav.size/1048576).toFixed(1)} MB)…`; renderMusic();
-        r=await fetch('/dash/music/upload?title='+encodeURIComponent(f.name),{method:'POST',credentials:'same-origin',body:wav});
-        j=await r.json().catch(()=>({}));
-      }
-      if(!r.ok) throw new Error(j.error||('the server said '+r.status));
-      added++;
-    }catch(e){ toast(`${f.name}: ${e.message||'this browser could not read it'}`,'err'); }
+/* ---------- the apps' pages and cards (server/plugins.py) ----------
+ * A plugin's DASH_VIEWS are pages of their own, DASH_CARDS cards in a page
+ * of ours; /dash/api/plugins hands over their HTML and script, fetched once
+ * here at load. Each script runs as a plain script after this one, in this
+ * page's scope, and says what it wants with dashPlugin(ID, hooks):
+ *   show()    its page has opened           render()  redraw (state arrived)
+ *   tick()    once a second                 glance()  its Overview rows
+ *   acts      {data-act: fn(button, event)} for its buttons */
+const PLUG={}, PLUG_ACTS={};
+function dashPlugin(id,hooks){ PLUG[id]=hooks||{}; Object.assign(PLUG_ACTS,PLUG[id].acts||{}); }
+function plugCall(name){
+  const out=[];
+  for(const [id,h] of Object.entries(PLUG)){
+    if(typeof h[name]!=='function') continue;
+    try{ out.push(h[name]()); }catch(e){ console.error('dashboard plugin '+id,e); }
   }
-  MU.busy='';
-  await musicLoad();
-  if(added) toast(added===1?'Added. The device gets it when Music opens.':`Added ${added}. The device gets them when Music opens.`);
+  return out;
 }
-function musicPlay(id){
-  const a=$('#mu-audio');
-  if(MU.playing===id){ a.pause(); MU.playing=''; renderMusic(); return; }
-  a.src='/dash/music/track?id='+encodeURIComponent(id); a.play().catch(()=>{}); MU.playing=id;
-  a.onended=()=>{ MU.playing=''; renderMusic(); };
-  renderMusic();
-}
-async function musicDelete(id){
-  const m=MU.list.find(x=>x.id===id);
-  const r=await modal({title:'Delete this track?',html:`<p>${esc(m?m.title:'')} goes from here, and from the device the next time it syncs.</p>`,actions:[{label:'Cancel'},{label:'Delete',value:1,kind:'danger'}]});
-  if(!r) return;
-  const res=await fetch('/dash/music/track?id='+encodeURIComponent(id),{method:'DELETE',credentials:'same-origin'});
-  if(!res.ok){ toast('Couldn’t delete it.','err'); return; }
-  await musicLoad();
-}
-(function(){
-  const d=$('#mu-drop'), v=$('#v-music');
-  ['dragenter','dragover'].forEach(ev=>d.addEventListener(ev,e=>{ e.preventDefault(); d.classList.add('over'); }));
-  ['dragleave','drop'].forEach(ev=>d.addEventListener(ev,e=>{ e.preventDefault(); d.classList.remove('over'); }));
-  d.addEventListener('drop',e=>{ if(e.dataTransfer&&e.dataTransfer.files.length) musicAdd(e.dataTransfer.files); });
-  v.addEventListener('dragover',e=>e.preventDefault());
-  v.addEventListener('drop',e=>{ e.preventDefault(); d.classList.remove('over'); if(e.target!==d&&e.dataTransfer&&e.dataTransfer.files.length) musicAdd(e.dataTransfer.files); });
-  $('#mu-file').onchange=e=>{ musicAdd(e.target.files); e.target.value=''; };
-})();
-
-/* ---------- photos ----------
- * Kept on the server (server/photos.py) with a screen copy and a print copy;
- * the device's Photos app syncs them. */
-const PH={list:[],busy:0};
-async function photosLoad(){
-  try{ const r=await fetch('/dash/photos',{credentials:'same-origin'}); if(r.status===403){ signedOut(); return; } PH.list=await r.json(); }
-  catch(e){ toast('Couldn’t load the photos.','err'); }
-  renderPhotos();
-}
-function renderPhotos(){
-  const g=$('#ph-grid'); if(!g) return;
-  $('#ph-state').textContent=PH.busy?`adding ${PH.busy}…`:PH.list.length?`${PH.list.length} photo${PH.list.length===1?'':'s'}`:'';
-  g.innerHTML=PH.list.length?PH.list.map(p=>`<div class="ph"><img loading="lazy" alt="" src="/dash/photos/thumb?id=${esc(p.id)}"><div class="cap"><span title="${esc(p.name)}">${esc(p.name)}</span><button class="icon-btn" data-act="ph-del" data-id="${esc(p.id)}" title="Delete" aria-label="Delete ${esc(p.name)}">${ic('trash')}</button></div></div>`).join('')
-    :'<p class="dim" style="grid-column:1/-1;margin:0">No photos yet.</p>';
-}
-async function photosAdd(files){
-  const pics=[...files].filter(f=>/^image\//.test(f.type)||/\.(jpe?g|png|gif|webp|bmp)$/i.test(f.name));
-  if(!pics.length){ toast('Those aren’t pictures.','err'); return; }
-  for(const f of pics){
-    PH.busy++; renderPhotos();
-    try{
-      const r=await fetch('/dash/photos/upload?name='+encodeURIComponent(f.name),{method:'POST',credentials:'same-origin',body:f});
-      const j=await r.json().catch(()=>({}));
-      if(!r.ok) throw new Error(j.error||('the server said '+r.status));
-    }catch(e){ toast(`${f.name}: ${e.message}`,'err'); }
-    PH.busy--;
+const pluginGlance=()=>plugCall('glance').flat().filter(Boolean);
+async function loadPlugins(){
+  let parts;
+  try{ parts=await api('GET','/dash/api/plugins'); }
+  catch(e){ toast(`The apps’ pages didn’t load. ${e.message}`,'err'); return; }
+  for(const v of parts.views){
+    const sec=document.createElement('section'); sec.className='view block'; sec.id='v-'+v.id; sec.innerHTML=v.html;
+    $('main').appendChild(sec);
+    VIEWS[v.id]=v.title;
+    for(const [nav,label] of [['.nav',v.title],['.bnav',v.short]]){
+      const a=document.createElement('a'); a.href='#/'+v.id; a.dataset.view=v.id; a.dataset.order=v.order;
+      a.innerHTML=`<svg class="i" viewBox="0 0 24 24">${v.icon}</svg>${esc(label)}`;
+      const next=$$(nav+' [data-view]').find(x=>+x.dataset.order>v.order);
+      $(nav).insertBefore(a,next||null);
+    }
   }
-  await photosLoad();
-  toast(pics.length===1?'Added. The device gets it when Photos opens.':`Added ${pics.length}. The device gets them when Photos opens.`);
+  for(const c of parts.cards){
+    const box=$(`[data-cards="${c.view}"]`); if(!box) continue;
+    const t=document.createElement('template'); t.innerHTML=c.html; box.appendChild(t.content);
+  }
+  for(const p of [...parts.views,...parts.cards]){
+    if(!p.js) continue;
+    const sc=document.createElement('script');
+    sc.textContent=p.js+`\n//# sourceURL=dash-${p.plugin}-${p.id}.js`;
+    document.body.appendChild(sc);
+  }
 }
-async function photosDelete(id){
-  const p=PH.list.find(x=>x.id===id);
-  const r=await modal({title:'Delete this photo?',html:`<p>${esc(p?p.name:'')} goes from here, and from the device the next time it syncs.</p>`,actions:[{label:'Cancel'},{label:'Delete',value:1,kind:'danger'}]});
-  if(!r) return;
-  const res=await fetch('/dash/photos/photo?id='+encodeURIComponent(id),{method:'DELETE',credentials:'same-origin'});
-  if(!res.ok){ toast('Couldn’t delete it.','err'); return; }
-  await photosLoad();
-}
-(function(){
-  const d=$('#ph-drop');
-  ['dragenter','dragover'].forEach(ev=>d.addEventListener(ev,e=>{ e.preventDefault(); d.classList.add('over'); }));
-  ['dragleave','drop'].forEach(ev=>d.addEventListener(ev,e=>{ e.preventDefault(); d.classList.remove('over'); }));
-  d.addEventListener('drop',e=>{ if(e.dataTransfer&&e.dataTransfer.files.length) photosAdd(e.dataTransfer.files); });
-  /* Dropped anywhere on the Photos page, not only on the box. */
-  const v=$('#v-photos');
-  v.addEventListener('dragover',e=>e.preventDefault());
-  v.addEventListener('drop',e=>{ e.preventDefault(); d.classList.remove('over'); if(e.target!==d&&e.dataTransfer&&e.dataTransfer.files.length) photosAdd(e.dataTransfer.files); });
-  $('#ph-file').onchange=e=>{ photosAdd(e.target.files); e.target.value=''; };
-})();
-
-/* ---------- notes ----------
- * Kept on the server (server/notes.py); the device syncs its own copies. */
-const N={list:[],id:null,clean:'',busy:false};
-const noteDirty=()=>$('#note-text').value!==N.clean;
-function noteMeta(t){ $('#note-meta').textContent=t||''; }
-function renderNotes(){
-  const el=$('#notes-list');
-  el.innerHTML=N.list.length?N.list.map(n=>`<button data-act="note-open" data-id="${esc(n.id)}" class="${n.id===N.id?'on':''}"><span class="t">${esc(n.title)}</span><span class="w">${esc(new Date(n.updated*1000).toLocaleString(undefined,{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}</span></button>`).join(''):'<p class="faint" style="padding:8px">No notes yet.</p>';
-  $('#note-state').textContent=N.busy?'saving…':(N.id&&noteDirty()?'unsaved changes':'');
-}
-async function noteFetch(method,url,body){
-  const r=await fetch(url,{method,credentials:'same-origin',body});
-  if(r.status===403){ signedOut(); throw new ApiError('You’re signed out.'); }
-  const text=await r.text();
-  if(!r.ok) throw new ApiError(text.replace(/^error /,'').trim()||('HTTP '+r.status));
-  return text;
-}
-async function notesLoad(){
-  try{ N.list=JSON.parse(await noteFetch('GET','/dash/notes')); renderNotes(); }
-  catch(e){ toast(e.message,'err'); }
-}
-function noteGuard(){ return !noteDirty()||confirm('Discard the unsaved changes to this note?'); }
-async function noteOpen(id){
-  if(id===N.id||!noteGuard()) return;
-  try{
-    const text=await noteFetch('GET','/dash/notes/note?id='+encodeURIComponent(id));
-    N.id=id; N.clean=text; $('#note-text').value=text;
-    const n=N.list.find(n=>n.id===id); noteMeta(n?'saved '+new Date(n.updated*1000).toLocaleString():'');
-    renderNotes();
-  }catch(e){ toast(e.message,'err'); }
-}
-function noteNew(){
-  if(!noteGuard()) return;
-  N.id=null; N.clean=''; $('#note-text').value=''; noteMeta('a new note'); renderNotes(); $('#note-text').focus();
-}
-async function noteSave(){
-  const text=$('#note-text').value;
-  if(!text.trim()){ toast('Write something first — the first line is the title.','err'); return; }
-  N.busy=true; renderNotes();
-  try{
-    const line=await noteFetch('POST','/dash/notes/note'+(N.id?'?id='+encodeURIComponent(N.id):''),text);
-    N.id=line.split('\t')[0]; N.clean=text; noteMeta('saved just now');
-    await notesLoad();
-  }catch(e){ toast(e.message,'err'); }
-  finally{ N.busy=false; renderNotes(); }
-}
-async function noteDelete(){
-  if(!N.id){ noteNew(); return; }
-  if(!confirm('Delete this note? The device deletes its copy at its next sync.')) return;
-  try{ await noteFetch('DELETE','/dash/notes/note?id='+encodeURIComponent(N.id)); N.id=null; N.clean=''; $('#note-text').value=''; noteMeta(''); await notesLoad(); toast('Deleted.','info'); }
-  catch(e){ toast(e.message,'err'); }
-}
-$('#note-text').addEventListener('input',()=>{ $('#note-state').textContent=noteDirty()?'unsaved changes':''; });
-$('#note-text').addEventListener('keydown',e=>{ if((e.ctrlKey||e.metaKey)&&e.key==='s'){ e.preventDefault(); noteSave(); } });
-window.addEventListener('beforeunload',e=>{ if(N.id!==undefined&&noteDirty()){ e.preventDefault(); e.returnValue=''; } });
 
 /* ---------- routing ---------- */
-const VIEWS={home:'Overview',files:'SD card',term:'Terminal',notes:'Notes',photos:'Photos',music:'Music',accounts:'Accounts & keys',server:'Server',updates:'Updates',settings:'Settings'};
+const VIEWS={home:'Overview',files:'SD card',term:'Terminal',accounts:'Accounts & keys',server:'Server',updates:'Updates',settings:'Settings'};
 function currentView(){ const v=(location.hash.match(/^#\/(\w+)/)||[])[1]; return VIEWS[v]?v:'home'; }
 function route(){
   const v=currentView();
@@ -1720,9 +1384,7 @@ function route(){
   closeMenu(); window.scrollTo(0,0);
   if(v==='files') renderCard();
   if(v==='term'){ renderTerm(); setTimeout(()=>$('#term-line').focus(),0); }
-  if(v==='notes') notesLoad();
-  if(v==='photos') photosLoad();
-  if(v==='music') musicLoad();
+  if(PLUG[v]&&PLUG[v].show){ try{ PLUG[v].show(); }catch(e){ console.error('dashboard plugin '+v,e); } }
   // Who you are first: Claude's login is only asked about for its owner.
   if(v==='accounts'&&!ME.busy) meLoad().then(()=>{ if(ME.v&&ME.v.admin&&!CL.v&&!CL.busy) claudeLoad(false); });
 }
@@ -1735,6 +1397,7 @@ async function meLoad(){
   ME.busy=true;
   try{ ME.v=await api('GET','/dash/api/me'); ME.err=''; }catch(e){ ME.err=e.message; }
   ME.busy=false; renderMe(); renderPeople(); renderClaude();
+  if(ME.v&&ME.v.accounts) friendsLoad(); else renderFriends();
 }
 function renderMe(){
   const el=$('#me'); if(!el) return;
@@ -1765,6 +1428,51 @@ function renderPeople(){
   h+='<div class="acts"><button class="btn primary" data-act="user-add">Add a person</button></div>';
   h+='<p class="dim" style="margin:0;font-size:13px">For their Google sign-in, add their address as a test user on the OAuth consent screen while it is in Testing.</p>';
   el.innerHTML=h;
+}
+/* ---------- friends (server/friends.py) ---------- */
+// Who an app may show your public data to, share a room with, send to.
+// Plain-text routes the device uses too: one line a person.
+const FR={rows:[],people:[],err:''};
+async function textApi(method,url){
+  let r;
+  try{ r=await fetch(url,{method,credentials:'same-origin'}); }catch(e){ throw netError(e); }
+  const t=await r.text();
+  if(!r.ok) throw new ApiError(t.replace(/^error /,'').trim()||`The server answered “${r.status}”.`);
+  return t;
+}
+const frLines=t=>t.split('\n').filter(Boolean).map(l=>l.split('\t'));
+async function friendsLoad(){
+  try{
+    FR.rows=frLines(await textApi('GET','/dash/friends'));
+    FR.people=frLines(await textApi('GET','/dash/people'));
+    FR.err='';
+  }catch(e){ FR.err=e.message; }
+  renderFriends();
+}
+function renderFriends(){
+  const el=$('#friends'); if(!el) return;
+  const v=ME.v;
+  if(!v||!v.accounts){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  let h=`<div class="acct-top"><div class="logo">♥</div><div style="min-width:0"><h3>Friends</h3><div class="sub">Who your apps may share with: results to compare, games to play together</div></div></div>`;
+  if(FR.err){ el.innerHTML=h+`<div class="note warn">${esc(FR.err)}</div>`; return; }
+  const said={friend:'friends',asked:'asked — waiting for them',asking:'asked to be your friend'};
+  h+=FR.rows.length?'<ul class="plain">'+FR.rows.map(([name,disp,state])=>`<li style="display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;justify-content:space-between;margin-bottom:6px"><span>${esc(disp)} <span class="faint">${esc(said[state]||state)}</span></span><span>${state==='asking'?`<button class="btn primary sm" data-act="fr-ask" data-name="${esc(name)}">Say yes</button>`:''}<button class="btn ghost sm" data-act="fr-drop" data-name="${esc(name)}" data-label="${esc(disp)}">${state==='friend'?'Remove':state==='asked'?'Take back':'No'}</button></span></li>`).join('')+'</ul>'
+    :'<p class="dim" style="margin:0">None yet.</p>';
+  const known=new Set(FR.rows.map(r=>r[0]));
+  const others=FR.people.filter(([name])=>name!==v.user&&!known.has(name));
+  if(others.length) h+='<div class="acts">'+others.map(([name,disp])=>`<button class="btn ghost" data-act="fr-ask" data-name="${esc(name)}">Ask ${esc(disp)}</button>`).join('')+'</div>';
+  h+='<p class="dim" style="margin:0;font-size:13px">A friendship is both ways: they say yes here, on their own sign-in. Nothing is posted for you; an app shows a friend’s results only where they belong, and sends only what you choose to send.</p>';
+  el.innerHTML=h;
+}
+async function frAsk(name){
+  try{ const t=await textApi('POST','/dash/friends/ask?who='+encodeURIComponent(name)); toast(t.includes('friend')?'Friends now.':'Asked. They see it on their device and here.'); friendsLoad(); }
+  catch(e){ toast(e.message,'err'); }
+}
+async function frDrop(name,label){
+  const r=await modal({title:'Not friends?',html:`<p>${esc(label)} and you stop sharing: neither of your apps shows the other’s results any more.</p>`,actions:[{label:'Cancel'},{label:'Remove',value:1,kind:'danger'}]});
+  if(!r) return;
+  try{ await textApi('POST','/dash/friends/drop?who='+encodeURIComponent(name)); friendsLoad(); }catch(e){ toast(e.message,'err'); }
 }
 async function showToken(r){
   await modal({title:'The device’s token',html:`<p>Put this in <code>/config/claude.token</code> on ${esc(r.user)}’s device card, then restart it.</p>
@@ -1817,10 +1525,7 @@ document.addEventListener('click',e=>{
   if(!e.target.closest('#menu')&&!(b&&b.dataset.act==='menu')) closeMenu();
   if(!b) return;
   if(b.dataset.act==='term-sug'){ termRun(b.dataset.line); return; }
-  if(b.dataset.act==='note-open'){ noteOpen(b.dataset.id); return; }
-  if(b.dataset.act==='note-new'){ noteNew(); return; }
-  if(b.dataset.act==='note-save'){ noteSave(); return; }
-  if(b.dataset.act==='note-delete'){ noteDelete(); return; }
+  if(PLUG_ACTS[b.dataset.act]){ if(b.closest('#menu')) closeMenu(); PLUG_ACTS[b.dataset.act](b,e); return; }
   if(b.dataset.act==='term-clear'){ $('#term-out').innerHTML=''; renderTerm(); return; }
   const a=b.dataset.act, p=b.dataset.path, isDir=!!b.dataset.dir, size=+b.dataset.size||0;
   if(b.closest('#menu')) closeMenu();
@@ -1849,20 +1554,14 @@ document.addEventListener('click',e=>{
     case 'pw-change': pwChange(); break;
     case 'user-add': userAdd(); break;
     case 'user-del': userDel(b.dataset.name); break;
+    case 'fr-ask': frAsk(b.dataset.name); break;
+    case 'fr-drop': frDrop(b.dataset.name,b.dataset.label); break;
     case 'g-signout': gSignOut(); break;
-    case 't-disconnect': tDisconnect(); break;
-    case 'ph-add': $('#ph-file').click(); break;
-    case 'mu-add': $('#mu-file').click(); break;
-    case 'mu-play': musicPlay(b.dataset.id); break;
-    case 'mu-del': musicDelete(b.dataset.id); break;
-    case 'ph-del': photosDelete(b.dataset.id); break;
     case 'cl-start': claudeStart(); break;
     case 'cl-check': claudeLoad(true); break;
     case 'cl-paste': CL.paste=!CL.paste; renderClaude(); break;
     case 'cl-cancel': CL.step='idle'; renderClaude(); break;
     case 'cl-forget': api('POST','/dash/api/claude/forget',{}).then(()=>{ toast('Forgot the dashboard’s token.','info'); claudeLoad(true); },e=>toast(e.message,'err')); break;
-    case 'tg-del': setTarget(b.dataset.p,b.dataset.k,0); break;
-    case 't-show': { const i=$('#t-token'); i.type=i.type==='password'?'text':'password'; b.textContent=i.type==='password'?'Show':'Hide'; break; }
     case 'state-refresh': e.preventDefault(); loadState(false); break;
     case 'theme': setTheme(b.dataset.t,true); break;
     case 'afilter': S.appFilter=b.dataset.g; renderUpdates(); break;
@@ -1880,11 +1579,8 @@ document.addEventListener('click',e=>{
 });
 function fallbackCopy(v,done){ const t=document.createElement('textarea'); t.value=v; document.body.appendChild(t); t.select(); let ok=false; try{ ok=document.execCommand('copy'); }catch(e){} t.remove(); if(ok) done(); else toast(`Couldn’t reach the clipboard. The hash is ${v}.`,'err'); }
 document.addEventListener('submit',e=>{
-  if(e.target.id==='t-form'){ e.preventDefault(); tConnect(); }
   if(e.target.id==='cl-code-form'){ e.preventDefault(); claudeCode(); }
   if(e.target.id==='cl-token-form'){ e.preventDefault(); claudeToken(); }
-  if(e.target.id==='tg-form'){ e.preventDefault(); const h=parseFloat($('#tg-h').value); if(!(h>0)){ $('#tg-h').focus(); return; }
-    const k=$('#tg-k').value; setTarget($('#tg-p').value,k,h,k==='total'?$('#tg-s').value:undefined); }
 });
 $('#upfile').onchange=e=>{ upload(e.target.files,S.cwd); e.target.value=''; };
 $('#asearch').oninput=e=>{ S.appQuery=e.target.value.trim(); renderUpdates(); };
@@ -1910,10 +1606,10 @@ window.addEventListener('scroll',closeMenu,{passive:true});
     toast(msg,/fail|error|denied|refus|couldn|can.t|not /i.test(msg)?'err':'ok');
     u.searchParams.delete('msg'); history.replaceState(null,'',u.pathname+(u.search||'')+u.hash);
   }
-  route(); renderAll();
+  renderAll();
   loadState(false);
   pollStatus(); setInterval(pollStatus,3000);
-  setInterval(tick,1000);
+  loadPlugins().finally(()=>{ route(); renderAll(); setInterval(tick,1000); });
 })();
 </script>
 </body>

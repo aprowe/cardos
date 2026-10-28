@@ -7,11 +7,14 @@
  *
  *   1 kick  2 snare  3 hi-hat  4 crash/special  5 keys  6 bass  7 misc  8 samples
  *
- * -- and keeps to them (server/midi.py, kit=circuit). /config/circuit.txt
+ * -- and keeps to them (apps/midi/server/__init__.py, kit=circuit). /config/circuit.txt
  * says which channel each track really plays on, and a note to play a
  * drum's every hit as, so a Circuit set up another way needs no new songs.
  * Beats are in /circuit. A beat is dense, so the song lives in a big-mode
  * block (CAPP_BIG), not the arena.
+ *
+ * @app folder Make
+ * @app release extra
  */
 #define CIRCUIT 1
 #include "apps/midi/midi.c"

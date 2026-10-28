@@ -3,10 +3,10 @@
  * On the wire an emoji is only text -- ":arty-happy:" among a message's
  * words, or the whole of it -- so the server and older Chats need nothing:
  * they show the words. The pictures are pixel art,
- * drawn in tools/make_emoji.py and generated into chat_emoji.h as palette
+ * drawn in apps/chat/tools/make_emoji.py and generated into chat_emoji.h as palette
  * indices; a code is dog * EMO_MOODS + mood.
  *
- * Header-only and libc-free, so the app and test/test_chat_emoji.c share it.
+ * Header-only and libc-free, so the app and apps/chat/test/test_chat_emoji.c share it.
  */
 #ifndef CARDOS_CHAT_EMOJI_H
 #define CARDOS_CHAT_EMOJI_H

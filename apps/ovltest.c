@@ -8,7 +8,11 @@
  * Also a fixture: tools/test_build_apps.py checks the build's overlay rules
  * on it, and test/test_capprel.c relocates its constants (STEP is a table
  * of pointers among the constants, so it has .rela.rodata).
- * docs/superpowers/specs/2026-10-10-app-data-overlays-design.md */
+ * docs/superpowers/specs/2026-10-10-app-data-overlays-design.md
+ *
+ * @app folder -
+ * @app release extra
+ */
 
 #include "kernel/app/capp.h"
 

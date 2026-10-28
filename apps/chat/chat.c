@@ -9,14 +9,18 @@
  * Hold the button on top and talk, and what you said is sent.
  *
  * Tab picks a dog emoji -- Arty or Marcy, eight moods (apps/chat/emoji.h,
- * drawn in tools/make_emoji.py); Enter puts it in what is being typed, as
+ * drawn in apps/chat/tools/make_emoji.py); Enter puts it in what is being typed, as
  * the text ":arty-happy:", and the message goes when that is sent. Here
  * each one is shown as the picture, four log rows tall, among the words:
  * each row is a log line marked EMO_MARK, which paint_row draws instead.
  *
  * The requests are http_start/http_poll, so typing never waits on the
- * network. Drawn the way apps/claude.c is: every line written over the one
+ * network. Drawn the way apps/claude/claude.c is: every line written over the one
  * before, padded to the width, nothing cleared first.
+ *
+ * @app folder Net
+ * @app routes /msg /share
+ * @app release core
  */
 #include "kernel/app/capp.h"
 #include "apps/str.h"

@@ -5,7 +5,7 @@
  * by change; the dot; search; the ex commands people type every day;
  * syntax colours for C, Python and Markdown; completion from the buffer
  * and the language's keywords. The editing is apps/vim/vimcore.h, which
- * the host suite drives a key at a time (test/test_vim.c); this file is the
+ * the host suite drives a key at a time (apps/vim/test/test_vim.c); this file is the
  * memory, the pixels and the OS's file picker.
  *
  * Memory. The text is a gap buffer, the undo log and the register blocks
@@ -44,6 +44,9 @@
  * api->resumed put Vim back as it was: the tree, or the file at the same
  * line. The same state, without the file, is /cache/vimtree, so the tree
  * is as it was left from one launch to the next too.
+ *
+ * @app folder Make
+ * @app release core
  */
 
 #include "kernel/app/capp.h"

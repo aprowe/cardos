@@ -17,6 +17,9 @@
  * with damage() and drawn in paint, a strip of rows at a time into one
  * buffer and blitted -- nothing is drawn on the panel twice, so nothing
  * flickers.
+ *
+ * @app folder Games
+ * @app release extra
  */
 #include "kernel/app/capp.h"
 #include "apps/kart/kart.h"

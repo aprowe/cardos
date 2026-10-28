@@ -8,6 +8,9 @@
  *     cat FILE...     write those files out
  *     cat             copy stdin to stdout
  *     cat -n FILE     number the lines
+ *
+ * @app folder -
+ * @app release core
  */
 
 #include "kernel/app/capp.h"

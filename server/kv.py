@@ -17,6 +17,10 @@ Namespaces -- the `ns` argument -- and who sees them:
     me/NAME     the person's data for one app, NAME
     app/NAME    one app's, shared by everyone: a game's world
     srv/NAME    written only by server code; anyone signed in may read it
+    pub/NAME    the person's data for one app that their friends may read
+                (server/friends.py): a Wordle result, crossword times.
+                Written only by its person; read with of=PERSON, or
+                everyone's at once with /kv/each
 
 NAME is [a-z0-9_-], 1 to 24. Without accounts the server is one person and
 "me" is theirs. Keys are 1 to 128 of [A-Za-z0-9._:/@+-] -- no spaces or
@@ -40,8 +44,15 @@ A queue holds at most QUEUE_MAX messages.
 
 The wire format (routes, all "device_or_dash"; writes are POST):
 
-    GET  /kv/get?ns=NS&key=K        -> 200, the value's bytes exactly
-                                       (application/octet-stream)
+    GET  /kv/get?ns=NS&key=K[&of=PERSON]
+                                    -> 200, the value's bytes exactly
+                                       (application/octet-stream); of= only
+                                       with pub/NAME, a friend's value
+    GET  /kv/each?ns=pub/NAME&key=K -> yours and each friend's value of K,
+                                       yours first, then by name, each:
+                                       PERSON <tab> DISPLAY <tab> SIZE\\n
+                                       then SIZE bytes, then "\\n"; a person
+                                       without the key is left out
     POST /kv/put?ns=NS&key=K[&ttl=S]  body: the value's bytes -> "ok\\n"
     POST /kv/del?ns=NS&key=K        -> "ok 1\\n" (deleted) or "ok 0\\n" (was not there)
     GET  /kv/list?ns=NS[&prefix=P][&max=N]
@@ -124,6 +135,9 @@ def me():
     return (accounts.current() if accounts.enabled() else None) or NOBODY
 
 
+NS_WORDS = "namespace is me, me/NAME, pub/NAME, app/NAME or srv/NAME"
+
+
 def resolve(ns, who, writing=False, server=False):
     """The stored namespace for a client's `ns`. srv/ is server code's to
     write; a device may only read it."""
@@ -132,16 +146,18 @@ def resolve(ns, who, writing=False, server=False):
         return "u/" + who
     head, _, name = ns.partition("/")
     if not _NAME.match(name or ""):
-        raise KVError("namespace is me, me/NAME, app/NAME or srv/NAME")
+        raise KVError(NS_WORDS)
     if head == "me":
         return "u/%s/%s" % (who, name)
+    if head == "pub":
+        return "p/%s/%s" % (who, name)
     if head == "app":
         return ns
     if head == "srv":
         if writing and not server:
             raise NotAllowed("srv/ is written by the server")
         return ns
-    raise KVError("namespace is me, me/NAME, app/NAME or srv/NAME")
+    raise KVError(NS_WORDS)
 
 
 def check_key(key):
@@ -195,6 +211,15 @@ class Store:
             CREATE INDEX IF NOT EXISTS q_sender ON q (sender);
             CREATE TABLE IF NOT EXISTS people (
                 user TEXT PRIMARY KEY, display TEXT, seen REAL);
+            CREATE TABLE IF NOT EXISTS rooms (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app TEXT NOT NULL, title TEXT NOT NULL, creator TEXT NOT NULL,
+                members TEXT NOT NULL, state BLOB NOT NULL, version INTEGER NOT NULL,
+                seq INTEGER NOT NULL, created REAL NOT NULL, updated REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS moves (
+                room INTEGER NOT NULL, seq INTEGER NOT NULL, sender TEXT NOT NULL,
+                at REAL NOT NULL, body BLOB NOT NULL, PRIMARY KEY (room, seq));
+            CREATE INDEX IF NOT EXISTS moves_sender ON moves (sender);
         """)
         self._purged = 0
 
@@ -243,7 +268,12 @@ class Store:
                             "WHERE owner = ? AND " + live, (who,)).fetchone()[0]
         b = self.db.execute("SELECT COALESCE(SUM(LENGTH(body)), 0) FROM q "
                             "WHERE sender = ? AND " + live, (who,)).fetchone()[0]
-        return a + b
+        # a room's moves count against who sent them, its state against its creator
+        c = self.db.execute("SELECT COALESCE(SUM(LENGTH(body)), 0) FROM moves "
+                            "WHERE sender = ?", (who,)).fetchone()[0]
+        d = self.db.execute("SELECT COALESCE(SUM(LENGTH(state)), 0) FROM rooms "
+                            "WHERE creator = ?", (who,)).fetchone()[0]
+        return a + b + c + d
 
     def _charge(self, who, adding, freeing=0):
         if who == SERVER or adding <= freeing:
@@ -496,14 +526,48 @@ def _body(h):
         raise TooBig(str(e))
 
 
+def _pub_of(args, of):
+    """The stored namespace of a friend's pub/NAME."""
+    from . import friends
+    ns = arg(args, "ns")
+    if not ns.startswith("pub/"):
+        raise KVError("of= is only for pub/NAME")
+    who = me()
+    if of != who and not friends.are_friends(who, of):
+        raise NotAllowed("%s is not your friend" % of)
+    return resolve(ns, of)
+
+
 @kv_route
 def get_kv(h, args):
-    """a value, its bytes"""
+    """a value, its bytes (of=PERSON: a friend's pub/ value)"""
     ns, key = _ns(args)
+    of = arg(args, "of")
+    if of:
+        ns = _pub_of(args, of)
     v = store().get(ns, key)
     if v is None:
         raise NotFound("no such key")
     _bytes(h, v)
+
+
+@kv_route
+def each_kv(h, args):
+    """one pub/ key: yours and every friend's"""
+    from . import friends
+    ns, key = _ns(args)
+    if not arg(args, "ns").startswith("pub/"):
+        raise KVError("each is only for pub/NAME")
+    who = me()
+    out = []
+    for person in [who] + friends.friends_of(who):
+        v = store().get(resolve(arg(args, "ns"), person), key)
+        if v is None:
+            continue
+        name = friends.display(person) if person != NOBODY else person
+        head = "%s\t%s\t%d\n" % (person, name, len(v))
+        out.append(head.encode() + v + b"\n")
+    _bytes(h, b"".join(out))
 
 
 @kv_route
@@ -615,6 +679,7 @@ def post_allow(h, args):
 
 ROUTES = [
     ("GET", "/kv/get", get_kv, "device_or_dash"),
+    ("GET", "/kv/each", each_kv, "device_or_dash"),
     ("POST", "/kv/put", put_kv, "device_or_dash"),
     ("POST", "/kv/del", del_kv, "device_or_dash"),
     ("GET", "/kv/list", list_kv, "device_or_dash"),

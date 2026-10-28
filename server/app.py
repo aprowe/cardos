@@ -27,8 +27,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 
-from . import accounts, agent, ask, chat, crossword, m5hub, daily, dash, dashapi, files, google, jar, kv, midi, msg, music, notes, people, photos, shots, sign, talk, toggl, traitors, tz, updates, voice, wiki
-from .jar import jarlab
+from . import accounts, agent, ask, chat, daily, dash, dashapi, files, friends, google, kv, msg, people, plugins, rooms, shots, sign, talk, tz, updates, voice
 from .chat import ROOT as ROOT_DIR
 
 
@@ -126,11 +125,11 @@ def _normalise(routes):
     return [r if len(r) == 4 else r + ("token",) for r in routes]
 
 
-ALL_ROUTES = _normalise(SERVER_ROUTES + chat.ROUTES + agent.ROUTES + m5hub.ROUTES + updates.ROUTES +
+ALL_ROUTES = _normalise(SERVER_ROUTES + chat.ROUTES + agent.ROUTES + updates.ROUTES +
                         voice.ROUTES + shots.ROUTES + tz.ROUTES + dash.ROUTES + dashapi.ROUTES +
-                        google.ROUTES + files.ROUTES + toggl.ROUTES + notes.ROUTES + daily.ROUTES + photos.ROUTES + music.ROUTES + midi.ROUTES + talk.ROUTES + msg.ROUTES +
-                        kv.ROUTES + people.ROUTES + ask.ROUTES + sign.ROUTES + jar.ROUTES + jarlab.ROUTES + wiki.ROUTES +
-                        crossword.ROUTES + traitors.ROUTES + _screen_routes())
+                        google.ROUTES + files.ROUTES + daily.ROUTES + talk.ROUTES + msg.ROUTES +
+                        kv.ROUTES + people.ROUTES + friends.ROUTES + rooms.ROUTES + ask.ROUTES + sign.ROUTES +
+                        plugins.routes() + _screen_routes())   # the apps' own: server/plugins.py
 
 
 def find_route(method, path):

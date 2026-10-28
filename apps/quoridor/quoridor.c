@@ -23,6 +23,9 @@
  *
  * The board is 9 cells of 11 pixels with 3-pixel grooves: 123 pixels, the
  * height the screen has above the footer.
+ *
+ * @app folder Games
+ * @app release extra
  */
 #include "kernel/app/capp.h"
 #include "apps/str.h"

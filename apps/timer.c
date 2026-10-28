@@ -21,6 +21,9 @@
  * The keys are the hint bar along the bottom (apps/footer.h), the same bar
  * every app has; Start and Reset are also a menu (apps/toolbar.h), fn-b or
  * a mouse, from the same action table as the ctrl-r chord.
+ *
+ * @app folder Plan
+ * @app release core
  */
 
 #include "kernel/app/capp.h"

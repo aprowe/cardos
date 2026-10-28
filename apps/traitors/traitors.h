@@ -1,5 +1,5 @@
 /* The Traitors: the rules, and the computer players. No screen, no API, no
- * libc -- apps/traitors/traitors.c draws it and test/test_traitors.c plays
+ * libc -- apps/traitors/traitors.c draws it and apps/traitors/test/test_traitors.c plays
  * it on the host.
  *
  * An original hidden-role game in the manner of the television show: seven

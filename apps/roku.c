@@ -22,6 +22,9 @@
  * Commands: `power on|off|toggle`, `volume up|down`, `mute`,
  * `input hdmi1..hdmi4|tuner|av`, `key NAME` (any ECP key: Home, Play, ...),
  * `address IP`.
+ *
+ * @app folder Net
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

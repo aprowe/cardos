@@ -1,0 +1,15 @@
+<style>
+.tracks{list-style:none;margin:0;padding:0}
+.tracks li{display:grid;grid-template-columns:auto 1fr auto auto auto;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line)}
+.tracks li:last-child{border-bottom:0}
+.tracks .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tracks .m{font-variant-numeric:tabular-nums;color:var(--ink2);font-size:13px}
+</style>
+<div class="sec-head">
+  <div><span class="lab">on the server, synced to the device</span><h2>Music</h2></div>
+  <div class="side-info"><span id="mu-state" class="faint"></span><button class="btn sm primary" data-act="mu-add">Add tracks</button></div>
+</div>
+<div class="drop" id="mu-drop"><b>Drop tracks here</b> &mdash; MP3, M4A, Ogg, FLAC, WAV. They are turned into what the device's speaker plays (22 kHz mono) here in the browser, then kept on the server; the Music app on the device fetches them when it opens.</div>
+<div class="panel"><ul class="tracks" id="mu-list"></ul></div>
+<audio id="mu-audio" preload="none"></audio>
+<input type="file" id="mu-file" accept="audio/*" multiple hidden>

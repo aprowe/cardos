@@ -11,7 +11,7 @@
  * starts with a digit, a string runs to its closing quote or the end of
  * the line (a C string that does not close is not carried on).
  *
- * Portable; host-tested in test/test_vim.c.
+ * Portable; host-tested in apps/vim/test/test_vim.c.
  */
 #ifndef CARDOS_VIMHL_H
 #define CARDOS_VIMHL_H

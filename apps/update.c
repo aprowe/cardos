@@ -30,6 +30,10 @@
  * still install as ever (they are the same for both), then the firmware,
  * which shows no percentage on the way -- the shell call returns at the end,
  * or not at all, since a firmware that goes in restarts the device.
+ *
+ * @app folder System
+ * @app release core
+ * @app embed yes
  */
 #include "kernel/app/capp.h"
 #include "apps/str.h"

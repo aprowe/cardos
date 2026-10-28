@@ -40,6 +40,22 @@
 
 #define CAPP_API_VERSION 50
 
+/* The oldest app this firmware loads. An app built for version V (its
+ * capp_info.api_version) loads when CAPP_API_MIN <= V <= CAPP_API_VERSION;
+ * one built for a newer V is refused as needing a newer CardOS. MIN is 48
+ * because that is when the last app-provided struct changed (CappUi gained
+ * `save`, which capprun copies whole); 49 and 50 only appended to CardApi.
+ * Keeping old apps loadable takes three rules:
+ *   - CardApi only grows: nothing is removed or reordered, and a dead entry
+ *     stays as a refusal (the share_* entries are the pattern);
+ *   - a new field in a struct an app hands the kernel (CappInfo, CappUi,
+ *     CappAction, CappParam, ...) raises CAPP_API_MIN, unless the kernel
+ *     checks the app's version before reading it;
+ *   - an app reads api->version (CardApi's first field, the firmware's
+ *     CAPP_API_VERSION) before calling an entry newer than CAPP_API_MIN, and
+ *     copes without it on older firmware. */
+#define CAPP_API_MIN 48
+
 /* Local time, broken down, as api->now fills it in. */
 typedef struct {
   uint16_t year;                /* 2026, not 126 */
@@ -1108,7 +1124,7 @@ typedef struct {
 /* The descriptor, read by the loader without executing anything. Must be a
  * const object named exactly `capp_info`. */
 typedef struct {
-  uint16_t api_version;                  /* must equal CAPP_API_VERSION */
+  uint16_t api_version;                  /* CAPP_API_VERSION it was built with; see CAPP_API_MIN */
   uint16_t flags;
   char     name[16];
   uint8_t  icon[CAPP_ICON_BYTES];        /* 16x16, 1bpp, bit 7 = leftmost */

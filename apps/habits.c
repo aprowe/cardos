@@ -44,6 +44,9 @@
  * to the 6x8 font if the card has not got them.
  *
  * Commands (the same data as the screen): add NAME, done HABIT, list.
+ *
+ * @app folder Plan
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

@@ -7,6 +7,9 @@
  *
  * Links against nothing: everything it does goes through the CardApi table it
  * is handed at registration.
+ *
+ * @app folder Games
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

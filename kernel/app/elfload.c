@@ -451,7 +451,7 @@ CappResult capp_load_ex(const char *path, LoadedApp *out, int foreground) {
     rc = CAPP_ERR_NOT_ELF;
     goto done;
   }
-  if (head[0] != CAPP_API_VERSION) { rc = CAPP_ERR_API; goto done; }
+  if ((rc = capp_api_check(head[0])) != CAPP_OK) goto done;
   /* The overlay region, for capprun to switch in; the icon scan never runs
    * the app, so it has no use for it. */
   if (foreground != LOAD_INFO && (rc = find_overlays(fd, &eh, sh, prog_size, out)) != CAPP_OK)
@@ -658,7 +658,8 @@ const char *capp_strerror(CappResult r) {
   case CAPP_ERR_NO_ENTRY:       return "no capp_register";
   case CAPP_ERR_NO_MEMORY:      return "no executable RAM left";
   case CAPP_ERR_RELOC:          return "unsupported relocation";
-  case CAPP_ERR_API:            return "built for a different API version";
+  case CAPP_ERR_API:            return "built for an older CardOS; rebuild it";
+  case CAPP_ERR_API_NEWER:      return "needs a newer CardOS";
   }
   return "unknown error";
 }

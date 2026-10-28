@@ -10,7 +10,8 @@ else()
   add_compile_options(-Wall -Wextra)
 endif()
 set(ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
-file(GLOB CARDOS_TEST_SOURCES CONFIGURE_DEPENDS ${ROOT}/test/*.c)
+# test/ and each app's own tests (apps/NAME/test/test_*.c, tools/appmeta.py)
+file(GLOB CARDOS_TEST_SOURCES CONFIGURE_DEPENDS ${ROOT}/test/*.c ${ROOT}/apps/*/test/test_*.c)
 # Only the portable modules build on the host; kernel/drv is device-only.
 file(GLOB_RECURSE CARDOS_KERNEL_SOURCES CONFIGURE_DEPENDS
   ${ROOT}/kernel/mem/*.c ${ROOT}/kernel/swap/*.c

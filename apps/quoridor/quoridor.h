@@ -1,5 +1,5 @@
 /* Quoridor: the rules, and a computer player. No screen, no API, no libc --
- * apps/quoridor/quoridor.c draws it and test/test_quoridor.c plays it on the host.
+ * apps/quoridor/quoridor.c draws it and apps/quoridor/test/test_quoridor.c plays it on the host.
  *
  * A 9x9 board. Each side has a pawn and ten walls; you win by reaching the
  * far row. A turn is a step (up, down, left, right) or a wall: two cells

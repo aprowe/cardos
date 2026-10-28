@@ -74,7 +74,7 @@
  * -- is refused.
  *
  * Header-only and libc-free, like apps/pet/petsim.h, so apps/jar/jar.c and the host
- * tests (test/test_jaritem.c) share one copy, and so the server can be
+ * tests (apps/jar/test/test_jaritem.c) share one copy, and so the server can be
  * checked against the same layout.
  */
 #ifndef CARDOS_JARITEM_H
@@ -408,7 +408,7 @@ static JI_OPT int jitem_decode(JItem *it, const uint8_t *in, int n) {
  * its eight memory slots (136..151, which scripts write, so a gift must
  * verify whatever they hold) zeroed, and its total length (offset 2) less
  * the signature; then everything after the signature. Fixed with
- * server/jar/__init__.py (2026-10-09). The signature itself is at
+ * apps/jar/server/__init__.py (2026-10-09). The signature itself is at
  * [hdr, hdr + in[204]). The message's length, or -1 if `in` is not a record
  * whose lengths agree or the message does not fit in `cap`. */
 static JI_OPT int ji_signed_message(const uint8_t *in, int n, uint8_t *out, int cap) {

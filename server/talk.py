@@ -14,7 +14,7 @@ conversation can touch the repository -- it is Claude with no tools, unlike
     GET  /talk/doc?s=ID                    -> the latest revision
 
 `kind` is `song` for MIDI's songs (apps/midi/midiseq.h), whose revisions are
-checked like server/midi.py's and sent back to be mended once; anything
+checked like apps/midi/server/__init__.py's and sent back to be mended once; anything
 else is text.
 
 Short calls, as everywhere the device is concerned: the shell is one loop,
@@ -25,7 +25,7 @@ import secrets
 import sys
 import threading
 
-from . import accounts, jobs, midi
+from . import accounts, jobs, plugins
 
 DOC_MAX = 24000
 SAY_MAX = 2000
@@ -45,9 +45,11 @@ out: it replaces the file. When they only ask a question, do not include the
 document.
 """
 
-SONG = """
-The document is a song for a small MIDI sequencer, in this format:
-""" + midi.FORMAT.split("Example:")[0].split("\n", 2)[2]
+# A kind of document an app knows -- `song` for MIDI's -- is that app's
+# plugin's TALK_KINDS (server/plugins.py): {"prompt": what Claude is told
+# about the format, "check": fn(text) -> (line, why) or None}.
+def _kind(name):
+    return plugins.talk_kind(name) or {}
 
 _sessions = jobs.Table(IDLE_S)  # id -> Session, gone after IDLE_S untouched
 _lock = threading.Lock()         # a Session's fields, between a request and its thread
@@ -87,17 +89,18 @@ def turn(chat, s, said):
     if s.sid:
         prompt = said
     else:
-        prompt = (PROMPT + (SONG if s.kind == "song" else "") +
+        prompt = (PROMPT + _kind(s.kind).get("prompt", "") +
                   "\nThe document, %s:\n```\n%s```\n\n%s" % (s.name, s.doc, said))
     answer, s.sid = _claude(chat, prompt, s.sid)
     words, rev = split(answer)
-    if rev is not None and s.kind == "song":
-        bad = midi.check(rev)
+    check = _kind(s.kind).get("check")
+    if rev is not None and check:
+        bad = check(rev)
         if bad:
             answer, s.sid = _claude(chat, "That song has a mistake on line %d (%s). "
                                     "Give the whole song again, corrected, in a ```doc block." % bad, s.sid)
             _, rev = split(answer)
-            if rev is None or midi.check(rev):
+            if rev is None or check(rev):
                 return words + "\n(the revision had a mistake, so it was not kept)", None
     return words, rev
 

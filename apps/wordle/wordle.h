@@ -1,11 +1,11 @@
 /* Wordle's rules, its word list, the daily puzzle and the stats file -- the
  * parts that can be wrong in a way a person would argue about, kept apart
- * from the screen so the host suite can pin them (test/test_wordle.c).
+ * from the screen so the host suite can pin them (apps/wordle/test/test_wordle.c).
  *
  * Portable C with no libc: the app links none, and this compiles on the PC
  * for the tests as it is.
  *
- * The word list (apps/wordle/wordle_words.h, made by tools/make_wordle.py)
+ * The word list (apps/wordle/wordle_words.h, made by apps/wordle/tools/make_wordle.py)
  * is one sorted list: ENABLE2K's five-letter words, which is what a guess
  * may be, with a bit on each that is also an answer. A word's first two
  * letters pick a bucket; its last three are 15 bits of a uint16_t. Two

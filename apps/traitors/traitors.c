@@ -1,11 +1,11 @@
 /* The Traitors: seven at a castle, two of them Traitors. A game for one
  * person, or two on two Cardputers side by side, with the castle's other
  * guests played by the computer -- whose words at the round table are
- * written by Claude through the server (server/traitors.py).
+ * written by Claude through the server (apps/traitors/server).
  *
  * The rules and the computer players are apps/traitors/traitors.h (host-
- * tested in test/test_traitors.c); this is the castle on screen. The
- * pictures are tools/make_traitors.py's, in apps/traitors/traitors_art.h:
+ * tested in apps/traitors/test/test_traitors.c); this is the castle on screen. The
+ * pictures are apps/traitors/tools/make_traitors.py's, in apps/traitors/traitors_art.h:
  * seven portraits and the little icons; the hall behind them -- stone,
  * two moonlit windows, the table in candlelight -- is drawn here a row at a
  * time.
@@ -31,6 +31,9 @@
  *
  * Every repaint is whole and composed off the panel by the OS; nothing marks
  * damage.
+ *
+ * @app folder Games
+ * @app release extra
  */
 
 #include "kernel/app/capp.h"

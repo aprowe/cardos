@@ -1,7 +1,7 @@
 /* Crossword's puzzle: the grid, its numbering, the clues, the cursor, what
  * the solver has typed, and the file that remembers it -- the parts that can
  * be wrong in a way a person would argue about, kept apart from the screen so
- * the host suite can pin them (test/test_crossword.c).
+ * the host suite can pin them (apps/crossword/test/test_crossword.c).
  *
  * Portable C with no libc: the app links none, and this compiles on the PC
  * for the tests as it is. One `Xw` is the whole state of one puzzle in play,

@@ -1,0 +1,20 @@
+<style>
+.logo.t{background:#e57cd8;color:#2c1029}
+.running{display:flex;align-items:center;gap:12px;border-radius:12px;background:var(--panel2);padding:12px 14px}
+.running .clk{font:600 24px var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.running .clk small{font-size:13px;color:var(--ink3);font-weight:500}
+.running .what{min-width:0;flex:1}
+.running .what b{display:block}
+.running .what span{font-size:13px;color:var(--ink2)}
+.proj-dot{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:0}
+.tgs{display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line);padding-top:14px}
+.tgs h4{margin:0;font-size:14px}
+.tg{display:grid;grid-template-columns:1fr auto auto;gap:4px 10px;align-items:center;font-size:13.5px}
+.tg .bar{grid-column:1/-1;height:10px;border-radius:5px;background:var(--panel2);overflow:hidden;box-shadow:inset 0 0 0 1px var(--line)}
+.tg .bar i{display:block;height:100%;border-radius:5px}
+.tg .n{color:var(--ink2);font-variant-numeric:tabular-nums}
+.tg-form{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.tg-form .inp{width:auto;flex:1 1 120px;font-family:inherit}
+.tg-form .inp.h{flex:0 0 76px}
+</style>
+<div class="panel acct" id="toggl"></div>

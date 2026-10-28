@@ -54,6 +54,9 @@
  * sampled now, so an event on the far side of a DST change can be shown an
  * hour out. Storing the offset per event would fix it and cost more than the
  * error is worth on a device whose clock is lost at every power cut.
+ *
+ * @app folder Plan
+ * @app release core
  */
 
 #include "kernel/app/capp.h"

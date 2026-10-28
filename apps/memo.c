@@ -9,7 +9,11 @@
  * Files are named by the clock when it is set -- 0920-1142.wav -- and by
  * count when it is not, so the list sorts into the order they were made
  * either way. 16 kHz mono 16-bit, the mic's native form: 32 KB a second,
- * which the card takes without noticing. */
+ * which the card takes without noticing.
+ *
+ * @app folder Make
+ * @app release core
+ */
 
 #include "kernel/app/capp.h"
 #include "apps/datetime.h"
@@ -438,7 +442,7 @@ static int app_key(void *st, unsigned char k) {
   case 0x7F:           return do_action(ACT_DELETE);
   case 'n': case 'N':
     /* To a note: the Notes app sends it to the server, which transcribes it
-     * and keeps it as a note (apps/notes.c, `notes memo PATH`). That call
+     * and keeps it as a note (apps/notes/notes.c, `notes memo PATH`). That call
      * blocks for as long as the upload and Whisper take, and made here it
      * froze the screen with nothing on it saying why. So the key only says
      * "sending..." and tick makes the call once that has been painted. */

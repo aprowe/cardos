@@ -63,7 +63,7 @@ def main():
                        [updates.valid_icon_name(n) for n in
                         ("Dashboard Link", "folder-Games", "../x", "a/b", "a.b", " x", "")],
                        [True, True, False, False, False, False, False])
-    fails += not check("the repository's own table is apps/folders.txt",
+    fails += not check("each app says its own folder (@app folder)",
                        updates.load_folders().get("timer"), "Plan")
     fails += not check("where '-' means the top level",
                        "grep" in updates.load_folders(), False)

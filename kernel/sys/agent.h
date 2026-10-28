@@ -6,7 +6,7 @@
  * and runs from the shell's tick, because "open Todo" means Todo takes the
  * screen -- an app that owned this loop would stop running the moment its
  * first useful tool call succeeded. Voice already lives here for the same
- * reason. apps/claude.c is a terminal over this, nothing more.
+ * reason. apps/claude/claude.c is a terminal over this, nothing more.
  *
  * What the model may do is a fixed list of tools, each one a verb the device
  * already had a way to do from the keyboard: the same list voice commands

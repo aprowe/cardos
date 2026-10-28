@@ -19,6 +19,9 @@
  *
  * Functions persist in /var/calc.txt with the angle mode; the roll does
  * not -- it is a scratchpad.
+ *
+ * @app folder Make
+ * @app release core
  */
 
 #include "kernel/app/capp.h"
