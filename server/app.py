@@ -27,7 +27,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 
-from . import accounts, agent, ask, chat, daily, dash, dashapi, files, friends, google, kv, msg, music, notes, people, photos, plugins, rooms, shots, sign, talk, toggl, tz, updates, voice
+from . import accounts, agent, ask, chat, daily, dash, dashapi, files, friends, google, kv, msg, people, plugins, rooms, shots, sign, talk, tz, updates, voice
 from .chat import ROOT as ROOT_DIR
 
 
@@ -127,7 +127,7 @@ def _normalise(routes):
 
 ALL_ROUTES = _normalise(SERVER_ROUTES + chat.ROUTES + agent.ROUTES + updates.ROUTES +
                         voice.ROUTES + shots.ROUTES + tz.ROUTES + dash.ROUTES + dashapi.ROUTES +
-                        google.ROUTES + files.ROUTES + toggl.ROUTES + notes.ROUTES + daily.ROUTES + photos.ROUTES + music.ROUTES + talk.ROUTES + msg.ROUTES +
+                        google.ROUTES + files.ROUTES + daily.ROUTES + talk.ROUTES + msg.ROUTES +
                         kv.ROUTES + people.ROUTES + friends.ROUTES + rooms.ROUTES + ask.ROUTES + sign.ROUTES +
                         plugins.routes() + _screen_routes())   # the apps' own: server/plugins.py
 

@@ -1,0 +1,14 @@
+<style>
+.photo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.ph{position:relative;border-radius:10px;overflow:hidden;background:var(--panel2);box-shadow:inset 0 0 0 1px var(--line)}
+.ph img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#000}
+.ph .cap{display:flex;align-items:center;gap:6px;padding:6px 8px;font-size:13px}
+.ph .cap span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+</style>
+<div class="sec-head">
+  <div><span class="lab">on the server, synced to the device</span><h2>Photos</h2></div>
+  <div class="side-info"><span id="ph-state" class="faint"></span><button class="btn sm primary" data-act="ph-add">Add photos</button></div>
+</div>
+<div class="drop" id="ph-drop"><b>Drop pictures here</b> &mdash; JPG, PNG, GIF, WebP. The device gets a screen copy and a print copy the next time Photos opens.</div>
+<div class="photo-grid" id="ph-grid"></div>
+<input type="file" id="ph-file" accept="image/*" multiple hidden>

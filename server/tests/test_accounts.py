@@ -294,7 +294,7 @@ class PerPerson(Server):
                 google.access_token()
 
     def test_a_new_toggl_token_keeps_the_targets(self):
-        from server import toggl
+        from apps.toggl import server as toggl
         self.as_me()
         target = {"project": 7, "kind": "week", "hours": 5}
         toggl.save({"token": "old", "name": "Alex", "workspace": 5, "targets": [target]})
@@ -308,7 +308,7 @@ class PerPerson(Server):
         self.assertEqual(c["targets"], [target])
 
     def test_a_toggl_save_drops_only_that_persons_cache(self):
-        from server import toggl
+        from apps.toggl import server as toggl
         toggl._cache.clear()
         self.addCleanup(toggl._cache.clear)
         toggl._cache[("sam", "projects")] = (1e12, {"sams": 1})
