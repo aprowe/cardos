@@ -1199,11 +1199,15 @@ void test_wordle_a_game_takes_letters_and_refuses_bad_guesses(void);
 void test_wordle_six_misses_lose(void);
 void test_wordle_stats_count_dailies_and_streaks(void);
 void test_wordle_stats_round_trip_through_text(void);
+void test_wordle_friends_a_win_is_its_colours_and_no_letters(void);
+void test_wordle_friends_six_misses_are_an_x(void);
+void test_wordle_friends_refuses_a_game_still_going_and_junk(void);
 void test_wordle_paint_opens_on_the_daily_and_fills_the_screen(void);
 void test_wordle_paint_a_refused_guess_says_why_and_stays(void);
 void test_wordle_paint_colours_tiles_and_keys(void);
 void test_wordle_paint_the_daily_comes_back_as_it_was_left(void);
 void test_wordle_paint_with_no_clock_is_practice(void);
+void test_wordle_paint_a_finished_daily_shows_friends_and_shares_on_purpose(void);
 
 int main(void) {
   /* Unbuffered, so a crash is reported next to the test that caused it
@@ -2508,11 +2512,16 @@ int main(void) {
   RUN(test_wordle_six_misses_lose);
   RUN(test_wordle_stats_count_dailies_and_streaks);
   RUN(test_wordle_stats_round_trip_through_text);
+  printf("-- wordle friends --\n");
+  RUN(test_wordle_friends_a_win_is_its_colours_and_no_letters);
+  RUN(test_wordle_friends_six_misses_are_an_x);
+  RUN(test_wordle_friends_refuses_a_game_still_going_and_junk);
   printf("-- wordle paint --\n");
   RUN(test_wordle_paint_opens_on_the_daily_and_fills_the_screen);
   RUN(test_wordle_paint_a_refused_guess_says_why_and_stays);
   RUN(test_wordle_paint_colours_tiles_and_keys);
   RUN(test_wordle_paint_the_daily_comes_back_as_it_was_left);
   RUN(test_wordle_paint_with_no_clock_is_practice);
+  RUN(test_wordle_paint_a_finished_daily_shows_friends_and_shares_on_purpose);
   return tt_report();
 }

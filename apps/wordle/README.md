@@ -21,3 +21,15 @@ are 15 bits, the top bit marks an answer): 19 KB of constants, which the
 icon scan reads into RAM -- do not grow it lightly. The rules are
 `apps/wordle/wordle.h`; `apps/wordle/test/test_wordle_paint.c` plays it into a
 framebuffer with the real fonts (`test/fakescreen.h`; `WORDLE_DUMP=dir`).
+
+**Friends** (2026-10-27, `apps/wordle/wdfriends.h`). A finished daily is
+published as your `pub/wordle` value of `day` -- the day, the result, each
+guess as its colours (g y .), the streak; never the letters -- which only
+friends can read (server/friends.py). Then Wordle reads everyone's
+(`/kv/each`) and shows the friends who finished the same day under your
+result ("Sam 4/6"); `f` shows each one's grid, `r` reads again, `s` sends
+"Wordle #N 3/6" to Chat as you (`/share`, your Chat name from
+/config/chat.txt). Nothing else is sent, and nothing is sent without a
+network: Wordle does not ask for one. Tests: apps/wordle/test/
+test_wordle_friends.c, and the flow end to end in test_wordle_paint.c.
+

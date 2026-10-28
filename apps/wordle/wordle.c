@@ -17,6 +17,12 @@
  * line of text, and the whole screen is 30 tiles and 26 keys -- cheaper to
  * redraw than to track, and nothing can flicker.
  *
+ * Friends (apps/wordle/wdfriends.h): a finished daily publishes its result
+ * -- the colours, never the letters -- for friends to see, and reads
+ * theirs for the same day: "Sam 4/6" under yours, and `f` shows each one's
+ * grid. `s` sends yours to Chat. Nothing else leaves the device, and with no
+ * network Wordle is as it was.
+ *
  * The rules, the word list and the stats file are wordle.h, host-tested in
  * apps/wordle/test/test_wordle.c; the screen in apps/wordle/test/test_wordle_paint.c.
  *
@@ -28,7 +34,9 @@
 #include "apps/str.h"
 #include "apps/footer.h"
 #include "apps/safefile.h"
+#include "apps/social.h"
 #include "apps/wordle/wordle.h"
+#include "apps/wordle/wdfriends.h"
 
 static const CardApi *api;
 
@@ -62,7 +70,9 @@ static const CardApi *api;
 #define C_WARN    CAPP_RGB(240, 150, 90)
 
 enum { MODE_DAILY, MODE_PRACTICE };
-enum { V_GAME, V_STATS };
+enum { V_GAME, V_STATS, V_FRIENDS };
+/* The one request in flight: publishing ours, reading theirs, sharing. */
+enum { RQ_NONE, RQ_PUB, RQ_EACH, RQ_SHARE };
 
 static const char *const KB_ROWS[3] = { "qwertyuiop", "asdfghjkl", "zxcvbnm" };
 static const char *const PRAISE[WD_TRIES] = {
@@ -80,6 +90,11 @@ static struct {
   int     shake_row;          /* the row a refused guess was typed in, or -1 */
   uint32_t seed;
   int     f_tile, f_ui, f_num;
+  int     rq;                 /* RQ_* */
+  int     published;          /* today's result is on the server */
+  int     nfr;                /* friends' results for today */
+  WdFriend fr[WDF_MAX];
+  char    reply[1600];
 } G;
 
 /* ---- stats on the card ----------------------------------------------------- */
@@ -162,6 +177,8 @@ static void start_daily(void) {
   if (G.g.over) wd_stats_finish(&G.st, G.today, G.g.over == WD_WON, G.g.n);
 }
 
+static void friends_sync(void);
+
 /* A daily guess played: kept at once, and counted when the game ends. */
 static void keep_daily(void) {
   int i;
@@ -170,6 +187,7 @@ static void keep_daily(void) {
   for (i = 0; i < G.g.n; i++) api->mem_cpy(G.st.guess[i], G.g.guess[i], WD_LEN + 1);
   if (G.g.over) wd_stats_finish(&G.st, G.today, G.g.over == WD_WON, G.g.n);
   save_stats();
+  if (G.g.over) friends_sync();
 }
 
 static void submit(void) {
@@ -180,6 +198,86 @@ static void submit(void) {
   G.shake_row = -1;
   say("", C_TEXT, 0);
   if (G.mode == MODE_DAILY) keep_daily();
+}
+
+/* ---- friends ---------------------------------------------------------------- */
+
+static int daily_over(void) {
+  return G.mode == MODE_DAILY && G.g.over != WD_PLAYING && G.today != WD_NO_DAY;
+}
+
+/* Publish today's result, then read the friends'. Quietly does nothing
+ * with no network: Wordle never asks for one. */
+static void friends_sync(void) {
+  char body[120];
+  if (!daily_over() || G.rq != RQ_NONE || !api->net_ready()) return;
+  if (wdf_format(&G.g, G.today, wd_stats_streak(&G.st, G.today), body, sizeof body) < 0) return;
+  if (soc_pub_put(api, "wordle", "day", body) == 0) G.rq = RQ_PUB;
+}
+
+/* /kv/each: yours first (published, so it is there), then each friend's;
+ * only today's finished ones are kept. */
+static void friends_read(int n) {
+  const char *p = G.reply, *end = G.reply + n, *head, *body;
+  int len, first = 1;
+  G.nfr = 0;
+  while (soc_block_next(&p, end, &head, &body, &len)) {
+    WdFriend *f = &G.fr[G.nfr];
+    if (first) { first = 0; continue; }
+    if (G.nfr >= WDF_MAX) break;
+    tsv_field(head, 0, f->name, sizeof f->name);
+    tsv_field(head, 1, f->display, sizeof f->display);
+    if (wdf_parse(body, len, f) && f->day == G.today) G.nfr++;
+  }
+}
+
+static void chat_name(char *out, int n) {
+  int fd = api->open(CAPP_CONFIG "/chat.txt", CAPP_O_READ), got = 0, i;
+  out[0] = 0;
+  if (fd < 0) return;
+  got = api->read(fd, out, (size_t)(n - 1));
+  api->close(fd);
+  if (got < 0) got = 0;
+  out[got] = 0;
+  for (i = 0; out[i]; i++) if (out[i] == '\n' || out[i] == '\r') { out[i] = 0; break; }
+}
+
+/* `s`: today's result, as a line in Chat. */
+static void share(void) {
+  char line[40], name[24], sc[4];
+  WdFriend me;
+  if (!daily_over()) { say("finish today's first", C_DIM, 1800); return; }
+  if (G.rq != RQ_NONE) { say("busy, try again", C_DIM, 1500); return; }
+  me.result = G.g.over == WD_WON ? G.g.n : WDF_X;
+  wdf_score(&me, sc);
+  api->fmt(line, sizeof line, "Wordle #%d %s", (int)G.today + 1, sc);
+  chat_name(name, sizeof name);
+  if (soc_share(api, "Wordle", line, name) == 0) { G.rq = RQ_SHARE; say("sending...", C_DIM, 0); }
+  else say("no network", C_WARN, 1800);
+}
+
+/* 1 when what is drawn changed. */
+static int friends_tick(void) {
+  int n;
+  if (G.rq == RQ_NONE) return 0;
+  n = api->http_poll(G.reply, sizeof G.reply);
+  if (n == CAPP_HTTP_PENDING) return 0;
+  if (G.rq == RQ_PUB) {
+    G.rq = RQ_NONE;
+    if (n < 0) return 0;
+    G.published = 1;
+    if (soc_pub_each(api, "wordle", "day") == 0) G.rq = RQ_EACH;
+    return 0;
+  }
+  if (G.rq == RQ_EACH) {
+    G.rq = RQ_NONE;
+    if (n < 0) return 0;
+    friends_read(n);
+    return 1;
+  }
+  G.rq = RQ_NONE;                                /* RQ_SHARE */
+  say(n < 0 ? "could not send" : "sent to Chat", n < 0 ? C_WARN : C_GREEN, 2500);
+  return 1;
 }
 
 /* ---- drawing --------------------------------------------------------------- */
@@ -267,7 +365,17 @@ static void paint_panel(void) {
   api->text_font(G.f_ui, PX, 21, b, colour, C_BG);
   paint_keys();
   if (G.msg[0]) api->text_font(G.f_ui, PX, MSG_Y, G.msg, G.msg_colour, C_BG);
-  else if (G.g.over && G.mode == MODE_DAILY)
+  else if (G.g.over && G.mode == MODE_DAILY && G.nfr) {
+    char line[48], sc[4];
+    int i, at = 0;
+    line[0] = 0;
+    for (i = 0; i < G.nfr && at < (int)sizeof line - 12; i++) {
+      wdf_score(&G.fr[i], sc);
+      at += api->fmt(line + at, sizeof line - (size_t)at, "%s%s %s", i ? "  " : "",
+                     G.fr[i].display[0] ? G.fr[i].display : G.fr[i].name, sc);
+    }
+    api->text_font(G.f_ui, PX, MSG_Y, line, C_TEXT, C_BG);
+  } else if (G.g.over && G.mode == MODE_DAILY)
     api->text_font(G.f_ui, PX, MSG_Y, "new one tomorrow", C_DIM, C_BG);
 }
 
@@ -277,8 +385,9 @@ static void paint_game(CRect c) {
   api->fill(capp_rect(c.x, c.y, c.w, c.h - FOOT_H), C_BG);
   paint_board();
   paint_panel();
-  footer_paint(api, c, G.g.over ? "n practice  d daily  tab stats"
-                                : "enter guess  bksp delete  tab stats");
+  footer_paint(api, c, daily_over() ? "s share  f friends  tab stats"
+                       : G.g.over ? "n practice  d daily  tab stats"
+                       : "enter guess  bksp delete  tab stats");
 }
 
 static void paint_stats(CRect c) {
@@ -319,9 +428,38 @@ static void paint_stats(CRect c) {
   footer_paint(api, c, "esc back  n practice  d daily");
 }
 
+/* Each friend's day: their name and result over their grid of colours. */
+static void paint_friends(CRect c) {
+  char b[40], sc[4];
+  int i;
+  api->fill(capp_rect(c.x, c.y, c.w, c.h - FOOT_H), C_BG);
+  api->text_font(G.f_tile, 8, 3, "Friends", C_TEXT, C_BG);
+  api->fmt(b, sizeof b, "#%d", (int)G.today + 1);
+  api->text_font(G.f_ui, 80, 3, b, C_DIM, C_BG);
+  if (!G.nfr) {
+    api->text_font(G.f_ui, 8, 30, G.rq != RQ_NONE ? "asking the server..." :
+                   "no friend has finished today's yet", C_DIM, C_BG);
+    api->text_font(G.f_ui, 8, 48, "friends are added on the dashboard", C_DIM, C_BG);
+  }
+  for (i = 0; i < G.nfr && i < 4; i++) {
+    const WdFriend *f = &G.fr[i];
+    int x = 8 + i * 58, r, k;
+    api->fmt(b, sizeof b, "%s", f->display[0] ? f->display : f->name);
+    if (api->str_len(b) > 8) b[8] = 0;
+    api->text_font(G.f_ui, (int16_t)x, 22, b, C_TEXT, C_BG);
+    wdf_score(f, sc);
+    api->text_font(G.f_ui, (int16_t)x, 36, sc, f->result == WDF_X ? C_WARN : C_GREEN, C_BG);
+    for (r = 0; r < f->nrows; r++)
+      for (k = 0; k < WD_LEN; k++)
+        api->fill(capp_rect(x + k * 9, 52 + r * 9, 8, 8), state_colour(f->rows[r][k]));
+  }
+  footer_paint(api, c, "esc back  r refresh  s share");
+}
+
 static void app_paint(void *st, CRect c) {
   (void)st;
-  if (G.view == V_STATS) paint_stats(c);
+  if (G.view == V_FRIENDS) paint_friends(c);
+  else if (G.view == V_STATS) paint_stats(c);
   else paint_game(c);
 }
 
@@ -329,6 +467,13 @@ static void app_paint(void *st, CRect c) {
 
 static int app_key(void *st, uint8_t k) {
   (void)st;
+  if (G.view == V_FRIENDS) {
+    if (api->key_repeat()) return 1;
+    if (k == CAPP_KEY_ESC || k == 'f') { G.view = V_GAME; return 1; }
+    if (k == 'r') { friends_sync(); return 1; }
+    if (k == 's') { share(); return 1; }
+    return 0;
+  }
   if (G.view == V_STATS) {
     if (api->key_repeat()) return 1;
     if (k == CAPP_KEY_ESC || k == '\t') { G.view = V_GAME; return 1; }
@@ -339,6 +484,9 @@ static int app_key(void *st, uint8_t k) {
   if (k == '\t') { if (!api->key_repeat()) G.view = V_STATS; return 1; }
   if (G.g.over) {
     if (api->key_repeat()) return 1;
+    if (k == 's') { share(); return 1; }
+    if (k == 'f' && daily_over()) { G.view = V_FRIENDS; friends_sync(); return 1; }
+    if (k == 'r') { friends_sync(); return 1; }
     if (k == 'n' || k == CAPP_KEY_ENTER) { start_practice(); return 1; }
     if (k == 'd') { start_daily(); return 1; }
     return 0;
@@ -355,9 +503,10 @@ static int app_key(void *st, uint8_t k) {
   return 0;
 }
 
-/* Only a message timing out: nothing else here moves by itself. */
+/* A message timing out, and the friends' replies arriving. */
 static int app_tick(void *st, uint32_t now) {
   (void)st;
+  if (friends_tick()) return 1;
   if (G.msg_until && (int32_t)(now - G.msg_until) >= 0) {
     G.msg[0] = 0;
     G.msg_until = 0;
@@ -384,6 +533,8 @@ const CappInfo capp_info = {
   "letters\ttype a guess\nenter\tplay it\nbksp\tdelete a letter\n"
   "tab\tstatistics\nn\tpractice game (when one is over)\n"
   "d\ttoday's puzzle (when one is over)\n"
+  "f\tfriends' results for today (when it is done)\n"
+  "s\tsend your result to Chat\nr\tread friends' results again\n"
   "green\tright letter, right place\nyellow\tin the word, elsewhere\n"
   "grey\tnot in the word\n",
 };
@@ -401,6 +552,7 @@ int capp_main(const CardApi *a, int argc, char **argv) {
   G.f_num = api->font_load("num30");
   load_stats();
   start_daily();
+  friends_sync();                     /* today's already done: show theirs */
 
   UI.paint = app_paint;
   UI.key = app_key;

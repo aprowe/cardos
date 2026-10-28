@@ -7,6 +7,7 @@
  *
  * WORDLE_DUMP=dir writes the screens there (wordle_*.ppm), to look at. */
 #include <string.h>
+#include <stdio.h>
 
 #include "tinytest.h"
 #include "fakescreen.h"
@@ -161,4 +162,92 @@ void test_wordle_paint_with_no_clock_is_practice(void) {
   CHECK(G.msg[0] != 0);
   CHECK_EQ(fakescreen_unset(), 0);
   fakescreen_dump("WORDLE_DUMP", "wordle_noclock");
+}
+
+/* ---- friends: a finished daily is published, theirs read and shown ------------ */
+
+static char s_url[400], s_body[200];
+static int s_nreq;
+static const char *s_reply;
+
+static int f_start(const char *m, const char *u, const char *b, const char *ct, const char *br,
+                   int ms) {
+  (void)m; (void)ct; (void)br; (void)ms;
+  snprintf(s_url, sizeof s_url, "%s", u);
+  snprintf(s_body, sizeof s_body, "%s", b ? b : "");
+  s_nreq++;
+  return 0;
+}
+
+static int f_poll(char *o, size_t n) {
+  size_t k = strlen(s_reply);
+  if (k > n - 1) k = n - 1;
+  memcpy(o, s_reply, k);
+  o[k] = 0;
+  return (int)k;
+}
+
+static void w_tick(void) {
+  fakeapi_ticks += 100;
+  if (fakescreen_ui.tick(fakescreen_ui.state, fakeapi_ticks)) fakescreen_paint();
+}
+
+void test_wordle_paint_a_finished_daily_shows_friends_and_shares_on_purpose(void) {
+  char typed[8], body[200];
+  w_boot(1);
+  WA.http_start = f_start;
+  WA.http_poll = f_poll;
+  s_nreq = 0;
+  snprintf(typed, sizeof typed, "%s\r", G.g.answer);
+  w_keys(typed);
+  CHECK_EQ(G.g.over, WD_WON);
+  /* Published: the colours of one green row, never the word. */
+  CHECK_EQ(s_nreq, 1);
+  CHECK(!strcmp(s_url, "http://srv/kv/put?ns=pub/wordle&key=day"));
+  CHECK(strstr(s_body, "result 1\nrows ggggg\n") != NULL);
+  CHECK(strstr(s_body, G.g.answer) == NULL);
+  memcpy(body, s_body, sizeof body);
+  /* Then everyone's: mine first, then Sam's for today, then Lee's old one. */
+  s_reply = "ok\n";
+  w_tick();
+  CHECK_EQ(s_nreq, 2);
+  CHECK(!strcmp(s_url, "http://srv/kv/each?ns=pub/wordle&key=day"));
+  {
+    static char rep[600];
+    char sam[80];
+    snprintf(sam, sizeof sam, "day %d\nresult 4\nrows ..y.. .gy.. gg.g. ggggg\nstreak 2\n",
+             (int)G.today);
+    snprintf(rep, sizeof rep, "alex\talex\t%d\n%s\nsam\tSam\t%d\n%s\nlee\tLee\t%d\n%s\n",
+             (int)strlen(body), body, (int)strlen(sam), sam,
+             (int)strlen("day 3\nresult 2\n"), "day 3\nresult 2\n");
+    s_reply = rep;
+  }
+  w_tick();
+  CHECK_EQ(G.nfr, 1);
+  CHECK(!strcmp(G.fr[0].display, "Sam"));
+  CHECK_EQ(G.fr[0].result, 4);
+  CHECK_EQ(fakescreen_unset(), 0);
+  fakescreen_dump("WORDLE_DUMP", "wordle_friends_line");
+  /* f: each friend's grid. */
+  w_keys("f");
+  CHECK_EQ(G.view, V_FRIENDS);
+  s_reply = "ok\n";
+  w_tick();                                            /* the refresh f asked for */
+  CHECK_EQ(fakescreen_unset(), 0);
+  fakescreen_dump("WORDLE_DUMP", "wordle_friends");
+  /* Nothing went to Chat until s. */
+  while (G.rq != RQ_NONE) w_tick();
+  CHECK(strstr(s_url, "/share") == NULL);
+  w_keys("s");
+  CHECK(strstr(s_url, "/share?app=Wordle") != NULL);
+  {
+    char want[24];
+    snprintf(want, sizeof want, "Wordle #%d 1/6", (int)G.today + 1);
+    CHECK(!strcmp(s_body, want));
+  }
+  s_reply = "12\n";
+  w_tick();
+  CHECK(!strcmp(G.msg, "sent to Chat"));
+  w_keys("\x1b");
+  CHECK_EQ(G.view, V_GAME);
 }
