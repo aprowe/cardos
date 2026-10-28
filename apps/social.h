@@ -249,7 +249,14 @@ static SOC_OPT void soc_pick_key(SocPick *pk, int key) {
   if (key == CAPP_KEY_UP && pk->sel > 0) pk->sel--;
   else if (key == CAPP_KEY_DOWN && pk->sel < pk->n - 1) pk->sel++;
   else if (key == CAPP_KEY_ENTER) {
-    if (pk->n > 0) { pk->chosen = pk->f[pk->sel]; pk->done = 1; }
+    if (pk->n > 0) {
+      /* Field by field: a struct assignment compiles to memcpy, which an
+       * app does not link (build_apps.py, -fno-builtin). */
+      int i;
+      for (i = 0; i < SOC_NAME; i++) pk->chosen.name[i] = pk->f[pk->sel].name[i];
+      for (i = 0; i < SOC_DISPLAY; i++) pk->chosen.display[i] = pk->f[pk->sel].display[i];
+      pk->done = 1;
+    }
     else pk->done = -1;
     pk->open = 0;
   }
