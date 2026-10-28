@@ -746,6 +746,79 @@ class Midi(unittest.TestCase):
         self.assertIn("2020-01-01", self.ids())
 
 
+def wordhint_page(rows, across, down, day="October 27, 2026", by="A. Setter", answers=None):
+    """A page in wordhint.net's markup: a button a white square, its letter in
+    the last span, and the Across and Down tables of number, clue, answer."""
+    w = len(rows[0])
+    cells = []
+    for r, row in enumerate(rows):
+        for c, ch in enumerate(row):
+            if ch == ".":
+                cells.append('<div class="bg-slate-800"></div>')
+            else:
+                cells.append('<button type="button" aria-label="Reveal letter at row %d, column %d" class="x">'
+                             '<span aria-hidden="true">1</span><span class="opacity-0">%s</span></button>'
+                             % (r + 1, c + 1, ch.upper()))
+    a, d = crossword.entries(upper(rows))
+
+    def table(name, ents, texts, dr, dc):
+        out = ['<h3 class="mb-2">%s</h3><table class="w-full"><thead><tr><th>#</th><th>Clue</th>'
+               '<th>Answer</th></tr></thead><tbody>' % name]
+        for (n, r, c, ln), t in zip(ents, texts):
+            ans = (answers or {}).get((name, n)) or "".join(upper(rows)[r + k * dr][c + k * dc] for k in range(ln))
+            out.append('<tr class="b"><td class="p">%d</td><td class="p"><a href="/x/">%s</a></td>'
+                       '<td class="p"><strong class="f">%s</strong></td></tr>' % (n, t.replace('"', "&quot;"), ans))
+        return "".join(out) + "</tbody></table>"
+
+    return ('<html><head><title>NYT Crossword Answers Today</title></head><body>'
+            '<p class="byline">By %s</p>'
+            '<div class="grid" style="grid-template-columns:repeat(%d, minmax(0, 1fr))">%s</div>'
+            '<p>The full solution for today\'s puzzle (%s) is listed.</p>%s%s</body></html>'
+            % (by, w, "".join(cells), day, table("Across", a, across, 0, 1), table("Down", d, down, 1, 0)))
+
+
+class Wordhint(unittest.TestCase):
+    """wordhint.net's NYT answers page: the grid and clues from its markup."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        os.environ["CARDOS_STATE"] = self.dir
+        crossword._invalidate()
+
+    def tearDown(self):
+        os.environ.pop("CARDOS_STATE", None)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_the_page_is_the_puzzle(self):
+        pz = crossword.from_wordhint(wordhint_page(FIX_ROWS, FIX_ACROSS, FIX_DOWN))
+        self.assertEqual(pz["rows"], upper(FIX_ROWS))
+        self.assertEqual(pz["date"], "2026-10-27")
+        self.assertEqual(pz["by"], "A. Setter")
+        self.assertEqual(pz["title"], "Daily: A. Setter")
+        self.assertEqual([t for _, t in pz["across"]], FIX_ACROSS)
+        self.assertEqual([t for _, t in pz["down"]], FIX_DOWN)
+
+    def test_a_challenge_page_is_refused(self):
+        with self.assertRaises(ValueError):
+            crossword.from_wordhint("<html><title>Just a moment...</title></html>")
+
+    def test_a_grid_that_disagrees_with_its_answers_is_refused(self):
+        page = wordhint_page(FIX_ROWS, FIX_ACROSS, FIX_DOWN, answers={("Across", 1): "HEAT"})
+        with self.assertRaisesRegex(ValueError, "1-Across"):
+            crossword.from_wordhint(page)
+
+    def test_put_keeps_a_week_of_the_series_only(self):
+        crossword.add(small("2026-10-01"))
+        for day in ("2026-10-20", "2026-10-21", "2026-10-27"):
+            pz = crossword.from_wordhint(wordhint_page(FIX_ROWS, FIX_ACROSS, FIX_DOWN,
+                                                       day=datetime.date.fromisoformat(day).strftime("%B %d, %Y")))
+            status, removed = crossword.put_text(crossword.to_text(pz), day + "-nyt", keep=7)
+        self.assertEqual(status, "added")
+        self.assertEqual(removed, ["2026-10-20-nyt"])
+        self.assertEqual([e["id"] for e in crossword.index()],
+                         ["2026-10-01", "2026-10-21-nyt", "2026-10-27-nyt"])
+
+
 class Routes(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()

@@ -1138,9 +1138,16 @@ def main(argv=None, out=None, err=None):
     if argv == ["midi"]:
         midi_refresh(log=lambda s: print(s, file=out or sys.stdout))
         return 0
+    if argv[:1] == ["put"] and len(argv) in (2, 4) and (len(argv) == 2 or argv[2] == "--keep"):
+        # tools/wordhint_nyt.py: a puzzle's text on stdin, kept under ID.
+        status, removed = put_text(sys.stdin.read(), argv[1], int(argv[3]) if len(argv) == 4 else 0)
+        print("%s %s%s" % (argv[1], status, "; removed " + " ".join(removed) if removed else ""),
+              file=out or sys.stdout)
+        return 0
     usage = ("usage: python -m server.crossword import PATH [PATH ...] "
              "[--dry-run] [--replace] [--date D] [--state DIR] [-v | -q]\n"
-             "       python -m server.crossword midi     (this week's NYT Midi, now)")
+             "       python -m server.crossword midi     (this week's NYT Midi, now)\n"
+             "       python -m server.crossword put ID [--keep DAYS] < PUZZLE.xw")
     if argv in (["-h"], ["--help"]):
         print(usage, file=out or sys.stdout)
         return 0
@@ -1208,13 +1215,20 @@ def midi_refresh(fetch=None, log=None):
                 added.append(pid)
         except Exception as e:             # a day the site lacks is not the week's end
             log("midi %s: %s" % (day, e))
-    removed = [e["id"] for e in index()
-               if e["id"].endswith(MIDI_SUFFIX) and e["id"][:-len(MIDI_SUFFIX)] < oldest]
-    for pid in removed:
-        remove(pid)
+    removed = prune(MIDI_SUFFIX, oldest)
     if added or removed:
         log("midi: added %s; removed %s" % (" ".join(added) or "none", " ".join(removed) or "none"))
     return added, removed
+
+
+def prune(suffix, oldest):
+    """Forget the puzzles of a series (ids DATE+suffix) printed before oldest,
+    a YYYY-MM-DD. The removed ids."""
+    gone = [e["id"] for e in index()
+            if e["id"].endswith(suffix) and e["id"][:-len(suffix)] < oldest]
+    for pid in gone:
+        remove(pid)
+    return gone
 
 
 def start_midi(every=MIDI_EVERY):
@@ -1228,6 +1242,88 @@ def start_midi(every=MIDI_EVERY):
                 print("crossword: midi: %s" % e)
             time.sleep(every)
     threading.Thread(target=loop, name="midi", daemon=True).start()
+
+
+# ---- the NYT daily, from wordhint.net's answers page --------------------------------------------------------
+#
+# wordhint.net/crossword-clues-answers/nyt/today/ draws the day's grid as a
+# button a white square, each holding its letter (hidden until tapped), and
+# lists every clue with its answer in two tables. That is the whole puzzle.
+# Its Cloudflare lets a plain request from a home connection through and
+# challenges the droplet's, so tools/wordhint_nyt.py fetches it on the laptop
+# and hands the text to `put` here over ssh. Kept as DATE-nyt, a week of them.
+
+NYT_SUFFIX = "-nyt"
+
+_WH_CELL = re.compile(r'aria-label="Reveal letter at row (\d+), column (\d+)"(.*?)</button>', re.S)
+_WH_ROW = re.compile(r"<tr[^>]*>\s*<td[^>]*>\s*(\d+)\s*</td>\s*<td[^>]*>(.*?)</td>\s*<td[^>]*>(.*?)</td>\s*</tr>",
+                     re.S)
+_TAG = re.compile(r"<[^>]+>")
+
+
+def _wh_text(s):
+    return html.unescape(_TAG.sub("", s)).strip()
+
+
+def from_wordhint(page):
+    """The puzzle on a wordhint.net NYT answers page. ValueError if the page
+    is not one (a Cloudflare challenge, say), or its grid and its answer
+    tables disagree."""
+    m = re.search(r"grid-template-columns:repeat\((\d+),", page)
+    if not m:
+        raise ValueError("no crossword grid on the page")
+    w = int(m.group(1))
+    found = {}
+    for r, c, inner in _WH_CELL.findall(page):
+        letters = re.findall(r">([^<>]*)</span>", inner)
+        found[(int(r) - 1, int(c) - 1)] = _grid_cell(letters[-1].strip() if letters else "")
+    if not found:
+        raise ValueError("a grid with no squares")
+    h = max(r for r, _ in found) + 1
+    if max(c for _, c in found) >= w:
+        raise ValueError("a square past the grid's %d columns" % w)
+    rows = ["".join(found.get((r, c), ".") for c in range(w)) for r in range(h)]
+    if any(ch == "." for (r, c), ch in found.items()):
+        raise ValueError("a white square with no letter")
+
+    def table(name):
+        at = re.search(r"<h3[^>]*>\s*%s\s*</h3>\s*<table(.*?)</table>" % name, page, re.S)
+        if not at:
+            raise ValueError("no %s table" % name)
+        return [(int(n), _wh_text(clue), _wh_text(ans).upper()) for n, clue, ans in _WH_ROW.findall(at.group(1))]
+
+    a, d = entries(rows)
+    lists = []
+    for name, ents, dr, dc in (("Across", a, 0, 1), ("Down", d, 1, 0)):
+        listed = table(name)
+        word = {n: "".join(rows[r + k * dr][c + k * dc] for k in range(ln)) for n, r, c, ln in ents}
+        for n, _, ans in listed:
+            ans = re.sub(r"[^A-Z]", "", ans)
+            # A rebus square keeps its first letter, so the grid may be shorter.
+            if n in word and not (word[n] == ans or (len(ans) > len(word[n]) and ans[0] == word[n][0])):
+                raise ValueError("%d-%s is %s in the grid but %s in the table" % (n, name, word[n], ans))
+        lists.append(_clue_texts([(n, t) for n, t, _ in listed], ents, name))
+    dm = re.search(r"\(([A-Z][a-z]+ \d{1,2}, \d{4})\)", page)
+    day = parse_date(dm.group(1)) if dm else ""
+    if not day:
+        raise ValueError("the page does not say which day's puzzle it is")
+    bm = re.search(r"[Bb]y ([A-Z][^<]{2,80}?)</", page)
+    by = _wh_text(bm.group(1)) if bm else ""
+    # The weekday daily has no title; the list shows only date and title.
+    return make_puzzle(rows, lists[0], lists[1], title="Daily: " + by if by else "Daily",
+                       by=by, date=day)
+
+
+def put_text(text, pid, keep=0):
+    """Keep a puzzle's text under pid (replacing one there), and with keep,
+    forget the series' puzzles more than keep days older. (status, removed)."""
+    pz = parse_text(text)
+    status = add(pz, replace=True, pid=pid)
+    removed = []
+    if keep and pid[:10] == pz.get("date"):
+        oldest = (datetime.date.fromisoformat(pz["date"]) - datetime.timedelta(days=keep - 1)).isoformat()
+        removed = prune(pid[10:], oldest)
+    return status, removed
 
 
 # ---- routes ----------------------------------------------------------------------------------------------
