@@ -1,6 +1,6 @@
 """The three calls the device makes, against the real handler.
 
-The agent itself is stubbed: this is checking the contract apps/claude.c
+The agent itself is stubbed: this is checking the contract apps/claude/claude.c
 depends on -- post returns an id immediately, polling says pending until it
 does not, an answer is delivered once and then forgotten -- not whether Claude
 can write C. Starting a real agent from a test would edit this repository.

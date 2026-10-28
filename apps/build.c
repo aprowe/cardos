@@ -22,7 +22,7 @@
  *     build <base-url>        somewhere else, e.g. http://10.0.0.5:8080
  *
  * This used to be called Claude. It was renamed when a Claude of its own
- * arrived -- apps/claude.c talks to the model directly and can drive the
+ * arrived -- apps/claude/claude.c talks to the model directly and can drive the
  * device; this one talks to Claude Code and can change it.
  *
  * Type /new to forget the conversation, /url <base> to move the server, and
@@ -95,7 +95,7 @@ static struct {
  * the input line and nothing else; without this every keystroke redrew the
  * whole window, log and all, which on a 40x12 terminal is visible as a
  * flicker. These were three flags and an expect_paint guess; api->damage
- * says it outright, as apps/claude.c does. Before the first paint there is
+ * says it outright, as apps/claude/claude.c does. Before the first paint there is
  * nowhere to mark, and the shell paints everything anyway. */
 static void mark_bar(void) { C.marked = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y, C.at.w, BAR_H)); }
 static void mark_log(void) { C.marked = 1; if (C.have_at) api->damage(capp_rect(C.at.x, C.at.y + BAR_H, C.at.w, C.at.h - BAR_H - IN_H)); }
@@ -148,7 +148,7 @@ static int online(void) {
  *
  * This still only reaches a Build that gets reopened -- there is nowhere
  * for the poll to run while nothing has the app loaded at all, the way
- * kernel/sys/agent.c's agent_tick runs for apps/claude.c's own
+ * kernel/sys/agent.c's agent_tick runs for apps/claude/claude.c's own
  * conversation whether or not that app is open. Doing the same for Build
  * would need a persistent kernel-side poller of its own; this is the
  * lighter fix of the two the task allowed. */

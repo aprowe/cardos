@@ -31,7 +31,9 @@ Everything about an app lives beside its source (`tools/appmeta.py`, whose
 docstring is the reference; `python tools/appmeta.py` lists them):
 `@app` lines in its top comment (`folder` -- required -- `release
 core|extra`, `embed yes`, `budget WHY`, `multi {JSON}`, `routes /prefix`),
-`NAME.icon.txt` (its colour icon), `NAME.md` or `README.md` (its notes),
+`NAME.icon.txt` (its colour icon), `NAME.md` or `README.md` (its notes; a
+file named claude.md is CLAUDE.md on Windows, which Claude Code loads as
+instructions -- so the Claude app is a folder),
 and for a folder app `test/` (host tests, collected with test/ by
 gen_test_main and the host CMake), `tools/` (its generators) and
 `server/` (a plugin). There is no apps/folders.txt, no apps/icons/, no
@@ -94,7 +96,7 @@ PATH, so `edit` works even when nothing on PATH is called that.
 **Claude runs on the device**, in the only sense it can: `apps/build.c` (Build)
 is a terminal, and the CardOS server — one process, one port, the same one
 that renders web pages — hands what you type to Claude Code running **in this
-repository, with permission to edit it**. (`apps/claude.c` is the other
+repository, with permission to edit it**. (`apps/claude/claude.c` is the other
 Claude: a chat with the kernel's agent, through `/agent/messages` -- see
 "The Claude app goes through the server" below.) Asking the device to change an app
 changes the source on the PC. Three short calls rather than one long one
@@ -989,7 +991,7 @@ Settings) are in the kernel.
 - **cat** (apps/cat.c) -- CLI: files or stdin to stdout
 - **Chat** (apps/chat/chat.c) -- chat, with Arty and Marcy emojis; notes in apps/chat/README.md
 - **Circuit** (apps/midi/circuit.c) -- beats for a Novation Circuit; notes in apps/midi/README.md
-- **Claude** (apps/claude.c) -- chat with the kernel's agent, or about one document; notes in apps/claude.md
+- **Claude** (apps/claude/claude.c) -- chat with the kernel's agent, or about one document; notes in apps/claude/README.md
 - **Clock** (apps/clock.c) -- clock face and alarm editor; notes in apps/clock.md
 - **Counter** (apps/counter.c) -- a tally with laps
 - **Crossword** (apps/crossword/crossword.c) -- NYT puzzles, Full, Midi and Themed

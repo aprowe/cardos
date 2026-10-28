@@ -122,6 +122,12 @@ def sources(apps_dir=APPS):
     """Every app's source: every .c directly in apps_dir, and every .c
     directly in a folder of it. One level only."""
     srcs = []
+    # apps/claude.md is apps/CLAUDE.md on a case-blind disk, which Claude
+    # Code loads as instructions for everything under apps/ (2026-10-27):
+    # an app with notes and that name is a folder, apps/claude/README.md.
+    if any(f.lower() == "claude.md" for f in os.listdir(apps_dir)):
+        raise SystemExit("%s/claude.md would be read as CLAUDE.md: make the app a folder"
+                         % os.path.relpath(apps_dir, ROOT))
     for f in sorted(os.listdir(apps_dir)):
         p = os.path.join(apps_dir, f)
         if f.endswith(".c") and os.path.isfile(p):

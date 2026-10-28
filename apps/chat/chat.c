@@ -15,7 +15,7 @@
  * each row is a log line marked EMO_MARK, which paint_row draws instead.
  *
  * The requests are http_start/http_poll, so typing never waits on the
- * network. Drawn the way apps/claude.c is: every line written over the one
+ * network. Drawn the way apps/claude/claude.c is: every line written over the one
  * before, padded to the width, nothing cleared first.
  *
  * @app folder Net

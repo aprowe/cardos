@@ -4,7 +4,7 @@
  * machine for as long as it takes -- twenty seconds of dead keyboard for a
  * calendar sync. kernel/sys/busy.c made that visible; this makes it stop
  * happening. The caller starts a request and returns immediately, then polls
- * from its tick until the answer is there. apps/claude.c has always worked
+ * from its tick until the answer is there. apps/claude/claude.c has always worked
  * this way and it is the pattern that survives on this hardware.
  *
  * A task of its own rather than a job on kernel/sys/bg.c: that task also
