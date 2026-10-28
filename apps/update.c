@@ -22,6 +22,14 @@
  *   "downloading 40%"        the firmware, coming down
  *   "N KB on the card, ..."  the firmware is down, being checked
  *   "writing 70%"            the firmware, going into its slot
+ *
+ * f switches between the debug and the release firmware (the owner asked,
+ * 2026-10-27). It starts on the one running. The API's check and install
+ * know only that one, so the other goes through the console's own words,
+ * `update version FLAVOR` and `update os FLAVOR`, by api->shell: the apps
+ * still install as ever (they are the same for both), then the firmware,
+ * which shows no percentage on the way -- the shell call returns at the end,
+ * or not at all, since a firmware that goes in restarts the device.
  */
 #include "kernel/app/capp.h"
 #include "apps/str.h"
@@ -74,7 +82,16 @@ static struct {
   /* versions, from the console's `update version`: this firmware's, the one
    * the server offers, the server's own */
   char  run_v[40], off_v[40], srv_v[40];
+  char  run_fl[8];               /* the flavor running: debug or release */
+  int   other;                   /* f: the other flavor's firmware is the one wanted */
+  int   off_same;                /* the offered firmware is the one running */
 } U;
+
+/* The flavor whose firmware is checked and installed. */
+static const char *want_fl(void) {
+  if (!U.other) return U.run_fl[0] ? U.run_fl : "debug";
+  return api->str_len(U.run_fl) && U.run_fl[0] == 'r' ? "debug" : "release";
+}
 
 static void draw(int f, int x, int y, const char *s, uint16_t fg, uint16_t bg) {
   if (f >= 0) api->text_font(f, (int16_t)x, (int16_t)y, s, fg, bg);
@@ -180,13 +197,33 @@ static void version_of(const char *text, const char *label, char *out, int n) {
   }
 }
 
+/* "running   V (debug)": the word in the brackets. */
+static void flavor_of(const char *text, char *out, int n) {
+  const char *p = text;
+  int k = 0;
+  out[0] = 0;
+  while (*p && !str_starts(p, "running")) p++;
+  while (*p && *p != '(' && *p != '\n') p++;
+  if (*p != '(') return;
+  for (p++; *p && *p != ')' && k < n - 1; p++) out[k++] = *p;
+  out[k] = 0;
+}
+
+/* The versions, for the flavor wanted ("update version" alone, before the
+ * running flavor is known). Whether the offered one is the one running. */
 static void fetch_versions(void) {
   static char out[256];
+  char cmd[32];
+  const char *p;
+  api->fmt(cmd, sizeof cmd, U.run_fl[0] ? "update version %s" : "update version", want_fl());
   out[0] = 0;
-  if (api->shell("update version", out, sizeof out) < 0) out[0] = 0;
+  if (api->shell(cmd, out, sizeof out) < 0) out[0] = 0;
   version_of(out, "running", U.run_v, sizeof U.run_v);
   version_of(out, "offered", U.off_v, sizeof U.off_v);
   version_of(out, "server", U.srv_v, sizeof U.srv_v);
+  if (!U.run_fl[0]) flavor_of(out, U.run_fl, sizeof U.run_fl);
+  U.off_same = 0;
+  for (p = out; *p; p++) if (str_starts(p, ", the same")) U.off_same = 1;
 }
 
 /* Both versions, along the bottom of the body: what this is, and what the
@@ -211,8 +248,25 @@ static void run_check(void) {
     return;
   }
   fetch_versions();
-  if (n == 0) { U.state = S_CURRENT; U.n = 0; return; }
-  parse_diff();
+  U.n = U.napps = U.has_fw = 0;
+  if (n > 0) parse_diff();
+  if (U.other) {
+    /* The check compared the firmware running; it is the other one that is
+     * wanted, so the firmware row is what `update version` said of it. */
+    int i, j = 0;
+    for (i = 0; i < U.n; i++)                        /* not `=`: that is memcpy, which apps lack */
+      if (!U.it[i].firmware) { if (j != i) api->mem_cpy(&U.it[j], &U.it[i], sizeof U.it[i]); j++; }
+    U.n = j;
+    U.has_fw = 0;
+    if (!U.off_same && U.off_v[0] && U.n < MAX_ITEMS) {
+      api->fmt(U.it[U.n].name, NAME_MAX, "firmware");
+      U.it[U.n].firmware = 1;
+      U.it[U.n].state = I_WAIT;
+      U.n++;
+      U.has_fw = 1;
+    }
+  }
+  if (U.n == 0) { U.state = S_CURRENT; return; }
   U.state = S_READY;
   U.button = 0;
 }
@@ -231,6 +285,9 @@ static void paint_head(void) {
   api->fill(capp_rect(c.x, c.y, c.w, HEAD_H - 1), CLR_HEAD);
   api->fill(capp_rect(c.x, c.y + HEAD_H - 1, c.w, 1), CLR_LINE);
   draw(U.f_uib, c.x + 8, c.y + (HEAD_H - 1 - height(U.f_uib)) / 2, "Update", CLR_TEXT, CLR_HEAD);
+  if (U.run_fl[0])
+    draw(U.f_ui, c.x + 16 + width(U.f_uib, "Update"), c.y + (HEAD_H - 1 - height(U.f_ui)) / 2, want_fl(),
+         U.other ? CLR_FW : CLR_FAINT, CLR_HEAD);
   draw(U.f_ui, c.x + c.w - 8 - width(U.f_ui, U.host), c.y + (HEAD_H - 1 - height(U.f_ui)) / 2,
        U.host, CLR_FAINT, CLR_HEAD);
 }
@@ -322,7 +379,11 @@ static void paint_buttons(void) {
 static void paint_bar(void) {
   int y = U.c.y + U.c.h - FOOT_H - 22, x = U.c.x + 10, w = U.c.w - 20, fill, total;
   char what[48], right[16];
-  if (U.phase == PH_APPS) {
+  if (U.pct < 0) {                           /* the other flavor: no percentage comes */
+    fill = 0;
+    api->fmt(what, sizeof what, "Downloading %s firmware", want_fl());
+    api->fmt(right, sizeof right, "");
+  } else if (U.phase == PH_APPS) {
     total = U.napps ? U.napps : 1;
     fill = (U.ok + U.failed) * w / total;
     api->fmt(what, sizeof what, "Installing apps");
@@ -373,12 +434,13 @@ static void app_paint(void *st, CRect c) {
     return;
   case S_ERROR:
     paint_center(1, CLR_BAD, "Could not check", U.msg);
-    footer_paint(api, c, "r try again");
+    footer_paint(api, c, "f debug/release  r try again");
     return;
   case S_CURRENT:
-    paint_center(0, CLR_GOOD, "Up to date", "the firmware and every app match the server");
+    paint_center(0, CLR_GOOD, "Up to date", U.other ? "the other firmware is not on the server"
+                                                    : "the firmware and every app match the server");
     paint_versions();
-    footer_paint(api, c, "r check again");
+    footer_paint(api, c, "f debug/release  r check again");
     return;
   case S_READY:
     api->fmt(sub, sizeof sub, "%d app%s%s", U.napps, U.napps == 1 ? "" : "s",
@@ -391,8 +453,8 @@ static void app_paint(void *st, CRect c) {
     }
     paint_list();
     paint_buttons();
-    footer_paint(api, c, U.has_fw && U.napps ? "enter install  < > choose  r recheck"
-                                             : "enter install  r recheck");
+    footer_paint(api, c, U.has_fw && U.napps ? "enter install  < > choose  f build"
+                                             : "enter install  f build  r recheck");
     return;
   case S_INSTALLING:
     paint_summary("Installing", U.with_fw ? "don't switch off" : 0, CLR_FW);
@@ -513,7 +575,33 @@ static void run_install(void) {
   /* Drawn now: there is no paint until the install returns. */
   app_paint(0, U.c);
   mark_next_going();
-  n = api->update_apply_progress(U.with_fw, on_line, 0, out, sizeof out);
+  if (U.other) {
+    /* The apps by the API, then the other firmware by the console's words. */
+    static char sh[512];
+    char cmd[32];
+    n = 0;
+    if (U.napps) n = api->update_apply_progress(0, on_line, 0, out, sizeof out);
+    if (n >= 0 && U.with_fw) {
+      U.phase = PH_DOWNLOAD;
+      U.pct = -1;
+      fw_state(I_GOING);
+      paint_bar();
+      api->repaint_now();
+      api->fmt(cmd, sizeof cmd, "update os %s", want_fl());
+      sh[0] = 0;
+      api->shell(cmd, sh, sizeof sh);
+      /* Back means it did not go in: the last line says why. */
+      {
+        int e = (int)api->str_len(sh), b;
+        while (e > 0 && (sh[e - 1] == '\n' || sh[e - 1] == ' ')) e--;
+        for (b = e; b > 0 && sh[b - 1] != '\n'; b--) {}
+        api->fmt(out, sizeof out, "%.*s", e - b, sh + b);
+      }
+      n = -1;
+    }
+  } else {
+    n = api->update_apply_progress(U.with_fw, on_line, 0, out, sizeof out);
+  }
   /* Back only without a firmware, or when it failed: a firmware that went
    * in has restarted the device. */
   if (n < 0) {
@@ -530,6 +618,12 @@ static int app_key(void *st, uint8_t k) {
   (void)st;
   if (U.state == S_CHECKING || U.state == S_INSTALLING) return 1;
   if (k == 'r' || k == 'R') { U.state = S_CHECKING; return 1; }
+  if ((k == 'f' || k == 'F') && U.run_fl[0]) {           /* debug <-> release */
+    if (api->key_repeat()) return 1;
+    U.other = !U.other;
+    U.state = S_CHECKING;
+    return 1;
+  }
   if (U.state != S_READY) return 0;
   switch (k) {
   case CAPP_KEY_LEFT: case CAPP_KEY_RIGHT: case '\t':
@@ -584,6 +678,8 @@ const CappInfo capp_info = {
     0x40, 0x02, 0x3F, 0xFC, 0x00, 0x00, 0x00, 0x00 },
   "enter\tinstall\nleft/right\tinstall all, or apps only\nup/down\tscroll the list\n"
   "r\tcheck again\n"
+  "f\tdebug or release firmware: starts on the one\n"
+  "\trunning; the other installs with no percentage\n"
   "\n"
   "the same check and install as the console's `update`.\n",
 };
