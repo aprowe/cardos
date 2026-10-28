@@ -80,4 +80,5 @@ def post_name(h, args):
 ROUTES = [
     ("GET", "/people", get_people, "device_or_dash"),
     ("POST", "/people/name", post_name, "device_or_dash"),
+    ("GET", "/dash/people", get_people, "dash"),         # the cookie's Path is /dash
 ]

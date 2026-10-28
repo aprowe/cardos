@@ -1443,8 +1443,8 @@ async function textApi(method,url){
 const frLines=t=>t.split('\n').filter(Boolean).map(l=>l.split('\t'));
 async function friendsLoad(){
   try{
-    FR.rows=frLines(await textApi('GET','/friends'));
-    FR.people=frLines(await textApi('GET','/people'));
+    FR.rows=frLines(await textApi('GET','/dash/friends'));
+    FR.people=frLines(await textApi('GET','/dash/people'));
     FR.err='';
   }catch(e){ FR.err=e.message; }
   renderFriends();
@@ -1466,13 +1466,13 @@ function renderFriends(){
   el.innerHTML=h;
 }
 async function frAsk(name){
-  try{ const t=await textApi('POST','/friends/ask?who='+encodeURIComponent(name)); toast(t.includes('friend')?'Friends now.':'Asked. They see it on their device and here.'); friendsLoad(); }
+  try{ const t=await textApi('POST','/dash/friends/ask?who='+encodeURIComponent(name)); toast(t.includes('friend')?'Friends now.':'Asked. They see it on their device and here.'); friendsLoad(); }
   catch(e){ toast(e.message,'err'); }
 }
 async function frDrop(name,label){
   const r=await modal({title:'Not friends?',html:`<p>${esc(label)} and you stop sharing: neither of your apps shows the other’s results any more.</p>`,actions:[{label:'Cancel'},{label:'Remove',value:1,kind:'danger'}]});
   if(!r) return;
-  try{ await textApi('POST','/friends/drop?who='+encodeURIComponent(name)); friendsLoad(); }catch(e){ toast(e.message,'err'); }
+  try{ await textApi('POST','/dash/friends/drop?who='+encodeURIComponent(name)); friendsLoad(); }catch(e){ toast(e.message,'err'); }
 }
 async function showToken(r){
   await modal({title:'The device’s token',html:`<p>Put this in <code>/config/claude.token</code> on ${esc(r.user)}’s device card, then restart it.</p>

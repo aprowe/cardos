@@ -83,6 +83,15 @@ class Friends(unittest.TestCase):
         self.ok("POST", "/friends/drop?who=alex", self.sam)
         self.assertEqual(self.ok("GET", "/friends", self.alex), "")
 
+    def test_the_dashboard_has_them_under_dash(self):
+        # The page's cookie is Path=/dash: /friends from a browser has no
+        # cookie. The same routes there, behind the dashboard's sign-in.
+        self.assertEqual(self.req("GET", "/dash/friends", None)[0], 403)
+        self.assertEqual(self.req("GET", "/dash/people", None)[0], 403)
+        paths = {r[1] for r in app.ALL_ROUTES}
+        self.assertTrue({"/dash/friends", "/dash/friends/ask", "/dash/friends/drop",
+                         "/dash/people"} <= paths)
+
     def test_ask_refusals(self):
         self.assertEqual(self.req("POST", "/friends/ask?who=alex", self.alex)[0], 400)
         self.assertEqual(self.req("POST", "/friends/ask?who=nobody", self.alex)[0], 404)

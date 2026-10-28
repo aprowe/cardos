@@ -23,6 +23,9 @@ Without accounts there is one person and no friends.
                                    asked you; NAME is notified (app Friends)
     POST /friends/drop?who=NAME -> "ok\\n": the friendship, or an ask either
                                    way, gone from both sides
+
+and the same three under /dash/ for the dashboard, whose cookie goes
+nowhere else (people.py has /dash/people for the same reason).
 """
 from . import accounts, kv, msg, people
 from .kv import kv_route
@@ -147,4 +150,9 @@ ROUTES = [
     ("GET", "/friends", get_friends, "device_or_dash"),
     ("POST", "/friends/ask", post_ask, "device_or_dash"),
     ("POST", "/friends/drop", post_drop, "device_or_dash"),
+    # The same for the dashboard's Friends panel: its cookie's Path is /dash,
+    # so a browser sends it to nothing outside (server/dash.py).
+    ("GET", "/dash/friends", get_friends, "dash"),
+    ("POST", "/dash/friends/ask", post_ask, "dash"),
+    ("POST", "/dash/friends/drop", post_drop, "dash"),
 ]
