@@ -1121,6 +1121,11 @@ void test_crossword_paint_ctrl_l_goes_side_big_zoom_and_is_kept(void) {
   CHECK_EQ(G.lay, LAY_ZOOM);
   geometry(&g);
   CHECK_EQ(g.cs, 16);
+  /* The long clue gets three lines of bar, and fits in them whole. */
+  CHECK_EQ(G.cl_n, CL_LINES);
+  CHECK_EQ(G.cl_cut3, 0);
+  CHECK_EQ(G.cl_cut, 1);                              /* where the big view's two lines would cut it */
+  CHECK_EQ(g.bar_h, CL_LINES * G.lh + 4);
   CHECK_EQ(g.nc, 15);
   CHECK_EQ(g.gx0, 0);
   CHECK(g.nr < 15);
@@ -1155,6 +1160,8 @@ void test_crossword_paint_the_zoom_view_draws_a_mini_in_big_letters(void) {
   x_key('\r');
   geometry(&g);
   CHECK_EQ(g.cs, CELL_ZOOM);
+  CHECK_EQ(G.cl_n, 1);                                /* a short clue: a one-line bar */
+  CHECK_EQ(g.bar_h, G.lh + 4);
   x_key('h');
   CHECK(fakescreen_count(x_cell(0, 0), G_INK) > 40);  /* an H at twice the size */
   CHECK(fakescreen_count(x_cell(2, 2), G_RING) > 30);

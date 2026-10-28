@@ -113,6 +113,7 @@ static const char *const LAY_NAME[LAY_N] = { "side", "big", "zoom" };
 #define CELL_NUM    13                   /* the smallest that has room for a number above the letter */
 #define COL_MIN     100                  /* the side view's clue column is never narrower */
 #define CELL_ZOOM   32                   /* the zoom view's biggest square */
+#define CL_LINES    3                    /* the zoom view's clue bar grows to this many lines */
 #define CELL_SIDE   24                   /* the side view's: a mini in big letters, the column still wide */
 #define TIME_W      46
 
@@ -201,7 +202,7 @@ static struct {
   const char *cl_text;                  /* the clue (in pz's pool), its label and its wrapping */
   char     cl_label[24];
   int      cl_lw;
-  int      cl_off[2], cl_len[2], cl_cut;
+  int      cl_off[CL_LINES], cl_len[CL_LINES], cl_cut, cl_cut3, cl_n;
 
   /* playing */
   int      dirty;                       /* the grid has changed since it was written */
@@ -942,7 +943,7 @@ static void geometry(Geo *g) {
       if (g->cs > CELL_ZOOM) g->cs = CELL_ZOOM;
       if (g->cs < CELL) g->cs = CELL;
     }
-    g->bar_h = (G.lay == LAY_ZOOM ? 1 : 2) * G.lh + 4;
+    g->bar_h = (G.lay == LAY_ZOOM ? G.cl_n : 2) * G.lh + 4;     /* zoom: as tall as the clue */
     g->bar_y = c.y + h - g->bar_h;
     g->area = capp_rect(c.x, c.y, c.w, g->bar_y - c.y);
     g->vcols = (G.lay == LAY_ZOOM && pw * g->cs == c.w ? c.w : c.w - 1) / g->cs;
@@ -1049,24 +1050,34 @@ static int wrap_one(const char *s, int start, int avail, int *off, int *len) {
 }
 
 /* The current word's clue, wrapped to the bar: its label ("12-Across") in
- * bold, then the text over two lines, the second cut with ".." if it must be. */
+ * bold, then the text over up to CL_LINES lines. The big view shows two, the
+ * second cut with ".." if there is more (cl_cut); the zoom view's bar is as
+ * many as the clue needs (cl_n), cut only past the third (cl_cut3). */
 static void clue_layout(void) {
-  int ci = xw_cur_clue(&G.pz), p, w = (G.have_at ? G.at.w : 240) - 8;
+  int ci = xw_cur_clue(&G.pz), p, k, w = (G.have_at ? G.at.w : 240) - 8;
   G.cl_text = "";
   G.cl_label[0] = 0;
   G.cl_lw = 0;
-  G.cl_off[0] = G.cl_off[1] = 0;
-  G.cl_len[0] = G.cl_len[1] = 0;
-  G.cl_cut = 0;
+  for (k = 0; k < CL_LINES; k++) G.cl_off[k] = G.cl_len[k] = 0;
+  G.cl_cut = G.cl_cut3 = 0;
+  G.cl_n = 1;
   if (ci < 0) return;
   api->fmt(G.cl_label, sizeof G.cl_label, "%d-%s", G.pz.clue[ci].num,
            G.pz.clue[ci].dir == XW_ACROSS ? "Across" : "Down");
   G.cl_lw = str_w(1, G.cl_label, 1 << 14) + 6;
   G.cl_text = xw_clue_text(&G.pz, ci);
-  p = wrap_one(G.cl_text, 0, w - G.cl_lw, &G.cl_off[0], &G.cl_len[0]);
-  p = wrap_one(G.cl_text, p, w, &G.cl_off[1], &G.cl_len[1]);
+  p = 0;
+  for (k = 0; k < CL_LINES; k++) {
+    p = wrap_one(G.cl_text, p, k ? w : w - G.cl_lw, &G.cl_off[k], &G.cl_len[k]);
+    if (G.cl_len[k] > 0) G.cl_n = k + 1;
+    if (k == 1) {
+      int q = p;
+      while (G.cl_text[q] == ' ') q++;
+      G.cl_cut = G.cl_text[q] != 0;
+    }
+  }
   while (G.cl_text[p] == ' ') p++;
-  G.cl_cut = G.cl_text[p] != 0;
+  G.cl_cut3 = G.cl_text[p] != 0;
 }
 
 /* ---- playing: the clock, the writing of progress, a win, and opening and leaving a puzzle ---------------------- */
@@ -1124,8 +1135,8 @@ static void enter_grid(const char *id) {
   restore_progress(id);
   G.view = V_GRID;
   G.ox = G.oy = 0;
+  clue_layout();                                /* first: the zoom view's bar is as tall as the clue */
   scroll_to_cursor();
-  clue_layout();
   G.status[0] = 0;
   G.ask = ASK_NONE;
   G.msg[0] = 0;
@@ -1224,8 +1235,8 @@ static void do_reset(void) {
   G.shown_secs = 0;
   G.view = V_GRID;
   G.ox = G.oy = 0;
+  clue_layout();                                /* first: the zoom view's bar is as tall as the clue */
   scroll_to_cursor();
-  clue_layout();
   damage_all();
 }
 
@@ -1487,11 +1498,13 @@ static void cut_line(char *ln, int n, int w) {
   ln[n] = 0;
 }
 
-/* The clue bar: a rule, the label in bold and the clue's first line, then its
- * second -- in the zoom view only the first, cut with ".." if there is more. */
+/* The clue bar: a rule, the label in bold and the clue's first line, then the
+ * rest -- two lines in the big view, as many as it takes (up to CL_LINES) in
+ * the zoom view; the last cut with ".." if there is still more. */
 static void paint_bar(CRect c, const Geo *g) {
   char ln[220];
-  int y = g->bar_y, k, n, lh = G.lh, w = c.w - 8, nl = G.lay == LAY_ZOOM ? 1 : 2;
+  int y = g->bar_y, k, n, lh = G.lh, w = c.w - 8, nl = G.lay == LAY_ZOOM ? G.cl_n : 2;
+  int more = G.lay == LAY_ZOOM ? G.cl_cut3 : G.cl_cut;
   api->fill(capp_rect(c.x, y, c.w, 1), L_RULE);
   api->fill(capp_rect(c.x, y + 1, c.w, 1), B_BG);
   y += 2;
@@ -1500,7 +1513,7 @@ static void paint_bar(CRect c, const Geo *g) {
     n = G.cl_len[k] < (int)sizeof ln - 4 ? G.cl_len[k] : (int)sizeof ln - 4;
     api->mem_cpy(ln, G.cl_text + G.cl_off[k], (size_t)n);
     ln[n] = 0;
-    if (k == nl - 1 && (G.cl_cut || (nl == 1 && G.cl_len[1] > 0)))
+    if (k == nl - 1 && more)
       cut_line(ln, n, k == 0 ? w - G.cl_lw : w);
     if (k == 0) box_text(0, c.x + 4 + G.cl_lw, y, c.w - 4 - G.cl_lw, lh, 0, 0, ln, B_TEXT, B_BG);
     else box_text(0, c.x, y, c.w, lh, 4, 0, ln, B_TEXT, B_BG);
@@ -1939,14 +1952,19 @@ static int nothing(void) {
  * word it is in, and the clue bar if the clue changed. A scroll is the whole
  * grid. */
 static void refresh_cursor(int old) {
-  int ci = xw_cur_clue(&G.pz), cross = xw_clue_at(&G.pz, G.pz.cur, 1 - G.pz.dir);
-  if (scroll_to_cursor()) {
+  int ci = xw_cur_clue(&G.pz), cross = xw_clue_at(&G.pz, G.pz.cur, 1 - G.pz.dir), lines = G.cl_n;
+  if (ci != old) clue_layout();
+  /* Zoom's bar is as tall as the clue, so a clue of another height moves
+   * the grid: that is a whole repaint, and the view may have to scroll. */
+  if (G.lay == LAY_ZOOM && G.cl_n != lines) {
+    scroll_to_cursor();
+    damage_all();
+  } else if (scroll_to_cursor()) {
     damage_all();
   } else {
     damage_word(old);
     damage_word(ci);
   }
-  if (ci != old) clue_layout();
   /* The side column shows the crossing clue too, which changes along a word. */
   if (ci != old || (G.lay == LAY_SIDE && cross != G.cross_ci)) damage_bar();
   G.cross_ci = cross;
@@ -1956,8 +1974,8 @@ static void refresh_cursor(int old) {
 static void next_layout(void) {
   G.lay = (G.lay + 1) % LAY_N;
   G.ox = G.oy = 0;
+  clue_layout();                                /* first: the zoom view's bar is as tall as the clue */
   scroll_to_cursor();
-  clue_layout();
   view_save();
   damage_all();
 }
